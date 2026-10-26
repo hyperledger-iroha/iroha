@@ -864,7 +864,7 @@ fn create_secure_temporary(
 ) -> io::Result<(File, OsString)> {
     for _ in 0..VERIFIED_SOURCE_SECURE_TEMP_RETRIES_V1 {
         let mut suffix = [0_u8; 16];
-        rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut suffix)
+        rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut suffix)
             .map_err(|error| io::Error::other(format!("OS randomness unavailable: {error}")))?;
         let name = OsString::from(format!(
             ".{}.{}.tmp",
@@ -2304,7 +2304,7 @@ fn resolve_contract_view_input_for_instruction(
 }
 fn new_job_id() -> Result<String, Error> {
     let mut bytes = [0_u8; FIXED_HEX_COMPONENT_BYTES_V1];
-    rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut bytes).map_err(
+    rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut bytes).map_err(
         |error| {
             storage_error(format!(
                 "failed to generate verified-source job id: {error}"

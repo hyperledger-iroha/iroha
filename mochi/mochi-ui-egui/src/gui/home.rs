@@ -2,18 +2,258 @@
 //! validators, the developer account, the latest blocks and quick actions.
 
 use super::{
-    Desktop, LocalnetDialog, View,
+    Desktop, LocalnetDialog, Message, UiResult, View,
     accounts::QuickKind,
     brand::{self, Mood},
+    ledger::BlockRow,
     theme,
     widgets::{self, icon},
 };
-use eframe::egui::{self, Align, Layout, RichText, Ui, Vec2};
-use mochi_core::developer::ManagedPhase;
+use eframe::egui::{self, Align, Layout, RichText, Sense, Ui, Vec2};
+use mochi_core::{
+    developer::{ManagedPhase, PreparedLocalnet},
+    state::BlockTip,
+};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
+
+/// How often Home compares the validators' newest blocks.
+const BLOCK_TIP_INTERVAL: Duration = Duration::from_secs(2);
+/// How long one validator may take to report its newest block.
+const BLOCK_TIP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Name Quickstart gives its new localnet: the first unused `local`, `local-2`, ….
 pub(crate) fn quickstart_name(names: &[String]) -> String {
     LocalnetDialog::new(names).name
+}
+
+/// One validator's newest block (`None` before its first), or why it could not be read.
+pub(crate) type TipObservation = Result<Option<BlockTip>, String>;
+
+/// The validators' newest blocks, read for the Home cards.
+#[derive(Default)]
+pub(crate) struct BlockTips {
+    /// The latest read, one entry per validator.
+    pub(super) observed: Vec<TipObservation>,
+    /// The newest height any read before `observed` saw.
+    pub(super) settled: u64,
+    /// A read is in flight; there is never more than one.
+    pub(super) pending: bool,
+    /// When the latest read started; `None` reads at once.
+    pub(super) started: Option<Instant>,
+}
+
+impl BlockTips {
+    fn record(&mut self, observed: UiResult<Vec<TipObservation>>) {
+        // Each validator should since have reached the newest height an earlier read saw.
+        self.settled = self.settled.max(newest_height(&self.observed));
+        // A failed read shows nothing rather than a comparison of outdated blocks.
+        self.observed = observed.unwrap_or_default();
+    }
+}
+
+/// How one validator's newest block compares with the others'.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TipSync {
+    /// At the newest height, or reaching it while a commit spreads.
+    Current,
+    /// Still below the newest height an earlier read saw; counted to the newest height now.
+    Behind(u64),
+    /// Its block differs from another one at this height that at least as many report.
+    Diverged,
+    /// It did not report its newest block.
+    Unanswered,
+}
+
+/// Compare each validator's newest block with the others'. A commit reaches every validator
+/// within moments, so a lower height is a lag only while it stays below `settled`, the newest
+/// height an earlier read saw; a validator one block short mid-commit is not flagged.
+pub(crate) fn tip_sync(observed: &[TipObservation], settled: u64) -> Vec<TipSync> {
+    let newest = newest_height(observed).max(settled);
+    observed
+        .iter()
+        .map(|tip| match tip {
+            Err(_) => TipSync::Unanswered,
+            Ok(Some(own)) if outvoted(observed, own) => TipSync::Diverged,
+            Ok(tip) => match tip.map_or(0, |tip| tip.height) {
+                height if height < settled => TipSync::Behind(newest - height),
+                _ => TipSync::Current,
+            },
+        })
+        .collect()
+}
+
+fn tips(observed: &[TipObservation]) -> impl Iterator<Item = &BlockTip> {
+    observed
+        .iter()
+        .filter_map(|tip| tip.as_ref().ok()?.as_ref())
+}
+
+fn newest_height(observed: &[TipObservation]) -> u64 {
+    tips(observed).map(|tip| tip.height).max().unwrap_or(0)
+}
+
+/// Whether another block at `own`'s height is reported at least as often as `own`'s block.
+fn outvoted(observed: &[TipObservation], own: &BlockTip) -> bool {
+    let votes = |hash| {
+        tips(observed)
+            .filter(|tip| tip.height == own.height && tip.hash == hash)
+            .count()
+    };
+    let own_votes = votes(own.hash);
+    tips(observed)
+        .any(|tip| tip.height == own.height && tip.hash != own.hash && votes(tip.hash) >= own_votes)
+}
+
+/// One pill for the whole committee: in sync, or how many validators are not.
+fn sync_summary(ui: &mut Ui, sync: &[TipSync]) {
+    let palette = widgets::palette(ui);
+    let out = sync
+        .iter()
+        .filter(|sync| **sync != TipSync::Current)
+        .count();
+    if out == 0 {
+        widgets::pill(ui, "in sync", palette.matcha, palette.matcha_soft)
+            .on_hover_text("No validator has fallen behind or reports a different block");
+        return;
+    }
+    let failed = sync
+        .iter()
+        .any(|sync| matches!(sync, TipSync::Diverged | TipSync::Unanswered));
+    let (fg, bg) = if failed {
+        (palette.aka, palette.aka_soft)
+    } else {
+        (palette.kinako, palette.kinako_soft)
+    };
+    widgets::pill(ui, format!("{out} out of sync"), fg, bg);
+}
+
+/// One validator's newest block. Being out of sync is flagged on a line of its own, so a
+/// narrow card never squeezes the flag.
+fn block_tip_row(ui: &mut Ui, tip: Option<&TipObservation>, sync: Option<TipSync>, newest: u64) {
+    let palette = widgets::palette(ui);
+    match tip {
+        None => {
+            ui.label(
+                RichText::new("Reading latest block…")
+                    .small()
+                    .color(palette.faint),
+            );
+        }
+        Some(Ok(None)) => {
+            ui.label(RichText::new("No blocks yet").small().color(palette.muted));
+        }
+        Some(Ok(Some(tip))) => {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(
+                    RichText::new(format!("#{}", tip.height))
+                        .strong()
+                        .color(palette.sky),
+                );
+                let hash = tip.hash.to_string();
+                ui.label(
+                    RichText::new(widgets::short_middle(&hash, 8))
+                        .monospace()
+                        .small()
+                        .color(palette.muted),
+                )
+                .on_hover_text(&hash);
+                widgets::copy_button(ui, &hash, "block hash");
+            });
+        }
+        Some(Err(_)) => {}
+    }
+    let (flag, fg, bg, detail) = match (sync, tip) {
+        (Some(TipSync::Behind(blocks)), _) => (
+            format!(
+                "{blocks} block{} behind",
+                if blocks == 1 { "" } else { "s" }
+            ),
+            palette.kinako,
+            palette.kinako_soft,
+            format!("The newest block is #{newest}"),
+        ),
+        (Some(TipSync::Diverged), _) => (
+            "hash differs".to_owned(),
+            palette.aka,
+            palette.aka_soft,
+            "Other validators report a different block at this height".to_owned(),
+        ),
+        (Some(TipSync::Unanswered), Some(Err(error))) => (
+            "no response".to_owned(),
+            palette.aka,
+            palette.aka_soft,
+            super::bounded_text(error),
+        ),
+        _ => return,
+    };
+    ui.horizontal(|ui| {
+        widgets::pill(ui, flag, fg, bg).on_hover_text(detail);
+    });
+}
+
+/// The newest streamed blocks, one clickable row each; returns the height of a clicked row.
+fn latest_blocks(ui: &mut Ui, feed: &VecDeque<BlockRow>, now: u64) -> Option<u64> {
+    let palette = widgets::palette(ui);
+    let mut opened = None;
+    for row in feed.iter().take(5) {
+        // Painted behind the row once its hover is known.
+        let highlight = ui.painter().add(egui::Shape::Noop);
+        // Selectable labels would take the click for text selection; the row owns it.
+        let label = |ui: &mut Ui, text: RichText| {
+            ui.add(egui::Label::new(text).selectable(false));
+        };
+        let response = ui
+            .horizontal(|ui| {
+                label(
+                    ui,
+                    RichText::new(format!("#{}", row.height))
+                        .strong()
+                        .color(palette.sky),
+                );
+                label(
+                    ui,
+                    RichText::new(format!(
+                        "{} tx{}",
+                        row.transactions,
+                        if row.rejected > 0 {
+                            format!(" · {} rejected", row.rejected)
+                        } else {
+                            String::new()
+                        }
+                    )),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    label(
+                        ui,
+                        RichText::new(widgets::time_ago(row.created_ms, now))
+                            .small()
+                            .color(palette.muted),
+                    );
+                });
+            })
+            .response
+            .interact(Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(format!("Open block #{}", row.height));
+        if response.hovered() {
+            ui.painter().set(
+                highlight,
+                egui::Shape::rect_filled(
+                    response.rect.expand(4.0),
+                    egui::CornerRadius::same(8),
+                    palette.inset,
+                ),
+            );
+        }
+        if response.clicked() {
+            opened = Some(row.height);
+        }
+    }
+    opened
 }
 
 impl Desktop {
@@ -32,6 +272,53 @@ impl Desktop {
         }
         let name = quickstart_name(&self.names);
         self.start_localnet(name);
+    }
+
+    /// Read every validator's newest block while Home shows a ready network. Like attachment
+    /// progress, the read never marks the desktop busy, so the cards' controls stay enabled.
+    pub(super) fn poll_block_tips(&mut self) {
+        let due = self
+            .block_tips
+            .started
+            .is_none_or(|started| started.elapsed() >= BLOCK_TIP_INTERVAL);
+        if self.view != View::Home || !self.ready() || self.block_tips.pending || !due {
+            return;
+        }
+        let (Some(selected), Some(runtime)) = (&self.selected, &self.runtime) else {
+            return;
+        };
+        let (network, handle) = (selected.network.clone(), runtime.handle().clone());
+        let (sender, epoch) = (self.sender.clone(), self.epoch);
+        self.block_tips.pending = true;
+        self.block_tips.started = Some(Instant::now());
+        std::thread::spawn(move || {
+            let tips = handle
+                .block_on(network.block_tips(BLOCK_TIP_TIMEOUT))
+                .map(|tips| {
+                    tips.into_iter()
+                        .map(|tip| tip.map_err(|error| error.to_string()))
+                        .collect()
+                })
+                .map_err(|error| error.to_string());
+            let prepared = network.prepared().clone();
+            let _ = sender.send((epoch, Message::BlockTips { prepared, tips }));
+        });
+    }
+
+    /// Show a read only on the generation it came from; any reply ends the read in flight.
+    pub(super) fn record_block_tips(
+        &mut self,
+        prepared: &PreparedLocalnet,
+        tips: UiResult<Vec<TipObservation>>,
+    ) {
+        self.block_tips.pending = false;
+        let shown = self
+            .selected
+            .as_ref()
+            .map(|selected| selected.network.prepared());
+        if super::validate_retained_selection(shown, prepared).is_ok() {
+            self.block_tips.record(tips);
+        }
     }
 
     fn welcome(&mut self, ui: &mut Ui) {
@@ -56,7 +343,7 @@ impl Desktop {
                     ui.add(
                         egui::Label::new(
                             RichText::new(
-                                "Spin up four validators with a funded developer account and live endpoints in seconds. No configuration files.",
+                                "Spin up four validators with a funded developer account and live endpoints. No configuration files.",
                             )
                             .size(15.0)
                             .color(palette.muted),
@@ -101,12 +388,15 @@ impl Desktop {
                             self.private_dialog = true;
                         }
                     });
-                    if self.busy {
+                    if self.busy && self.foreground {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label(
-                                RichText::new("Preparing validators… this usually takes a few seconds.")
-                                    .color(palette.muted),
+                                RichText::new(format!(
+                                    "Preparing validators… {}",
+                                    widgets::elapsed(self.busy_since.elapsed())
+                                ))
+                                .color(palette.muted),
                             );
                         });
                     }
@@ -143,7 +433,7 @@ impl Desktop {
             (
                 icon::COINS,
                 "Funded account",
-                "A generated developer signer, ready to mint and send.",
+                "A generated developer signer with XOR to send, ready to create and mint tokens.",
             ),
             (
                 icon::ENDPOINTS,
@@ -245,12 +535,21 @@ impl Desktop {
             "Kagami and Mochi share this network. It stays available when you close the desktop.",
         );
         ui.add_space(10.0);
-        ui.label(
-            RichText::new("Validators")
-                .size(17.0)
-                .strong()
-                .color(palette.text),
-        );
+        // Blocks are compared only while every validator is supervised as ready.
+        let tips = (phase == ManagedPhase::Ready).then_some(&self.block_tips.observed);
+        let sync = tips.map_or_else(Vec::new, |tips| tip_sync(tips, self.block_tips.settled));
+        let newest = tips.map_or(0, |tips| newest_height(tips).max(self.block_tips.settled));
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Validators")
+                    .size(17.0)
+                    .strong()
+                    .color(palette.text),
+            );
+            if tips.is_some_and(|tips| !tips.is_empty()) {
+                sync_summary(ui, &sync);
+            }
+        });
         ui.add_space(2.0);
         let columns = if ui.available_width() > 1000.0 { 4 } else { 2 };
         let mut observe = None;
@@ -285,6 +584,9 @@ impl Desktop {
                         &format!("validator {} URL", index + 1),
                     );
                 });
+                if let Some(tips) = tips {
+                    block_tip_row(ui, tips.get(index), sync.get(index).copied(), newest);
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     if !observed
@@ -315,8 +617,11 @@ impl Desktop {
             }
         }
         ui.add_space(12.0);
+        self.chain_pulse(ui, 32);
+        ui.add_space(12.0);
         let ready = phase == ManagedPhase::Ready;
         let account = context.account_id.clone();
+        let mut opened = None;
         ui.columns(2, |columns| {
             widgets::card(&mut columns[0], |ui| {
                 widgets::card_title(ui, icon::KEY, "Developer account");
@@ -367,25 +672,14 @@ impl Desktop {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX));
-                for row in self.blocks_feed.iter().take(5) {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("#{}", row.height)).strong().color(palette.sky));
-                        ui.label(format!(
-                            "{} tx{}",
-                            row.transactions,
-                            if row.rejected > 0 {
-                                format!(" · {} rejected", row.rejected)
-                            } else {
-                                String::new()
-                            }
-                        ));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(RichText::new(widgets::time_ago(row.created_ms, now)).small().color(palette.muted));
-                        });
-                    });
-                }
+                opened = latest_blocks(ui, &self.blocks_feed, now);
             });
         });
+        // A latest block opens in the Blocks view's drill-down.
+        if let Some(height) = opened {
+            self.view = View::Blocks;
+            self.open_block(height);
+        }
         ui.add_space(12.0);
         ui.label(
             RichText::new("Quick actions")
@@ -439,7 +733,12 @@ impl Desktop {
         if let Some((view, quick)) = chosen {
             self.view = view;
             if let Some(kind) = quick {
-                self.quick.kind = kind;
+                // Only a token's owner mints it: without one of their own, start by creating one.
+                self.quick.kind = if kind == QuickKind::Mint && !self.owns_mintable_token() {
+                    QuickKind::NewToken
+                } else {
+                    kind
+                };
                 self.preview = None;
             }
         }
@@ -464,6 +763,152 @@ impl Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::prelude::{Hash, HashOf};
+
+    /// A validator reporting block `block` at `height`.
+    fn tip(height: u64, block: u8) -> TipObservation {
+        Ok(Some(BlockTip {
+            height,
+            hash: HashOf::from_untyped_unchecked(Hash::prehashed([block; 32])),
+        }))
+    }
+
+    #[test]
+    fn validators_on_one_block_are_in_sync_and_a_spreading_commit_is_no_lag() {
+        use TipSync::{Behind, Current};
+        let agreed = [tip(10, 1), tip(10, 1), tip(10, 1), tip(10, 1)];
+        assert_eq!(tip_sync(&agreed, 0), [Current; 4]);
+        // One block short of the others, yet past what the network had at the previous read.
+        let spreading = [tip(10, 1), tip(10, 1), tip(10, 1), tip(9, 9)];
+        assert_eq!(tip_sync(&spreading, 9), [Current; 4]);
+        assert_eq!(
+            tip_sync(&spreading, 10),
+            [Current, Current, Current, Behind(1)]
+        );
+    }
+
+    #[test]
+    fn lagging_validators_count_from_the_newest_height_seen() {
+        use TipSync::{Behind, Current, Unanswered};
+        let lagging = [tip(12, 1), tip(12, 1), Ok(None), tip(7, 3)];
+        assert_eq!(
+            tip_sync(&lagging, 10),
+            [Current, Current, Behind(12), Behind(5)]
+        );
+        // A validator that stops answering still set the height the others must reach.
+        let silent = [
+            Err("connection refused".into()),
+            tip(9, 2),
+            tip(9, 2),
+            tip(9, 2),
+        ];
+        assert_eq!(
+            tip_sync(&silent, 10),
+            [Unanswered, Behind(1), Behind(1), Behind(1)]
+        );
+    }
+
+    #[test]
+    fn a_different_block_at_one_height_is_flagged_unless_it_is_outvoted() {
+        use TipSync::{Current, Diverged};
+        let minority = [tip(10, 1), tip(10, 1), tip(10, 1), tip(10, 2)];
+        assert_eq!(
+            tip_sync(&minority, 10),
+            [Current, Current, Current, Diverged]
+        );
+        let split = [tip(10, 1), tip(10, 1), tip(10, 2), tip(10, 2)];
+        assert_eq!(tip_sync(&split, 10), [Diverged; 4]);
+        // Blocks at different heights are never compared by hash.
+        assert_eq!(tip_sync(&[tip(10, 1), tip(9, 2)], 9), [Current; 2]);
+    }
+
+    #[test]
+    fn reads_keep_the_previous_newest_height_and_only_the_shown_generation() {
+        let mut tips = BlockTips::default();
+        tips.record(Ok(vec![tip(4, 1)]));
+        tips.record(Ok(vec![tip(5, 1), Err("timeout".into())]));
+        assert_eq!((tips.settled, tips.observed.len()), (4, 2));
+        // A failed read compares nothing but keeps the height the network had reached.
+        tips.record(Err("selected network was replaced".into()));
+        assert!(tips.observed.is_empty());
+        tips.record(Ok(vec![tip(5, 1)]));
+        assert_eq!((tips.settled, tips.observed.len()), (5, 1));
+
+        let mut desktop = Desktop::model(std::path::PathBuf::from("unused"));
+        desktop.block_tips.pending = true;
+        let elsewhere = PreparedLocalnet {
+            service_profile: Default::default(),
+            context: super::super::tests::observation_context(),
+            peers: Vec::new(),
+        };
+        desktop.record_block_tips(&elsewhere, Ok(vec![tip(4, 1)]));
+        assert!(!desktop.block_tips.pending, "the reply ends the read");
+        assert!(
+            desktop.block_tips.observed.is_empty(),
+            "no generation is shown"
+        );
+    }
+
+    #[test]
+    fn blocks_are_read_only_for_a_ready_network_and_forgotten_with_it() {
+        let mut desktop = Desktop::model(std::path::PathBuf::from("unused"));
+        desktop.poll_block_tips();
+        assert!(!desktop.block_tips.pending, "nothing is selected");
+        assert!(desktop.receiver.try_recv().is_err());
+        desktop.block_tips = BlockTips {
+            observed: vec![tip(4, 1)],
+            settled: 3,
+            pending: true,
+            started: Some(Instant::now()),
+        };
+        desktop.clear_network();
+        let tips = &desktop.block_tips;
+        assert!(tips.observed.is_empty() && tips.settled == 0);
+        assert!(!tips.pending && tips.started.is_none());
+    }
+
+    #[test]
+    fn cards_show_each_block_and_flag_only_validators_out_of_sync() {
+        let context = egui::Context::default();
+        let rows = [
+            (tip(10, 1), TipSync::Current),
+            (tip(8, 2), TipSync::Behind(2)),
+            (tip(9, 2), TipSync::Behind(1)),
+            (tip(10, 2), TipSync::Diverged),
+            (Err("connection refused".into()), TipSync::Unanswered),
+            (Ok(None), TipSync::Current),
+        ];
+        let mut draw = |context: &mut egui::Ui| {
+            egui::CentralPanel::default().show(context, |ui| {
+                for (tip, sync) in &rows {
+                    block_tip_row(ui, Some(tip), Some(*sync), 10);
+                }
+                block_tip_row(ui, None, None, 10);
+                sync_summary(ui, &[TipSync::Current; 4]);
+                sync_summary(ui, &[TipSync::Current, TipSync::Behind(2)]);
+            });
+        };
+        let _ = super::super::tests::render_frame(&context, Vec::new(), &mut draw);
+        let output = super::super::tests::render_frame(&context, Vec::new(), &mut draw);
+        for text in [
+            "#10",
+            "01010101…01010101",
+            "#8",
+            "2 blocks behind",
+            "1 block behind",
+            "hash differs",
+            "no response",
+            "No blocks yet",
+            "Reading latest block…",
+            "in sync",
+            "1 out of sync",
+        ] {
+            assert!(
+                super::super::tests::text_position(&output, text).is_some(),
+                "{text} is shown"
+            );
+        }
+    }
 
     #[test]
     fn quickstart_picks_the_first_unused_localnet_name() {
@@ -489,7 +934,7 @@ mod tests {
     fn welcome_offers_quickstart_without_starting_anything() {
         let mut desktop = Desktop::model(std::path::PathBuf::from("unused"));
         let context = egui::Context::default();
-        let mut draw = |context: &egui::Context| {
+        let mut draw = |context: &mut egui::Ui| {
             egui::CentralPanel::default().show(context, |ui| desktop.home(ui));
         };
         let _ = super::super::tests::render_frame(&context, Vec::new(), &mut draw);
@@ -499,5 +944,29 @@ mod tests {
         assert!(super::super::tests::text_position(&output, "Your Iroha playground").is_some());
         super::super::tests::click_label(&context, &label, draw);
         assert!(!desktop.busy, "no workspace: Quickstart is disabled");
+    }
+
+    #[test]
+    fn a_latest_block_row_opens_its_block() {
+        let row = |height: u64, transactions, rejected| BlockRow {
+            height,
+            hash: format!("{height:064x}"),
+            transactions,
+            rejected,
+            signatures: 4,
+            created_ms: 0,
+            genesis: height == 1,
+            bytes: 512,
+            body: None,
+        };
+        let feed = VecDeque::from([row(2, 3, 1), row(1, 7, 0)]);
+        let context = egui::Context::default();
+        let mut opened = None;
+        super::super::tests::click_label(&context, "3 tx · 1 rejected", |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                opened = opened.or(latest_blocks(ui, &feed, 0));
+            });
+        });
+        assert_eq!(opened, Some(2), "the clicked row's block opens");
     }
 }

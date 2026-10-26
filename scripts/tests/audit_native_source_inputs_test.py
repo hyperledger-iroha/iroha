@@ -13,6 +13,50 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import audit_native_source_inputs as audit
 
 
+@pytest.mark.parametrize('stem', ['build', 'main'])
+@pytest.mark.parametrize('mutation', [None, 'target', 'alias', 'hash', 'bytes', 'output', 'source', 'symlink'])
+def test_custom_build_mapping_binds_only_selected_source_owner_and_bytes(tmp_path, stem, mutation):
+    owner = tmp_path / 'build' / 'dependency-0123456789abcdef'
+    owner.mkdir(parents=True)
+    source = tmp_path / (stem + '.rs')
+    source.write_text('fn main() {}')
+    target_name = 'build-script-' + stem
+    alias = owner / target_name
+    compiled = owner / (target_name.replace('-', '_') + '-0123456789abcdef')
+    depfile = Path(str(compiled) + '.d')
+    alias.write_bytes(b'inert original build executable')
+    compiled.write_bytes(alias.read_bytes())
+    depfile.write_text(f'{compiled}: {source}\n')
+    # A tempting same-directory sibling must never enter the selected closure.
+    (owner / 'build_script_build-0000000000000000.d').write_text('/other: /unrelated.rs\n')
+    message = {'target': {'kind': ['custom-build'], 'name': target_name, 'src_path': str(source)},
+               'filenames': [str(alias)]}
+    if mutation == 'target':
+        message['target']['name'] = 'build-script-unrelated'
+    elif mutation == 'alias':
+        other = alias.with_name('build-script-unrelated')
+        alias.rename(other)
+        message['filenames'] = [str(other)]
+    elif mutation == 'hash':
+        other = owner.with_name('dependency-not-an-owner-hash')
+        owner.rename(other)
+        message['filenames'] = [str(other / alias.name)]
+    elif mutation == 'bytes':
+        compiled.write_bytes(b'substituted')
+    elif mutation == 'output':
+        depfile.write_text(f'/unrelated/build: {source}\n')
+    elif mutation == 'source':
+        depfile.write_text(f'{compiled}: /unrelated.rs\n')
+    elif mutation == 'symlink':
+        compiled.unlink()
+        compiled.symlink_to(alias)
+    if mutation is None:
+        assert audit.artifact_depfiles(message) == {depfile}
+    else:
+        with pytest.raises(ValueError):
+            audit.artifact_depfiles(message)
+
+
 @pytest.fixture
 def selected(tmp_path, monkeypatch):
     root = tmp_path / 'source'
@@ -655,3 +699,114 @@ def test_oid_does_not_admit_other_files_in_same_out_dir(selected, oid_generator)
     with pytest.raises(SystemExit, match='1'):
         selected.run(oid_generator.events)
     assert json.loads(selected.args.output.read_text())['omittedCanonicalInputs'] == [str(unexpected)]
+
+
+@pytest.fixture(params=[('serde', '1.0.229', '229'),
+                        ('serde_core', '1.0.229', '229'),
+                        ('thiserror', '2.0.21', '21')])
+def private_module_generator(selected, tmp_path, request):
+    """Synthetic archive exercises custody guards, not registry qualification."""
+    name, version, suffix = request.param
+    identity = f'{name}-{version}'
+    root = tmp_path / 'cargo/registry/src/index-fixture' / identity
+    originals = ['Cargo.toml', 'build.rs']
+    if name == 'thiserror':
+        originals.append('build/probe.rs')
+    archive = root.parents[2] / 'cache/index-fixture' / f'{identity}.crate'
+    archive.parent.mkdir(parents=True)
+    with tarfile.open(archive, 'w:gz') as package:
+        for relative in originals:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = f'synthetic pinned {identity}/{relative}'.encode()
+            path.write_bytes(data)
+            info = tarfile.TarInfo(f'{identity}/{relative}')
+            info.size = len(data)
+            package.addfile(info, io.BytesIO(data))
+    checksum = audit.sha(archive)
+    (selected.root / 'Cargo.lock').write_text(
+        f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        f'checksum = "{checksum}"\n')
+    out = selected.root / f'target/debug/build/{name}-1234abcd/out'
+    out.mkdir(parents=True)
+    output = out / 'private.rs'
+    # Independent reviewed output literal, including serde's extra core import.
+    module = ('#[doc(hidden)]\npub mod __privatePATCH {\n'
+              '    #[doc(hidden)]\n    pub use crate::private::*;\n}\n')
+    if name == 'serde':
+        module += 'use serde_core::__privatePATCH as serde_core_private;\n'
+    output.write_text(module.replace('PATCH', suffix))
+    package_id = f'registry+https://github.com/rust-lang/crates.io-index#{name}@{version}'
+    events = [
+        {'reason': 'build-script-executed', 'package_id': package_id,
+         'out_dir': str(out), 'cfgs': [], 'env': []},
+        {'reason': 'compiler-artifact', 'package_id': package_id,
+         'target': {'kind': ['custom-build'], 'src_path': str(root / 'build.rs')},
+         'manifest_path': str(root / 'Cargo.toml'), 'features': [], 'filenames': []},
+    ]
+    selected.depfile.write_text(selected.depfile.read_text().rstrip() + ' ' + str(output) + '\n')
+    return SimpleNamespace(name=name, version=version, root=root, originals=originals,
+                           archive=archive, output=output, events=events, checksum=checksum)
+
+
+def test_reviewed_private_module_binds_exact_archive_and_output(selected, private_module_generator):
+    item = private_module_generator
+    selected.run(item.events)
+    result = json.loads(selected.args.output.read_text())
+    assert result['passed'] and result['omittedCanonicalInputs'] == []
+    [record] = result['externalDependencyGeneratedInputs']
+    assert record['path'] == str(item.output)
+    assert record['sha256'] == audit.sha(item.output)
+    assert record['cargoLockChecksum'] == record['registryArchiveSha256'] == item.checksum
+    assert {Path(row['path']) for row in record['maintainedGeneratorInputs']} == {
+        item.root / relative for relative in item.originals}
+
+
+@pytest.mark.parametrize('changed', ['Cargo.toml', 'build.rs', 'probe', 'archive',
+                                     'lock-checksum', 'output-suffix', 'output-code',
+                                     'missing-builder', 'extra-output'])
+def test_reviewed_private_module_rejects_changed_custody_or_output(
+        selected, private_module_generator, changed):
+    item = private_module_generator
+    if changed in ('Cargo.toml', 'build.rs', 'probe'):
+        relative = item.originals[-1] if changed == 'probe' else changed
+        (item.root / relative).write_text('changed generator source')
+        message = 'differs from pinned registry archive'
+    elif changed == 'archive':
+        item.archive.write_bytes(item.archive.read_bytes() + b'changed archive')
+        message = 'registry archive checksum mismatch'
+    elif changed == 'lock-checksum':
+        lock = selected.root / 'Cargo.lock'
+        lock.write_text(lock.read_text().replace(item.checksum, '00' * 32))
+        message = 'registry archive checksum mismatch'
+    elif changed in ('output-suffix', 'output-code'):
+        original = item.output.read_text()
+        item.output.write_text(original.replace('__private', '__private0')
+                               if changed == 'output-suffix' else original + 'pub fn injected() {}\n')
+        message = 'Unexpected private module generation'
+    elif changed == 'missing-builder':
+        item.events.pop()
+        message = 'Missing or ambiguous exact dependency generator'
+    else:
+        extra = item.output.with_name('unreviewed.rs')
+        extra.write_text('not the single reviewed private module')
+        selected.depfile.write_text(selected.depfile.read_text().rstrip() + ' ' + str(extra) + '\n')
+        with pytest.raises(SystemExit, match='1'):
+            selected.run(item.events)
+        assert json.loads(selected.args.output.read_text())['omittedCanonicalInputs'] == [str(extra)]
+        return
+    with pytest.raises(ValueError, match=message):
+        audit.external_generated_inputs(item.events)
+
+
+@pytest.mark.parametrize('name,version', [
+    ('serde', '1.0.228'), ('serde', '1.0.230'),
+    ('serde_core', '1.0.228'), ('serde_core', '1.0.230'),
+    ('thiserror', '2.0.18'), ('thiserror', '2.0.22'),
+])
+def test_private_module_admission_rejects_retired_and_unreviewed_versions(selected, name, version):
+    with pytest.raises(ValueError, match='Unreviewed generated dependency version'):
+        audit.external_generated_inputs([
+            {'reason': 'build-script-executed',
+             'package_id': f'registry+https://github.com/rust-lang/crates.io-index#{name}@{version}'}])

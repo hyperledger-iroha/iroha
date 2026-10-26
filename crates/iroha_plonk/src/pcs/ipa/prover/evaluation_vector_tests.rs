@@ -3,7 +3,7 @@
 use ff::Field;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaField};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::*;
 use crate::transcript::{Blake2bHash, Transcript, TranscriptError, TranscriptWriter};

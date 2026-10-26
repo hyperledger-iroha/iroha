@@ -13,7 +13,6 @@ use chacha20poly1305::{
 };
 use incrementalmerkletree::{Position, frontier::Frontier};
 use iroha_data_model::privacy::{PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1};
-use nonempty::NonEmpty;
 use orchard::{
     Action, Address, Anchor, Bundle, Proof,
     builder::{Builder, BundleType, InProgress, Unauthorized},
@@ -32,8 +31,7 @@ pub use orchard::{
     note::Note,
     tree::MerklePath,
 };
-use rand::TryRngCore as _;
-use rand_core_06::{CryptoRng as CryptoRng06, RngCore as RngCore06};
+use rand_core::{TryCryptoRng, TryRng, UnwrapErr};
 use sha2::{Digest as _, Sha256};
 use std::sync::OnceLock;
 use thiserror::Error;
@@ -41,18 +39,18 @@ use zeroize::{Zeroize, Zeroizing};
 /// Maximum Orchard actions admitted by the first-release Taira profile.
 pub const ORCHARD_MAX_ACTIONS_V1: usize = 2;
 /// Exact pinned upstream Orchard crate version.
-pub const ORCHARD_UPSTREAM_CRATE_VERSION_V1: &str = "0.15.4";
+pub const ORCHARD_UPSTREAM_CRATE_VERSION_V1: &str = "0.16.0";
 /// Exact pinned upstream source revision.
-pub const ORCHARD_UPSTREAM_REVISION_V1: &str = "9d07047d32c4787e1b7964b4cf4fa0286c93824c";
+pub const ORCHARD_UPSTREAM_REVISION_V1: &str = "8190e4d9b7e9c0140964e88b71f95276d2b50470";
 /// SHA-256 of the pinned upstream Post-NU6.3 circuit description.
 pub const ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1: &str =
     "8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90";
 /// Magic and version for the sole first-release Orchard authorization wire.
 pub const ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1: [u8; 4] = *b"ORC1";
-/// Exact retained rand-core 0.6 bridge used by the Orchard producer.
+/// Exact retained rand-core 0.10 bridge used by the Orchard producer.
 pub(crate) const ORCHARD_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"bridge=chacha20poly1305-aead:source-key=entropy[0..32]:source-nonce=entropy[32..44]:source-plaintext=entropy[44..64]+IROHA-ORC-V1:seed-aad=iroha.privacy.orchard-v3.prover-rng.seed-bridge.v1:retained-key=ciphertext32:nonce-prefix=tag[0..4]:stream-aad=iroha.privacy.orchard-v3.prover-rng.stream-block.v1:stream-nonce=prefix4+u64be-counter:stream-plaintext=stream-aad+zeros-to64:counter-start=0:counter-u64max-exclusive:consumed-bytes-zeroized:state-zeroized+poisoned-on-error-unwind-drop:single-state-no-replay:v1";
 /// Complete native-engine profile descriptor.
-pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.15.4@9d07047d32c4787e1b7964b4cf4fa0286c93824c|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.3.4:halo2-gadgets-0.5.0:incrementalmerkletree-0.8.2:pasta-curves-0.5.2:reddsa-0.5.2|producer=native-builder:two-phase-prepare-then-consuming-authorize:nonempty-spend-or-wallet-change:PostNu6_3:self-verified|prover_rng=shared-rand0.9-TryCryptoRng-fixed64-health-policy-v1+orchard-retained-bridge-policy-v1|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-native-consensus-binding-digest-and-public-bundle-v1|legacy=unrepresentable";
+pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.16.0@8190e4d9b7e9c0140964e88b71f95276d2b50470|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.4.0:halo2-gadgets-0.6.0:incrementalmerkletree-0.9.0:pasta-curves-0.6.1:reddsa-0.6.1|producer=native-builder:two-phase-prepare-then-consuming-authorize:nonempty-spend-or-wallet-change:PostNu6_3:self-verified|prover_rng=shared-rand0.10-TryCryptoRng-fixed64-health-policy-v1+orchard-retained-bridge-policy-v1|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-native-consensus-binding-digest-and-public-bundle-v1|legacy=unrepresentable";
 const SIGHASH_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.bundle-sighash.v1";
 const PROVER_RNG_SEED_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.seed-bridge.v1";
 const PROVER_RNG_STREAM_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.stream-block.v1";
@@ -766,7 +764,7 @@ fn orchard_v3_proving_key() -> &'static ProvingKey {
     static PROVING_KEY: OnceLock<ProvingKey> = OnceLock::new();
     PROVING_KEY.get_or_init(|| ProvingKey::build(OrchardCircuitVersion::PostNu6_3))
 }
-/// Zeroizing deterministic bridge into the pinned rand-core 0.6 Orchard API.
+/// Zeroizing deterministic bridge into the pinned rand-core 0.10 Orchard API.
 ///
 /// The caller's complete health-checked 64-byte block is compressed into the
 /// key without a plain stack seed. The retained key, nonce prefix, and unread
@@ -837,7 +835,7 @@ impl OrchardUpstreamRngV1 {
         self.next_block.zeroize();
         self.poisoned = true;
     }
-    fn try_refill_v1(&mut self) -> Result<(), rand_core_06::Error> {
+    fn try_refill_v1(&mut self) -> Result<(), OrchardProverErrorV1> {
         if self.poisoned {
             return Err(orchard_upstream_rng_error_v1());
         }
@@ -876,7 +874,10 @@ impl OrchardUpstreamRngV1 {
         transition.disarm();
         Ok(())
     }
-    fn try_fill_canonical_v1(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+    fn try_fill_canonical_v1(
+        &mut self,
+        destination: &mut [u8],
+    ) -> Result<(), OrchardProverErrorV1> {
         if self.poisoned {
             self.poison_v1();
             destination.zeroize();
@@ -906,28 +907,26 @@ impl Drop for OrchardUpstreamRngV1 {
         self.poison_v1();
     }
 }
-impl RngCore06 for OrchardUpstreamRngV1 {
-    fn next_u32(&mut self) -> u32 {
+impl TryRng for OrchardUpstreamRngV1 {
+    type Error = OrchardProverErrorV1;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
+        self.try_fill_canonical_v1(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
+        self.try_fill_canonical_v1(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        self.try_fill_canonical_v1(destination)
-            .expect("zeroizing Orchard RNG bridge exhausted its fixed counter");
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         self.try_fill_canonical_v1(destination)
     }
 }
-impl CryptoRng06 for OrchardUpstreamRngV1 {}
-fn orchard_upstream_rng_error_v1() -> rand_core_06::Error {
-    rand_core_06::Error::new(OrchardProverErrorV1::RandomnessUnavailable)
+impl TryCryptoRng for OrchardUpstreamRngV1 {}
+fn orchard_upstream_rng_error_v1() -> OrchardProverErrorV1 {
+    OrchardProverErrorV1::RandomnessUnavailable
 }
 fn map_orchard_randomness_error_v1(
     error: TryCryptoProverRandomnessErrorV1,
@@ -959,7 +958,7 @@ fn public_draft_from_bundle_v1<T: Authorization>(bundle: &Bundle<T, i64>) -> Orc
             randomized_key: <[u8; 32]>::from(action.rk()),
             note_commitment: action.cmx().to_bytes(),
             ephemeral_key: action.encrypted_note().epk_bytes,
-            encrypted_note: action.encrypted_note().enc_ciphertext,
+            encrypted_note: action.encrypted_note().enc_ciphertext.0,
             outgoing_ciphertext: action.encrypted_note().out_ciphertext,
             value_commitment: action.cv_net().to_bytes(),
         })
@@ -1024,7 +1023,7 @@ fn parse_action(
         note_commitment,
         TransmittedNoteCiphertext {
             epk_bytes: action.ephemeral_key,
-            enc_ciphertext: action.encrypted_note,
+            enc_ciphertext: orchard::note_encryption::NoteBytesData(action.encrypted_note),
             out_ciphertext: action.outgoing_ciphertext,
         },
         value_commitment,
@@ -1133,13 +1132,13 @@ pub fn prepare_orchard_bundle_v1_with_rng<R: rand::TryCryptoRng + ?Sized>(
             .map_err(|_| OrchardProverErrorV1::ChangeInput { index })?;
         signing_keys.push(signing_key);
     }
-    // The pinned upstream Orchard crate consumes the rand-core 0.6 traits and
+    // The pinned upstream Orchard crate consumes the rand-core 0.10 traits and
     // exposes infallible `fill_bytes` internally. Seed one in-memory CSPRNG only
     // after all deterministic input checks, so operating-system entropy failure
     // remains a typed error and cannot become a panic halfway through proving.
     let mut upstream_rng = seeded_upstream_rng_v1(randomness)?;
     let (unsigned, _) = builder
-        .build::<i64>(&mut upstream_rng)
+        .build::<i64>(UnwrapErr(&mut upstream_rng))
         .map_err(|_| OrchardProverErrorV1::BundleConstruction)?
         .ok_or(OrchardProverErrorV1::BundleConstruction)?;
     if unsigned.actions().len() != expected_actions
@@ -1148,7 +1147,7 @@ pub fn prepare_orchard_bundle_v1_with_rng<R: rand::TryCryptoRng + ?Sized>(
         return Err(OrchardProverErrorV1::OutputShape);
     }
     let proven = unsigned
-        .create_proof(orchard_v3_proving_key(), &mut upstream_rng)
+        .create_proof(orchard_v3_proving_key(), UnwrapErr(&mut upstream_rng))
         .map_err(|_| OrchardProverErrorV1::Halo2Proof)?;
     let draft = public_draft_from_bundle_v1(&proven);
     Ok(OrchardPreparedBundleV1 {
@@ -1174,7 +1173,7 @@ pub fn prepare_orchard_bundle_v1(
         spends,
         changes,
         minimum_action_count,
-        &mut rand::rngs::OsRng,
+        &mut rand::rngs::SysRng,
     )
 }
 /// Consume a prepared bundle and authorize its exact randomized public actions.
@@ -1231,7 +1230,11 @@ pub fn authorize_orchard_bundle_v1(
     let mut upstream_rng = prepared.upstream_rng;
     let authorized = prepared
         .proven
-        .apply_signatures(&mut upstream_rng, sighash, &prepared.signing_keys)
+        .apply_signatures(
+            UnwrapErr(&mut upstream_rng),
+            sighash,
+            &prepared.signing_keys,
+        )
         .map_err(|_| OrchardProverErrorV1::Authorization)?;
     let proved = encode_authorized_bundle_v1(&authorized, consensus_binding)?;
     if proved.public != public {
@@ -1265,17 +1268,23 @@ pub fn verify_orchard_bundle_v1(
     let authorization = decode_authorization_wire_v1(proof_bytes, public.actions.len())?;
     let anchor = Option::<Anchor>::from(Anchor::from_bytes(public.anchor))
         .ok_or(OrchardNativeErrorV1::AnchorEncoding)?;
-    let actions = public
+    let mut actions = public
         .actions
         .iter()
         .zip(authorization.spend_authorization_signatures)
         .enumerate()
         .map(|(index, (action, signature))| parse_action(index, action, signature))
         .collect::<Result<Vec<_>, _>>()?;
-    let actions = NonEmpty::from_vec(actions).ok_or(OrchardNativeErrorV1::ActionCount {
-        actual: 0,
-        max: ORCHARD_MAX_ACTIONS_V1,
-    })?;
+    if actions.is_empty() {
+        return Err(OrchardNativeErrorV1::ActionCount {
+            actual: 0,
+            max: ORCHARD_MAX_ACTIONS_V1,
+        });
+    }
+    // Construct the upstream nonempty sequence through its public tuple API.
+    // Removing the first element preserves the original action order and backing.
+    let first_action = actions.remove(0);
+    let actions = (first_action, actions).into();
     let authorization = Authorized::from_parts(
         Proof::new(authorization.halo2_proof.to_vec()),
         redpallas::Signature::<Binding>::from(authorization.binding_signature),
@@ -1323,7 +1332,7 @@ pub(crate) mod tests {
         builder::{Builder, BundleType},
         bundle::BundleVersion,
     };
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::{SeedableRng as _, rngs::StdRng};
     use std::sync::OnceLock;
     fn consensus_limits() -> PrivacyConsensusLimitsV1 {
         PrivacyConsensusLimitsV1::taira_default()
@@ -1441,8 +1450,9 @@ pub(crate) mod tests {
             formatter.write_str("injected Orchard prover entropy failure")
         }
     }
+    impl core::error::Error for ProverEntropyErrorV1 {}
     struct ProverEntropyRngV1(ProverEntropyModeV1);
-    impl rand::TryRngCore for ProverEntropyRngV1 {
+    impl rand::TryRng for ProverEntropyRngV1 {
         type Error = ProverEntropyErrorV1;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0_u8; 4];
@@ -1519,7 +1529,7 @@ pub(crate) mod tests {
             }
         }
     }
-    impl rand::TryRngCore for RecordingEntropyRngV1 {
+    impl rand::TryRng for RecordingEntropyRngV1 {
         type Error = ProverEntropyErrorV1;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0_u8; 4];
@@ -1544,7 +1554,7 @@ pub(crate) mod tests {
     struct PanicEntropyRngV1 {
         requests: usize,
     }
-    impl rand::TryRngCore for PanicEntropyRngV1 {
+    impl rand::TryRng for PanicEntropyRngV1 {
         type Error = ProverEntropyErrorV1;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("deterministically invalid input reached entropy")
@@ -1989,11 +1999,19 @@ pub(crate) mod tests {
         assert_eq!(first_source.requests, [ORCHARD_PROVER_ENTROPY_BYTES_V1]);
         assert_eq!(second_source.requests, [ORCHARD_PROVER_ENTROPY_BYTES_V1]);
         let mut expected = [0_u8; 257];
-        first.fill_bytes(&mut expected);
+        first
+            .try_fill_bytes(&mut expected)
+            .expect("healthy retained RNG");
         let mut actual = [0_u8; 257];
-        second.fill_bytes(&mut actual[..13]);
-        second.fill_bytes(&mut actual[13..191]);
-        second.fill_bytes(&mut actual[191..]);
+        second
+            .try_fill_bytes(&mut actual[..13])
+            .expect("healthy retained RNG");
+        second
+            .try_fill_bytes(&mut actual[13..191])
+            .expect("healthy retained RNG");
+        second
+            .try_fill_bytes(&mut actual[191..])
+            .expect("healthy retained RNG");
         assert_eq!(actual, expected);
         second.poison_v1();
         assert_eq!(*second.key, [0; 32]);
@@ -2005,7 +2023,9 @@ pub(crate) mod tests {
         let mut unwind_source = RecordingEntropyRngV1::new();
         let mut unwinding = seeded_upstream_rng_v1(&mut unwind_source).expect("healthy source");
         let mut first_byte = [0_u8; 1];
-        unwinding.fill_bytes(&mut first_byte);
+        unwinding
+            .try_fill_bytes(&mut first_byte)
+            .expect("healthy retained RNG");
         assert_ne!(*unwinding.key, [0; 32]);
         assert!(unwinding.reservoir.iter().any(|byte| *byte != 0));
         assert!(
@@ -2025,7 +2045,9 @@ pub(crate) mod tests {
         let mut exhausted_source = RecordingEntropyRngV1::new();
         let mut exhausted = seeded_upstream_rng_v1(&mut exhausted_source).expect("healthy source");
         let mut consumed_prefix = [0_u8; 60];
-        exhausted.fill_bytes(&mut consumed_prefix);
+        exhausted
+            .try_fill_bytes(&mut consumed_prefix)
+            .expect("healthy retained RNG");
         exhausted.next_block = u64::MAX;
         let mut destination = [0x5A; 32];
         assert!(exhausted.try_fill_bytes(&mut destination).is_err());
@@ -2044,7 +2066,9 @@ pub(crate) mod tests {
         let mut baseline_rng =
             OrchardUpstreamRngV1::from_entropy_v1(&entropy).expect("fixed entropy shape");
         let mut baseline = [0_u8; ORCHARD_UPSTREAM_RNG_BLOCK_BYTES_V1];
-        baseline_rng.fill_bytes(&mut baseline);
+        baseline_rng
+            .try_fill_bytes(&mut baseline)
+            .expect("healthy retained RNG");
         assert_eq!(
             hex::encode(baseline_rng.key.as_slice()),
             "71135673e9a5c7256fd5cb3f820064174c51b0d5deff28ac83b2395443c4e026"
@@ -2063,7 +2087,9 @@ pub(crate) mod tests {
             let mut mutated_rng = OrchardUpstreamRngV1::from_entropy_v1(&mutated_entropy)
                 .expect("fixed entropy shape");
             let mut mutated = [0_u8; ORCHARD_UPSTREAM_RNG_BLOCK_BYTES_V1];
-            mutated_rng.fill_bytes(&mut mutated);
+            mutated_rng
+                .try_fill_bytes(&mut mutated)
+                .expect("healthy retained RNG");
             assert_ne!(mutated, baseline, "entropy byte {index} was not bound");
         }
     }

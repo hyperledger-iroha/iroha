@@ -46,7 +46,7 @@ use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::NetworkId;
 use iroha_model_base::peer::PeerId;
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 #[cfg(test)]
 use std::num::NonZeroUsize;
 use std::{collections::HashSet, fmt, time::Duration};
@@ -733,7 +733,7 @@ pub fn signed_request_headers(
     uri: &crate::Uri,
     body: &[u8],
 ) -> Result<HeaderMap, OperatorSignatureError> {
-    signed_request_headers_with_rng(key_pair, network_id, method, uri, body, &mut OsRng)
+    signed_request_headers_with_rng(key_pair, network_id, method, uri, body, &mut SysRng)
 }
 fn signed_request_headers_with_rng<R: TryCryptoRng>(
     key_pair: &KeyPair,
@@ -783,7 +783,7 @@ pub fn signed_torii_proxy_request_headers(
         method,
         uri,
         body,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
@@ -1092,7 +1092,7 @@ mod tests {
         OperatorWebAuthnAlgorithm, OperatorWebAuthnConfig, ToriiOperatorAuth,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     use std::{
         sync::{Arc, Barrier},
         thread,
@@ -1102,12 +1102,13 @@ mod tests {
     struct FailingOperatorNonceRng;
     #[derive(Debug)]
     struct FailingOperatorNonceRngError;
+    impl std::error::Error for FailingOperatorNonceRngError {}
     impl fmt::Display for FailingOperatorNonceRngError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("failing operator nonce RNG")
         }
     }
-    impl TryRngCore for FailingOperatorNonceRng {
+    impl TryRng for FailingOperatorNonceRng {
         type Error = FailingOperatorNonceRngError;
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingOperatorNonceRngError)

@@ -259,8 +259,12 @@ fn public_key_validation_call_count() -> usize {
 // ML-DSA-65 wire widths are stable protocol constants. Keep them available
 // when the optional native PQC backend is disabled so
 // parsers preserve the same framing and algorithm discriminant.
-const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
-const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+/// Encoded FIPS 204 ML-DSA-65 public key length.
+pub const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
+/// Encoded FIPS 204 ML-DSA-65 signature length.
+pub const ML_DSA_65_SIGNATURE_BYTES: usize = 3_309;
+/// Encoded FIPS 204 ML-DSA-65 expanded secret key length.
+pub const ML_DSA_65_SECRET_KEY_BYTES: usize = 4_032;
 /// Protocol-wide ceiling for the raw payload of any canonical public key.
 ///
 /// This excludes the one-byte algorithm tag stored by [`PublicKey`]. The
@@ -430,7 +434,7 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
-                let mut rng = rand::rngs::OsRng;
+                let mut rng = rand::rngs::SysRng;
                 let private =
                     sm::Sm2PrivateKey::try_random(sm::Sm2PublicKey::default_distid(), &mut rng)
                         .map_err(|err| Error::KeyGen(err.to_string()))?;
@@ -2499,37 +2503,36 @@ struct MlDsaSecretKey {
 }
 #[cfg(feature = "pqc")]
 struct MlDsaSecretKeyInner {
-    secret: pqcrypto_mldsa::mldsa65::SecretKey,
+    secret: [u8; 4032],
 }
 #[cfg(feature = "pqc")]
 impl MlDsaSecretKey {
-    fn new(inner: &pqcrypto_mldsa::mldsa65::SecretKey) -> Self {
+    fn new(inner: &[u8; 4032]) -> Self {
         Self {
             inner: Arc::new(MlDsaSecretKeyInner { secret: *inner }),
         }
     }
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
-        use pqcrypto_traits::sign::SecretKey as _;
         soranet_pq::validate_mldsa_secret_key(soranet_pq::MlDsaSuite::MlDsa65, bytes)
             .map_err(|err| ParseError::Invalid(err.to_string()))?;
-        let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
-            .map_err(|err| ParseError::Invalid(err.to_string()))?;
+        let mut inner: [u8; 4032] = bytes
+            .try_into()
+            .map_err(|_| ParseError::Invalid("invalid ML-DSA secret key length".to_owned()))?;
         let secret = Self::new(&inner);
         zeroize_mldsa_secret_key(&mut inner);
         Ok(secret)
     }
-    fn as_secret(&self) -> &pqcrypto_mldsa::mldsa65::SecretKey {
+    fn as_secret(&self) -> &[u8; 4032] {
         &self.inner.secret
     }
     fn to_vec(&self) -> Vec<u8> {
-        use pqcrypto_traits::sign::SecretKey as _;
-        self.inner.secret.as_bytes().to_vec()
+        self.inner.secret.as_slice().to_vec()
     }
     fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
         self.try_sign_with_context(&[], payload)
     }
     fn try_sign_with_context(&self, context: &[u8], payload: &[u8]) -> Result<Vec<u8>, Error> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.try_sign_with_context_and_rng(context, payload, &mut rng)
     }
     #[cfg(test)]
@@ -2546,12 +2549,11 @@ impl MlDsaSecretKey {
         payload: &[u8],
         rng: &mut R,
     ) -> Result<Vec<u8>, Error> {
-        use pqcrypto_traits::sign::SecretKey as _;
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
         soranet_pq::sign_mldsa_from_rng(
             soranet_pq::MlDsaSuite::MlDsa65,
-            self.as_secret().as_bytes(),
+            self.as_secret().as_slice(),
             context,
             payload,
             rng,
@@ -2565,12 +2567,11 @@ impl MlDsaSecretKey {
         payload: &[u8],
         rng: &mut soranet_pq::HedgedChaCha20Rng,
     ) -> Result<Vec<u8>, Error> {
-        use pqcrypto_traits::sign::SecretKey as _;
         mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
             .map_err(|err| Error::Signing(err.to_string()))?;
         soranet_pq::sign_mldsa(
             soranet_pq::MlDsaSuite::MlDsa65,
-            self.as_secret().as_bytes(),
+            self.as_secret().as_slice(),
             context,
             payload,
             rng,
@@ -2586,8 +2587,7 @@ impl MlDsaSecretKey {
 #[cfg(feature = "pqc")]
 impl PartialEq for MlDsaSecretKey {
     fn eq(&self, other: &Self) -> bool {
-        use pqcrypto_traits::sign::SecretKey as _;
-        self.inner.secret.as_bytes() == other.inner.secret.as_bytes()
+        self.inner.secret.as_slice() == other.inner.secret.as_slice()
     }
 }
 #[cfg(feature = "pqc")]
@@ -2595,22 +2595,8 @@ impl Eq for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
 impl ZeroizeOnDrop for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
-#[allow(unsafe_code)]
-fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
-    use core::{mem, ptr, slice};
-    let byte_ptr = ptr::addr_of_mut!(*secret).cast::<u8>();
-    // SAFETY: `byte_ptr` points to the complete live `SecretKey` object. The
-    // upstream type is a plain fixed-size byte wrapper; treating its object
-    // representation as bytes is the same layout assumption required to hold
-    // the key at all. `Zeroize` uses volatile stores plus a compiler fence, so
-    // the erase cannot be removed merely because the object is about to drop.
-    let bytes = unsafe {
-        slice::from_raw_parts_mut(
-            byte_ptr,
-            mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
-        )
-    };
-    zeroize::Zeroize::zeroize(bytes);
+fn zeroize_mldsa_secret_key(secret: &mut [u8; 4032]) {
+    zeroize::Zeroize::zeroize(secret);
 }
 #[cfg(feature = "pqc")]
 impl Drop for MlDsaSecretKeyInner {

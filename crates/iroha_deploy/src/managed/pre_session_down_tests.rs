@@ -37,6 +37,7 @@ fn starting(context: ManagedContext) -> ManagedStatus {
         phase: ManagedPhase::Starting,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     }
 }
 
@@ -67,6 +68,7 @@ fn pre_session_down_waits_for_owned_failure_and_preserves_retained_generation() 
         phase: ManagedPhase::Failed,
         running_peers: 0,
         failure: Some("startup program admission failed before control publication".into()),
+        validators: Vec::new(),
     };
     let expected = failed.clone();
     let owned_directory = directory.retain().unwrap();
@@ -154,7 +156,9 @@ fn pre_session_down_refuses_present_malformed_session_without_clearing_ownership
         .write_atomic(WORKER, b"malformed", PublishMode::CreateNew)
         .unwrap();
     let _runtime = acquire(&directory, "runtime.lock", "local").unwrap();
-    let expected = exchange(&directory, "down").unwrap_err().to_string();
+    let expected = exchange(&directory, ControlAction::Down)
+        .unwrap_err()
+        .to_string();
     assert_eq!(store.down("local").unwrap_err().to_string(), expected);
     assert!(runtime_owned(&directory).unwrap());
     assert_eq!(
@@ -184,6 +188,7 @@ fn down_closes_actual_owner_exit_after_session_admission_and_refuses_changed_ses
         phase: ManagedPhase::Failed,
         running_peers: 0,
         failure: Some("startup failed after session publication".into()),
+        validators: Vec::new(),
     };
     directory
         .write_atomic(
@@ -305,7 +310,7 @@ fn down_requires_original_context_and_terminal_zero_peer_authenticated_reply() {
                 if let Some(mut connection) = listener.accept().unwrap() {
                     let request = connection.receive().unwrap();
                     assert_eq!(request.token, token);
-                    assert_eq!(request.action, "down");
+                    assert_eq!(request.action, ControlAction::Down);
                     connection.reply(&reply).unwrap();
                     break;
                 }
@@ -330,6 +335,7 @@ fn down_requires_original_context_and_terminal_zero_peer_authenticated_reply() {
         phase: ManagedPhase::Stopped,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     };
     let expected = terminal.clone();
     let worker = thread::spawn(move || {
@@ -338,7 +344,7 @@ fn down_requires_original_context_and_terminal_zero_peer_authenticated_reply() {
             if let Some(mut connection) = listener.accept().unwrap() {
                 let request = connection.receive().unwrap();
                 assert_eq!(request.token, token);
-                assert_eq!(request.action, "down");
+                assert_eq!(request.action, ControlAction::Down);
                 connection.reply(&terminal).unwrap();
                 drop(runtime);
                 break;
@@ -366,6 +372,7 @@ fn deadline_session(
         phase: ManagedPhase::Stopped,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     };
     directory
         .write_atomic(
@@ -403,7 +410,7 @@ fn down_waits_for_delayed_terminal_reply_and_original_owner_release() {
             if let Some(mut connection) = listener.accept().unwrap() {
                 let request = connection.receive().unwrap();
                 assert_eq!(request.token, token);
-                assert_eq!(request.action, "down");
+                assert_eq!(request.action, ControlAction::Down);
                 thread::sleep(Duration::from_secs(11));
                 owned
                     .write_atomic(STATUS, &encode(&terminal).unwrap(), PublishMode::Replace)
@@ -437,7 +444,7 @@ fn late_terminal_reply_cannot_extend_down_observation_or_prove_cleanup() {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(mut connection) = listener.accept().unwrap() {
-                assert_eq!(connection.receive().unwrap().action, "down");
+                assert_eq!(connection.receive().unwrap().action, ControlAction::Down);
                 held.recv_timeout(Duration::from_secs(5)).unwrap();
                 let _ = connection.reply(&terminal);
                 drop(runtime);
@@ -472,7 +479,7 @@ fn terminal_reply_does_not_restart_owner_observation_deadline() {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Some(mut connection) = listener.accept().unwrap() {
-                assert_eq!(connection.receive().unwrap().action, "down");
+                assert_eq!(connection.receive().unwrap().action, ControlAction::Down);
                 connection.reply(&terminal).unwrap();
                 held.recv_timeout(Duration::from_secs(5)).unwrap();
                 drop(runtime);

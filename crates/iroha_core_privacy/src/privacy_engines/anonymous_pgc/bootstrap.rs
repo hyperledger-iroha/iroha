@@ -15,7 +15,7 @@ use crate::privacy_engines::p256::{
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
 use p256::{ProjectivePoint, Scalar};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 /// Closed suite for the complete PGC account-bootstrap proof.
 pub const PGC_BOOTSTRAP_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.p256.sha256.v1";
@@ -486,7 +486,7 @@ fn prove_well_formed<R>(
     rng: &mut R,
 ) -> Result<PgcBootstrapWellFormedProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let key = statement.public_keys[index].point.to_projective()?;
@@ -571,7 +571,7 @@ fn prove_unsigned_range<R>(
     rng: &mut R,
 ) -> Result<PgcBootstrapUnsignedRangeProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let commitment = statement.encrypted_balances[index].right.to_projective()?;
@@ -781,7 +781,7 @@ fn prove_aggregate_supply<R>(
     rng: &mut R,
 ) -> Result<PgcBootstrapAggregateSupplyProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let aggregate_right = sum_points(
@@ -881,7 +881,7 @@ pub fn prove_bootstrap<R>(
     rng: &mut R,
 ) -> Result<AnonymousPgcBootstrapProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     super::validate_binding(&statement.transcript_binding)?;
     let aggregate_randomness = validate_witness(statement, witness)?;
@@ -965,7 +965,6 @@ pub fn verify_bootstrap_encoded(
 mod tests {
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     const TEST_NAMESPACE: &[u8] = b"canonical-norito:anonymous-pgc:taira-pool-7";
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
@@ -1005,56 +1004,60 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            let mut offset = 0;
-            while offset < destination.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.anonymous-pgc.bootstrap.kat-rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (destination.len() - offset).min(block.len());
-                destination[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < destination.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.anonymous-pgc.bootstrap.kat-rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (destination.len() - offset).min(block.len());
+                    destination[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     struct PeriodicRng;
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("PGC bootstrap must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("PGC bootstrap must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = ((index % 16) as u8).wrapping_mul(19).wrapping_add(7);
             }
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
+    impl rand::TryCryptoRng for PeriodicRng {}
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());

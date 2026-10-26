@@ -111,7 +111,7 @@ All mutable collections and byte arrays are copied on construction and access. U
   Android source seal after every ABI and immediately before and after each raw
   or stripped/provenance promotion, and binds the dependency-closure fingerprint
   into provenance. AGP packages those generated outputs and explicitly excludes
-  `src/main/jniLibs`. Every ABI uses canonical Rust 1.93.1 `cargo`, `rustc`, and
+  `src/main/jniLibs`. Every ABI uses canonical Rust 1.99.1 `cargo`, `rustc`, and
   `rustdoc`, plus `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`,
   and `CARGO_NET_OFFLINE=true`. Stock Cargo receives
   `--locked --offline --jobs 1 --manifest-path <canonical-iroha-root>/Cargo.toml`
@@ -199,4 +199,4 @@ operations, Android artifacts or physical devices.
 
 ## Version Catalog
 
-Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.4.21, AGP 9.4.1, JUnit 5.14.4, BouncyCastle 1.86, zstd-jni 1.5.7-24, OkHttp 5.5.1, Netty 4.1.139.Final.
+Dependencies managed in `gradle/libs.versions.toml`: Kotlin 2.4.21, AGP 9.4.1, JUnit 5.14.4, BouncyCastle 1.86, zstd-jni 1.5.7-24, OkHttp 5.5.1, Netty 4.2.19.Final.

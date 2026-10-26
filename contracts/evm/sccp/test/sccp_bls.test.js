@@ -31,7 +31,7 @@ const h = require("./sccp_edr_harness.js");
 const { Ledger } = require("./sccp_replay.js");
 
 const { ethers, REPO, RUNTIME_DIR } = m;
-const { bls12_381: noble } = createRequire(path.join(RUNTIME_DIR, "package.json"))("@noble/curves/bls12-381");
+const { bls12_381: noble } = createRequire(path.join(RUNTIME_DIR, "package.json"))("@noble/curves/bls12-381.js");
 
 const LIBRARY_SOURCE = "contracts/evm/sccp/lib/BLS12_381.sol";
 const HARNESS_SOURCE = "contracts/evm/sccp/test/harness/SccpBlsHarness.sol";
@@ -164,7 +164,7 @@ function g2Bytes(point) {
 
 /** EIP-2537 form of a G1 point of `@noble/curves` (the identity is 128 zero bytes). */
 function g1Bytes(point) {
-  if (point.equals(noble.G1.ProjectivePoint.ZERO)) return zeros(128);
+  if (point.equals(noble.G1.Point.ZERO)) return zeros(128);
   const { x, y } = point.toAffine();
   return ethers.concat([fieldElement(x), fieldElement(y)]);
 }
@@ -199,7 +199,7 @@ function fixtureAffine(compressed, group) {
   const fp2 = noble.fields.Fp2;
   if (!infinity && x.c0 < P && x.c1 < P) {
     try {
-      y = fp2.sqrt(fp2.add(fp2.pow(x, 3n), noble.params.G2b));
+      y = fp2.sqrt(fp2.add(fp2.pow(x, 3n), noble.G2.Point.CURVE().b));
       if (((y.c1 === 0n ? y.c0 : y.c1) > HALF_P) !== sign) y = fp2.neg(y);
     } catch { /* Preserve invalid coordinates for the precompile. */ }
   }
@@ -428,10 +428,10 @@ describe("BLS12_381 source and build", () => {
   const source = fs.readFileSync(path.join(REPO, LIBRARY_SOURCE), "utf8");
   const code = source.replace(/\/\/.*$/gm, "");
 
-  it("compiles with solc 0.8.31, cancun and the legacy pipeline without any diagnostic", () => {
+  it("compiles with solc 0.8.38, cancun and the legacy pipeline without any diagnostic", () => {
     const lockPath = path.join(REPO, "scripts", "contract_tooling", "compiler-lock.json");
     const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-    assert.equal(lock.compilers.evm.reported_version, "0.8.31+commit.fd3a2265");
+    assert.equal(lock.compilers.evm.reported_version, "0.8.38+commit.1835d247");
     assert.equal(lock.settings.evmVersion, "cancun");
     assert.equal(lock.settings.viaIR, false);
     // `compileTestSources` fails on any diagnostic, warnings included.
@@ -446,8 +446,8 @@ describe("BLS12_381 source and build", () => {
   });
 
   it("meets the corridor source policy and imports nothing", () => {
-    assert(source.startsWith("// SPDX-License-Identifier: Apache-2.0\npragma solidity 0.8.31;\n"));
-    assert.deepEqual(code.match(/\bpragma\b[^;]*;/g), ["pragma solidity 0.8.31;"]);
+    assert(source.startsWith("// SPDX-License-Identifier: Apache-2.0\npragma solidity 0.8.38;\n"));
+    assert.deepEqual(code.match(/\bpragma\b[^;]*;/g), ["pragma solidity 0.8.38;"]);
     for (const banned of [/\bimport\b/, /\bdelete\b/, /\blayout\s+at\b/, /\bpublic\b/, /\bexternal\b/]) {
       assert(!banned.test(code), `the library must not contain ${banned}`);
     }
@@ -547,7 +547,7 @@ for (const hardfork of HARDFORKS) {
       assert.equal(p, fieldElement(P));
       assert.equal(halfP, fieldElement(HALF_P));
       assert.equal(negG1, constants.neg_g1.eip2537);
-      assert.equal(negG1, g1Bytes(noble.G1.ProjectivePoint.BASE.negate()));
+      assert.equal(negG1, g1Bytes(noble.G1.Point.BASE.negate()));
       assert.equal(slice(negG1, 0, 64), slice(constants.g1.eip2537, 0, 64));
       assert.equal(BigInt(slice(negG1, 64, 128)), BigInt(constants.neg_g1_y));
       assert.deepEqual([g1Point, g1Pair, g2Point, pairingInput], [128n, 256n, 256n, 768n]);
@@ -631,7 +631,7 @@ for (const hardfork of HARDFORKS) {
         const q = await bench.hashToG2(trace.msg);
         assert.equal(q, trace.q.eip2537, `${trace.label}: hashToG2`);
         assert.equal(q, expandLimbs(trace.q.evm192));
-        assert.equal(q, g2Bytes(noble.G2.ProjectivePoint.fromHex(trace.q.compressed.slice(2))));
+        assert.equal(q, g2Bytes(noble.G2.Point.fromHex(trace.q.compressed.slice(2))));
         assert.equal(fixtureAffine(trace.q.compressed, 2), q, "fixture translation retains the affine point");
         ledger.ran("hash_to_g2_dst_sig", fixtureRowId(trace, index));
       }
@@ -641,7 +641,7 @@ for (const hardfork of HARDFORKS) {
       assert.equal(BLS.sign_verify.dst, DST_SIG);
       for (const [index, entry] of BLS.sign_verify.signatures.entries()) {
         const key = BLS.sign_verify.keys[entry.key].pk;
-        assert.equal(fixtureAffine(key, 1), g1Bytes(noble.G1.ProjectivePoint.fromHex(key.slice(2))));
+        assert.equal(fixtureAffine(key, 1), g1Bytes(noble.G1.Point.fromHex(key.slice(2))));
         await replayVerification(bench, [key], entry.msg, entry.signature, entry.verify, `sign_verify.signatures/${index}`);
         ledger.ran("sign_verify.signatures", fixtureRowId(entry, index));
       }
@@ -685,8 +685,8 @@ for (const hardfork of HARDFORKS) {
           // of the signature equation. Infinity is legal to EIP-2537, while
           // compressed metadata is outside its affine-only input boundary.
           const input = group === 1
-            ? ethers.concat([point, g2Bytes(noble.G2.ProjectivePoint.BASE), point, g2Bytes(noble.G2.ProjectivePoint.BASE.negate())])
-            : ethers.concat([g1Bytes(noble.G1.ProjectivePoint.BASE), point, g1Bytes(noble.G1.ProjectivePoint.BASE.negate()), point]);
+            ? ethers.concat([point, g2Bytes(noble.G2.Point.BASE), point, g2Bytes(noble.G2.Point.BASE.negate())])
+            : ethers.concat([g1Bytes(noble.G1.Point.BASE), point, g1Bytes(noble.G1.Point.BASE.negate()), point]);
           const parsed = await bench.pairingCheck(input, CLEAN, REFUSAL_GAS);
           assert.equal(parsed.ok, entry.evm_affine_pairing, `${section}/${entry.label}: affine deserialization`);
           await replayVerification(bench, [group === 1 ? entry.encoding : baseline.pk], baseline.msg,
@@ -714,8 +714,8 @@ for (const hardfork of HARDFORKS) {
           // Cancelling pairs isolate EIP-2537's curve and subgroup checks.
           // Identity is legal to this arithmetic API; step 6 excludes it.
           const input = group === 1
-            ? ethers.concat([point, g2Bytes(noble.G2.ProjectivePoint.BASE), point, g2Bytes(noble.G2.ProjectivePoint.BASE.negate())])
-            : ethers.concat([g1Bytes(noble.G1.ProjectivePoint.BASE), point, g1Bytes(noble.G1.ProjectivePoint.BASE.negate()), point]);
+            ? ethers.concat([point, g2Bytes(noble.G2.Point.BASE), point, g2Bytes(noble.G2.Point.BASE.negate())])
+            : ethers.concat([g1Bytes(noble.G1.Point.BASE), point, g1Bytes(noble.G1.Point.BASE.negate()), point]);
           assert.equal((await bench.pairingCheck(input, CLEAN, REFUSAL_GAS)).ok, entry.evm_affine_pairing,
             `${section}/${entry.label}: affine curve/subgroup parsing; upstream compressed decode=${entry.output}`);
           await replayVerification(bench, [key], IMPORTED.baseline.msg,
@@ -766,8 +766,8 @@ for (const hardfork of HARDFORKS) {
         const expected = ethers.concat([...entry.output.x.split(","), ...entry.output.y.split(",")].map(fieldElement));
         assert.equal(actual, expected, `${entry.label}: exact upstream affine point`);
         assert.equal(actual, entry.point.eip2537, `${entry.label}: generated encoding agrees with upstream output`);
-        const pairing = ethers.concat([g1Bytes(noble.G1.ProjectivePoint.BASE), actual,
-          g1Bytes(noble.G1.ProjectivePoint.BASE.negate()), expected]);
+        const pairing = ethers.concat([g1Bytes(noble.G1.Point.BASE), actual,
+          g1Bytes(noble.G1.Point.BASE.negate()), expected]);
         assert.equal((await bench.pairingCheck(pairing)).ok, true, `${entry.label}: library pairing accepts the point`);
         ledger.ran("ethereum.hash_to_G2.map_and_add", fixtureRowId(entry, index));
       }
@@ -897,7 +897,7 @@ for (const hardfork of HARDFORKS) {
     it("adds G1 points in place and keeps the second operand", async () => {
       const keys = FINALITY.test_keys.slice(0, 4);
       const points = keys.map((key) => key.pk_eip2537);
-      const curve = keys.map((key) => noble.G1.ProjectivePoint.fromHex(key.pk.slice(2)));
+      const curve = keys.map((key) => noble.G1.Point.fromHex(key.pk.slice(2)));
       keys.forEach((key, index) => {
         assert.equal(points[index], g1Bytes(curve[index]));
         assert.equal(BigInt(slice(points[index], 64, 128)), BigInt(key.pk_y));

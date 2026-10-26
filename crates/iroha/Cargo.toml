@@ -54,12 +54,13 @@ tls-native-vendored = [
     "tungstenite/native-tls-vendored",
 ]
 tls-rustls-native-roots = [
-    "reqwest/rustls-tls-native-roots",
+    "reqwest/rustls",
     "tokio-tungstenite/rustls-tls-native-roots",
     "tungstenite/rustls-tls-native-roots",
 ]
 tls-rustls-webpki-roots = [
-    "reqwest/rustls-tls-webpki-roots",
+    "dep:webpki-root-certs",
+    "reqwest/rustls",
     "tokio-tungstenite/rustls-tls-webpki-roots",
     "tungstenite/rustls-tls-webpki-roots",
 ]
@@ -83,6 +84,7 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_executor_data_model = { workspace = true }
 
 reqwest = { workspace = true, features = ["blocking"] }
+webpki-root-certs = { version = "1.0.11", optional = true }
 eyre = { workspace = true }
 error-stack = { workspace = true }
 http = "1.3.1"
@@ -92,7 +94,7 @@ base64 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 derive_more = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tungstenite = { workspace = true }
@@ -113,6 +115,8 @@ assertables = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tokio-stream = { workspace = true }
 tempfile = { workspace = true }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
+rustls = { workspace = true, features = ["ring", "tls12"] }
 
 [[test]]
 name = "tx_ttl"

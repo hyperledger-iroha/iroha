@@ -94,7 +94,7 @@ use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, Quantity};
 #[cfg(test)]
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
-use rand::{TryRngCore as _, rngs::OsRng};
+use rand::{TryRng as _, rngs::SysRng};
 pub use service_authorities::LocalnetServiceProfile;
 use std::{
     collections::BTreeSet,
@@ -7768,7 +7768,7 @@ fn write_localnet_runtime_bundle(
     write_private_key_sidecar(&operator_signer_key, http_operator.private_key.as_str())?;
     write_private_key_sidecar(&onboarding_signer_key, onboarding.private_key.as_str())?;
     let mut token_entropy = [0_u8; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut token_entropy)
         .wrap_err("obtain OS entropy for the localnet onboarding token")?;
     let token = Zeroizing::new(format!("iroha-localnet-{}", hex::encode(token_entropy)));

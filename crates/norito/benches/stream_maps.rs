@@ -3,7 +3,7 @@ use norito::{
     Compression, StreamMapIter, decode_from_bytes, serialize_into,
     stream_btreemap_collect_from_reader, stream_hashmap_collect_from_reader,
 };
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::collections::{BTreeMap, HashMap};
 fn gen_maps(n: usize) -> (HashMap<String, u32>, BTreeMap<u64, String>) {
     let mut rng = StdRng::seed_from_u64(42);

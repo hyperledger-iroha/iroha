@@ -67,7 +67,7 @@ use iroha_data_model::{
 use iroha_data_model::{privacy::BootleLanternIssuerPolicyV1, transaction::TransactionPayload};
 #[cfg(test)]
 use iroha_model_base::metadata::Metadata;
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 const PROJECTION_R_STAGE_V1: &[u8] = b"projection-r-v1";
@@ -261,7 +261,7 @@ struct ProjectionProofV1 {
 /// samplers are intentionally variable-work. Deployments must not expose proof
 /// completion timing to an untrusted remote observer or a hostile co-tenant;
 /// use process isolation and a local authenticated invocation boundary.
-pub fn prove_presentation_v1<R: CryptoRng + RngCore>(
+pub fn prove_presentation_v1<R: TryCryptoRng + TryRng>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
     transcript: &PresentationTranscriptV1,
@@ -275,7 +275,7 @@ pub fn prove_presentation_v1<R: CryptoRng + RngCore>(
         MAX_PROOF_SAMPLING_ATTEMPTS_V1,
     )
 }
-pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
+pub(crate) fn prove_blind_issuance_request_v1<R: TryCryptoRng + TryRng>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
     transcript: &BlindIssuanceRequestTranscriptV1,
@@ -291,7 +291,7 @@ pub(crate) fn prove_blind_issuance_request_v1<R: CryptoRng + RngCore>(
     Ok(BootleLanternBlindIssuanceRequestProofV1::from_validated_body_v1(body))
 }
 #[cfg(test)]
-fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
+fn prove_presentation_with_rejection_limit_v1<R: TryCryptoRng + TryRng>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
     transcript: &PresentationTranscriptV1,
@@ -306,7 +306,7 @@ fn prove_presentation_with_rejection_limit_v1<R: CryptoRng + RngCore>(
         rejection_draw_limit,
     )
 }
-fn prove_with_transcript_core_v1<R: CryptoRng + RngCore>(
+fn prove_with_transcript_core_v1<R: TryCryptoRng + TryRng>(
     relation: &BootleLanternApplicationRelationV1,
     witness: &BootleLanternPresentationWitnessV1,
     transcript: &ProofTranscriptCoreV1,
@@ -2116,7 +2116,7 @@ pub fn prepare_bootle_lantern_presentation_privacy_action_with_rng_v1<R>(
     BootleLanternPresentationPrivacyActionBuildErrorV1,
 >
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(BootleLanternPresentationPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -2242,7 +2242,7 @@ pub fn build_signed_bootle_lantern_presentation_privacy_action_with_rng_v1<R>(
     BootleLanternPresentationPrivacyActionBuildErrorV1,
 >
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_bootle_lantern_presentation_signing_authority_v1(&context.authority, private_key)?;
     let prepared = prepare_bootle_lantern_presentation_privacy_action_with_rng_v1(
@@ -2293,8 +2293,8 @@ mod tests {
         PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyVerifierDigestV1,
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha3::{Digest, Sha3_256};
+    use std::io::Error as RngError;
     use std::sync::OnceLock;
     const H_START_TEST: usize = T_B_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
     const T_A1_START_TEST: usize = H_START_TEST + H_POLYNOMIALS_V1 * APPLICATION_RING_DEGREE_V1;
@@ -2312,21 +2312,20 @@ mod tests {
         period: Option<u8>,
     }
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("Bootle/Lantern public preflight reached the random source")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("Bootle/Lantern public preflight reached the random source")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     impl TestRng {
         const fn healthy(seed: u64) -> Self {
             Self {
@@ -2361,24 +2360,26 @@ mod tests {
             }
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_le_bytes(bytes)
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_le_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_le_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_le_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("infallible test invocation");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             if self.fail {
-                return Err(RngError::new("injected Bootle/Lantern RNG failure"));
+                return Err(RngError::other("injected Bootle/Lantern RNG failure"));
             }
             if let Some(byte) = self.stuck {
                 destination.fill(byte);
@@ -2401,7 +2402,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct Fixture {
         policy: BootleLanternIssuerPolicyV1,
         statement: IrohaBootleLanternAnoncredStatementV1,

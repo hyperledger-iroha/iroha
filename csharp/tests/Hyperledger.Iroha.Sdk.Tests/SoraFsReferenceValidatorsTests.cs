@@ -597,16 +597,19 @@ public sealed class SoraFsReferenceValidatorsTests
                 native));
         Assert.Equal(0, native.BlockCalls);
 
-        native.Abi = 20;
-        var abiError = Assert.Throws<InvalidOperationException>(() =>
-            SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
-                new byte[] { 1 },
-                "block.to",
-                null,
-                0,
-                native));
-        Assert.Contains("ABI 33", abiError.Message, StringComparison.Ordinal);
-        Assert.Equal(0, native.BlockCalls);
+        foreach (var abi in new uint[] { 20, 32, 34 })
+        {
+            native.Abi = abi;
+            var abiError = Assert.Throws<InvalidOperationException>(() =>
+                SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
+                    new byte[] { 1 },
+                    "block.to",
+                    null,
+                    0,
+                    native));
+            Assert.Contains("ABI 33", abiError.Message, StringComparison.Ordinal);
+            Assert.Equal(0, native.BlockCalls);
+        }
 
         native.Abi = SoraFsReferenceValidators.RequiredBridgeAbiVersion;
         native.SymbolsAvailable = false;

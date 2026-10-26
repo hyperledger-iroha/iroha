@@ -320,11 +320,18 @@ def await_natural_exit(child, directory, deadline):
         raise
 
 
+def retain_unfinished_child(campaign, error):
+    """Remember uncertain tool ownership before any fallible cleanup or receipt."""
+    if isinstance(error, child_process.UnfinishedChild):
+        child = {'pid': error.pid, 'command': error.argv,
+                 'directory': str(campaign), 'role': 'compiler_custody'}
+        if child not in _UNFINISHED_CHILDREN:
+            _UNFINISHED_CHILDREN.append(child)
+
+
 def retain_failure(campaign, error):
     """Preserve uncertain compiler custody before fallible failure-record I/O."""
-    if isinstance(error, child_process.UnfinishedChild):
-        _UNFINISHED_CHILDREN.append({'pid': error.pid, 'command': error.argv,
-                                    'directory': str(campaign), 'role': 'compiler_custody'})
+    retain_unfinished_child(campaign, error)
     try:
         return save(campaign / 'failure.json', {
             'error': str(error), 'accepted': False, 'custody_reconciliation_required': True})
@@ -335,6 +342,8 @@ def retain_failure(campaign, error):
 
 
 def request_owned_abort(live, setup, failure, child):
+    if _UNFINISHED_CHILDREN:
+        return None  # A second child may still own the campaign's source or custody.
     if child.poll() is not None:
         return None
     if setup is None and (live / 'setup/setup.json').exists():
@@ -615,16 +624,31 @@ def catalog_from_live_setup(campaign, setup, admitted, selected_tools, env):
         admitted['retained'][transport['path']] = transport['sha256']
         admitted['raw_reuse_output'] = str(catalog / 'originals')
         compiler_env['KAGEMUSHA_WALLET_REUSE_INPUTS'] = transport['path']
+    primary_error = None
     try:
         exact_test(compiler, CATALOG, run, compiler_env, admitted, selected_tools)
         if transport is not None:
             require(CATALOG_POLICY.bounded(Path(transport['path']), 16_384)
                     == CATALOG_POLICY.bounded(catalog / 'reuse-inputs.json', 16_384),
                     'native reuse transport differs or is missing')
+    except BaseException as error:
+        primary_error = error
+        retain_unfinished_child(campaign, error)
+        raise
     finally:
-        # Preserve the real subject's result even on failure. This is the same
-        # post-run full content/controlled-hard-link check used by CATALOG_POLICY runner2.
-        if reuse is not None:
+        # Only a naturally completed subject permits a post-run raw custody scan.
+        # An unfinished query must be registered before any receipt can fail.
+        if reuse is not None and _UNFINISHED_CHILDREN:
+            try:
+                save(campaign / 'raw-reuse-after.json', {
+                    'accepted': False, 'postcheck_performed': False,
+                    'state': 'deferred_unfinished_or_uncertain_child',
+                    'automatic_retry_permitted': False, 'custody_reconciliation_required': True})
+            except BaseException:
+                if primary_error is None:
+                    raise
+                # Keep the actual uncertain child exception and in-memory guard.
+        elif reuse is not None:
             try:
                 checked = native_catalog.REUSE.check(
                     reuse, hash_bytes=True, output_originals=catalog / 'originals')
@@ -633,6 +657,7 @@ def catalog_from_live_setup(campaign, setup, admitted, selected_tools, env):
                 raise
             else:
                 save(campaign / 'raw-reuse-after.json', {'accepted': True, 'custody': checked})
+    require(not _UNFINISHED_CHILDREN, 'unfinished child forbids catalog output consumption')
     outputs, pins = native_catalog.completed(catalog, compiler, fixture, component, CATALOG_POLICY)
     save(campaign / 'new-anchor-catalog.json', {'setup': setup, 'fixture': ref(fixture),
         'catalog_outputs': outputs, 'source_pins': pins, 'recursive_finality_graph': False})

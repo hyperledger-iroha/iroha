@@ -41,6 +41,16 @@ public sealed class ConfidentialProverTests
     }
 
     [Fact]
+    public void NativeAvailabilityRequiresExactCurrentBridgeAbi()
+    {
+        Assert.True(ConfidentialWalletNative.SupportsBridgeAbi(33U));
+        Assert.False(ConfidentialWalletNative.SupportsBridgeAbi(30U));
+        Assert.False(ConfidentialWalletNative.SupportsBridgeAbi(31U));
+        Assert.False(ConfidentialWalletNative.SupportsBridgeAbi(32U));
+        Assert.False(ConfidentialWalletNative.SupportsBridgeAbi(34U));
+    }
+
+    [Fact]
     public async Task AcceptedJobSurvivesDisposeAndClearsAllManagedCopies()
     {
         var driver = new Driver(); var key = Word(9); var callerRho = Word(8);

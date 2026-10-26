@@ -1,6 +1,6 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import { AccountAddress } from "../src/address.js";
 import { planDomainLease, SNS_DOMAIN_SUFFIX_ID } from "../src/domainLease.js";

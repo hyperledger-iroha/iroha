@@ -4,7 +4,6 @@
 use super::*;
 use crate::{
     attachment::tests::Fixture,
-    bootstrap::{NetworkRelease, ReleaseCheckpointStore, ReleaseTrust, SignedNetworkCheckpoint},
     verify::finality::FinalityAttestation,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
@@ -29,46 +28,7 @@ fn configuration(fixture: &Fixture) -> Config {
     )
     .unwrap()
 }
-fn bootstrap(fixture: &Fixture, path: &Path) -> AuthenticatedBootstrap {
-    let now = native_operation::now_ms().unwrap();
-    let checkpoint = fixture.parent.checkpoint();
-    let key = KeyPair::from_seed(vec![49; 32], Algorithm::Ed25519);
-    let release = NetworkRelease {
-        network_name: "fixture".into(),
-        serial: 1,
-        generation: 1,
-        network_id: checkpoint.network_id(),
-        chain_id: checkpoint.chain_id().into(),
-        issued_at_ms: now - 1_000,
-        expires_at_ms: now + 600_000,
-        torii_roots: vec!["https://parent.example/".into()],
-        account_chain_discriminant: 753,
-        native_world_schema: Hash::new(b"independently qualified fixture World schema"),
-        peers: checkpoint
-            .tip()
-            .committee
-            .iter()
-            .map(|v| crate::bootstrap::ReleasePeer {
-                node_id: PeerId::new(v.public_key.clone()),
-                torii_root: "https://parent.example/".into(),
-            })
-            .collect(),
-        faucet: None,
-        build_registry: None,
-        checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
-        checkpoint_height: checkpoint.height(),
-        checkpoint_block_hash: checkpoint.block_hash().into(),
-    };
-    let bytes = SignedNetworkCheckpoint::sign(release, &checkpoint, key.private_key())
-        .unwrap()
-        .encode_canonical()
-        .unwrap();
-    let trust = ReleaseTrust::new("fixture".into(), key.public_key().clone(), 1).unwrap();
-    ReleaseCheckpointStore::open(path)
-        .unwrap()
-        .authenticate(&trust, &bytes, now)
-        .unwrap()
-}
+
 fn options() -> BoundedTransactionOptions {
     BoundedTransactionOptions {
         fee_payment: FeePaymentIntent::authority(Vec::new(), None),
@@ -208,7 +168,7 @@ fn administrative_amx_partial_or_changed_origin_is_no_http_and_no_repair() {
     let config = configuration(&fixture);
     let options = options();
     let utc = native_operation::now_ms().unwrap() + 60_000;
-    let bootstrap = bootstrap(&fixture, &root.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
     let mut store =
         AttachmentStore::open(&root.path().join("attachment"), fixture.identity.clone()).unwrap();
@@ -266,7 +226,7 @@ fn administrative_amx_requires_fresh_original_parent_before_signing_and_cancella
     let config = configuration(&fixture);
     let options = options();
     let utc = native_operation::now_ms().unwrap() + 60_000;
-    let bootstrap = bootstrap(&fixture, &root.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
     let mut store =
         AttachmentStore::open(&root.path().join("attachment"), fixture.identity.clone()).unwrap();
@@ -303,7 +263,7 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
     let config = configuration(&fixture);
     let options = options();
     let utc = native_operation::now_ms().unwrap() + 60_000;
-    let bootstrap = bootstrap(&fixture, &root.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&root.path().join("parent"), &bootstrap).unwrap();
     let original =
         encode_bounded(&origin(&fixture, &config, utc, &options), MAX_RECORD_BYTES).unwrap();
@@ -369,7 +329,10 @@ fn administrative_amx_replay_evidence_refuses_missing_journal_before_parent_obse
 fn administrative_amx_replay_requires_genuine_signed_prefix_and_preserves_unsigned_recovery() {
     crate::managed::native_operation::test_support::with_signed_amx_preparation(
         |config, request, original_path| {
-            let source = PrivateDirectory::open_exact(original_path).unwrap();
+            // The temporary root may use an OS alias (for example /var on macOS).
+            // Select the fixture's canonical spelling before exercising exact custody.
+            let original_path = std::fs::canonicalize(original_path).unwrap();
+            let source = PrivateDirectory::open_exact(&original_path).unwrap();
             let request_bytes = source.read("preparation.json", MAX_RECORD_BYTES).unwrap();
             let payload_bytes = source.read("payload.json", MAX_RECORD_BYTES).unwrap();
             let signed_bytes = source.read("operation.json", MAX_RECORD_BYTES).unwrap();

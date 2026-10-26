@@ -4,17 +4,19 @@
 # source trees in tests/conftest.py, so they intentionally do not appear here.
 # Keep these ranges aligned with the local native, SDK, Norito, and Torii pyprojects.
 #
-# Regenerate from the repository root with Python 3.12 and pip-tools 7.6.0:
+# Regenerate from the repository root with Python 3.12 and pip-tools 7.6.2:
 #   python3.12 -m piptools compile --generate-hashes --resolver=backtracking \
 #     --strip-extras --allow-unsafe --output-file python/iroha_python/requirements-ci.lock \
 #     python/iroha_python/requirements-ci.in
 
-blake3==1.0.9
-cryptography==50.0.1
-maturin==1.14.1
-pytest==8.4.2
-requests==2.32.5
+blake3==1.0.11
+cryptography==50.0.2
+maturin==1.15.0
+pytest==9.1.1
+requests==2.34.2
+certifi==2026.10.23
+urllib3==2.8.0
 
 # Canonical pure SDK wheel backend (no unpinned isolated build environment).
-setuptools==84.0.0
+setuptools==84.2.1
 wheel==0.48.0

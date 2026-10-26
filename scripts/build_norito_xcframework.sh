@@ -665,13 +665,13 @@ fi
 
 # The bridge support and its provenance profile are mandatory for every slice.
 CARGO_FEATURE_ARGS=(--features privacy-production-enabled)
-PINNED_RUST_TOOLCHAIN="1.93.1"
+PINNED_RUST_TOOLCHAIN="1.99.1"
 SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 CARGO_GRAPH_OWNER="$ROOT_DIR/ci/privacy_sdk_cargo_lockfile.sh"
 PIN_COMMIT_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 APPLE_SLICE_HANDOFF="$ROOT_DIR/scripts/norito_bridge_apple_slice_handoff.py"
-PQCRYPTO_ARCHIVE_NORMALIZER="$ROOT_DIR/scripts/normalize_pqcrypto_archive.py"
+NATIVE_STATIC_ARCHIVE_AUDITOR="$ROOT_DIR/scripts/audit_native_static_archive.py"
 USER_HOME_DIR="$(run_python312_clean -c \
   'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$(run_python312_clean -c \
@@ -706,7 +706,7 @@ for required_input in \
   "$PIN_COMMIT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$APPLE_SLICE_HANDOFF" \
-  "$PQCRYPTO_ARCHIVE_NORMALIZER" \
+  "$NATIVE_STATIC_ARCHIVE_AUDITOR" \
   "$ROOT_DIR/rust-toolchain.toml"; do
   [[ -f "$required_input" && ! -L "$required_input" ]] || {
     echo "[-] Required NoritoBridge build input is unavailable: $required_input" >&2
@@ -1312,80 +1312,70 @@ check_apple_consumer_link() {
 #include <stdint.h>
 #include <string.h>
 
-/* Pinned PQClean implementation symbols are exercised here, not added to the
- * public bridge ABI. Exact sizes/signatures match pqcrypto-mldsa 0.1.2 and
- * pqcrypto-mlkem 0.1.1. Loading all archive members also checks the accelerated
- * backends' helper closure on each packaged architecture. */
-extern void sha3_256(uint8_t *, const uint8_t *, size_t);
-extern void shake256(uint8_t *, size_t, const uint8_t *, size_t);
-extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(uint8_t *, uint8_t *);
-extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(
-    uint8_t *, size_t *, const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *);
-extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(
-    const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *);
-extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
-extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
-extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
-
-/* Exercise the public ABI consumed by Swift, in addition to the retained
- * PQClean backend checks below. Suite 1 is ML-DSA-65 on the native owner. */
-static int check_mldsa_ffi(void) {
+/* Exercise every ML-DSA and ML-KEM parameter set through the public ABI.
+ * The RustCrypto providers are retained by all-load; no private C backend
+ * symbol or archive is part of the bridge contract. FIPS known-answer vectors
+ * are exercised by the source-owned soranet_pq test suite. */
+static int check_mldsa_ffi(uint32_t suite) {
     static const uint8_t message[] = {'a', 'b', 'c'};
     static const uint8_t changed[] = {'a', 'b', 'd'};
-    uint8_t public_key[1952], secret_key[4032] = {0}, signature[3309];
+    static const uint32_t widths[3][3] = {{1312, 2560, 2420}, {1952, 4032, 3309}, {2592, 4896, 4627}};
+    uint8_t public_key[2592], secret_key[4896] = {0}, signature[4627];
     uint32_t public_len = 0, secret_len = 0, signature_len = 0;
     int result = 14;
-    if (soranet_mldsa_parameters(1, &public_len, &secret_len, &signature_len)) goto done;
-    if (public_len != sizeof(public_key) || secret_len != sizeof(secret_key)
-        || signature_len != sizeof(signature)) goto done;
-    if (soranet_mldsa_generate_keypair(1, public_key, sizeof(public_key),
-            secret_key, sizeof(secret_key))) goto done;
-    if (soranet_mldsa_sign(1, secret_key, sizeof(secret_key), message, sizeof(message),
-            signature, sizeof(signature))) goto done;
-    if (soranet_mldsa_verify(1, public_key, sizeof(public_key), message, sizeof(message),
-            signature, sizeof(signature))) goto done;
-    if (soranet_mldsa_verify(1, public_key, sizeof(public_key), changed, sizeof(changed),
-            signature, sizeof(signature)) != SORANET_PQ_ERR_VERIFICATION_FAILED) goto done;
+    if (soranet_mldsa_parameters(suite, &public_len, &secret_len, &signature_len)) goto done;
+    if (public_len != widths[suite][0] || secret_len != widths[suite][1]
+        || signature_len != widths[suite][2]) goto done;
+    if (soranet_mldsa_generate_keypair(suite, public_key, public_len, secret_key, secret_len)) goto done;
+    if (soranet_mldsa_sign(suite, secret_key, secret_len, message, sizeof(message),
+            signature, signature_len)) goto done;
+    if (soranet_mldsa_verify(suite, public_key, public_len, message, sizeof(message),
+            signature, signature_len)) goto done;
+    if (soranet_mldsa_verify(suite, public_key, public_len, changed, sizeof(changed),
+            signature, signature_len) != SORANET_PQ_ERR_VERIFICATION_FAILED) goto done;
     result = 0;
 done:
     for (size_t i = 0; i < sizeof(secret_key); ++i) ((volatile uint8_t *)secret_key)[i] = 0;
     return result;
 }
 
+static int check_mlkem_ffi(uint32_t suite) {
+    static const uint32_t widths[3][3] = {{800, 1632, 768}, {1184, 2400, 1088}, {1568, 3168, 1568}};
+    uint8_t public_key[1568], secret_key[3168] = {0}, ciphertext[1568], sent[32] = {0}, received[32] = {0};
+    uint32_t public_len = 0, secret_len = 0, ciphertext_len = 0, shared_len = 0;
+    int result = 15;
+    if (soranet_mlkem_parameters(suite, &public_len, &secret_len, &ciphertext_len, &shared_len)) goto done;
+    if (public_len != widths[suite][0] || secret_len != widths[suite][1]
+        || ciphertext_len != widths[suite][2] || shared_len != sizeof(sent)) goto done;
+    if (soranet_mlkem_generate_keypair(suite, public_key, public_len, secret_key, secret_len)) goto done;
+    if (soranet_mlkem_encapsulate(suite, public_key, public_len, ciphertext, ciphertext_len,
+            sent, shared_len)) goto done;
+    if (soranet_mlkem_decapsulate(suite, secret_key, secret_len, ciphertext, ciphertext_len,
+            received, shared_len) || memcmp(sent, received, sizeof(sent))) goto done;
+    ciphertext[0] ^= 1;
+    if (soranet_mlkem_decapsulate(suite, secret_key, secret_len, ciphertext, ciphertext_len,
+            received, shared_len) || !memcmp(sent, received, sizeof(sent))) goto done;
+    result = 0;
+done:
+    for (size_t i = 0; i < sizeof(secret_key); ++i) ((volatile uint8_t *)secret_key)[i] = 0;
+    for (size_t i = 0; i < sizeof(sent); ++i) ((volatile uint8_t *)sent)[i] = 0;
+    for (size_t i = 0; i < sizeof(received); ++i) ((volatile uint8_t *)received)[i] = 0;
+    return result;
+}
+
 int main(void) {
-    static const uint8_t message[] = {'a', 'b', 'c'};
-    static const uint8_t changed[] = {'a', 'b', 'd'};
-    static const uint8_t sha3_expected[32] = {
-        58, 152, 93, 167, 79, 226, 37, 178, 4, 92, 23, 45, 107, 211, 144, 189,
-        133, 95, 8, 110, 62, 157, 82, 91, 70, 191, 226, 69, 17, 67, 21, 50};
-    static const uint8_t shake_expected[32] = {
-        72, 51, 102, 96, 19, 96, 168, 119, 28, 104, 99, 8, 12, 196, 17, 77,
-        141, 180, 69, 48, 248, 241, 225, 238, 79, 148, 234, 55, 231, 139, 87, 57};
-    uint8_t sha3[32], shake[32];
-    uint8_t signing_public[1312], signing_secret[2560], signature[2420];
-    uint8_t kem_public[800], kem_secret[1632], ciphertext[768], sent[32], received[32];
-    size_t signature_len = 0;
     if (connect_norito_bridge_abi_version() != CONNECT_NORITO_BRIDGE_ABI_VERSION) return 1;
     static const char domain[] = "xn--bcher-kva.universal";
     static const char invalid_domain[] = "BANKA.universal";
     if (connect_norito_domain_id_validate_v1(domain, sizeof(domain) - 1) != 0) return 12;
     if (connect_norito_domain_id_validate_v1(invalid_domain, sizeof(invalid_domain) - 1) != 1) return 13;
-    sha3_256(sha3, message, sizeof(message));
-    shake256(shake, sizeof(shake), message, sizeof(message));
-    if (memcmp(sha3, sha3_expected, sizeof(sha3)) || memcmp(shake, shake_expected, sizeof(shake))) return 2;
-    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(signing_public, signing_secret)) return 3;
-    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(signature, &signature_len,
-            message, sizeof(message), NULL, 0, signing_secret)) return 4;
-    if (signature_len != sizeof(signature)) return 5;
-    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(signature, signature_len,
-            message, sizeof(message), NULL, 0, signing_public)) return 6;
-    if (!PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(signature, signature_len,
-            changed, sizeof(changed), NULL, 0, signing_public)) return 7;
-    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(kem_public, kem_secret)) return 8;
-    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(ciphertext, sent, kem_public)) return 9;
-    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(received, ciphertext, kem_secret)) return 10;
-    if (memcmp(sent, received, sizeof(sent))) return 11;
-    return check_mldsa_ffi();
+    for (uint32_t suite = 0; suite < 3; ++suite) {
+        int result = check_mldsa_ffi(suite);
+        if (result) return result;
+        result = check_mlkem_ffi(suite);
+        if (result) return result;
+    }
+    return 0;
 }
 CONSUMER_EOF
   echo "[+] Linking complete native archive into a C consumer: $target_triple" >&2
@@ -1409,7 +1399,7 @@ CONSUMER_EOF
      || ( "$target_triple" == "$MACOS_X64_TRIPLE" && "$host_arch" == "x86_64" ) ]]; then
     env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR="$MOBILE_TMPDIR" \
       LANG=C.UTF-8 LC_ALL=C.UTF-8 "$consumer_dir/consumer" || return $?
-    echo "[+] Host C consumer passed ABI, SHA3/SHAKE, ML-DSA and ML-KEM checks" >&2
+    echo "[+] Host C consumer passed ABI, all ML-DSA/ML-KEM suites and tamper checks" >&2
   fi
 }
 
@@ -1436,12 +1426,12 @@ stage_cargo_library() {
   fi
   mkdir -p "$(dirname "$staged_library")"
   cp "$source_library" "$staged_library"
-  run_isolated_python "$PQCRYPTO_ARCHIVE_NORMALIZER" \
+  run_isolated_python "$NATIVE_STATIC_ARCHIVE_AUDITOR" \
     --library "$staged_library" \
     --cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/apple-release/build" \
     --cargo-messages "$STAGE_DIR/cargo-messages/$target_triple.jsonl" \
     --target "$target_triple" --cargo-lock "$CARGO_LOCKFILE" \
-    --report "$staged_library.pqcrypto-normalization.json" || return $?
+    --report "$staged_library.native-archive-audit.json" || return $?
   rebuild_apple_archive_index "$staged_library" || return $?
   check_apple_consumer_link "$target_triple" "$staged_library" || return $?
   printf '%s\n' "$staged_library"

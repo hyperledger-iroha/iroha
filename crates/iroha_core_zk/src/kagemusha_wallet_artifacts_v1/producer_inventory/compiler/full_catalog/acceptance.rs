@@ -183,7 +183,7 @@ pub(super) fn accept(
         scheme_id: draft.scheme().scheme_id(),
         role: KagemushaWalletSignerRoleV1::Artifact,
         key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            artifact.verifying_key().to_encoded_point(false).as_bytes(),
+            artifact.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         serial: 1,

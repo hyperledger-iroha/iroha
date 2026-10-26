@@ -284,3 +284,58 @@ class ProducerTests(unittest.TestCase):
                 self.assertFalse(record['success'])
                 self.assertIn('retention_failure',record)
 
+
+    def test_live_owner_close_preserves_residual_table_and_caller_tracer(self):
+        class Memory:
+            checks=0
+            closed=False
+            def checkpoint(self):self.checks+=1
+            def close(self):self.closed=True
+        memory=Memory();subject=owner(memory=memory)
+        self.assertIs(subject.memory,memory)
+        self.assertIs(subject.family.oracle.owner,subject)
+        answer=subject.query(b'residual query')
+        before=(dict(subject.oracle.table),subject.oracle.queries,len(subject.sampler.records))
+        self.assertEqual(subject.query(b'residual query'),answer)
+        self.assertEqual(subject.oracle.table,before[0])
+        self.assertEqual(len(subject.sampler.records),before[2])
+        subject.close();subject.close()
+        self.assertFalse(memory.closed)
+        with self.assertRaisesRegex(RAW.Refused,'setup owner closed'):subject.query(b'after close')
+        with self.assertRaisesRegex(RAW.Refused,'setup owner closed'):subject.derive(0,0)
+        self.assertEqual(subject.oracle.table,before[0])
+        memory.close();self.assertTrue(memory.closed)
+
+    def test_terminal_setup_failures_preserve_first_reason_without_new_entropy(self):
+        for reason in ('canonical draw exhausted','native parameter identity','occupied XMD input','entry cap'):
+            subject=owner();calls=[]
+            def refused(*args):
+                calls.append(args)
+                raise RAW.Refused(reason)
+            with patch.object(subject.family,'point',side_effect=refused):
+                with self.assertRaisesRegex(RAW.Refused,reason):subject.derive(0,0)
+            stopped=subject.stopped
+            subject.close()
+            with self.assertRaisesRegex(RAW.Refused,reason):subject.derive(0,0)
+            self.assertEqual(subject.stopped,stopped)
+            self.assertEqual(len(calls),1)
+            self.assertEqual(subject.oracle.table,{})
+            self.assertEqual(subject.oracle.logs,{})
+            self.assertEqual(subject.sampler.records,[])
+
+    def test_artifact_first_lstat_identity_remains_binding(self):
+        from contextlib import contextmanager
+        from . import bounded
+        directory=new_output(OUTPUT/'between-stat-open')
+        path=directory/'one';path.write_bytes(b'abc')
+        held=bounded.guarded_file;replaced=[]
+        @contextmanager
+        def replace_then_open(selected,extent,observation):
+            replacement=directory/'replacement';replacement.write_bytes(b'abc')
+            replacement.replace(path);replaced.append(True)
+            with held(selected,extent,observation) as stream:yield stream
+        with patch.object(bounded,'guarded_file',replace_then_open):
+            with self.assertRaisesRegex(ValueError,'artifact changed before read'):
+                artifact_inventory(directory,1,3)
+        self.assertEqual(replaced,[True])
+        self.assertEqual(path.read_bytes(),b'abc')

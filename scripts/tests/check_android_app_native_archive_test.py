@@ -18,9 +18,9 @@ SCRIPT = Path(__file__).resolve().parents[1] / "check_android_app_native_archive
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
 LIBRARY_NAME = "libconnect_norito_bridge.so"
 PROVENANCE_ENTRY = "assets/iroha/native-build-provenance-v1.json"
-ANDROID_NDK_BASE_REVISION = "28.0.12674087"
+ANDROID_NDK_BASE_REVISION = "30.0.16248370"
 ANDROID_NDK_SOURCE_PROPERTIES_SHA256 = (
-    "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+    "e73b7dc557cea2da9212c09ee1795434957d62e63b7550eef69fd1887a355d94"
 )
 
 

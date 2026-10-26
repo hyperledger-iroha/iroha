@@ -2052,10 +2052,17 @@ export class ToriiBrowserClient {
         }
         normalizedOptions.responseObserver(response);
       }
-      if (
-        status === 204
-        || normalizedOptions.nullStatuses?.includes(status)
-      ) return null;
+      if (normalizedOptions.nullStatuses?.includes(status)) {
+        // Absence changes the result, not the response-size or abort contract.
+        await readBoundedResponseBytes(
+          response,
+          normalizedOptions.maximumBodyBytes ?? DEFAULT_JSON_RESPONSE_MAX_BYTES,
+          `${method} ${path}`,
+          signal,
+        );
+        return null;
+      }
+      if (status === 204) return null;
       const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
       if (typeof jsonParser !== FIELD_FUNCTION) {
         rejectType(`${method} ${path} jsonParser${TEXT_MUST_BE_A_2}function`);

@@ -15,12 +15,13 @@ use iroha_wallet::operations::NativePreparationPhase;
 use std::{path::PathBuf, time::Duration};
 
 // This exercises history depth and custody, not a short-window signing latency target.
-// All 64 bodies expire naturally: 640 seconds of expiry pacing leaves 560 seconds in
+// All 64 bodies expire naturally: 1,920 seconds of expiry pacing leaves 600 seconds in
 // the original finite campaign for fixture setup, native retirement, proofs and assertions.
+// Deep debug histories can spend over ten seconds on original admission and retirement.
 // Focused short-expiry tests retain their own 500 ms / two-second authorizations.
-const BODY_VALIDITY_MS: u64 = 10_000;
-const CAMPAIGN_BUDGET: Duration = Duration::from_secs(1_200);
-const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(12);
+const BODY_VALIDITY_MS: u64 = 30_000;
+const CAMPAIGN_BUDGET: Duration = Duration::from_secs(2_520);
+const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(32);
 
 struct OriginalBytes {
     body: PathBuf,

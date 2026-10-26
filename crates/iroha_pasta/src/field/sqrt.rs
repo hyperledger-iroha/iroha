@@ -1,6 +1,6 @@
 //! Table-based square roots (Sarkar, IACR ePrint 2020/1407).
 //!
-//! This is the algorithm `pasta_curves` 0.5.2 uses with its `sqrt-table`
+//! This is the algorithm `pasta_curves` 0.6.1 uses with its `sqrt-table`
 //! feature, with the same tables and perfect-hash parameters, so it returns the
 //! same root as that crate for every input. Both Pasta fields have 2-adicity
 //! `S = 32`, which the four 8-bit table levels cover.

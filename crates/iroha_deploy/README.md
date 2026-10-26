@@ -42,7 +42,10 @@ What exists so far:
   authenticated native control IPC, durable stop/restart/reset and signed readiness.
   `ManagedStore::up` retains the same generation and signer across starts; readiness
   requires one signed transaction to be applied by every validator. Kagami and
-  Mochi call this owner directly. Explicit deployment/recovery targets preserve the
+  Mochi call this owner directly. Fresh environments use the `Standard` profile;
+  storage and package-registry development explicitly select `StreamTokenAuthorities`.
+  Plain contract deployment and local package builds do not provision those services.
+  Explicit deployment/recovery targets preserve the
   workspace selection; ordinary startup and default auto-creation select their environment.
   Startup transfers the original runtime lock through inherited stdin, preserving ownership
   through worker loading and into its validator children. Unix retains the shared native file

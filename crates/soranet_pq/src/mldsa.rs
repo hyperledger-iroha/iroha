@@ -1,17 +1,10 @@
+use crate::EncodingLengthError;
 use crate::{
     HedgedChaCha20Rng, HedgedRngSeed, RngError, deterministic_chacha20_rng,
     hedged_chacha20_rng_from_rng,
 };
 use core::fmt;
-use pqcrypto_mldsa::{mldsa44, mldsa65, mldsa87};
-use pqcrypto_traits::{
-    Error as PqError,
-    sign::{
-        DetachedSignature as PrimitiveDetachedSignature, PublicKey as PrimitivePublicKey,
-        VerificationError,
-    },
-};
-use rand_core::{RngCore, TryCryptoRng};
+use rand_core::{Rng, TryCryptoRng};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 #[path = "mldsa_backend.rs"]
@@ -60,27 +53,27 @@ impl MlDsaSuite {
     #[must_use]
     pub fn public_key_len(self) -> usize {
         match self {
-            MlDsaSuite::MlDsa44 => mldsa44::public_key_bytes(),
-            MlDsaSuite::MlDsa65 => mldsa65::public_key_bytes(),
-            MlDsaSuite::MlDsa87 => mldsa87::public_key_bytes(),
+            MlDsaSuite::MlDsa44 => 1312,
+            MlDsaSuite::MlDsa65 => 1952,
+            MlDsaSuite::MlDsa87 => 2592,
         }
     }
     /// Return the secret key length in bytes for this suite.
     #[must_use]
     pub fn secret_key_len(self) -> usize {
         match self {
-            MlDsaSuite::MlDsa44 => mldsa44::secret_key_bytes(),
-            MlDsaSuite::MlDsa65 => mldsa65::secret_key_bytes(),
-            MlDsaSuite::MlDsa87 => mldsa87::secret_key_bytes(),
+            MlDsaSuite::MlDsa44 => 2560,
+            MlDsaSuite::MlDsa65 => 4032,
+            MlDsaSuite::MlDsa87 => 4896,
         }
     }
     /// Return the detached signature length in bytes for this suite.
     #[must_use]
     pub fn signature_len(self) -> usize {
         match self {
-            MlDsaSuite::MlDsa44 => mldsa44::signature_bytes(),
-            MlDsaSuite::MlDsa65 => mldsa65::signature_bytes(),
-            MlDsaSuite::MlDsa87 => mldsa87::signature_bytes(),
+            MlDsaSuite::MlDsa44 => 2420,
+            MlDsaSuite::MlDsa65 => 3309,
+            MlDsaSuite::MlDsa87 => 4627,
         }
     }
     /// Validate a public key encoding for this suite.
@@ -228,8 +221,8 @@ pub enum MlDsaError {
     #[error(transparent)]
     BadEncoding(Box<MlDsaEncodingError>),
     /// Signature verification failed.
-    #[error("signature verification failed: {0}")]
-    VerificationFailed(VerificationError),
+    #[error("signature verification failed")]
+    VerificationFailed,
     /// Context exceeded the FIPS 204 one-byte context length field.
     #[error("ML-DSA context length must be at most 255 bytes, found {len}")]
     ContextTooLong {
@@ -254,10 +247,10 @@ pub enum MlDsaError {
     },
     /// Hedged RNG seed construction failed.
     #[error(transparent)]
-    Rng(#[from] RngError),
+    RngExt(#[from] RngError),
 }
 impl MlDsaError {
-    fn bad_encoding(kind: &'static str, err: PqError) -> Self {
+    fn bad_encoding(kind: &'static str, err: EncodingLengthError) -> Self {
         MlDsaError::BadEncoding(Box::new(MlDsaEncodingError { kind, source: err }))
     }
 }
@@ -280,7 +273,7 @@ fn validate_mldsa_len(
     } else {
         Err(MlDsaError::bad_encoding(
             kind,
-            PqError::BadLength {
+            EncodingLengthError {
                 name: kind,
                 actual,
                 expected,
@@ -315,9 +308,9 @@ fn validate_mldsa_seed_material_not_all_zero(
 pub struct MlDsaEncodingError {
     /// Field identifier.
     kind: &'static str,
-    /// Underlying `PQClean` error.
+    /// Encoded field length diagnostic.
     #[source]
-    source: PqError,
+    source: EncodingLengthError,
 }
 /// Generate an ML-DSA keypair.
 ///
@@ -368,16 +361,16 @@ fn validate_generated_mldsa_keypair(
 /// Generate an ML-DSA keypair using a seed plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlDsaError::Rng`] when the initial OS seed draw fails.
+/// Returns [`MlDsaError::RngExt`] when the initial OS seed draw fails.
 pub fn generate_mldsa_keypair_from_os(suite: MlDsaSuite) -> Result<MlDsaKeyPair, MlDsaError> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     generate_mldsa_keypair_from_rng(suite, &mut rng)
 }
 /// Generate an ML-DSA keypair using caller-supplied seed entropy plus live OS
 /// entropy when available.
 ///
 /// # Errors
-/// Returns [`MlDsaError::Rng`] when the required seed draw fails, or a backend
+/// Returns [`MlDsaError::RngExt`] when the required seed draw fails, or a backend
 /// error when generated material fails validation.
 pub fn generate_mldsa_keypair_from_rng<R: TryCryptoRng + ?Sized>(
     suite: MlDsaSuite,
@@ -433,7 +426,7 @@ fn sign_mldsa_from_coins(
 /// Sign using fresh OS seed material plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlDsaError::Rng`] when the initial OS seed draw fails, or a backend
+/// Returns [`MlDsaError::RngExt`] when the initial OS seed draw fails, or a backend
 /// error when the secret-key encoding is invalid.
 pub fn sign_mldsa_from_os(
     suite: MlDsaSuite,
@@ -441,13 +434,13 @@ pub fn sign_mldsa_from_os(
     context: &[u8],
     message: &[u8],
 ) -> Result<MlDsaSignature, MlDsaError> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     sign_mldsa_from_rng(suite, secret_key, context, message, &mut rng)
 }
 /// Sign using caller-supplied seed entropy plus live OS entropy when available.
 ///
 /// # Errors
-/// Returns [`MlDsaError::Rng`] when the required seed draw fails, or a backend
+/// Returns [`MlDsaError::RngExt`] when the required seed draw fails, or a backend
 /// error when the secret-key encoding is invalid.
 pub fn sign_mldsa_from_rng<R: TryCryptoRng + ?Sized>(
     suite: MlDsaSuite,
@@ -480,31 +473,11 @@ pub fn verify_mldsa(
     suite.validate_public_key(public_key)?;
     suite.validate_signature(signature)?;
     match suite {
-        MlDsaSuite::MlDsa44 => {
-            let pk = mldsa44::PublicKey::from_bytes(public_key)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 public key", err))?;
-            let sig = mldsa44::DetachedSignature::from_bytes(signature)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-44 signature", err))?;
-            verifier::verify44_ctx(&sig, message, context, &pk)
-                .map_err(MlDsaError::VerificationFailed)
-        }
-        MlDsaSuite::MlDsa65 => {
-            let pk = mldsa65::PublicKey::from_bytes(public_key)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 public key", err))?;
-            let sig = mldsa65::DetachedSignature::from_bytes(signature)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-65 signature", err))?;
-            verifier::verify65_ctx(&sig, message, context, &pk)
-                .map_err(MlDsaError::VerificationFailed)
-        }
-        MlDsaSuite::MlDsa87 => {
-            let pk = mldsa87::PublicKey::from_bytes(public_key)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 public key", err))?;
-            let sig = mldsa87::DetachedSignature::from_bytes(signature)
-                .map_err(|err| MlDsaError::bad_encoding("ML-DSA-87 signature", err))?;
-            verifier::verify87_ctx(&sig, message, context, &pk)
-                .map_err(MlDsaError::VerificationFailed)
-        }
+        MlDsaSuite::MlDsa44 => verifier::verify44_ctx(signature, message, context, public_key),
+        MlDsaSuite::MlDsa65 => verifier::verify65_ctx(signature, message, context, public_key),
+        MlDsaSuite::MlDsa87 => verifier::verify87_ctx(signature, message, context, public_key),
     }
+    .map_err(|_| MlDsaError::VerificationFailed)
 }
 /// Validate the encoding of an ML-DSA public key.
 ///
@@ -542,7 +515,7 @@ pub fn validate_mldsa_signature(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), M
 mod tests {
     use super::*;
     use crate::{deterministic_chacha20_rng, hedged_chacha20_rng};
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     const ML_DSA_SECRET_TR_OFFSET: usize = 64;
     #[derive(Debug)]
     struct FailingPqSeedRng;
@@ -554,7 +527,7 @@ mod tests {
         }
     }
     impl std::error::Error for FailingPqSeedRngError {}
-    impl TryRngCore for FailingPqSeedRng {
+    impl TryRng for FailingPqSeedRng {
         type Error = FailingPqSeedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingPqSeedRngError)
@@ -570,7 +543,7 @@ mod tests {
     struct FixedPqSeedRng {
         seed: [u8; 32],
     }
-    impl TryRngCore for FixedPqSeedRng {
+    impl TryRng for FixedPqSeedRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))
@@ -669,7 +642,7 @@ mod tests {
     fn from_rng_keypair_reports_seed_failure() {
         let mut rng = FailingPqSeedRng;
         match generate_mldsa_keypair_from_rng(MlDsaSuite::MlDsa44, &mut rng) {
-            Err(MlDsaError::Rng(RngError)) => {}
+            Err(MlDsaError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-DSA keypair seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-DSA RNG error, got {other:?}"),
         }
@@ -678,7 +651,7 @@ mod tests {
     fn from_rng_keypair_rejects_all_zero_seed_material() {
         let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
         match generate_mldsa_keypair_from_rng(MlDsaSuite::MlDsa44, &mut rng) {
-            Err(MlDsaError::Rng(RngError)) => {}
+            Err(MlDsaError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-DSA keypair all-zero seed material must be rejected"),
             Err(other) => panic!("expected ML-DSA inert seed RNG error, got {other:?}"),
         }
@@ -689,7 +662,7 @@ mod tests {
         let keypair = seeded_keypair(suite, 0xA4, b"failing-sign-seed-keygen");
         let mut rng = FailingPqSeedRng;
         match sign_mldsa_from_rng(suite, keypair.secret_key(), b"", b"message", &mut rng) {
-            Err(MlDsaError::Rng(RngError)) => {}
+            Err(MlDsaError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-DSA signing seed RNG failure must be reported"),
             Err(other) => panic!("expected ML-DSA signing RNG error, got {other:?}"),
         }
@@ -700,7 +673,7 @@ mod tests {
         let keypair = seeded_keypair(suite, 0xA5, b"inert-sign-seed-keygen");
         let mut rng = FixedPqSeedRng { seed: [0_u8; 32] };
         match sign_mldsa_from_rng(suite, keypair.secret_key(), b"", b"message", &mut rng) {
-            Err(MlDsaError::Rng(RngError)) => {}
+            Err(MlDsaError::RngExt(RngError)) => {}
             Ok(_) => panic!("ML-DSA signing all-zero seed material must be rejected"),
             Err(other) => panic!("expected ML-DSA inert signing seed error, got {other:?}"),
         }
@@ -1471,7 +1444,7 @@ mod tests {
         )
         .unwrap_err();
         match err {
-            MlDsaError::VerificationFailed(VerificationError::InvalidSignature) => {}
+            MlDsaError::VerificationFailed => {}
             _ => panic!("unexpected error"),
         }
     }
@@ -1496,10 +1469,7 @@ mod tests {
         signature[0] ^= 0x01;
         let err = verify_mldsa(suite, keypair.public_key(), b"", message, &signature)
             .expect_err("modified signature must fail");
-        assert!(matches!(
-            err,
-            MlDsaError::VerificationFailed(VerificationError::InvalidSignature)
-        ));
+        assert!(matches!(err, MlDsaError::VerificationFailed));
     }
     #[test]
     fn reject_wrong_public_key() {
@@ -1538,10 +1508,7 @@ mod tests {
             signature.as_bytes(),
         )
         .expect_err("signature must fail under a different public key");
-        assert!(matches!(
-            err,
-            MlDsaError::VerificationFailed(VerificationError::InvalidSignature)
-        ));
+        assert!(matches!(err, MlDsaError::VerificationFailed));
     }
     #[test]
     fn context_is_domain_separating() {

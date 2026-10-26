@@ -280,6 +280,46 @@ def test_swapins_alone_are_diagnostic_under_the_declared_memory_policy():
     assert not qualify.environment_reasons(before, after)
 
 
+@pytest.mark.parametrize("counter", (*qualify.QUIET_MEMORY_COUNTERS, "Swapins"))
+@pytest.mark.parametrize("replacement", [
+    "{counter}: 0. stale", "{counter}: 0.5", "{counter}:\n0.",
+    "{counter}: ٠.", "{counter}: -1.", "{counter}: unavailable",
+])
+def test_malformed_memory_rows_invalidate_the_observation(counter, replacement):
+    before = environment_fixture()
+    after = deepcopy(before)
+    text = after["raw"]["vm"]["stdout"]
+    after["raw"]["vm"]["stdout"] = "\n".join(
+        replacement.format(counter=counter) if line.startswith(f"{counter}:") else line
+        for line in text.splitlines()
+    )
+    with pytest.raises(ValueError, match="vm_stat counter"):
+        qualify.parse_vm_stat(after["raw"]["vm"]["stdout"])
+    assert qualify.environment_reasons(before, after)
+
+
+@pytest.mark.parametrize("counter", (*qualify.QUIET_MEMORY_COUNTERS, "Swapins"))
+@pytest.mark.parametrize("duplicate", [
+    "{counter}: 0.", "{counter}: 999999.", "{counter}: unavailable",
+    " {counter}: 0.", "{counter} : 0.",
+])
+def test_duplicate_memory_rows_cannot_hide_activity(counter, duplicate):
+    before = environment_fixture()
+    for boundary in ("before", "after"):
+        observations = {"before": deepcopy(before), "after": deepcopy(before)}
+        observations[boundary]["raw"]["vm"]["stdout"] += duplicate.format(counter=counter) + "\n"
+        assert qualify.environment_reasons(**observations)
+    # A refusal must not poison parsing of the retained healthy original.
+    assert not qualify.environment_reasons(before, deepcopy(before))
+
+
+def test_memory_rows_allow_kernel_padding_without_constraining_other_diagnostics():
+    text = ('Mach Virtual Memory Statistics: (page size of 16384 bytes)\n'
+            'Pages free: 42.\nCompressions:                 123.\t\n'
+            'Pageouts:\t0.\nSwapouts: 2.\nSwapins: 3.\n')
+    assert qualify.parse_vm_stat(text) == {"Compressions": 123, "Pageouts": 0, "Swapouts": 2, "Swapins": 3}
+
+
 @pytest.mark.parametrize("counter", qualify.QUIET_MEMORY_COUNTERS)
 def test_every_required_quiet_memory_counter_invalidates_on_increase(counter):
     before = environment_fixture()

@@ -17,7 +17,7 @@ fn select_receiver_head(wallet: &mut Wallet, frozen: &FrozenTransition) {
             KagemushaWalletSigningDomainV1::Receipt,
             &owner.receipt_body(c, &capsule).unwrap(),
         ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     let record = owner.assemble(c, &capsule, &signature).unwrap();
     record.verify(&frozen.credential, c).unwrap();
@@ -390,7 +390,7 @@ pub(super) fn payer_projection_wallet(
             KagemushaWalletSigningDomainV1::Receipt,
             &owner.receipt_body(c, &capsule).unwrap(),
         ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     let record = owner.assemble(c, &capsule, &signature).unwrap();
     let retained = Retained {

@@ -26,7 +26,7 @@ use crate::{
     transcript::{Domain, TranscriptChip},
 };
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::PastaCurve;
 use iroha_plonk::{
     DescriptorBinding, Protocol, VerifyError, VerifyingKey,

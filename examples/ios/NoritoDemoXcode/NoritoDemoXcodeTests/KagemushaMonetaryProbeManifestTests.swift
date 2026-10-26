@@ -262,6 +262,17 @@ final class KagemushaActivationRetentionProbeTests: XCTestCase {
     }
   }
 
+  func testControllerSequenceBoundaryIsIndependentOfEnvelopeCapacity() throws {
+    let original = try XCTUnwrap(KagemushaActivationRetentionProbe.receipt(
+      signedWire: wire, outcome: awaiting, returned: 1, invocation: runID, sequence: 9_999))
+    let row = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: String])
+    XCTAssertEqual(row["sequence"], "9999")
+    for sequence in [10_000, 10_033] {
+      XCTAssertThrowsError(try KagemushaActivationRetentionProbe.receipt(
+        signedWire: wire, outcome: awaiting, returned: 1, invocation: runID, sequence: sequence))
+    }
+  }
+
   func testMalformedControllerIdentityAndWireCannotProduceReceipt() throws {
     for (bytes, ticks, run, sequence) in [
       (Data(), UInt64(1), runID, 1),

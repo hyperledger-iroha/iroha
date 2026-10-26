@@ -88,26 +88,23 @@ pub const LOOKUP_ROWS: usize = 2;
 /// Tags per fixed base (at least the number of fixed windows).
 const FIXED_TAG_STRIDE: u64 = 64;
 
-/// The tag of window `window` of fixed base `base`.
-#[must_use]
-pub const fn fixed_tag(base: usize, window: usize) -> u64 {
-    1 + FIXED_TAG_STRIDE * base as u64 + window as u64
-}
-
-/// [`fixed_tag`] when it is unique: the window is below the per-base stride
-/// and the tag below every dynamic tag.
+/// The tag of window `window` of fixed base `base`, when the window is below
+/// the per-base stride and the tag is below every dynamic tag.
 ///
 /// # Errors
 ///
 /// [`Error::Synthesis`] otherwise.
 pub fn checked_fixed_tag(base: usize, window: usize) -> Result<u64, Error> {
     let stride = usize::try_from(FIXED_TAG_STRIDE).map_err(|_| Error::Synthesis)?;
+    if window >= stride {
+        return Err(Error::Synthesis);
+    }
     let tag = u64::try_from(base)
         .ok()
         .and_then(|base| base.checked_mul(FIXED_TAG_STRIDE))
         .and_then(|offset| offset.checked_add(1 + u64::try_from(window).ok()?))
         .ok_or(Error::Synthesis)?;
-    (window < stride && tag < DYNAMIC_TAG_BASE)
+    (tag < DYNAMIC_TAG_BASE)
         .then_some(tag)
         .ok_or(Error::Synthesis)
 }

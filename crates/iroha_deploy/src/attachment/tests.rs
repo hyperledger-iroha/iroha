@@ -2,9 +2,6 @@
 //! These tests do not execute parent business rules or qualify a running private network.
 
 use super::*;
-use crate::bootstrap::{
-    NetworkRelease, ReleaseCheckpointStore, ReleaseTrust, SignedNetworkCheckpoint,
-};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     block::consensus::{ExecKv, ExecWitness},
@@ -59,7 +56,6 @@ impl Fixture {
         );
         let identity = AttachmentIdentity {
             parent_name: "fixture".into(),
-            parent_generation: 1,
             parent_network_id: parent.network_id(),
             parent_chain_id: parent.chain_id().into(),
             alias: "acme".into(),
@@ -159,44 +155,14 @@ impl Fixture {
         (receipt, finality)
     }
 
-    pub(super) fn bootstrap(&self, path: &Path) -> AuthenticatedBootstrap {
+    pub(super) fn bootstrap(&self) -> AuthenticatedBootstrap {
         let checkpoint = self.parent.checkpoint();
-        let key = KeyPair::from_seed(vec![49; 32], Algorithm::Ed25519);
-        let release = NetworkRelease {
-            network_name: "fixture".into(),
-            serial: 1,
-            generation: 1,
-            network_id: checkpoint.network_id(),
-            chain_id: checkpoint.chain_id().into(),
-            issued_at_ms: 1_000,
-            expires_at_ms: 10_000,
-            torii_roots: vec!["https://parent.example/".into()],
-            account_chain_discriminant: 753,
-            native_world_schema: Hash::new(b"independently qualified fixture World schema"),
-            peers: checkpoint
-                .tip()
-                .committee
-                .iter()
-                .map(|validator| crate::bootstrap::ReleasePeer {
-                    node_id: iroha_model_base::peer::PeerId::new(validator.public_key.clone()),
-                    torii_root: "https://parent.example/".into(),
-                })
-                .collect(),
-            faucet: None,
-            build_registry: None,
-            checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
-            checkpoint_height: checkpoint.height(),
-            checkpoint_block_hash: checkpoint.block_hash().into(),
-        };
-        let bytes = SignedNetworkCheckpoint::sign(release, &checkpoint, key.private_key())
-            .unwrap()
-            .encode_canonical()
-            .unwrap();
-        let trust = ReleaseTrust::new("fixture".into(), key.public_key().clone(), 1).unwrap();
-        ReleaseCheckpointStore::open(path)
-            .unwrap()
-            .authenticate(&trust, &bytes, 2_000)
-            .unwrap()
+        let mut metadata = crate::bootstrap::tests::metadata(&checkpoint);
+        metadata.torii_roots = vec!["https://parent.example/".into()];
+        for peer in &mut metadata.peers {
+            peer.torii_root = "https://parent.example/".into();
+        }
+        crate::bootstrap::tests::authenticated(metadata, &checkpoint)
     }
 }
 
@@ -222,7 +188,7 @@ fn parent_receipt_is_required_and_retained_across_private_progress_and_restart()
     let anchor = fixture.child_anchor();
     assert!(store.anchor_instruction(&anchor).is_err());
     let (receipt, _) = fixture.parent_receipt();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let identity = AttachmentIdentity::new(
         &bootstrap,
         "acme".into(),
@@ -236,7 +202,7 @@ fn parent_receipt_is_required_and_retained_across_private_progress_and_restart()
     let initial = store.confirm_record(receipt, &parent).unwrap();
     assert_eq!(initial.child.height, 1);
     assert_eq!(parent.network_name(), "fixture");
-    assert_eq!(parent.generation(), 1);
+    assert_eq!(parent.verifier().checkpoint().network_id(), fixture.parent.network_id());
     assert_eq!(
         store.confirmed_child_state().unwrap().cursor(),
         initial.child

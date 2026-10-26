@@ -12,6 +12,7 @@ from pathlib import Path
 import tracemalloc
 
 from .custody import require, sha
+from .file_custody import guarded_file, identity, safe
 
 MAX_K = 16
 MAX_CONTEXTS = 2*((1 << MAX_K)+2)
@@ -241,6 +242,11 @@ class Owner:
             self.stopped = record['reason']
             raise
 
+    def close(self):
+        """End residual setup queries; the caller retains ownership of its tracer."""
+        if self.stopped is None:
+            self.stopped = 'setup owner closed'
+
     def persist(self, directory):
         """Stream exact private raw table/log/attempt state, including failures."""
         directory = Path(directory)
@@ -293,25 +299,15 @@ def artifact_inventory(directory, max_files, max_bytes):
         total += before.st_size
         require(total <= max_bytes, 'artifact byte budget exceeded')
         digest = hashlib.sha256()
-        flags = os.O_RDONLY | getattr(os,'O_NOFOLLOW',0)
-        with os.fdopen(os.open(path,flags),'rb') as stream:
-            opened = os.fstat(stream.fileno())
-            require((opened.st_dev,opened.st_ino,opened.st_size,opened.st_mtime_ns) ==
-                    (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns),
+        with guarded_file(safe(path.absolute()), before.st_size, {}) as stream:
+            require(identity(os.fstat(stream.fileno())) == identity(before),
                     'artifact changed before read')
             consumed = 0
             while block := stream.read(1 << 20):
                 consumed += len(block)
                 require(consumed <= before.st_size,'artifact grew during read')
                 digest.update(block)
-            after = os.fstat(stream.fileno())
-        current = path.lstat()
-        require(consumed == before.st_size and
-                (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns) ==
-                (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns) and
-                (current.st_dev,current.st_ino,current.st_size,current.st_mtime_ns) ==
-                (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns),
-                'artifact changed during read')
+        require(consumed == before.st_size, 'artifact changed during read')
         rows.append({'name':path.name,'bytes':consumed,'sha256':digest.hexdigest()})
     require(sorted(path.name for path in directory.iterdir()) == [row['name'] for row in rows],
             'artifact namespace changed during read')

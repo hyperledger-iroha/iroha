@@ -66,11 +66,9 @@ use p256::{
         Signature as P256Signature, VerifyingKey as P256VerifyingKey,
         signature::hazmat::PrehashVerifier as _,
     },
-    elliptic_curve::{
-        PrimeField as _, bigint::U256, group::Group as _, ops::Reduce, sec1::ToEncodedPoint as _,
-    },
+    elliptic_curve::{PrimeField as _, group::Group as _, ops::Reduce, sec1::ToSec1Point as _},
 };
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256, Sha3_512};
 use thiserror::Error;
@@ -1008,7 +1006,7 @@ pub fn prepare_zk_ams_batch_admission_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -1058,7 +1056,7 @@ pub fn prepare_zk_ams_provision_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(ZkAmsPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -1092,7 +1090,7 @@ fn prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1<R>(
     rng: &mut R,
 ) -> Result<ZkAmsPreparedPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
@@ -1191,7 +1189,7 @@ pub fn build_signed_zk_ams_provision_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<SignedZkAmsPrivacyActionV1, ZkAmsPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_zk_ams_signing_authority_v1(&context.authority, private_key)?;
     let prepared = prepare_zk_ams_provision_privacy_action_with_rng_v1(
@@ -1231,7 +1229,7 @@ impl ZkAmsSeedSecretV1 {
     ///
     /// Returns an error when the random source does not produce an admitted
     /// canonical scalar within the fixed work bound.
-    pub fn generate<R: CryptoRng + RngCore>(rng: &mut R) -> Result<Self, ZkAmsErrorV1> {
+    pub fn generate<R: TryCryptoRng + TryRng>(rng: &mut R) -> Result<Self, ZkAmsErrorV1> {
         let mut checked_rng = health_checked_zk_ams_rng_v1(rng)?;
         let scalar = Zeroizing::new(random_nonzero_scalar(&mut checked_rng)?);
         Self::from_zeroizing_bytes(Zeroizing::new(scalar.to_bytes()))
@@ -1614,7 +1612,7 @@ pub fn zk_ams_registry_transition_root_v1(
 ///
 /// Fails closed for statement/binding drift, malformed credentials or low-s signatures, seed
 /// mismatch, root-transition mismatch, random failure, or native relation failure.
-pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
+pub fn prove_zk_ams_batch_admission_v1<R: TryCryptoRng + TryRng>(
     statement: &IrohaZkAmsStatementV1,
     binding: &TranscriptBindingV1<'_>,
     witnesses: &[ZkAmsBatchCredentialWitnessV1<'_>],
@@ -1788,7 +1786,7 @@ pub fn verify_zk_ams_batch_admission_v1(
 ///
 /// Fails closed for a malformed ring or key image, a mismatched secret, an
 /// invalid consensus binding, or random-source exhaustion.
-pub fn sign_zk_ams_provision_v1<R: CryptoRng + RngCore>(
+pub fn sign_zk_ams_provision_v1<R: TryCryptoRng + TryRng>(
     binding: &TranscriptBindingV1<'_>,
     ring: &[[u8; 32]],
     key_image_bytes: [u8; 32],
@@ -1864,7 +1862,7 @@ pub fn sign_zk_ams_provision_v1<R: CryptoRng + RngCore>(
 /// The wrapper validates and transcript-binds every authoritative record,
 /// current root/epoch, ring key, target account, and key image before invoking
 /// the LSAG prover, then runs the complete typed verifier before release.
-pub fn sign_zk_ams_provision_statement_v1<R: CryptoRng + RngCore>(
+pub fn sign_zk_ams_provision_statement_v1<R: TryCryptoRng + TryRng>(
     statement: &IrohaZkAmsStatementV1,
     binding: &TranscriptBindingV1<'_>,
     signer_index: usize,
@@ -1899,7 +1897,7 @@ pub fn sign_zk_ams_provision_statement_v1<R: CryptoRng + RngCore>(
 ///
 /// Fails closed for an invalid binding or point, a mismatched seed secret,
 /// random-source exhaustion, or an internal verifier self-check failure.
-pub fn prove_zk_ams_admission_possession_v1<R: CryptoRng + RngCore>(
+pub fn prove_zk_ams_admission_possession_v1<R: TryCryptoRng + TryRng>(
     binding: &TranscriptBindingV1<'_>,
     anchor_index: u32,
     phc_hash: [u8; 32],
@@ -1926,7 +1924,7 @@ pub fn prove_zk_ams_admission_possession_v1<R: CryptoRng + RngCore>(
         &mut checked_rng,
     )
 }
-fn prove_zk_ams_admission_possession_with_rng_v1<R: CryptoRng + RngCore>(
+fn prove_zk_ams_admission_possession_with_rng_v1<R: TryCryptoRng + TryRng>(
     binding: &TranscriptBindingV1<'_>,
     anchor_index: u32,
     phc_hash: [u8; 32],
@@ -1970,7 +1968,7 @@ fn validate_admission_possession_inputs_v1(
     }
     Ok(secret_scalar)
 }
-fn prove_zk_ams_admission_possession_validated_v1<R: CryptoRng + RngCore>(
+fn prove_zk_ams_admission_possession_validated_v1<R: TryCryptoRng + TryRng>(
     binding: &TranscriptBindingV1<'_>,
     anchor_index: u32,
     phc_hash: [u8; 32],
@@ -2298,7 +2296,7 @@ fn validate_provision_statement<'a>(
     }
     let issuer_key = P256VerifyingKey::from_sec1_bytes(statement.issuer_public_key.as_bytes())
         .map_err(|_| ZkAmsErrorV1::InvalidIssuerKey)?;
-    if issuer_key.to_encoded_point(true).as_bytes() != statement.issuer_public_key.as_bytes() {
+    if issuer_key.to_sec1_point(true).as_bytes() != statement.issuer_public_key.as_bytes() {
         return Err(ZkAmsErrorV1::InvalidIssuerKey);
     }
     let ring = provision
@@ -2377,11 +2375,11 @@ fn build_admission_public_inputs(
     }
     let issuer_key = P256VerifyingKey::from_sec1_bytes(statement.issuer_public_key.as_bytes())
         .map_err(|_| ZkAmsErrorV1::InvalidIssuerKey)?;
-    let canonical = issuer_key.to_encoded_point(true);
+    let canonical = issuer_key.to_sec1_point(true);
     if canonical.as_bytes() != statement.issuer_public_key.as_bytes() {
         return Err(ZkAmsErrorV1::InvalidIssuerKey);
     }
-    let uncompressed = issuer_key.to_encoded_point(false);
+    let uncompressed = issuer_key.to_sec1_point(false);
     let issuer_key_x: [u8; 32] = uncompressed
         .x()
         .ok_or(ZkAmsErrorV1::InvalidIssuerKey)?
@@ -2462,7 +2460,7 @@ fn validate_issuer_signature(
 ) -> Result<ZkAmsIssuerSignatureWitnessV1, ZkAmsErrorV1> {
     let signature = P256Signature::from_slice(signature_bytes)
         .map_err(|_| ZkAmsErrorV1::InvalidIssuerSignature)?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(ZkAmsErrorV1::HighSIssuerSignature);
     }
     issuer_key
@@ -2472,14 +2470,14 @@ fn validate_issuer_signature(
     let s_inverse = Option::<P256Scalar>::from(s.as_ref().invert())
         .ok_or(ZkAmsErrorV1::InvalidIssuerSignature)?;
     let digest_scalar =
-        <P256Scalar as Reduce<U256>>::reduce_bytes(&P256FieldBytes::from(message_digest));
+        <P256Scalar as Reduce<P256FieldBytes>>::reduce(&P256FieldBytes::from(message_digest));
     let issuer_point = P256ProjectivePoint::from(*issuer_key.as_affine());
     let recovery =
         (P256ProjectivePoint::GENERATOR * digest_scalar + issuer_point * *r.as_ref()) * s_inverse;
     if bool::from(recovery.is_identity()) {
         return Err(ZkAmsErrorV1::InvalidIssuerSignature);
     }
-    let recovery = P256AffinePoint::from(recovery).to_encoded_point(false);
+    let recovery = P256AffinePoint::from(recovery).to_sec1_point(false);
     let recovery_x: [u8; 32] = recovery
         .x()
         .ok_or(ZkAmsErrorV1::InvalidIssuerSignature)?
@@ -2530,7 +2528,7 @@ fn health_checked_zk_ams_rng_v1<R>(
     rng: &mut R,
 ) -> Result<HealthCheckedCryptoRngV1<'_, R>, ZkAmsErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
         ProverRandomnessErrorV1::Unavailable => ZkAmsErrorV1::RandomnessUnavailable,
@@ -2541,7 +2539,7 @@ struct MaskedRandomAdapter<'a, R> {
     source: &'a mut R,
     randomness_unavailable: bool,
 }
-impl<R: CryptoRng + RngCore> MaskedRelaxedRandomSourceV1 for MaskedRandomAdapter<'_, R> {
+impl<R: TryCryptoRng + TryRng> MaskedRelaxedRandomSourceV1 for MaskedRandomAdapter<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
         self.source.try_fill_bytes(destination).map_err(|_| {
             self.randomness_unavailable = true;
@@ -2552,7 +2550,7 @@ impl<R: CryptoRng + RngCore> MaskedRelaxedRandomSourceV1 for MaskedRandomAdapter
 fn scalar_from_canonical(bytes: [u8; 32]) -> Result<Scalar, ZkAmsErrorV1> {
     Option::<Scalar>::from(Scalar::from_canonical_bytes(bytes)).ok_or(ZkAmsErrorV1::InvalidScalar)
 }
-fn random_nonzero_scalar<R: CryptoRng + RngCore>(rng: &mut R) -> Result<Scalar, ZkAmsErrorV1> {
+fn random_nonzero_scalar<R: TryCryptoRng + TryRng>(rng: &mut R) -> Result<Scalar, ZkAmsErrorV1> {
     for _ in 0..RANDOM_REJECTION_ATTEMPTS {
         let mut candidate = [0_u8; 32];
         if rng.try_fill_bytes(&mut candidate).is_err() {
@@ -2683,7 +2681,7 @@ mod tests {
     };
     use iroha_model_base::metadata::Metadata;
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
-    use rand_core_06::Error as RngError;
+    use std::io::Error as RngError;
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_core::privacy_engines::zk_ams::tests::RetiredWireZkAmsBatchAdmissionProofV1"
@@ -2708,99 +2706,101 @@ mod tests {
     #[derive(Clone, Copy)]
     struct TestRng(u64);
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("public preflight reached the random source")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("public preflight reached the random source")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("public preflight reached the random source")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("public preflight reached the random source")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     impl TestRng {
         const fn new(seed: u64) -> Self {
             Self(seed)
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            self.next_u64() as u32
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(self.try_next_u64()? as u32)
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut value = self.0;
-            value ^= value << 13;
-            value ^= value >> 7;
-            value ^= value << 17;
-            self.0 = value;
-            value
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut value = self.0;
+                value ^= value << 13;
+                value ^= value >> 7;
+                value ^= value << 17;
+                self.0 = value;
+                value
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            rand_core_06::impls::fill_bytes_via_next(self, destination);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                for chunk in destination.chunks_mut(8) {
+                    let word = self.try_next_u64()?.to_le_bytes();
+                    chunk.copy_from_slice(&word[..chunk.len()]);
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct ZeroRng;
-    impl RngCore for ZeroRng {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ZeroRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             destination.fill(0);
             Ok(())
         }
     }
-    impl CryptoRng for ZeroRng {}
+    impl rand::TryCryptoRng for ZeroRng {}
     struct PeriodicRng;
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("ZK-AMS must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("ZK-AMS must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("ZK-AMS must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for (index, byte) in destination.iter_mut().enumerate() {
                 *byte = ((index % 8) as u8).wrapping_mul(29).wrapping_add(7);
             }
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
+    impl rand::TryCryptoRng for PeriodicRng {}
     struct FailingRng;
-    impl RngCore for FailingRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for FailingRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("ZK-AMS must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("ZK-AMS must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("ZK-AMS must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
-            Err(RngError::new("injected ZK-AMS RNG failure"))
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(RngError::other("injected ZK-AMS RNG failure"))
         }
     }
-    impl CryptoRng for FailingRng {}
+    impl rand::TryCryptoRng for FailingRng {}
     fn seed_secret(value: u8) -> ZkAmsSeedSecretV1 {
         let mut bytes = [0_u8; 32];
         bytes[0] = value;
@@ -3480,7 +3480,7 @@ mod tests {
     fn issuer_key() -> PrivacyP256PointV1 {
         let signing_key =
             P256SigningKey::from_bytes((&[7_u8; 32]).into()).expect("fixed P-256 issuer key");
-        let encoded = signing_key.verifying_key().to_encoded_point(true);
+        let encoded = signing_key.verifying_key().to_sec1_point(true);
         let bytes: [u8; 33] = encoded.as_bytes().try_into().expect("compressed P-256 key");
         PrivacyP256PointV1::new(bytes)
     }
@@ -3697,7 +3697,7 @@ mod tests {
                 let signature: P256Signature = issuer_signing_key
                     .sign_prehash(credential.digest().as_bytes())
                     .expect("issuer prehash signature");
-                let signature = signature.normalize_s().unwrap_or(signature);
+                let signature = signature.normalize_s();
                 <[u8; 64]>::from(signature.to_bytes())
             })
             .collect::<Vec<_>>();
@@ -3802,7 +3802,7 @@ mod tests {
         let (r, s) = low_s.split_scalars();
         let high_s =
             P256Signature::from_scalars(r.to_repr(), (-*s).to_repr()).expect("high-s counterpart");
-        assert!(high_s.normalize_s().is_some());
+        assert!(high_s.normalize_s() != high_s);
         let high_s_bytes = <[u8; 64]>::from(high_s.to_bytes());
         let high_s_witnesses = [
             ZkAmsBatchCredentialWitnessV1::new(&credentials[0], &high_s_bytes, &seed_secrets[0]),

@@ -97,8 +97,8 @@ committed-mask construction; current shape, size and row assertions require
 actual synthesis. The current wallet role caps are in the wire specification.
 
 `tests/compact_components.rs` exercises shared Glue, complete ECC, transcript,
-CRT, dot-product and algebraic/running-sum range constraints. The explicit compact
-profile has eleven advice columns, twelve fixed columns, one lookup and direct
+CRT, dot-product and algebraic/running-sum range constraints. The complete
+interpreter's compact profile has eleven advice columns, fourteen fixed columns, one lookup and direct
 public gates. The staged CRT kernel binds five intermediate products. Unsigned
 Proper single products with modulus above 2^254 use the separately reviewed
 three-carry finish. Unsigned dots additionally use three carries only when every
@@ -107,9 +107,14 @@ and 2^255. Staged Pasta results explicitly range their top limb to81 bits and
 preserve that bound through copies; selection takes the wider arm bound. Lazy
 inputs, division and wider dots retain their original carry admission. Its constant values
 are constrained through fixed Glue coefficients on the same bounded shared
-cursor. That captured degree-nine descriptor has 3,680 proof bytes plus the
-1,088-byte accumulator: **4,768 bytes**, within the 4,821-byte cap. This is a
-descriptor result; a complete production compact proof has not been generated.
+cursor. The current degree-ten descriptor has 26 advice queries and six equality
+columns in two norm-product permutation sets. Its five opening-point sets yield
+61 point and 64 scalar messages: 4,000 proof bytes plus two 544-byte accumulator
+claims, or **5,088 transport bytes**. The secondary-range component uses degree
+eleven and **5,120 transport bytes**, exactly the current production Omega cap.
+Adding one advice or state column instead requires 5,152 or 5,216 bytes; both
+are rejected by that cap. These are exact descriptor inventories, not complete
+current-candidate proof, catalog or release qualification.
 
 An explicit two-bus serialized Qσ profile produces a natively verified 7,008-byte
 proof for the complete two-sigma plus AS relation. Single k12/k14 and soft
@@ -121,8 +126,9 @@ Omega predicate passes in a diagnostic larger domain, requiring 63,889 shared
 rows with a pinned one-key catalog and 97,993 range rows. The exact tagged range
 table removes shifted-top rows: one `(width,value)` lookup contains the 65,528
 tuples for widths3..15, and algebraic roots check widths1/2. Its added fixed tag
-query is offset by removing the previous-row advice query, preserving 4,768
-transport bytes. The earlier
+query and two fixed lookup-coefficient columns keep the norm lookup argument
+at degree eight; the remaining gates determine the full descriptor degrees
+and transport sizes above. The earlier
 five-bus Load snapshot used 72,376 shared and 130,406 range rows; that evidence
 precedes later engine changes and also omits the complete per-step C4 current
 credential/certificate authorization. It is partial-relation evidence only.
@@ -139,8 +145,8 @@ initial/rebound terminal keys. Its uncompressed outer proof is10,272 bytes plus
 range rows. The explicit tagged-table A3 candidate now completes all four
 genuine corrected Load stages, whose maximum rows are 55,611 / 61,808 /
 57,646 / 58,164. Every actual source proof is 7,744 bytes. The matching
-Bootstrap compact diagnostic uses 62,849 shared / 94,033 range rows with a
-4,768-byte descriptor transport estimate. It still fails the range limit by
+Bootstrap compact diagnostic records a component-only measurement of 62,849
+shared / 94,033 range rows. It still fails the range limit by
 28,503 rows. This is source feasibility for Bootstrap/Load, with the full
 catalog rebind, Send and final compact proof remaining open.
 

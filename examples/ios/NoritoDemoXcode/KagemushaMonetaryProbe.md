@@ -11,7 +11,10 @@ can complete those boundaries. Native refusals remain refusals.
 A/B/C use distinct canonical accounts, UUID roots and Native custody slots in one
 explicitly isolated disposable app. Slots on the same phone share the app and its
 actual Keychain access group; this does not simulate independently signed apps.
-The selected iOS device is iPhone17 Pro Max (`iPhone18,2`), iOS26.7 build23H24.
+The specified iOS device is iPhone 16 Pro Max (`iPhone17,2`). Capture its actual
+hardware, OS/build and availability afresh before each run; the historical
+[evidence-gate inventory](../../../specs/kagemusha_evidence_gate.md#6-complete-device-exchanges)
+does not establish a current connection.
 Pixel6 is the other selected device; its corresponding driver is maintained in
 `kotlin/kagemusha-wallet-android`. Running all three actors on iOS does not qualify
 Android or a cross-OS population. Monetary qualification requires a matching
@@ -140,7 +143,7 @@ monetary authority, and changing either original under a retained Receive ID fai
 
 Receipt/anchor/certificate bounds are512 bytes; fee schedule/quote1024;
 payer companion2048;
-canonical account/beneficiary4096; peer originals/envelopes/certificate bundle10000;
+canonical account/beneficiary4096; peer originals/envelopes/certificate bundle10034;
 signed transaction/claim65536; epoch boundary256KiB. Finality intake is capped at
 36MiB overall; `load` itself has the SDK's stricter256KiB finality bound. E6 uses the
 SDK's exact `RESULT_MAX_BYTES`. Native retains every canonicality and protocol

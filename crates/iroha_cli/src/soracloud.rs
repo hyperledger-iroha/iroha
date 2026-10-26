@@ -119,8 +119,8 @@ use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{
-    rand_core::{TryCryptoRng, TryRngCore as _},
-    rngs::OsRng,
+    rand_core::{TryCryptoRng, TryRng as _},
+    rngs::SysRng,
 };
 use reqwest::{
     blocking::Client as BlockingHttpClient,
@@ -9283,7 +9283,7 @@ fn stage_taira_validator_config_replacement(
     require_taira_validator_config_directory_identity(directory)?;
     for _ in 0..128 {
         let mut suffix = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut suffix)
             .map_err(|_| eyre!("OS randomness failed while staging a Taira validator config"))?;
         let name = format!(
@@ -14004,7 +14004,7 @@ struct SoracloudTempDir {
 }
 impl SoracloudTempDir {
     fn new(prefix: &str) -> Result<Self> {
-        Self::new_with_rng(prefix, &mut OsRng)
+        Self::new_with_rng(prefix, &mut SysRng)
     }
     fn new_with_rng<R: TryCryptoRng + ?Sized>(prefix: &str, rng: &mut R) -> Result<Self> {
         for _ in 0..8 {
@@ -18808,7 +18808,7 @@ fn build_soracloud_mutation_auth_headers(
         http_witness_file,
         endpoint,
         body,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
@@ -18883,7 +18883,7 @@ fn build_soracloud_read_auth_headers(
         "GET",
         endpoint,
         &[],
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 fn soracloud_signature_timestamp_ms_from_elapsed(elapsed: Duration) -> Result<u64> {
@@ -21314,7 +21314,7 @@ impl BundlePackAtomicOutput {
             ));
         }
         let parent = BundlePackParentGuard::open(output)?;
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         for _ in 0..INROU_BUNDLE_PACK_TEMP_ATTEMPTS {
             let mut suffix = [0_u8; 16];
             rng.try_fill_bytes(&mut suffix)

@@ -5,7 +5,7 @@ use super::*;
 
 fn public() -> KagemushaWalletLineagePublicV1 {
     let signer = SigningKey::from_slice(&[7; 32]).expect("test signing key");
-    let encoded = signer.verifying_key().to_encoded_point(false);
+    let encoded = signer.verifying_key().to_sec1_point(false);
     KagemushaWalletLineagePublicV1 {
         version: KAGEMUSHA_WALLET_VERSION_V1,
         scheme_id: core::array::from_fn(|index| u8::try_from(index).unwrap() + 1),
@@ -142,7 +142,7 @@ fn retained_original_rejects_ambiguous_role_even_for_identical_bytes() {
 fn signed_tape_preserves_actual_body_and_canonical_signature_bytes() {
     let key = SigningKey::from_slice(&[7; 32]).unwrap();
     let signature: Signature = key.sign(b"original tape component test");
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let canonical =
         KagemushaDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_slice()).unwrap();
     let body = vec![0, 1, 255, 3];

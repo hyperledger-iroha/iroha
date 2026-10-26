@@ -4,8 +4,8 @@ use super::*;
 use crate::AccountId;
 use iroha_crypto::KeyPair;
 use iroha_crypto::blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
+    Blake2b,
+    digest::{Digest, consts::U32},
 };
 use norito::core::DecodeFromSlice;
 fn checked_random_keypair() -> KeyPair {
@@ -25,14 +25,11 @@ fn parliament_expected_head_root_keeps_the_length_prefixed_domain_preimage() {
     );
     let predecessor: (u64, [u8; 32]) = (7, [0x51; 32]);
     let head = parliament_expected_head_root_v1(&predecessor);
-    let mut hasher = Blake2bVar::new(32).expect("32-byte head digest");
+    let mut hasher = Blake2b::<U32>::new();
     hasher.update(&u64::try_from(HEAD_DOMAIN.len()).unwrap().to_le_bytes());
     hasher.update(HEAD_DOMAIN);
     hasher.update(&predecessor.encode());
-    let mut expected = [0; 32];
-    hasher
-        .finalize_variable(&mut expected)
-        .expect("32-byte head output");
+    let expected: [u8; 32] = hasher.finalize().into();
     assert_eq!(head, expected);
     assert_ne!(head, [0; 32]);
     assert_ne!(
@@ -934,14 +931,11 @@ fn proposal_fingerprint_matches_manual_derivation() {
     let domain_len = u64::try_from(domain.len())
         .expect("test domain fits in u64")
         .to_le_bytes();
-    let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length");
+    let mut hasher = Blake2b::<U32>::new();
     hasher.update(&domain_len);
     hasher.update(domain);
     hasher.update(&manual_bytes);
-    let mut manual_arr = [0u8; 32];
-    hasher
-        .finalize_variable(&mut manual_arr)
-        .expect("finalize Blake2bVar");
+    let manual_arr: [u8; 32] = hasher.finalize().into();
     assert_eq!(fp, manual_arr);
     assert_ne!(fp, [0; 32]);
 }

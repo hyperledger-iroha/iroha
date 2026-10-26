@@ -2661,10 +2661,13 @@ mod tests {
         roots
             .add(cert.der().clone())
             .expect("trust test relay certificate");
-        let mut client_tls =
-            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+        let mut client_tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
         client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
         let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
             .expect("build QUIC client crypto");
@@ -2934,10 +2937,13 @@ mod tests {
         roots
             .add(cert.der().clone())
             .expect("trust test relay certificate");
-        let mut client_tls =
-            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+        let mut client_tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
         client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
         let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
             .expect("build QUIC client crypto");
@@ -3001,10 +3007,13 @@ mod tests {
         roots
             .add(cert.der().clone())
             .expect("trust test relay certificate");
-        let mut client_tls =
-            rustls::ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+        let mut client_tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .expect("test TLS 1.3 provider")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
         client_tls.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
         let client_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(client_tls)
             .expect("build QUIC client crypto");
@@ -3115,6 +3124,7 @@ mod tests {
         let tls = RelayRuntime::tls_server_config(vec![cert.der().clone()], key)
             .expect("build relay TLS configuration");
         assert_eq!(tls.max_early_data_size, 0);
+        assert_eq!(tls.alpn_protocols, vec![SORANET_QUIC_ALPN.to_vec()]);
     }
     #[test]
     fn relay_tls_file_loaders_enforce_first_release_bounds() {

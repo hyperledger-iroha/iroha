@@ -73,7 +73,8 @@ class KagemushaWalletRequestBoundReviewV1Test {
     }
     @Test fun existingRejectsUnknownControlsNestingAndNonexactHeader() {
         for (kind in listOf(0, 6, 7, 8, 9, 18, 47, 64, 65, 66, 67, -1)) refuses { decision(66, nested(kind)) }
-        for (bytes in listOf(ByteArray(27), ByteArray(10_029), nested(2) + byteArrayOf(0),
+        for (bytes in listOf(ByteArray(27), ByteArray(10_029), nested(1, ByteArray(10_035) { 8 }),
+            nested(2) + byteArrayOf(0),
             nested(1, byteArrayOf(1)).copyOf(28), nested(2).also { it[27] = -1 },
             nested(11, low = 1), nested(11, high = 1), nested(11, detail = 1), nested(11, byteArrayOf(1)))) {
             refuses { decision(66, bytes) }

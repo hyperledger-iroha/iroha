@@ -1,0 +1,94 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef CORE_INTERNAL_MEDIUMS_MEDIUMS_H_
+#define CORE_INTERNAL_MEDIUMS_MEDIUMS_H_
+
+#include <memory>
+
+#include "connections/implementation/mediums/awdl/awdl_interface.h"
+#include "connections/implementation/mediums/ble.h"
+#include "connections/implementation/mediums/bluetooth/bluetooth_classic_interface.h"
+#include "connections/implementation/mediums/bluetooth_radio.h"
+#include "connections/implementation/mediums/webrtc.h"
+#include "connections/implementation/mediums/wifi.h"
+#include "connections/implementation/mediums/wifi_aware/wifi_aware_interface.h"
+#include "connections/implementation/mediums/wifi_direct/wifi_direct_interface.h"
+#include "connections/implementation/mediums/wifi_hotspot/wifi_hotspot.h"
+#include "connections/implementation/mediums/wifi_lan.h"
+
+namespace nearby {
+namespace connections {
+
+// Facilitates convenient and reliable usage of various wireless mediums.
+class Mediums {
+ public:
+  Mediums();
+  ~Mediums() = default;
+
+  // Returns a handle to the Bluetooth radio.
+  BluetoothRadio& GetBluetoothRadio();
+
+  // Returns a handle to the Bluetooth Classic medium.
+  BluetoothClassicInterface& GetBluetoothClassic();
+
+  // Returns a handle to the Ble medium.
+  Ble& GetBle();
+
+  // Returns a handle to the Wifi medium.
+  Wifi& GetWifi();
+
+  // Returns a handle to the Wifi-Lan medium.
+  WifiLan& GetWifiLan();
+
+  // Returns a handle to the Wifi-Aware medium.
+  WifiAwareInterface& GetWifiAware();
+
+  // Returns a handle to the Wifi-Hotspot medium.
+  WifiHotspot& GetWifiHotspot();
+
+  // Returns a handle to the Wifi-Direct medium.
+  WifiDirectInterface& GetWifiDirect();
+
+  // Returns a handle to the WebRtc medium.
+  mediums::WebRtc& GetWebRtc();
+
+  // Returns a handle to the Awdl medium.
+  AwdlInterface& GetAwdl();
+
+ private:
+  // The order of declaration is critical for both construction and
+  // destruction.
+  //
+  // 1) Construction: The individual mediums have a dependency on the
+  // corresponding radio, so the radio must be initialized first.
+  //
+  // 2) Destruction: The individual mediums should be shut down before the
+  // corresponding radio.
+  BluetoothRadio bluetooth_radio_;
+  const std::unique_ptr<BluetoothClassicInterface> bluetooth_classic_;
+  Ble ble_{bluetooth_radio_};
+  Wifi wifi_;
+  WifiLan wifi_lan_;
+  const std::unique_ptr<WifiAwareInterface> wifi_aware_;
+  WifiHotspot wifi_hotspot_;
+  const std::unique_ptr<WifiDirectInterface> wifi_direct_;
+  const std::unique_ptr<mediums::WebRtc> webrtc_;
+  const std::unique_ptr<AwdlInterface> awdl_;
+};
+
+}  // namespace connections
+}  // namespace nearby
+
+#endif  // CORE_INTERNAL_MEDIUMS_MEDIUMS_H_

@@ -44,6 +44,7 @@ fn deadline_and_down_join_all_mutators_before_terminal_status_and_owner_release(
             },
             running_peers: 0,
             failure: None,
+            validators: Vec::new(),
         };
         publish(&directory, &initial).unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));

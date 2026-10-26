@@ -10,7 +10,7 @@ use super::{
 };
 use ed25519_dalek::VerifyingKey;
 use iroha_crypto::zeroize_value_for_confidential_discard;
-use rand::{rand_core::TryRngCore, rngs::OsRng};
+use rand::{rand_core::TryRng, rngs::SysRng};
 use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenV1,
     signer::{
@@ -45,7 +45,7 @@ impl SignerClockV1 for SystemSignerClockV1 {
     }
     fn challenge(&self) -> Result<[u8; 32], StreamTokenIssuerError> {
         let mut challenge = [0; 32];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut challenge)
             .map_err(|_| StreamTokenIssuerError::RuntimeSignerUnavailable)?;
         if challenge == [0; 32] {

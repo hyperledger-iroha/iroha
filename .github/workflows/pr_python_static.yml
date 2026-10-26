@@ -11,15 +11,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci_image:
+    uses: ./.github/workflows/ci_image_preflight.yml
+    permissions:
+      contents: read
+
   check:
+    needs: ci_image
     runs-on: ubuntu-latest
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     strategy:
       matrix:
         suite: [iroha_cli_tests, iroha_torii_tests]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Install dependencies using Poetry for pytests/${{ matrix.suite }}
         working-directory: pytests/${{ matrix.suite }}
         run: |

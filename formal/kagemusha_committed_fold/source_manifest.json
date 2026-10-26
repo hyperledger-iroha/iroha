@@ -1,0 +1,19 @@
+{
+  "schema": "kagemusha.committed-fold.scalar-control.v1",
+  "files": {
+    "README.md": "119e9c18b4a28708d5d0fdae1626e7eab95aa95cac1bf8ebaabe82eb271d5fe7",
+    "model.py": "93080625b72f5395520b35db48431e346ac85978af26b24146a49f1e95bfa1db",
+    "test_model.py": "a298ee3d8f7d8ef2a575f5fddb48b14e2270f6624ac3f798c430df91220eb155"
+  },
+  "sources": {
+    "crates/iroha_plonk_recursion/src/accumulation.rs": "c448b4625e1e33e6fd053e18b251bd173e42e792a784645b79d5f6f69bb59ac7",
+    "crates/iroha_plonk_recursion/src/accumulation_circuit.rs": "8eb3fcb8641217e137aee0f0f37cc95246001c2f774782f593879447ed5ad91a",
+    "crates/iroha_plonk_recursion/src/fold_tape.rs": "15b250ccc27973fa233d9467019e06ed5284c7bec967965f65ac58e63d5b8525",
+    "crates/iroha_plonk_recursion/src/purpose.rs": "25c3a818a8d52d7a1884a8ff4fed3508f3a983b306f890c12fcb481a8a209d12",
+    "crates/iroha_plonk_recursion/src/claim.rs": "c2f70924d9540b4a0411adb3fdcb0e2d4f8d4ceff3c7d2203e0163609d3f70e2",
+    "crates/iroha_plonk/src/transcript/mod.rs": "da96760d71fc90222e55657185315ed95738639c2ed3edd1d4d64e74a6ef4548",
+    "crates/iroha_plonk/src/transcript/pipa_r.rs": "58fd0e62ae08bae94f25bb4cb13700d279d978b1d87cc4076e1c0665b0c9f14f",
+    "crates/iroha_plonk/src/pcs/ipa/mod.rs": "ef02ee81fb2669c27b11dd3af15b3ca1d9a753fccd9073116db574e13f0710ec",
+    "specs/kagemusha_c12_composition_v1.md": "b68342877d61494fbd9bfd9c34977a9237d1ebb0f99ac411c1689c1f5a870528"
+  }
+}

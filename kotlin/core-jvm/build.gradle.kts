@@ -24,6 +24,10 @@ repositories {
 
 dependencies {
     api(libs.okhttp)
+    constraints {
+        // Keep OkHttp's published transitive IO dependency on the reviewed current patch.
+        api(libs.okio)
+    }
     api(platform(libs.netty.bom))
     api(libs.netty.transport)
     implementation(libs.netty.handler)

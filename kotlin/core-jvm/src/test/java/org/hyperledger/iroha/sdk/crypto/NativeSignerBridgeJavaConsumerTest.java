@@ -115,6 +115,21 @@ public final class NativeSignerBridgeJavaConsumerTest {
   }
 
   @Test
+  void nativeExceptionRetainsItsCauseAndLeavesTheNextJniCallUsable() {
+    requireNative();
+    final Pair<byte[], byte[]> pair =
+        NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, fill(0x21, 32));
+    for (int attempt = 0; attempt < 32; attempt++) {
+      // Nonempty input reaches Rust: the managed boundary only rejects empty keys.
+      final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+          () -> NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ED25519, new byte[] {1}));
+      assertTrue(error.getMessage().contains("invalid private key bytes"));
+      assertArrayEquals(pair.getSecond(),
+          NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ED25519, pair.getFirst()));
+    }
+  }
+
+  @Test
   void nativeEd25519KeyDerivationAndSignatureAgree() {
     requireNative();
     final Pair<byte[], byte[]> pair =

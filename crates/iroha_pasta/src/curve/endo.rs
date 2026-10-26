@@ -6,8 +6,8 @@
 //! `|k1|, |k2| < 2^128`, halving the number of doublings.
 //!
 //! The decomposition uses Babai rounding against the short lattice basis
-//! `(b1, b2)` with the precomputed rounding constants `gamma1, gamma2`
-//! (`round(2^256 * b / r)`), the same constants the vendored
+//! `(b1, b2)` with the precomputed truncation constants `gamma1, gamma2`
+//! (`floor(2^256 * b / r)`), the same constants the vendored
 //! `halo2curves-axiom` uses. The bound `|k_i| < 2^128` follows from
 //! `|b1|, |b2| < 2^127.2`; `decompose` checks it and the tests exercise
 //! it on random and edge scalars.
@@ -25,9 +25,9 @@ use crate::field::cios::mac;
 
 /// Lattice constants for the GLV decomposition of one curve's scalars.
 pub trait GlvParams: PastaCurve {
-    /// `round(2^256 * b2 / r)` (vendored naming).
+    /// `floor(2^256 * Self::B1 / r)`.
     const GAMMA1: [u64; 4];
-    /// `round(2^256 * -b1 / r)` (vendored naming).
+    /// `floor(2^256 * Self::B2 / r)`.
     const GAMMA2: [u64; 4];
     /// First short basis component.
     const B1: [u64; 4];
@@ -188,7 +188,7 @@ mod tests {
     use ff::{Field, PrimeField};
     use group::Group;
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     fn check_decomposition<C: PastaCurve>(k: C::ScalarExt) {
         let d = C::glv_decompose(&k).expect("lattice bound");

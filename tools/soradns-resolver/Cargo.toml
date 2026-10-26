@@ -37,7 +37,7 @@ norito_derive = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }
 time = { workspace = true }
 thiserror = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls"] }
 base64 = { workspace = true, features = ["alloc"] }
 axum = { workspace = true, default-features = false, features = ["http1", "json", "macros", "tokio", "tower-log", "query"] }
 tokio-stream = { workspace = true, features = ["sync"] }
@@ -47,7 +47,7 @@ hickory-proto = { version = "0.26.1", default-features = false }
 iroha_primitives = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 tempfile = { workspace = true }
 
 [dev-dependencies]

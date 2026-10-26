@@ -38,7 +38,7 @@ use super::transparent_stark::{
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
-use rand::TryRngCore;
+use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -1454,7 +1454,7 @@ fn fri_mask_tree_v1(
 /// the one FRI-enforced exclusive cap `D`. The resulting root must be
 /// transcript-bound before any challenge that batches the lane's trace and
 /// composition polynomials.
-pub fn build_fri_mask_oracles_v1<R: TryRngCore>(
+pub fn build_fri_mask_oracles_v1<R: TryRng>(
     parameters: AggregateStarkParametersV1,
     domains: &AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
@@ -2463,7 +2463,7 @@ impl MaskedTracePolynomialSetV1 {
         mut source: S,
     ) -> Result<Self, AggregateStarkErrorV1>
     where
-        R: TryRngCore,
+        R: TryRng,
         S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
     {
         let native_rows = checked_domain_size_v1(native_trace_log2)?;
@@ -2635,7 +2635,7 @@ pub fn commit_masked_trace_columns_v1<R, S>(
     mut source: S,
 ) -> Result<(StreamingRowCommitmentResultV1, StreamingTraceMaskSetV1), AggregateStarkErrorV1>
 where
-    R: TryRngCore,
+    R: TryRng,
     S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
 {
     let (native_rows, lde_rows) = validate_masked_trace_commitment_shape_v1(
@@ -2754,7 +2754,7 @@ pub fn commit_masked_trace_polynomial_columns_v1<R, S>(
     source: S,
 ) -> Result<(StreamingRowCommitmentResultV1, MaskedTracePolynomialSetV1), AggregateStarkErrorV1>
 where
-    R: TryRngCore,
+    R: TryRng,
     S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
 {
     let (_, commitment_rows) = validate_masked_trace_commitment_shape_v1(
@@ -6496,7 +6496,8 @@ mod retained_polynomial_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     pub(super) const PARAMETERS: AggregateStarkParametersV1 = AggregateStarkParametersV1 {
         proof_magic: *b"AGG1",
         proof_version: 1,
@@ -7210,7 +7211,7 @@ mod tests {
             .iter()
             .map(PrivacyOuterMerkleTreeV1::root)
             .collect::<Vec<_>>();
-        let mut fri_mask_rng = StdRng::seed_from_u64(0x4652_494d_4153_4b31);
+        let mut fri_mask_rng = ChaCha12Rng::seed_from_u64(0x4652_494d_4153_4b31);
         let fri_masks = build_fri_mask_oracles_v1(parameters, &DOMAINS, &layout, &mut fri_mask_rng)
             .expect("FRI mask oracles");
         let fri_mask_roots = fri_masks
@@ -8064,7 +8065,7 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let mut rng = StdRng::from_seed([0x42; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0x42; 32]);
         let (root_only, masks) = commit_masked_trace_columns_v1(
             DOMAINS.digest_context,
             b"aggregate-streaming-masked-leaf",
@@ -8128,7 +8129,7 @@ mod tests {
     #[test]
     fn replayable_masked_column_commitment_rejects_shape_substitution() {
         let columns = [vec![F::ZERO; 8], vec![F::ONE; 8]];
-        let mut rng = StdRng::from_seed([0x24; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0x24; 32]);
         assert!(
             commit_masked_trace_columns_v1(
                 DOMAINS.digest_context,
@@ -8194,7 +8195,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let commitment_indices = [1, 9, 31];
-        let mut replayable_rng = StdRng::from_seed([0xD1; 32]);
+        let mut replayable_rng = ChaCha12Rng::from_seed([0xD1; 32]);
         let (replayable_commitment, masks) = commit_masked_trace_columns_v1(
             DOMAINS.digest_context,
             b"aggregate-retained-polynomial-leaf",
@@ -8209,7 +8210,7 @@ mod tests {
             |column| Ok(native_columns[column].clone()),
         )
         .expect("replayable-mask commitment");
-        let mut retained_rng = StdRng::from_seed([0xD1; 32]);
+        let mut retained_rng = ChaCha12Rng::from_seed([0xD1; 32]);
         let (retained_commitment, polynomials) = commit_masked_trace_polynomial_columns_v1(
             DOMAINS.digest_context,
             b"aggregate-retained-polynomial-leaf",
@@ -8304,7 +8305,7 @@ mod tests {
     #[test]
     fn retained_polynomial_shape_and_secret_zeroizers_reject_mutation() {
         let columns = [vec![F::ONE; 8], vec![F(2); 8]];
-        let mut rng = StdRng::from_seed([0xD4; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xD4; 32]);
         let (_, mut polynomials) = commit_masked_trace_polynomial_columns_v1(
             DOMAINS.digest_context,
             b"aggregate-retained-mutation-leaf",

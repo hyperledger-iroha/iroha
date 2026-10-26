@@ -1,8 +1,10 @@
 //! Genuine native custody through the automatic bridge worker; simulated host keys only.
 //!
 //! The ignored consumer needs a separately completed CoreZK handoff and independently
-//! selected current source pins. A locator, a producer's JSON claim or a scripted Wallet
-//! never supplies source authority. No explicit drain, fold or resume drives this consumer.
+//! selected current source pins. A protected-storage fault exercises provider refusal and
+//! exact retry; it never replaces cryptographic verification. A locator, a producer's JSON
+//! claim or a scripted Wallet never supplies source authority. No explicit drain, fold or
+//! resume drives this consumer.
 
 use super::*;
 use advance::*;
@@ -26,8 +28,15 @@ use std::{
     fs::{self, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    },
 };
+
+// Engineering test deadlines, not protocol latency or proof-performance allowances.
+const PROOF_WAIT: Duration = Duration::from_secs(30 * 60);
+const SIGN_CONTROL_WAIT: Duration = Duration::from_secs(60);
 
 const SOURCE_PINS: [&str; 7] = [
     "KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256",
@@ -232,6 +241,48 @@ struct HostPlatform {
     slot: KagemushaWalletSlotIdV1,
     key: Arc<SigningKey>,
     signs: Arc<AtomicUsize>,
+    storage_unavailable: Arc<AtomicBool>,
+    failed_storage_checks: Arc<AtomicUsize>,
+    signature_pause: Arc<Mutex<Option<SignaturePause>>>,
+}
+
+/// Hold one genuine signature result while the independent activity control runs.
+struct SignaturePause {
+    reached: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+/// Error unwinding releases the signing callback before joining the caller.
+/// No native worker is interrupted and no fabricated signature is returned.
+struct SignatureGate {
+    reached: mpsc::Receiver<()>,
+    release: Option<mpsc::Sender<()>>,
+    caller: Option<std::thread::JoinHandle<Result<Response>>>,
+}
+impl SignatureGate {
+    fn retry(&mut self, id: u64, send: [u8; 32]) {
+        assert!(self.caller.is_none());
+        self.caller = Some(std::thread::spawn(move || retry(id, &send)));
+    }
+    fn await_signature(&self) {
+        self.reached
+            .recv_timeout(PROOF_WAIT)
+            .expect("the admitted real Archive did not reach its signature boundary");
+    }
+    fn finish(mut self) -> Response {
+        self.release.take().unwrap().send(()).unwrap();
+        self.caller.take().unwrap().join().unwrap().unwrap()
+    }
+}
+impl Drop for SignatureGate {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        if let Some(caller) = self.caller.take() {
+            let _ = caller.join();
+        }
+    }
 }
 impl HostPlatform {
     fn existing(device: &Path, credential: &KagemushaWalletCredentialV1) -> Self {
@@ -246,11 +297,29 @@ impl HostPlatform {
             slot: KagemushaWalletSlotIdV1(slot),
             key: Arc::new(key),
             signs: Arc::default(),
+            storage_unavailable: Arc::default(),
+            failed_storage_checks: Arc::default(),
+            signature_pause: Arc::default(),
+        }
+    }
+    fn pause_next_signature(&self) -> SignatureGate {
+        let (reached, observed) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let mut held = self.signature_pause.lock().unwrap();
+        assert!(held.is_none(), "signature gate is one-shot");
+        *held = Some(SignaturePause {
+            reached,
+            release: released,
+        });
+        SignatureGate {
+            reached: observed,
+            release: Some(release),
+            caller: None,
         }
     }
     fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
         KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
+            key.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap()
     }
@@ -297,6 +366,21 @@ impl KagemushaWalletPlatformV1 for HostPlatform {
         assert_eq!(*slot, self.slot);
         self.signs.fetch_add(1, Ordering::SeqCst);
         let signature: DeviceSignature = self.key.sign(message.as_bytes());
+        let pause = self.signature_pause.lock().unwrap().take();
+        if let Some(pause) = pause {
+            // Gate the actual platform return, outside the gate mutex. The signature is
+            // genuine, and activity(false,false) changes only scheduler eligibility.
+            // An abandoned/timed-out test controller is an unavailable platform
+            // response, not a panic that would poison the wallet's custody mutex.
+            pause
+                .reached
+                .send(())
+                .map_err(|_| KagemushaWalletUnavailableV1::Busy)?;
+            pause
+                .release
+                .recv_timeout(SIGN_CONTROL_WAIT)
+                .map_err(|_| KagemushaWalletUnavailableV1::Busy)?;
+        }
         Ok(KagemushaWalletPlatformSignatureV1::Der(
             signature.to_der().as_bytes().to_vec(),
         ))
@@ -308,7 +392,14 @@ impl KagemushaWalletPlatformV1 for HostPlatform {
         KagemushaWalletAnchorPolicyV1::NotRequired
     }
     fn storage_state(&self) -> std::result::Result<(), KagemushaWalletUnavailableV1> {
-        Ok(())
+        // Fault only the real protected-storage availability boundary. No Wallet method,
+        // receipt verification, durable store operation or proof result is substituted.
+        if self.storage_unavailable.load(Ordering::SeqCst) {
+            self.failed_storage_checks.fetch_add(1, Ordering::SeqCst);
+            Err(KagemushaWalletUnavailableV1::Io(5))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -321,14 +412,18 @@ impl Drop for Handle {
 }
 fn wait_idle(owner: &Owner) {
     let control = owner.background.inner.lock();
-    let control = owner
+    let (control, timeout) = owner
         .background
         .inner
         .ready
-        .wait_while(control, |value| {
+        .wait_timeout_while(control, PROOF_WAIT, |value| {
             value.error.is_none() && (value.running || value.wake)
         })
         .unwrap();
+    assert!(
+        !timeout.timed_out() || (!control.running && !control.wake),
+        "automatic worker did not reach a bounded test observation"
+    );
     assert!(
         control.error.is_none(),
         "automatic worker failed: {:?}",
@@ -434,13 +529,80 @@ fn exercise(sources: &Sources, row: &Value, account_seed: u8, expected_branch: &
     assert_eq!(bound(id, send, &credited).kind, 11);
     assert_eq!(platform.signs.load(Ordering::SeqCst), 0);
     assert_eq!(retry(id, &send).unwrap().bytes, payment);
+    wait_idle(&actual_owner);
     // §5.3: charging OR count >= 16 OR age >= 24h, after no exchanges and zero backlog.
     // One fresh receipt is eligible by real scheduler charging state, never a forged age/count.
+    // The release event must encounter real provider unavailability before it can Archive.
+    platform.storage_unavailable.store(true, Ordering::SeqCst);
     assert!(matches!(
         exchange::end(id, exchange_id).unwrap(),
         state::ExchangeEndV1::Ended
     ));
+    let expected = Failure {
+        status: UNAVAILABLE,
+        reason: 3,
+        platform_code: 5,
+    };
+    {
+        let control = actual_owner.background.inner.lock();
+        let (control, _) = actual_owner
+            .background
+            .inner
+            .ready
+            .wait_timeout_while(control, Duration::from_secs(60), |value| {
+                value.running || value.error.is_none()
+            })
+            .unwrap();
+        assert_eq!(control.error, Some((expected, false)));
+        assert!(!control.running && !control.stopped);
+        assert!(control.deadline.is_none());
+    }
+    let failed_storage_checks = platform.failed_storage_checks.load(Ordering::SeqCst);
+    assert!(failed_storage_checks > 0);
+    assert_eq!(platform.signs.load(Ordering::SeqCst), 0);
+    platform.storage_unavailable.store(false, Ordering::SeqCst);
+
+    // Restoring the platform and retrying retained DATA cannot acknowledge an error the
+    // caller has not seen. The exact Send survives and its queued Archive remains unselected.
+    assert_eq!(retry(id, &send).unwrap().bytes, payment);
+    assert_eq!(
+        actual_owner.background.inner.lock().error,
+        Some((expected, false))
+    );
+    assert_eq!(snapshot(id).unwrap(), before);
+    assert_eq!(bound(id, send, &credited).kind, 11);
+    let invocation = exchange::Invocation::setup(id, 0, 18).unwrap();
+    assert_eq!(
+        setup(
+            &invocation,
+            setup::Setup::BackgroundStatus,
+            &mut review::CapabilityDelivery::default(),
+        )
+        .unwrap_err(),
+        expected
+    );
+    activity(id, true, true).unwrap();
+    actual_owner.background.notify();
+    assert_eq!(
+        actual_owner.background.inner.lock().error,
+        Some((expected, true))
+    );
+    assert_eq!(platform.signs.load(Ordering::SeqCst), 0);
+    // Stop fold eligibility at the real Archive signature return, after fresh Archive
+    // admission has already succeeded. The accepted Archive must still commit; only its
+    // subsequent covering fold is deferred. Retry runs on the normal caller thread so an
+    // independent activity control never waits for wallet ownership held by the signer.
+    let mut signature_gate = platform.pause_next_signature();
+    signature_gate.retry(id, send);
+    signature_gate.await_signature();
+    activity(id, false, false).unwrap();
+    assert_eq!(signature_gate.finish().bytes, payment);
+    assert_eq!(retry(id, &send).unwrap().bytes, payment);
     wait_idle(&actual_owner);
+    assert_eq!(
+        platform.failed_storage_checks.load(Ordering::SeqCst),
+        failed_storage_checks
+    );
     let archived = bound(id, send, &credited);
     assert_eq!(archived.kind, 1);
     let package: KagemushaWalletPackageV1 = decode(&archived.bytes);
@@ -454,7 +616,89 @@ fn exercise(sources: &Sources, row: &Value, account_seed: u8, expected_branch: &
         .verifier()
         .verify_package_proofs(&package, MemoryBudget::DEFAULT)
         .unwrap();
+    let awaiting_fold = snapshot(id).unwrap();
+    assert_eq!(
+        awaiting_fold.sequence,
+        before.sequence.checked_add(1).unwrap()
+    );
+    assert_eq!(awaiting_fold.owned_balance, before.owned_balance);
+    assert_eq!(awaiting_fold.known_burned_total, before.known_burned_total);
+    assert!(awaiting_fold.fold_backlog > 0);
+    assert!(matches!(
+        maintenance::source_view(&actual_owner).unwrap(),
+        maintenance::View::ArchiveFold
+    ));
+    assert_eq!(platform.signs.load(Ordering::SeqCst), 1);
+    assert_eq!(retry(id, &send).unwrap().bytes, payment);
+    assert_eq!(bound(id, send, &credited).bytes, archived.bytes);
+    close(id).unwrap();
+    drop(actual_owner);
+    drop(handle);
+
+    // Read the actual durable source through a new Core owner, without progressing it.
+    // Queue emptiness cannot erase the selected Archive's covering-fold obligation.
+    {
+        let runtime = state::NativeWalletRuntimeV1::load(
+            &sources.config(),
+            platform.provider(device, scheme),
+            &sources.pack,
+            &sources.inventory,
+            sources.originals(),
+        )
+        .unwrap();
+        let pending = runtime
+            .begin(&frames[0], &frames[1], &frames[2], &frames[3])
+            .unwrap();
+        let signature = Signature::try_new(account_key.private_key(), pending.challenge()).unwrap();
+        let mut reopened = pending.finish(signature.payload()).unwrap();
+        assert_eq!(reopened.snapshot().unwrap(), awaiting_fold);
+        assert_eq!(reopened.deferred_archive_summary().unwrap().count, 0);
+        assert!(
+            matches!(reopened.maintenance_view().unwrap(), state::MaintenanceViewV1::AwaitingArchiveFold(value) if value == awaiting_fold)
+        );
+    }
+
+    // Re-enter the public bridge with the same originals and a fresh account challenge.
+    // No scheduler, runtime handle or in-memory Archive reservation crosses this reopen.
+    let id = start_native_wallet(
+        sources.config(),
+        platform.provider(device, scheme),
+        &sources.pack,
+        &sources.inventory,
+        sources.originals(),
+    )
+    .unwrap_or_else(|_| panic!("reopened complete signed native source admission failed"));
+    let handle = Handle(id);
+    let challenge = open::begin(id, frames.each_ref().map(Vec::as_slice)).unwrap();
+    assert_eq!(challenge.kind, 15);
+    let signature = Signature::try_new(account_key.private_key(), &challenge.bytes).unwrap();
+    assert_eq!(open::finish(id, signature.payload()).unwrap().kind, 16);
+    let actual_owner = owner(id).unwrap();
+    wait_idle(&actual_owner);
+    assert_eq!(snapshot(id).unwrap(), awaiting_fold);
+    assert!(matches!(
+        maintenance::source_view(&actual_owner).unwrap(),
+        maintenance::View::ArchiveFold
+    ));
+    assert_eq!(bound(id, send, &credited).bytes, archived.bytes);
+    assert_eq!(retry(id, &send).unwrap().bytes, payment);
+    let reopened_exchange = exchange::begin(id).unwrap().delivered();
+    activity(id, true, false).unwrap();
+    wait_idle(&actual_owner);
+    assert!(matches!(
+        maintenance::source_view(&actual_owner).unwrap(),
+        maintenance::View::Released
+    ));
+    let fresh = exchange::Invocation::admit(id, reopened_exchange).unwrap();
+    assert!(maintenance::await_fresh(&fresh).unwrap().is_none());
+    drop(fresh);
+    assert!(matches!(
+        exchange::end(id, reopened_exchange).unwrap(),
+        state::ExchangeEndV1::Ended
+    ));
     let folded = snapshot(id).unwrap();
+    assert_eq!(folded.head, awaiting_fold.head);
+    assert_eq!(folded.sequence, awaiting_fold.sequence);
     assert_eq!(folded.sequence, before.sequence.checked_add(1).unwrap());
     assert_eq!(package.statement.sequence, folded.sequence);
     assert_eq!(folded.owned_balance, before.owned_balance);
@@ -510,7 +754,12 @@ fn exercise(sources: &Sources, row: &Value, account_seed: u8, expected_branch: &
         "archive_sha256": (hex::encode(BlobV1::of(&archived.bytes).sha256)),
         "payment_sha256": (hex::encode(BlobV1::of(&payment).sha256)),
         "automatic_archive_and_covering_fold": true,
+        "closed_after_durable_archive_before_covering_fold": true,
+        "reopened_empty_queue_retains_selected_archive_fold_barrier": true,
+        "reopened_bridge_worker_covers_same_head_during_open_exchange": true,
         "open_exchange_prevented_archive": true,
+        "provider_unavailable_retained_exact_send_and_archive_until_observed_retry": true,
+        "failed_platform_storage_checks": failed_storage_checks,
         "same_custody_reopened_queue_empty_before_duplicate_intake": true,
         "exact_archive_and_payment_replay_without_new_signature": true
     })

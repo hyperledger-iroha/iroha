@@ -337,7 +337,7 @@ pub fn message(bytes: &[u8], offset: usize) -> Result<[u8; 32], Error> {
 
 #[cfg(test)]
 mod counter_tests {
-    use group::{Curve, prime::PrimeCurveAffine};
+    use group::{Curve, CurveAffine};
     use iroha_pasta::{CancellationToken, Ep, Fq};
     use iroha_plonk::{
         VerificationCounts,

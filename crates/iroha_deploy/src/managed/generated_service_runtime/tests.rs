@@ -23,6 +23,20 @@ use iroha_wallet::operations::BoundedTransactionOptions;
 use std::{collections::BTreeMap, io, net::TcpListener, time::Duration};
 
 fn fixture(name: &str) -> (tempfile::TempDir, PreparedLocalnet, Vec<TcpListener>) {
+    let (temporary, prepared, ports) = fixture_with_ports(name);
+    let peers = ports.clone_api_listeners().unwrap();
+    for listener in &peers {
+        listener.set_nonblocking(true).unwrap();
+    }
+    (temporary, prepared, peers)
+}
+fn fixture_with_ports(
+    name: &str,
+) -> (
+    tempfile::TempDir,
+    PreparedLocalnet,
+    crate::managed::LocalnetPorts,
+) {
     let temporary = tempfile::tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = crate::localnet::prepare_localnet_at(
@@ -33,18 +47,7 @@ fn fixture(name: &str) -> (tempfile::TempDir, PreparedLocalnet, Vec<TcpListener>
         None,
     )
     .unwrap();
-    drop(ports);
-    let peers = prepared
-        .peers
-        .iter()
-        .map(|peer| {
-            let url: url::Url = peer.torii_url.parse().unwrap();
-            let listener = TcpListener::bind(("127.0.0.1", url.port().unwrap())).unwrap();
-            listener.set_nonblocking(true).unwrap();
-            listener
-        })
-        .collect();
-    (temporary, prepared, peers)
+    (temporary, prepared, ports)
 }
 fn options() -> BoundedTransactionOptions {
     BoundedTransactionOptions {
@@ -208,6 +211,7 @@ fn actual(
 struct Genuine {
     _temporary: tempfile::TempDir,
     prepared: PreparedLocalnet,
+    ports: crate::managed::LocalnetPorts,
     owner: GeneratedServiceRuntime,
     native: NativeFixture,
     selection: RuntimeSelection,
@@ -438,9 +442,7 @@ impl Genuine {
     ) -> Self {
         assert!(!full_parent || !short_initial);
         assert!(!retain_before_first_render || full_parent);
-        let (temporary, prepared, peers) = fixture(name);
-        // Native wallet readers own these original loopback ports during preparation.
-        drop(peers);
+        let (temporary, prepared, ports) = fixture_with_ports(name);
         let mut options = options();
         options.deadline = Instant::now() + Duration::from_secs(600);
         let mut parent = ManagedServiceBootstrap::open(&prepared).unwrap();
@@ -455,6 +457,9 @@ impl Genuine {
         let catalog_material =
             retain_before_first_render.then(|| catalog_material_skeleton(&owner));
         let mut native = NativeFixture::from_generated(&prepared, &owner.authority);
+        // Keep the original sockets across every HTTP phase; never release and
+        // race to rebind a generated endpoint between native wallet operations.
+        native.retain_http_listeners(&prepared, &ports);
         let log = quote_instructions(
             &native,
             &owner.authority.config,
@@ -538,6 +543,7 @@ impl Genuine {
         Self {
             _temporary: temporary,
             prepared,
+            ports,
             owner,
             native,
             selection,
@@ -548,16 +554,7 @@ impl Genuine {
         }
     }
     fn peers(&self) -> Vec<TcpListener> {
-        self.prepared
-            .peers
-            .iter()
-            .map(|peer| {
-                let url: url::Url = peer.torii_url.parse().unwrap();
-                let listener = TcpListener::bind(("127.0.0.1", url.port().unwrap())).unwrap();
-                listener.set_nonblocking(true).unwrap();
-                listener
-            })
-            .collect()
+        self.ports.clone_api_listeners().unwrap()
     }
     fn initial(&self, index: usize) -> RetainedCustodyEnrollment {
         let custody = ManagedStreamTokenCustody::open(
@@ -955,11 +952,14 @@ fn material_recovery_refuses_bootstrap_loss_after_selection_without_repair() {
         encode(&selected.policies, MAX_POLICY_BYTES).unwrap()
     );
     // Restored ordinary history is still incomplete; no failed recovery publishes material.
-    assert!(matches!(
-        owner.retain_current_custody_material(options().deadline),
-        Err(crate::managed::Error::Invalid(message))
-            if message == "generated bootstrap has incomplete original execution"
-    ));
+    let error = owner
+        .retain_current_custody_material(options().deadline)
+        .expect_err("incomplete original history cannot publish custody material");
+    assert!(
+        matches!(&error, crate::managed::Error::Invalid(message)
+            if message == "generated bootstrap has incomplete original execution: ReservePolicy: Absent"),
+        "the exact incomplete step and original operation status must be retained: {error:?}"
+    );
     assert_eq!(owner.authority.directory.entries(32).unwrap(), before);
     no_http(&peers);
 }

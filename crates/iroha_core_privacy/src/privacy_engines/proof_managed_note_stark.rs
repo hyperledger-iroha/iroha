@@ -24,7 +24,7 @@ use super::{
 #[cfg(test)]
 use iroha_data_model::privacy::{PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1};
 
-use rand::TryRngCore;
+use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -1338,7 +1338,7 @@ fn fixed_lde_columns_v1(
         Ok(coefficients)
     })
 }
-fn masked_lde_columns_v1<R: TryRngCore>(
+fn masked_lde_columns_v1<R: TryRng>(
     columns: &[Vec<F>],
     trace_log2: u8,
     lde_log2: u8,
@@ -2014,10 +2014,7 @@ impl ProofManagedNoteCandidateV1 {
 /// The caller supplies exact native base columns; the adapter reconstructs all
 /// statement-derived fixed policy and deterministic auxiliary columns. The
 /// emitted candidate must pass independent verification before owned bytes can be extracted.
-pub fn prove_proof_managed_note_stark_v1_with_rng<
-    A: ProofManagedNoteStarkAdapterV1,
-    R: TryRngCore,
->(
+pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapterV1, R: TryRng>(
     adapter: &A,
     base_columns: &[Vec<F>],
     rng: &mut R,
@@ -2872,11 +2869,14 @@ pub mod fixed_query_audit {
 pub mod degree_audit {
     use super::F;
     use core::fmt::Debug;
-    use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
-    fn random_field_v1(rng: &mut StdRng) -> F {
-        F::reduce(u128::from(rng.next_u64()))
+    use rand::{SeedableRng as _, TryRng as _};
+    use rand_chacha::ChaCha12Rng;
+    fn random_field_v1(rng: &mut ChaCha12Rng) -> F {
+        F::reduce(u128::from(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+        ))
     }
-    fn random_nonzero_field_v1(rng: &mut StdRng) -> F {
+    fn random_nonzero_field_v1(rng: &mut ChaCha12Rng) -> F {
         let value = random_field_v1(rng);
         if value == F::ZERO { F::ONE } else { value }
     }
@@ -2904,7 +2904,7 @@ pub mod degree_audit {
             declared_maximum_degree > 0,
             "degree audit requires a positive declared degree"
         );
-        let mut rng = StdRng::from_seed(seed);
+        let mut rng = ChaCha12Rng::from_seed(seed);
         let mut measured_maximum = 0;
         let terminal_order = usize::from(declared_maximum_degree) + 1;
         for trial in 0..trial_count {
@@ -2981,7 +2981,8 @@ pub mod degree_audit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    use rand::{Rng, SeedableRng as _};
+    use rand_chacha::ChaCha12Rng;
     use std::sync::OnceLock;
     const MOCK_PROFILE_DESCRIPTOR_V1: &[u8] = b"proof-managed-note-mock-relation-v1:wire=PMN1-v1:trace=2^13:base=8:profile-aux=0:profile-fixed=0:profile-constraints=1:constraint-degree=2:max-proof=4194304";
     const MOCK_TRACE_LOG2_V1: u8 = 13;
@@ -3230,7 +3231,7 @@ mod tests {
                 .build()
                 .expect("private test thread pool")
                 .install(|| {
-                    let mut rng = StdRng::from_seed([0x9B; 32]);
+                    let mut rng = ChaCha12Rng::from_seed([0x9B; 32]);
                     let (masked, masks) = masked_lde_columns_v1(&columns, 3, 10, &mut rng)
                         .expect("masked LDE columns");
                     let fixed = fixed_lde_columns_v1(&columns, 3, 10).expect("fixed LDE columns");
@@ -3250,7 +3251,7 @@ mod tests {
         };
         assert_eq!(run(1), run(4));
 
-        let mut rejected_rng = StdRng::from_seed([0xC7; 32]);
+        let mut rejected_rng = ChaCha12Rng::from_seed([0xC7; 32]);
         let mut untouched_rng = rejected_rng.clone();
         let malformed = vec![vec![F::ZERO; 7]];
         assert!(matches!(
@@ -3258,8 +3259,10 @@ mod tests {
             Err(ProofManagedNoteStarkErrorV1::Internal)
         ));
         assert_eq!(
-            rejected_rng.next_u64(),
-            untouched_rng.next_u64(),
+            rejected_rng.try_next_u64().expect("test RNG draw succeeds"),
+            untouched_rng
+                .try_next_u64()
+                .expect("test RNG draw succeeds"),
             "semantic transform rejection must happen before mask sampling"
         );
     }
@@ -3672,7 +3675,7 @@ mod tests {
         FIXTURE.get_or_init(|| {
             let adapter = MockAdapterV1::default();
             let base = mock_base_columns_v1();
-            let mut rng = StdRng::from_seed([0xA5; 32]);
+            let mut rng = ChaCha12Rng::from_seed([0xA5; 32]);
             let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base, &mut rng)
                 .expect("canonical mock candidate")
                 .verify_into_bytes_v1(&adapter)
@@ -3681,15 +3684,18 @@ mod tests {
         })
     }
     struct MaxValueRng;
-    impl RngCore for MaxValueRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
+    impl rand::TryRng for MaxValueRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::MAX)
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::MAX)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0xFF);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0xFF);
+            })
         }
     }
     #[test]
@@ -3997,7 +4003,7 @@ mod tests {
                 .map(|index| F(u64::try_from(index * 11 + 13).expect("small native trace")))
                 .collect::<Vec<_>>(),
         ];
-        let mut rng = StdRng::from_seed([0xD4; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xD4; 32]);
         let (lde, masks) =
             masked_lde_columns_v1(&columns, trace_log2, lde_log2, &mut rng).expect("masked LDE");
         let deep_point = E::canonical([7, 3, 1, 0]).expect("canonical extension-field DEEP point");
@@ -4391,7 +4397,7 @@ mod tests {
             prove_proof_managed_note_stark_v1_with_rng(
                 &invalid,
                 &base,
-                &mut StdRng::from_seed([0xD1; 32]),
+                &mut ChaCha12Rng::from_seed([0xD1; 32]),
             )
         });
         assert!(matches!(
@@ -4419,7 +4425,7 @@ mod tests {
             prove_proof_managed_note_stark_v1_with_rng(
                 &adapter,
                 &invalid_base,
-                &mut StdRng::from_seed([0xD1; 32]),
+                &mut ChaCha12Rng::from_seed([0xD1; 32]),
             )
         });
         assert!(matches!(
@@ -4435,8 +4441,8 @@ mod tests {
         use crate::privacy_engines::proof_phase_diagnostics::test_support::CaptureV1;
         let adapter = MockAdapterV1::default();
         let base = mock_base_columns_v1();
-        let mut disabled_rng = StdRng::from_seed([0xA5; 32]);
-        let mut enabled_rng = StdRng::from_seed([0xA5; 32]);
+        let mut disabled_rng = ChaCha12Rng::from_seed([0xA5; 32]);
+        let mut enabled_rng = ChaCha12Rng::from_seed([0xA5; 32]);
         let disabled = CaptureV1::new(false, false);
         let baseline = disabled
             .with_default(|| {
@@ -4468,7 +4474,7 @@ mod tests {
         let adapter = MockAdapterV1::default();
         let mut changed = mock_base_columns_v1();
         changed[0][5] = F::ONE;
-        let mut rng = StdRng::from_seed([3; 32]);
+        let mut rng = ChaCha12Rng::from_seed([3; 32]);
         assert!(prove_proof_managed_note_stark_v1_with_rng(&adapter, &changed, &mut rng,).is_err());
         assert!(matches!(
             prove_proof_managed_note_stark_v1_with_rng(

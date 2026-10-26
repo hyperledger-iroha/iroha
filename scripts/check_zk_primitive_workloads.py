@@ -186,11 +186,11 @@ SDK_PATH_ROOTS = {
 }
 SUPERSEDED_PQ_PACKAGES = re.compile(
     r"(?:\A|[-_])(?:kyber|dilithium|sphincs|saber|ntru|frodo|sike|rainbow|picnic|newhope)"
-    r"(?:\Z|[-_0-9])|pqcrypto-(?!internals\Z|traits\Z|mlkem\Z|mldsa\Z)"
+    r"(?:\Z|[-_0-9])|pqcrypto-"
 )
 PQ_PACKAGE = re.compile(r"pqcrypto|ml-?kem|ml-?dsa|fips20[3-5]|slh-?dsa|falcon|fn-?dsa|oqs|pqclean")
 LEGACY_PQ_LABEL = re.compile(r"kyber|dilithium")
-PQ_CALL_SITE = re.compile(r"pqcrypto_(?:mlkem|mldsa|traits)|soranet_pq")
+PQ_CALL_SITE = re.compile(r"pqcrypto_(?:mlkem|mldsa|traits)|ml_(?:kem|dsa)::|soranet_pq")
 SDK_MANIFEST = re.compile(
     r"(?:build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?|libs\.versions\.toml|Package\.swift|"
     r"package\.json|pyproject\.toml|requirements[^/]*\.txt|[^/]+\.csproj)\Z"
@@ -1691,27 +1691,9 @@ def check_poseidon(root: Path, spec: dict[str, Any], derived: dict[str, Any], re
 
 
 def sdk_manifest_pq_library(path: str, text: str) -> str | None:
-    """Find a PQ library name without mistaking Swift evidence keys for dependencies.
-
-    The native artifact validator compares an evidence-key set with literal
-    filenames. Only its exact normalization receipt filename is metadata;
-    occurrences in dependencies, linker settings or other expressions still fail.
-    """
-    metadata_spans = []
-    if path.endswith("/Package.swift"):
-        for guard in re.finditer(
-            r'\bSet\(\s*evidence\.keys\s*\)\s*==\s*Set\(\s*\['
-            r'(?P<names>\s*(?:"[^"\\\n]*"\s*,?\s*)*)\]\s*\)',
-            text,
-        ):
-            for name in re.finditer(r'"pqcrypto-normalization\.json"', guard["names"]):
-                metadata_spans.append(
-                    (guard.start("names") + name.start(), guard.start("names") + name.end())
-                )
-    for match in SDK_PQ_LIBRARY.finditer(text):
-        if not any(start <= match.start() and match.end() <= end for start, end in metadata_spans):
-            return match.group(0)
-    return None
+    """Find a retired SDK PQ library, including obsolete evidence receipt names."""
+    match = SDK_PQ_LIBRARY.search(text)
+    return match.group(0) if match else None
 
 
 def check_post_quantum(root: Path, spec: dict[str, Any], derived: dict[str, Any], files: Sequence[str], report: Report) -> None:

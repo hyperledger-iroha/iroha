@@ -234,9 +234,9 @@ fn fresh_and_exact_selected_generations_reach_locked_startup_without_replacement
         assert_eq!(original.context.name, "local");
         assert_eq!(
             original.service_profile,
-            crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities
+            crate::localnet::LocalnetServiceProfile::Standard
         );
-        assert!(original.stream_token_authorities().unwrap().is_some());
+        assert!(original.stream_token_authorities().unwrap().is_none());
         assert!(matches!(store.context(None), Err(Error::NoSelection)));
         let reached = stop_before_startup(&store);
         require_stopped(store.up_retained(&request, &original.context));

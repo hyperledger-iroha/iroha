@@ -39,7 +39,7 @@
 )]
 
 use ff::Field;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use zeroize::Zeroize;
 
 use crate::curve::{PastaAffine, PastaCurve};

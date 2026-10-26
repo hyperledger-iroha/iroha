@@ -380,6 +380,6 @@ pub fn read_capture(variable: &str, label: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     file.take(cap + 1).read_to_end(&mut bytes).unwrap();
     assert!(u64::try_from(bytes.len()).unwrap() <= cap);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), sha);
+    assert_eq!(hex::encode(Sha256::digest(&bytes)), sha);
     bytes
 }

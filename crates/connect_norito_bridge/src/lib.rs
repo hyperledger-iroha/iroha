@@ -2,23 +2,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
 
-// The locked pqcrypto-internals build emits both static and unqualified links.
-// With the current Rust toolchain its rlib does not retain the common/Keccak
-// objects. Own their Apple static bundling explicitly so this bridge archive is
-// self-contained. The Apple packager still authenticates every reference member
-// and removes only byte-identical second copies before its all-load consumer.
-#[cfg(target_vendor = "apple")]
-#[link(name = "pqclean_common", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-
-#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
-#[link(name = "keccak2x", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-
-#[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
-#[link(name = "keccak4x", kind = "static", modifiers = "+bundle")]
-unsafe extern "C" {}
-
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 #[cfg(test)]

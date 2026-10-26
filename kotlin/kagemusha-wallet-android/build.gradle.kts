@@ -25,7 +25,7 @@ val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")
 android {
     namespace = "org.hyperledger.iroha.sdk.offline.wallet"
     compileSdk = 37
-    ndkVersion = "28.0.12674087"
+    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         minSdk = 26
@@ -218,8 +218,8 @@ abstract class CompileEnrollmentProbeFiles : DefaultTask() {
         val properties = Properties().apply {
             ndk.resolve("source.properties").inputStream().use { load(it) }
         }
-        require(properties.getProperty("Pkg.BaseRevision") == "28.0.12674087" &&
-            properties.getProperty("Pkg.Revision") == "28.0.12674087-beta2") { "Test mailbox helper requires the pinned NDK" }
+        require(properties.getProperty("Pkg.BaseRevision") == "30.0.16248370" &&
+            properties.getProperty("Pkg.Revision") == "30.0.16248370") { "Test mailbox helper requires the pinned NDK" }
         val host = when {
             System.getProperty("os.name").startsWith("Mac") -> "darwin-x86_64"
             System.getProperty("os.name").startsWith("Linux") -> "linux-x86_64"

@@ -5,7 +5,7 @@
 //! cut. Only the ignored genuine test constructs parameters, keys or proofs.
 
 use ff::PrimeField;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::EqAffine;
 
 use super::*;

@@ -922,7 +922,7 @@ mod tests {
     use crate::field::{Fp, Fq};
     use ff::Field;
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     fn random_vec<F: PastaField>(n: usize, seed: u64) -> Vec<F> {
         let mut rng = ChaCha20Rng::seed_from_u64(seed);

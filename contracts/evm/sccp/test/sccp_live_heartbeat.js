@@ -22,7 +22,7 @@ function certificate(input, network, keys) {
   const signers = m.signerIndices(m.parseQcFixed(qc).signers);
   assert.equal(signers.length, m.quorum(keys.length));
   assert(signers.every((index) => index < keys.length), "signers belong to the original committee");
-  const signature = m.bls.G2.ProjectivePoint.fromHex(
+  const signature = m.bls.G2.Point.fromBytes(
     m.ethers.getBytes(bytes(input.aggregate_signature, 96, "original signature")),
   );
   signature.assertValidity();

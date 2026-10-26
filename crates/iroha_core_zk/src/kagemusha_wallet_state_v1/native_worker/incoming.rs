@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn incoming_mode_selection_preserves_all_four_obligations_and_one_correction() {
-        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        use p256::elliptic_curve::CurveAffine;
         let budget = MemoryBudget::DEFAULT;
         let pp = PinnedParams::<Ep>::derive(16).unwrap();
         let vp = PinnedParams::<Eq>::derive(16).unwrap();
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn archive_variants_select_only_their_actual_obligations() {
-        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        use p256::elliptic_curve::CurveAffine;
         let budget = MemoryBudget::DEFAULT;
         let pp = PinnedParams::<Ep>::derive(16).unwrap();
         let vp = PinnedParams::<Eq>::derive(16).unwrap();
@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn multiple_undecidable_originals_keep_exactly_the_first_checked_correction() {
-        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        use p256::elliptic_curve::CurveAffine;
         let budget = MemoryBudget::DEFAULT;
         let p = PinnedParams::<Ep>::derive(16).unwrap();
         let v = PinnedParams::<Eq>::derive(16).unwrap();
@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn correction_retains_actual_source_prefix_with_minimal_scratch() {
-        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        use p256::elliptic_curve::CurveAffine;
         let params = PinnedParams::<Eq>::derive(16).unwrap();
         let insufficient = PinnedParams::<Eq>::derive(3).unwrap();
         for k in [12, 14] {
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn correction_parameter_failures_abort_without_a_replacement() {
-        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        use p256::elliptic_curve::CurveAffine;
         let params = PinnedParams::<Eq>::derive(12).unwrap();
         let original =
             FoldInput::<Eq>::from_opening(iroha_pasta::EqAffine::generator(), &[Fp::ONE; 14])
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn zero_scratch_correction_preserves_binding_and_actual_sigma_modes() {
-        use p256::elliptic_curve::group::prime::PrimeCurveAffine;
+        use p256::elliptic_curve::CurveAffine;
         let params = PinnedParams::<Eq>::derive(3).unwrap();
         let original = FoldInput::<Eq>::from_opening(
             iroha_pasta::EqAffine::generator(),

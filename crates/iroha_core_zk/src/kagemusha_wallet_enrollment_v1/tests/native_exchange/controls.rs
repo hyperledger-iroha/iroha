@@ -515,11 +515,9 @@ fn receive_and_check(
     let request: KagemushaWalletRequestV1 = decode(request);
     // Keep the exact companion passed to Receive for the SDK carrier census.
     // It pairs with the retained Payment envelope; no wallet reconstruction is needed.
-    records.push(original(
-        output,
-        &format!("{label}-companion.norito"),
-        payer_companion,
-    ));
+    let (measurement, _) =
+        message_census::retain_companion(output, &format!("{label}-companion"), payer_companion);
+    records.push(measurement);
     let before = b.snapshot().unwrap();
     let intent = receive(payment, payer_companion, next(id));
     let bytes = complete(b.execute(intent.clone()).unwrap());

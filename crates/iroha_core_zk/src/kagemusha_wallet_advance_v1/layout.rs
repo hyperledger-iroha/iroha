@@ -41,7 +41,7 @@ use super::{
     },
     store::KagemushaWalletDurableStoreV1,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 /// Directory name of the custody root under the platform's no-backup directory.
 pub const KAGEMUSHA_WALLET_ROOT_DIR_NAME_V1: &str = "kagemusha-wallet-v1";
@@ -194,7 +194,7 @@ impl KagemushaWalletSlotIdV1 {
     /// Returns [`KagemushaWalletUnavailableV1::Platform`] when the RNG fails.
     pub fn generate() -> Result<Self, KagemushaWalletUnavailableV1> {
         let mut bytes = [0_u8; 32];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut bytes)
             .map_err(|_| KagemushaWalletUnavailableV1::Platform(0))?;
         if bytes == [0; 32] {
@@ -582,7 +582,7 @@ pub(super) fn kagemusha_wallet_prepare_root_v1<F: KagemushaWalletFsV1>(
         }
     }
     let mut root_nonce = [0_u8; 32];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut root_nonce)
         .map_err(|_| {
             KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))

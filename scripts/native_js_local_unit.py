@@ -273,7 +273,7 @@ def validate_config(root, config):
     require(Path(config["python"]).resolve() == Path(sys.executable).resolve(), "Python owner differs")
     node = shutil.which("node", path=tool_path(config))
     require(node and Path(config["node"]) == Path(node).resolve(strict=True), "Node tool differs from the actual local recipe")
-    toolchain = Path.home() / ".rustup/toolchains" / ("1.93.1-" + HOSTS[platform.machine()]) / "bin"
+    toolchain = Path.home() / ".rustup/toolchains" / ("1.99.1-" + HOSTS[platform.machine()]) / "bin"
     require(all(Path(config[key]) == toolchain / key for key in ("cargo", "rustc", "rustdoc")), "Rust tools do not name the pinned stock toolchain")
     developer = Path(config["developer_dir"])
     require(developer.resolve(strict=True) == developer, "developer directory is not canonical")
@@ -282,7 +282,7 @@ def validate_config(root, config):
             and config["codesign"] == "/usr/bin/codesign", "local native tools differ from stock Apple tools")
     sdk = developer / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
     require(Path(config["sdk"]) == sdk and sdk.resolve(strict=True) == sdk, "macOS SDK is not canonical")
-    require(tomllib.loads((root / "rust-toolchain.toml").read_text())["toolchain"]["channel"] == "1.93.1", "workspace Rust toolchain differs")
+    require(tomllib.loads((root / "rust-toolchain.toml").read_text())["toolchain"]["channel"] == "1.99.1", "workspace Rust toolchain differs")
 
 
 def current_consumed(root, metadata, before, receipts):

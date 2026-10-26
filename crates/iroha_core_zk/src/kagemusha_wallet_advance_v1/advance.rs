@@ -39,7 +39,7 @@ use iroha_data_model::kagemusha::{
     KagemushaWalletMarkerV1, KagemushaWalletOperationKindV1, KagemushaWalletRecoveryCapsuleV1,
     KagemushaWalletStateCommitmentV1,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 use super::{
     KagemushaWalletLostCustodyV1, KagemushaWalletProviderErrorV1,
@@ -1169,7 +1169,7 @@ where
             }
         })?;
         let mut bytes = vec![0_u8; size];
-        rand::rngs::OsRng.try_fill_bytes(&mut bytes).map_err(|_| {
+        rand::rngs::SysRng.try_fill_bytes(&mut bytes).map_err(|_| {
             KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(0))
         })?;
         match self.store.write_new(

@@ -1,4 +1,4 @@
-//! Release-authenticated public hints and finite allowances for managed parent contexts.
+//! Selected public routes and finite allowances for managed parent contexts.
 
 use std::{collections::BTreeSet, time::Instant};
 
@@ -10,22 +10,22 @@ use norito::{Decode, Encode};
 
 use super::*;
 
-/// Signed endpoint hint for a BLS validator; it cannot grant voting membership.
+/// Explicit endpoint hint for a BLS validator; it cannot grant voting membership.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::bootstrap::ReleasePeerV1")]
-pub struct ReleasePeer {
+#[norito_schema(name = "iroha_deploy::bootstrap::BootstrapPeerV1")]
+pub struct BootstrapPeer {
     /// Exact node identity, independently checked against native certified committee state.
     pub node_id: PeerId,
-    /// Canonical HTTPS root present in the same release's approved roots.
+    /// Canonical HTTPS root present in the same metadata's approved roots.
     pub torii_root: String,
 }
 
-/// Testnet faucet authority and explicit per-operation spending caps distributed by the release.
+/// Testnet faucet authority and explicit per-operation spending caps retained with the network.
 /// These public values authorize no minting: the native prepared envelope and ledger execution
 /// still enforce issuer custody, claim work, replay protection, funding and permissions.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::bootstrap::ReleaseFaucetV1")]
-pub struct ReleaseFaucet {
+#[norito_schema(name = "iroha_deploy::bootstrap::FaucetPolicyV1")]
+pub struct FaucetPolicy {
     /// Exact approved HTTPS root serving canonical native faucet routes.
     pub torii_root: String,
     /// Independently trusted single-signatory faucet issuer.
@@ -43,59 +43,57 @@ pub struct ReleaseFaucet {
 /// Independently selected public build-registry schema and Torii locations on this network.
 /// Provider endpoints and token signer custody must still come from authenticated current state.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_deploy::bootstrap::ReleaseBuildRegistryV1")]
-pub struct ReleaseBuildRegistry {
+#[norito_schema(name = "iroha_deploy::bootstrap::BuildRegistryPolicyV1")]
+pub struct BuildRegistryPolicy {
     /// Approved parent Torii roots serving registry and provider-discovery evidence.
     pub torii_roots: Vec<String>,
 }
 
-pub(super) fn validate(release: &NetworkRelease) -> Result<()> {
+pub(super) fn validate(metadata: &NetworkMetadata) -> Result<()> {
     iroha::config::resolve_account_chain_discriminant(
         None,
-        Some(release.account_chain_discriminant),
+        Some(metadata.account_chain_discriminant),
     )
-    .map_err(|_| BootstrapError::Invalid("invalid signed account address profile"))?;
-    if release.peers.is_empty()
-        || release.peers.len() > crate::verify::finality::MAX_OBSERVATION_PEERS
-    {
+    .map_err(|_| BootstrapError::Invalid("invalid selected account address profile"))?;
+    if metadata.peers.len() > crate::verify::finality::MAX_OBSERVATION_PEERS {
         return Err(BootstrapError::Invalid(
-            "invalid signed committee endpoint count",
+            "invalid selected committee endpoint count",
         ));
     }
     let mut peers = BTreeSet::new();
-    for peer in &release.peers {
+    for peer in &metadata.peers {
         if peer.node_id.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
             || !peers.insert(&peer.node_id)
-            || !release.torii_roots.contains(&peer.torii_root)
+            || !metadata.torii_roots.contains(&peer.torii_root)
         {
             return Err(BootstrapError::Invalid(
-                "invalid signed committee endpoint binding",
+                "invalid selected committee endpoint binding",
             ));
         }
     }
-    if let Some(faucet) = &release.faucet {
+    if let Some(faucet) = &metadata.faucet {
         iroha::client::AccountFaucetPolicyV1::try_new(
             faucet.issuer.clone(),
             faucet.asset_definition_id.clone(),
             faucet.amount.clone(),
         )
-        .map_err(|_| BootstrapError::Invalid("invalid signed faucet authority or allowance"))?;
-        if !release.torii_roots.contains(&faucet.torii_root)
+        .map_err(|_| BootstrapError::Invalid("invalid selected faucet authority or allowance"))?;
+        if !metadata.torii_roots.contains(&faucet.torii_root)
             || faucet.max_operation_fee.is_zero()
             || faucet.max_namespace_rent.is_zero()
             || faucet.max_operation_fee > faucet.amount
             || faucet.max_namespace_rent > faucet.amount
         {
             return Err(BootstrapError::Invalid(
-                "invalid signed developer spending allowance",
+                "invalid selected developer spending allowance",
             ));
         }
     }
-    if let Some(registry) = &release.build_registry {
+    if let Some(registry) = &metadata.build_registry {
         let roots = registry.torii_roots.iter().collect::<BTreeSet<_>>();
         if roots.is_empty()
             || roots.len() != registry.torii_roots.len()
-            || roots.iter().any(|root| !release.torii_roots.contains(root))
+            || roots.iter().any(|root| !metadata.torii_roots.contains(root))
         {
             return Err(BootstrapError::Invalid(
                 "build registry must select distinct approved parent roots",
@@ -106,25 +104,25 @@ pub(super) fn validate(release: &NetworkRelease) -> Result<()> {
 }
 
 impl AuthenticatedBootstrap {
-    /// Select the release's preferred public wallet context without constructing credentials.
+    /// Select the metadata's preferred public wallet context without constructing credentials.
     /// A managed wallet imports the retained child owner through its native custody API.
     ///
     /// # Errors
-    /// The release's exact chain/profile/endpoint cannot form a canonical SDK wallet context.
+    /// The metadata's exact chain/profile/endpoint cannot form a canonical SDK wallet context.
     pub fn wallet_network(&self) -> Result<iroha_wallet::WalletNetwork> {
-        let release = self.release();
+        let metadata = self.metadata();
         iroha_wallet::WalletNetwork::new(
-            release.network_id,
-            release
+            metadata.network_id,
+            metadata
                 .chain_id
                 .parse()
-                .map_err(|_| BootstrapError::Invalid("invalid signed parent chain"))?,
-            release.torii_roots[0]
+                .map_err(|_| BootstrapError::Invalid("invalid selected parent chain"))?,
+            metadata.torii_roots[0]
                 .parse()
-                .map_err(|_| BootstrapError::Invalid("invalid signed parent endpoint"))?,
-            release.account_chain_discriminant,
+                .map_err(|_| BootstrapError::Invalid("invalid selected parent endpoint"))?,
+            metadata.account_chain_discriminant,
         )
-        .map_err(|_| BootstrapError::Invalid("signed parent wallet context is inconsistent"))
+        .map_err(|_| BootstrapError::Invalid("selected parent wallet context is inconsistent"))
     }
 
     /// Obtain finite automatic registration/anchoring fees from the authenticated testnet policy.
@@ -138,11 +136,11 @@ impl AuthenticatedBootstrap {
         deadline: Instant,
     ) -> Result<iroha_wallet::operations::BoundedTransactionOptions> {
         let faucet = self
-            .release()
+            .metadata()
             .faucet
             .as_ref()
             .ok_or(BootstrapError::Invalid(
-                "signed network release has no automatic funding allowance",
+                "selected network metadata has no automatic funding allowance",
             ))?;
         if Instant::now() >= deadline {
             return Err(BootstrapError::Invalid("parent operation deadline elapsed"));
@@ -159,7 +157,7 @@ impl AuthenticatedBootstrap {
         })
     }
 
-    /// Construct credential-free parent endpoint contexts from signed release hints.
+    /// Construct credential-free parent endpoint contexts from selected metadata hints.
     ///
     /// The supplied wallet already targets one approved parent root. Its child listener token,
     /// Basic Auth and arbitrary operator credentials cannot be copied to other endpoints.
@@ -178,36 +176,36 @@ impl AuthenticatedBootstrap {
         crate::verify::http::HttpFinalityError,
     > {
         use crate::verify::http::HttpFinalityError;
-        let release = self.release();
-        if config.network_id != release.network_id
-            || config.chain.to_string() != release.chain_id
-            || config.account_chain_discriminant != release.account_chain_discriminant
+        let metadata = self.metadata();
+        if config.network_id != metadata.network_id
+            || config.chain.to_string() != metadata.chain_id
+            || config.account_chain_discriminant != metadata.account_chain_discriminant
             || config.api_token.is_some()
             || config.basic_auth.is_some()
-            || !release
+            || !metadata
                 .torii_roots
                 .iter()
                 .any(|root| root == config.torii_api_url.as_str())
         {
             return Err(HttpFinalityError::Invalid(
-                "wallet differs from signed public parent context",
+                "wallet differs from selected public parent context",
             ));
         }
         let make_client = |root: &str| {
             let mut selected = config.clone();
             selected.torii_api_url = root
                 .parse()
-                .map_err(|_| HttpFinalityError::Invalid("signed parent endpoint"))?;
+                .map_err(|_| HttpFinalityError::Invalid("selected parent endpoint"))?;
             iroha::client::Client::builder(selected)
                 .build()
-                .map_err(|_| HttpFinalityError::Invalid("signed parent SDK context"))
+                .map_err(|_| HttpFinalityError::Invalid("selected parent SDK context"))
         };
-        let proofs = release
+        let proofs = metadata
             .torii_roots
             .iter()
             .map(|root| make_client(root))
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let peers = release
+        let peers = metadata
             .peers
             .iter()
             .map(|peer| Ok((peer.node_id.clone(), make_client(&peer.torii_root)?)))

@@ -135,7 +135,6 @@ mod signed_attachment_refusal {
             let before_rejected = app
                 .telemetry
                 .metrics()
-                .await
                 .torii_route_stage_latency_seconds
                 .with_label_values(&["transaction", "verify", "error"])
                 .get_sample_count();
@@ -143,7 +142,6 @@ mod signed_attachment_refusal {
             let before_deferred = app
                 .telemetry
                 .metrics()
-                .await
                 .torii_route_stage_latency_seconds
                 .with_label_values(&["transaction", "verify", "deferred"])
                 .get_sample_count();
@@ -178,7 +176,7 @@ mod signed_attachment_refusal {
             );
             #[cfg(feature = "telemetry")]
             {
-                let metrics = app.telemetry.metrics().await;
+                let metrics = app.telemetry.metrics();
                 assert_eq!(
                     metrics
                         .torii_route_stage_latency_seconds
@@ -375,7 +373,7 @@ mod signed_attachment_refusal {
     #[tokio::test]
     async fn signed_attachment_outer_handler_metrics_do_not_record_local_rejection() {
         let (app, tx, wire) = fixture();
-        let metrics = app.telemetry.metrics().await;
+        let metrics = app.telemetry.metrics();
         let error_count = metrics
             .torii_route_stage_latency_seconds
             .with_label_values(&["transaction", "handle", "error"])
@@ -396,7 +394,7 @@ mod signed_attachment_refusal {
         })
         .expect_err("actual outer handler preserves local admission refusal");
         let captured = original(&error);
-        let metrics = app.telemetry.metrics().await;
+        let metrics = app.telemetry.metrics();
         assert_eq!(
             metrics
                 .torii_route_stage_latency_seconds

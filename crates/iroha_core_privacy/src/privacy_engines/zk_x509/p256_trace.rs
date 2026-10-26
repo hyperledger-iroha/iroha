@@ -43,8 +43,8 @@ use super::{
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::{
-    FieldBytes, FieldElement, ProjectivePoint, Scalar,
-    elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
+    FieldBytes, NistP256, ProjectivePoint, Scalar,
+    elliptic_curve::{PrimeField as _, hazmat::FieldArithmetic, sec1::ToSec1Point as _},
 };
 use thiserror::Error;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1297,13 +1297,17 @@ impl P256TraceCompilerV1 {
     fn base_field_v1(
         &self,
         value: P256BaseValueV1,
-    ) -> Result<FieldElement, P256TraceCompilerErrorV1> {
+    ) -> Result<<NistP256 as FieldArithmetic>::FieldElement, P256TraceCompilerErrorV1> {
         let record = self.record(value.0)?;
         if record.modulus != ZkX509P256ModulusV1::BaseField {
             return Err(P256TraceCompilerErrorV1::NonCanonical);
         }
-        Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(record.value_be)))
-            .ok_or(P256TraceCompilerErrorV1::NonCanonical)
+        Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+            <NistP256 as FieldArithmetic>::FieldElement::from_bytes(&FieldBytes::from(
+                record.value_be,
+            )),
+        )
+        .ok_or(P256TraceCompilerErrorV1::NonCanonical)
     }
     fn scalar_field_v1(
         &self,
@@ -1354,7 +1358,7 @@ impl P256TraceCompilerV1 {
         let mut table = [identity; 16];
         for (multiple, assigned) in table.iter_mut().enumerate().skip(1) {
             let point = ProjectivePoint::GENERATOR * Scalar::from(multiple as u64);
-            let encoded = point.to_affine().to_encoded_point(false);
+            let encoded = point.to_affine().to_sec1_point(false);
             let mut x_be = [0_u8; 32];
             let mut y_be = [0_u8; 32];
             x_be.copy_from_slice(
@@ -1890,8 +1894,10 @@ impl P256BaseFieldCircuitV1 for P256TraceCompilerV1 {
         self.assert_equal_handles_v1(left.0, right.0)
     }
     fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
-        let inverse = Option::<FieldElement>::from(self.base_field_v1(value)?.invert())
-            .ok_or(P256TraceCompilerErrorV1::ZeroInverse)?;
+        let inverse = Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+            self.base_field_v1(value)?.invert(),
+        )
+        .ok_or(P256TraceCompilerErrorV1::ZeroInverse)?;
         let inverse = P256BaseValueV1(self.push_initial_v1(
             ZkX509P256ModulusV1::BaseField,
             inverse.to_bytes().into(),
@@ -2252,7 +2258,7 @@ mod tests {
         digest_be: [u8; 32],
         signature: Signature,
     ) -> P256EcdsaWitnessV1 {
-        let encoded = key.verifying_key().to_encoded_point(false);
+        let encoded = key.verifying_key().to_sec1_point(false);
         let mut public_key_x_be = [0_u8; 32];
         let mut public_key_y_be = [0_u8; 32];
         public_key_x_be.copy_from_slice(encoded.x().expect("x"));
@@ -2272,7 +2278,7 @@ mod tests {
         let key = signing_key_v1(73);
         let digest = core::array::from_fn(|index| (index as u8).wrapping_mul(37).wrapping_add(11));
         let signature: Signature = key.sign_prehash(&digest).expect("sign");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let topology = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership).unwrap();
         let mut compiler = P256TraceCompilerV1::with_topology_capacity_v1(&topology).unwrap();
         let addresses = (
@@ -2495,7 +2501,7 @@ mod tests {
         let key = signing_key_v1(79);
         let digest = [0xa7; 32];
         let signature: Signature = key.sign_prehash(&digest).expect("sign");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let high = Signature::from_scalars(signature.r().to_bytes(), (-*signature.s()).to_bytes())
             .expect("high-s representative");
         let material = compile_p256_ecdsa_trace_material_v1(
@@ -2516,7 +2522,7 @@ mod tests {
         let key = signing_key_v1(83);
         let digest = [0x5c; 32];
         let signature: Signature = key.sign_prehash(&digest).expect("sign");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let witness = witness_v1(&key, digest, signature);
         let mut zero = witness;
         zero.r_be = [0; 32];

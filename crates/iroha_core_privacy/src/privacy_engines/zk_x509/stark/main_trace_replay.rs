@@ -59,7 +59,7 @@ impl MainTraceMaskGroupV1 {
     }
 
     #[cfg(test)]
-    pub(in super::super) fn sample_v1<R: TryRngCore>(
+    pub(in super::super) fn sample_v1<R: TryRng>(
         native_log: u8,
         common_log: u8,
         width: usize,
@@ -99,7 +99,7 @@ impl MainTraceMaskGroupV1 {
     /// published in either case. The pending iterator owns at most eight
     /// clearing columns on error and unwind too.
     #[cfg(test)]
-    pub(in super::super) fn sample_batched_v1<R: TryRngCore>(
+    pub(in super::super) fn sample_batched_v1<R: TryRng>(
         native_log: u8,
         common_log: u8,
         width: usize,
@@ -135,7 +135,7 @@ impl MainTraceMaskGroupV1 {
     /// Successful calls preserve the sampler's exact RNG sequence. Failed calls
     /// deliberately do not promise the old all-masks-before-commit RNG position.
     #[allow(clippy::too_many_arguments)]
-    fn sample_and_replay_batch_with_v1<R: TryRngCore>(
+    fn sample_and_replay_batch_with_v1<R: TryRng>(
         &mut self,
         columns: core::ops::Range<usize>,
         policy: MainBoundedTransformPolicyV1,
@@ -603,7 +603,7 @@ impl MainTracePolynomialSetV1 {
     /// First commitment consumes each native source once, retaining masks, RFC originals and its Merkle cut.
     /// All successful RNG draws, polynomials and commitment framing are unchanged.
     /// Errors are fail-fast: no later source/RNG activity and no partial root escapes.
-    pub(super) fn sample_and_commit_joined_v1<R: TryRngCore>(
+    pub(super) fn sample_and_commit_joined_v1<R: TryRng>(
         proof_instance: ZkX509ProofInstanceV1,
         layout: &AggregateProofLayoutV1,
         kind: MainTraceColumnKindV1,
@@ -972,7 +972,8 @@ impl MainTracePolynomialSetV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
 
     fn native(log: u8, column: usize) -> ZeroizingMainTraceColumnV1 {
         ZeroizingMainTraceColumnV1(
@@ -986,8 +987,8 @@ mod tests {
     fn mask_only_replay_matches_retained_coefficients_entropy_and_independent_native_evaluation() {
         for native_log in [3, 8, 11] {
             let common_log = 13;
-            let mut replay_rng = StdRng::from_seed([native_log; 32]);
-            let mut retained_rng = StdRng::from_seed([native_log; 32]);
+            let mut replay_rng = ChaCha12Rng::from_seed([native_log; 32]);
+            let mut retained_rng = ChaCha12Rng::from_seed([native_log; 32]);
             let group = MainTraceMaskGroupV1::sample_v1(
                 native_log,
                 common_log,
@@ -1005,7 +1006,10 @@ mod tests {
                 |column| Ok(native(native_log, column).into_vec_v1()),
             )
             .unwrap();
-            assert_eq!(replay_rng.next_u64(), retained_rng.next_u64());
+            assert_eq!(
+                replay_rng.try_next_u64().expect("test RNG draw succeeds"),
+                retained_rng.try_next_u64().expect("test RNG draw succeeds")
+            );
             let root = goldilocks_primitive_root_v1(native_log).unwrap();
             for column in 0..3 {
                 let values = native(native_log, column);
@@ -1034,7 +1038,7 @@ mod tests {
     #[test]
     fn bounded_parallel_interpolation_preserves_original_masks_order_and_polynomials() {
         for native_log in [3, 11] {
-            let mut rng = StdRng::from_seed([native_log + 91; 32]);
+            let mut rng = ChaCha12Rng::from_seed([native_log + 91; 32]);
             let group = MainTraceMaskGroupV1::sample_v1(native_log, 13, 10, &mut rng, |column| {
                 Ok(native(native_log, column))
             })
@@ -1116,7 +1120,7 @@ mod tests {
     #[test]
     fn bounded_interpolation_clears_partial_sources_on_error_unwind_and_replacement() {
         use super::super::super::super::private_table::inspection;
-        let mut rng = StdRng::from_seed([119; 32]);
+        let mut rng = ChaCha12Rng::from_seed([119; 32]);
         let group =
             MainTraceMaskGroupV1::sample_v1(3, 13, 8, &mut rng, |column| Ok(native(3, column)))
                 .unwrap();
@@ -1188,7 +1192,7 @@ mod tests {
 
     #[test]
     fn mask_replay_rejects_invalid_shapes_and_preserves_entropy_on_source_failure() {
-        let mut rng = StdRng::from_seed([71; 32]);
+        let mut rng = ChaCha12Rng::from_seed([71; 32]);
         let mut unchanged = rng.clone();
         let mut calls = 0;
         assert!(
@@ -1199,12 +1203,15 @@ mod tests {
             .is_err()
         );
         assert_eq!(calls, 0);
-        assert_eq!(rng.next_u64(), unchanged.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            unchanged.try_next_u64().expect("test RNG draw succeeds")
+        );
         for invalid in [
             vec![F::ONE; 7],
             vec![F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1); 8],
         ] {
-            let mut rng = StdRng::from_seed([72; 32]);
+            let mut rng = ChaCha12Rng::from_seed([72; 32]);
             let mut unchanged = rng.clone();
             assert!(
                 MainTraceMaskGroupV1::sample_v1(3, 11, 1, &mut rng, |_| Ok(
@@ -1212,9 +1219,12 @@ mod tests {
                 ))
                 .is_err()
             );
-            assert_eq!(rng.next_u64(), unchanged.next_u64());
+            assert_eq!(
+                rng.try_next_u64().expect("test RNG draw succeeds"),
+                unchanged.try_next_u64().expect("test RNG draw succeeds")
+            );
         }
-        let mut rng = StdRng::from_seed([73; 32]);
+        let mut rng = ChaCha12Rng::from_seed([73; 32]);
         let group =
             MainTraceMaskGroupV1::sample_v1(3, 11, 1, &mut rng, |_| Ok(native(3, 0))).unwrap();
         assert!(group.replay_v1(1, &native(3, 0)).is_err());
@@ -1743,13 +1753,14 @@ mod mask_sampling_tests;
 #[cfg(test)]
 mod native_mask_borrow_tests {
     use super::*;
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
 
     #[test]
     #[ignore = "complete registered original-mask ownership and RNG control; run optimized"]
     fn original_mask_borrows_bind_registered_kind_group_range_and_preserve_entropy() {
         let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-        let mut rng = StdRng::from_seed([191; 32]);
+        let mut rng = ChaCha12Rng::from_seed([191; 32]);
         let groups = layout
             .trace_groups
             .iter()
@@ -1814,7 +1825,12 @@ mod native_mask_borrow_tests {
             set.original_masks_v1(&malformed_layout, MainTraceColumnKindV1::Base, 0, 0..1)
                 .is_err()
         );
-        assert_eq!(rng.next_u64(), unchanged_rng.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            unchanged_rng
+                .try_next_u64()
+                .expect("test RNG draw succeeds")
+        );
     }
 }
 

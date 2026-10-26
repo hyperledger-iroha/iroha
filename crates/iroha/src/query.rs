@@ -26,7 +26,6 @@ use crate::{
     http_default::{DefaultHttpTransport, DefaultRequestBuilder},
 };
 pub use asynchronous::{AsyncQueryBuilderExt, QueryStream};
-pub use transaction_details_candidate::transaction_details_candidate_response_v1;
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
@@ -41,6 +40,7 @@ use std::{
     num::NonZeroU64,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+pub use transaction_details_candidate::transaction_details_candidate_response_v1;
 use url::Url;
 
 const TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -222,7 +222,7 @@ impl ClientQueryRequestHead {
         .ok_or_else(|| QueryError::Other(eyre!("query TTL must be nonzero")))?;
         let mut nonce = [0_u8; 32];
         for _ in 0..16 {
-            rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+            rand::rand_core::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
                 .map_err(|error| QueryError::Other(eyre!("query nonce OS RNG failed: {error}")))?;
             if nonce != [0_u8; 32] {
                 break;

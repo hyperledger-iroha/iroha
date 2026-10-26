@@ -858,7 +858,7 @@ mod tests {
             source_capsule_digest: [10; 32],
             credential_digest: [11; 32],
             payment_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-                payment.verifying_key().to_encoded_point(false).as_bytes(),
+                payment.verifying_key().to_sec1_point(false).as_bytes(),
             )
             .unwrap(),
             artifact_manifest_digest: [12; 32],

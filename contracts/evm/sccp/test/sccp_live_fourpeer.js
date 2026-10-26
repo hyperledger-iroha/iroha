@@ -53,7 +53,7 @@ async function replay(file) {
   assert.equal(m.committeeRoot(keys), parsed.committeeRoot);
   const indices = m.signerIndices(m.parseQcFixed(qc).signers);
   assert.equal(indices.length, m.quorum(keys.length), "native exact quorum");
-  const signature = m.bls.G2.ProjectivePoint.fromHex(m.ethers.getBytes(bytes(cert.aggregate_signature, 96, "original signature")));
+  const signature = m.bls.G2.Point.fromBytes(m.ethers.getBytes(bytes(cert.aggregate_signature, 96, "original signature")));
   signature.assertValidity();
   const certificate = [qc, header, m.g2Evm192(signature), m.ethers.concat(keys), m.signerYs(keys, indices)];
   const deployment = {

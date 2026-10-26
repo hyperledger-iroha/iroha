@@ -20,9 +20,9 @@ workspace = true
 # Pasta fields, curves, MSM, fold, FFT, `ParamsIpa` and the RP57 sponge.
 iroha_pasta = { workspace = true }
 # `Field`/`PrimeField` traits shared with iroha_pasta.
-ff = "0.13.1"
+ff = "0.14.0"
 # `Group`/`Curve`/`GroupEncoding` traits of the iroha_pasta curve types.
-group = "0.13"
+group = "0.14.0"
 # CircuitDescriptorV1 is a canonical Norito frame.
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Personalised BLAKE2b: descriptor digest, `transcript_repr`, the Challenge255
@@ -30,14 +30,15 @@ norito = { workspace = true, default-features = false, features = ["base-codec"]
 blake2 = { workspace = true }
 # Prover randomness (`Field::random` consumes `RngCore` words; `OsRng` keys
 # the production streams).
-rand_core_06 = { workspace = true }
+rand_core = { workspace = true }
+rand = { workspace = true }
 # The prover's ChaCha20 streams (OS-keyed and hedged `ProverRandomness`).
-rand_chacha = "0.3.1"
+rand_chacha = "0.10.0"
 # The quotient, the grand products and the commitments run on the caller's
 # Rayon pool; outputs do not depend on its size.
 rayon = { workspace = true }
 # SHA-256 of params bytes against `PINNED_PARAMS_V1` (spec section 3).
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 # Wipe canonical integer lookup scratch on success and every early return.
 zeroize = { workspace = true }
 
@@ -45,7 +46,7 @@ zeroize = { workspace = true }
 # existing SHA-256 backend's runtime-detected instructions, with its portable
 # fallback on CPUs without SHA support. sha2-asm does not support Windows.
 [target.'cfg(all(target_arch = "aarch64", not(target_os = "windows")))'.dependencies]
-sha2 = { version = "0.10.9", features = ["asm"] }
+sha2 = { version = "0.11.1", features = ["alloc"] }
 
 [dev-dependencies]
 # Fallible OS probes for isolated evaluator diagnostics, never protocol code.
@@ -53,4 +54,4 @@ iroha_measurement = { workspace = true }
 
 [build-dependencies]
 # Compile the actual local source identity; never accept a supplied digest.
-sha2 = "0.10.9"
+sha2 = "0.11.1"

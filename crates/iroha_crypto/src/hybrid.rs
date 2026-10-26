@@ -7,7 +7,7 @@
 //! envelopes without advertising new long-term public keys.
 use crate::kex::is_x25519_low_order_public_key;
 use core::{fmt, str::FromStr};
-use hkdf::HkdfExtract;
+use hkdf::SimpleHkdfExtract;
 use rand_core::TryCryptoRng;
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
@@ -680,7 +680,7 @@ fn derive_material(
     let _ = capacity;
     // Keep the complete length preflight, then stream exactly the same extract
     // input without retaining an unaccounted concatenation buffer.
-    let mut extract = HkdfExtract::<Sha3_256>::new(Some(suite.hkdf_salt()));
+    let mut extract = SimpleHkdfExtract::<Sha3_256>::new(Some(suite.hkdf_salt()));
     extract.input_ikm(ecdh);
     extract.input_ikm(kyber);
     for component in transcript_components {
@@ -729,17 +729,17 @@ mod tests {
     use super::*;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use rand_core::{TryCryptoRng, TryRngCore};
-    use zeroize::Zeroize as _;
+    use rand_core::{TryCryptoRng, TryRng};
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     impl fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing hybrid RNG")
         }
     }
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
@@ -755,7 +755,7 @@ mod tests {
     struct FixedTryRng {
         byte: u8,
     }
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
@@ -783,7 +783,7 @@ mod tests {
             byte
         }
     }
-    impl TryRngCore for ScriptedTryRng {
+    impl TryRng for ScriptedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.next_fill(); 4]))
@@ -962,13 +962,16 @@ mod tests {
         assert_eq!(baseline.rekey_secret(), duplicate.rekey_secret());
     }
     #[test]
-    fn x25519_shared_secret_zeroizes_explicitly() {
+    fn x25519_shared_secret_requires_zeroizing_drop() {
+        fn requires_zeroizing_drop<T: zeroize::ZeroizeOnDrop>(_: &T) {}
         let secret = StaticSecret::from([0x7D; 32]);
         let peer = X25519PublicKey::from(&StaticSecret::from([0xA5; 32]));
-        let mut shared = secret.diffie_hellman(&peer);
+        let shared = secret.diffie_hellman(&peer);
         assert!(shared.as_bytes().iter().any(|byte| *byte != 0));
-        shared.zeroize();
-        assert_eq!(shared.as_bytes(), &[0u8; 32]);
+        // x25519-dalek 3 wipes SharedSecret in Drop, which is feature-gated.
+        // Require the upstream drop contract at compile time without reading retired storage.
+        requires_zeroizing_drop(&shared);
+        drop(shared);
     }
     #[test]
     fn generated_keys_roundtrip() {

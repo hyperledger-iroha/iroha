@@ -1,7 +1,7 @@
 //! Committed-mask native fold with explicit private owners; staged diagnostic.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{
     PastaCurve, PastaField,
     fold::fold_generators_cancellable,

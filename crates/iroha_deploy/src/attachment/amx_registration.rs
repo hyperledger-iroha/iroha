@@ -310,7 +310,7 @@ impl AttachmentStore {
         parent: &ParentFinalityStore,
     ) -> Result<()> {
         let identity = &self.record.identity;
-        let release = bootstrap.release();
+        let release = bootstrap.metadata();
         let now = native(native_operation::now_ms())?;
         if config.network_id != identity.parent_network_id
             || config.chain.as_str() != identity.parent_chain_id
@@ -318,15 +318,11 @@ impl AttachmentStore {
             || config.api_token.is_some()
             || config.basic_auth.is_some()
             || parent.network_name() != identity.parent_name
-            || parent.generation() != identity.parent_generation
             || parent.verifier().checkpoint().network_id() != identity.parent_network_id
             || parent.verifier().checkpoint().chain_id() != identity.parent_chain_id
             || release.network_name != identity.parent_name
-            || release.generation != identity.parent_generation
             || release.network_id != identity.parent_network_id
             || release.chain_id != identity.parent_chain_id
-            || now < release.issued_at_ms
-            || now >= release.expires_at_ms
             || !release
                 .torii_roots
                 .iter()

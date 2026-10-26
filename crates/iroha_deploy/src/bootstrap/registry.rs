@@ -1,6 +1,6 @@
 //! Lazy registry discovery from an explicitly selected parent wallet and fresh native state.
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use iroha::{client::Client, config::Config};
 use iroha_data_model::{
@@ -24,7 +24,7 @@ impl ParentFinalityStore {
     /// no parent I/O. The exclusive checkpoint owner must remain held for the complete call.
     ///
     /// # Errors
-    /// Missing signed registry policy, stale release, changed parent identity, credentials,
+    /// Missing selected registry policy, changed parent identity, credentials,
     /// unapproved endpoint, missing fresh quorum, expired deadline or invalid provider evidence.
     pub fn discover_build_provider(
         &mut self,
@@ -33,7 +33,7 @@ impl ParentFinalityStore {
         provider: ProviderId,
         deadline: Instant,
     ) -> Result<VerifiedAccountReadProviderV1> {
-        let deadline = self.registry_deadline(bootstrap, config, provider, deadline, unix_ms()?)?;
+        let deadline = self.registry_deadline(bootstrap, config, provider, deadline)?;
         let source = bootstrap
             .parent_http_source(config, deadline)
             .map_err(|_| {
@@ -46,7 +46,7 @@ impl ParentFinalityStore {
             .with_request_deadline(deadline);
         self.discover_build_provider_with(bootstrap, config, provider, deadline, &source, |block| {
             client.get_account_read_provider_discovery(
-                provider, bootstrap.release().native_world_schema, block, unix_ms()?,
+                provider, bootstrap.metadata().native_world_schema, block, unix_ms()?,
             ).map_err(|_| BootstrapError::Invalid("cannot authenticate current build provider; retry from fresh parent quorum"))
         })
     }
@@ -60,12 +60,12 @@ impl ParentFinalityStore {
         source: &S,
         read: impl FnOnce(&VerifiedSumeragiBlock) -> Result<VerifiedAccountReadProviderV1>,
     ) -> Result<VerifiedAccountReadProviderV1> {
-        self.registry_deadline(bootstrap, config, provider, deadline, unix_ms()?)?;
+        self.registry_deadline(bootstrap, config, provider, deadline)?;
         self.observe(source, &rand::random())?;
         let block = self.verifier().verified_tip()?;
         let verified = read(&block)?;
-        self.registry_deadline(bootstrap, config, provider, deadline, unix_ms()?)?;
-        if verified.chain_id() != bootstrap.release().chain_id
+        self.registry_deadline(bootstrap, config, provider, deadline)?;
+        if verified.chain_id() != bootstrap.metadata().chain_id
             || verified.discovery().network_id() != config.network_id
             || verified.discovery().height() != block.height()
             || verified.discovery().context_id() != block.context_id()
@@ -84,22 +84,20 @@ impl ParentFinalityStore {
         config: &Config,
         provider: ProviderId,
         deadline: Instant,
-        now_ms: u64,
     ) -> Result<Instant> {
-        let release = bootstrap.release();
-        let registry = release
+        let metadata = bootstrap.metadata();
+        let registry = metadata
             .build_registry
             .as_ref()
             .ok_or(BootstrapError::Invalid(
-                "signed network release has no build registry",
+                "selected network metadata has no build registry",
             ))?;
-        if self.network_name() != release.network_name
-            || self.generation() != release.generation
-            || self.verifier().checkpoint().network_id() != release.network_id
-            || self.verifier().checkpoint().chain_id() != release.chain_id
-            || config.network_id != release.network_id
-            || config.chain.to_string() != release.chain_id
-            || config.account_chain_discriminant != release.account_chain_discriminant
+        if self.network_name() != metadata.network_name
+            || self.verifier().checkpoint().network_id() != metadata.network_id
+            || self.verifier().checkpoint().chain_id() != metadata.chain_id
+            || config.network_id != metadata.network_id
+            || config.chain.to_string() != metadata.chain_id
+            || config.account_chain_discriminant != metadata.account_chain_discriminant
             || config.api_token.is_some()
             || config.basic_auth.is_some()
             || !registry
@@ -112,18 +110,10 @@ impl ParentFinalityStore {
                 "build registry requires its exact public parent context",
             ));
         }
-        if now_ms < release.issued_at_ms
-            || now_ms >= release.expires_at_ms
-            || Instant::now() >= deadline
-        {
-            return Err(BootstrapError::Invalid(
-                "build registry release or request deadline expired",
-            ));
+        if Instant::now() >= deadline {
+            return Err(BootstrapError::Invalid("build registry request deadline expired"));
         }
-        let expires = Instant::now()
-            .checked_add(Duration::from_millis(release.expires_at_ms - now_ms))
-            .ok_or(BootstrapError::Invalid("build registry deadline overflow"))?;
-        Ok(deadline.min(expires))
+        Ok(deadline)
     }
 }
 

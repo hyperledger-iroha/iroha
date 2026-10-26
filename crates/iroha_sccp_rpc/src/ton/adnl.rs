@@ -56,7 +56,7 @@ use aes::{
 };
 use curve25519_dalek::edwards::EdwardsPoint;
 use ed25519_dalek::VerifyingKey;
-use rand::{RngCore, TryRngCore, rngs::OsRng};
+use rand::{Rng, TryRng, rngs::SysRng};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey as X25519PublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroizing;
@@ -222,7 +222,7 @@ pub fn server_x25519_key(public_key: &[u8; 32]) -> Result<X25519PublicKey, AdnlE
 /// # Errors
 /// [`AdnlError::Randomness`].
 pub fn os_random(buffer: &mut [u8]) -> Result<(), AdnlError> {
-    OsRng
+    SysRng
         .try_fill_bytes(buffer)
         .map_err(|error| AdnlError::Randomness(bounded(&error.to_string())))
 }
@@ -377,7 +377,7 @@ impl SessionCiphers {
 }
 
 fn stream_cipher(key: &[u8], iv: &[u8]) -> SessionCipher {
-    SessionCipher::new(key.into(), iv.into())
+    SessionCipher::new_from_slices(key, iv).expect("ADNL uses a 32-byte AES key and 16-byte IV")
 }
 
 /// The plaintext packet `size ‖ nonce ‖ payload ‖ sha256(nonce ‖ payload)`.
@@ -1123,15 +1123,14 @@ mod tests {
 
     #[test]
     fn session_state_is_zeroized_on_drop() {
-        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
-        // The x25519 secrets derive `Zeroize` with `zeroize(drop)`: dropping
-        // them wipes the scalar and the shared secret.
-        fn assert_zeroize_with_drop<T: zeroize::Zeroize>() {
+        // X25519 secrets implement Drop to wipe the scalar/shared secret and
+        // expose that guarantee through the ZeroizeOnDrop marker.
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {
             assert!(std::mem::needs_drop::<T>());
         }
         assert_zeroize_on_drop::<SessionCipher>();
-        assert_zeroize_with_drop::<StaticSecret>();
-        assert_zeroize_with_drop::<SharedSecret>();
+        assert_zeroize_on_drop::<StaticSecret>();
+        assert_zeroize_on_drop::<SharedSecret>();
         assert_zeroize_on_drop::<Zeroizing<[u8; HANDSHAKE_PARAMS_LEN]>>();
     }
 

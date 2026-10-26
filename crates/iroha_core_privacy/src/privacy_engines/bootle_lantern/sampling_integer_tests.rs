@@ -1,29 +1,31 @@
 use super::*;
-use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+use std::io::Error as RngError;
 use zeroize::Zeroizing;
 struct TestRng {
     state: u64,
     fail: bool,
     stuck: Option<u8>,
 }
-impl RngCore for TestRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut bytes = [0_u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
+impl rand::TryRng for TestRng {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok({
+            let mut bytes = [0_u8; 4];
+            self.try_fill_bytes(&mut bytes)?;
+            u32::from_le_bytes(bytes)
+        })
     }
-    fn next_u64(&mut self) -> u64 {
-        let mut bytes = [0_u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok({
+            let mut bytes = [0_u8; 8];
+            self.try_fill_bytes(&mut bytes)?;
+            u64::from_le_bytes(bytes)
+        })
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        self.try_fill_bytes(destination)
-            .expect("infallible test invocation");
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         if self.fail {
-            return Err(RngError::new("injected failure"));
+            return Err(RngError::other("injected failure"));
         }
         if let Some(byte) = self.stuck {
             destination.fill(byte);
@@ -38,7 +40,7 @@ impl RngCore for TestRng {
         Ok(())
     }
 }
-impl CryptoRng for TestRng {}
+impl rand::TryCryptoRng for TestRng {}
 fn test_seed() -> [u8; 32] {
     core::array::from_fn(|index| u8::try_from(index + 1).expect("index fits"))
 }
@@ -60,7 +62,7 @@ fn absolute_difference(left: U256, right: U256) -> U256 {
 }
 fn rational_q256(numerator: u64, denominator: u64) -> U512 {
     rational_to_q256_round_v1(
-        U512::from_u64(numerator).shl_vartime(Q256_FRACTION_BITS_V1),
+        U512::from_u64(numerator).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
         U512::from_u64(denominator),
     )
 }
@@ -183,7 +185,7 @@ fn closed_profiles_pin_width_shape_truncation_and_rejection_kind() {
         );
         assert_eq!(m.to_be_bytes(), expected_m.to_be_bytes());
         assert!(m > q256_one_v1());
-        assert!(m < U512::from_u64(3).shl_vartime(Q256_FRACTION_BITS_V1));
+        assert!(m < U512::from_u64(3).shl_vartime((Q256_FRACTION_BITS_V1) as u32));
     }
 }
 #[test]
@@ -260,21 +262,21 @@ fn q256_decay_matches_independent_high_precision_vectors() {
             "9b4597e37cb04ff3d675a35530cdd767e347bf8ad0e80abbce4ae95861014318",
         ),
         (
-            U512::from_u64(1).shl_vartime(Q256_FRACTION_BITS_V1),
+            U512::from_u64(1).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
             "5e2d58d8b3bcdf1abadec7829054f90dda9805aab56c77333024b9d0a507daee",
         ),
         (
-            U512::from_u64(10).shl_vartime(Q256_FRACTION_BITS_V1),
+            U512::from_u64(10).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
             "0002f9af36ac8f93538b648eaa1310e5f2bdf1d29cb282668b9a7147cc4dc89b",
         ),
         (
-            U512::from_u64(178).shl_vartime(Q256_FRACTION_BITS_V1),
+            U512::from_u64(178).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
             "0000000000000000000000000000000000000000000000000000000000000001",
         ),
     ];
     let error_bound = U256::from_u64(1 << 16);
     for (input, expected) in cases {
-        let (high, actual) = decay_q256_v1(input).split();
+        let (actual, high) = decay_q256_v1(input).split();
         assert_eq!(high, U256::ZERO);
         let expected = U256::from_be_hex(expected);
         assert!(
@@ -284,7 +286,7 @@ fn q256_decay_matches_independent_high_precision_vectors() {
     }
     assert_eq!(decay_q256_v1(U512::ZERO), q256_one_v1());
     assert_eq!(
-        decay_q256_v1(U512::from_u64(179).shl_vartime(Q256_FRACTION_BITS_V1)),
+        decay_q256_v1(U512::from_u64(179).shl_vartime((Q256_FRACTION_BITS_V1) as u32)),
         U512::ZERO
     );
 }
@@ -292,7 +294,7 @@ fn q256_decay_matches_independent_high_precision_vectors() {
 fn q256_decay_is_monotone_through_the_full_cutoff() {
     let mut previous = decay_q256_v1(U512::ZERO);
     for eighths in 1..=(179 * 8) {
-        let input = U512::from_u64(eighths).shl_vartime(Q256_FRACTION_BITS_V1 - 3);
+        let input = U512::from_u64(eighths).shl_vartime((Q256_FRACTION_BITS_V1 - 3) as u32);
         let current = decay_q256_v1(input);
         assert!(current <= previous, "decay increased at eighth {eighths}");
         if eighths <= 160 * 8 {
@@ -331,7 +333,7 @@ fn bernoulli_draws_are_big_endian_fixed_width_and_boundary_exact() {
     let mut probe = test_randomness();
     let mut bytes = [0_u8; 32];
     probe.fill_bytes(domain, &mut bytes);
-    let draw = U256::from_be_bytes(bytes);
+    let draw = U256::from_be_bytes(bytes.into());
     assert_ne!(draw, U256::MAX);
     let mut equal = test_randomness();
     assert!(!equal.bernoulli_q256(domain, BernoulliThresholdV1::Finite(draw)));
@@ -366,8 +368,8 @@ fn zero_rejection_inputs_match_exact_reciprocal_m_vectors() {
         // floor(2^512 / M_q256), not a rounded reciprocal or a limb truncation.
         let m = profile.rejection_m_q256();
         let threshold = U512::from(&threshold);
-        let lower: U1024 = m.mul(&threshold);
-        let upper: U1024 = m.mul(&threshold.wrapping_add(&U512::ONE));
+        let lower: U1024 = m.concatenating_mul(&threshold);
+        let upper: U1024 = m.concatenating_mul(&threshold.wrapping_add(&U512::ONE));
         let numerator = U1024::ONE.shl_vartime(512);
         assert!(lower <= numerator, "reciprocal floor exceeds exact ratio");
         assert!(
@@ -616,7 +618,7 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
             0x05, 0xd6, 0x9e, 0x83,
         ]
     );
-    let cdf_draw = U256::from_be_bytes(cdf_bytes);
+    let cdf_draw = U256::from_be_bytes(cdf_bytes.into());
     assert!(cdf_draw < CDF_155_Q256_V1[0]);
     assert!(cdf_draw < CDF_155_Q256_V1[1]);
     assert!(cdf_draw >= CDF_155_Q256_V1[2]);
@@ -635,7 +637,7 @@ fn z4_gaussian_kat_coefficient_13_is_reconstructed_from_pinned_raw_draws() {
     // D=(s-f)*(2*m*s+s-f). The raw acceptance draw is far below this bound.
     let ideal_acceptance_floor =
         U256::from_be_hex("e47ea296d803ad0cbf21ed310ac31c2a5fa1bb5f76fc5cf4095764be1f85c125");
-    assert!(U256::from_be_bytes(accept_bytes) < ideal_acceptance_floor);
+    assert!(U256::from_be_bytes(accept_bytes.into()) < ideal_acceptance_floor);
     let candidate = magnitude + 1;
     let reconstructed = candidate
         .checked_mul(i64::try_from(scale).expect("fixed scale fits i64"))

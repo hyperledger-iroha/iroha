@@ -21,7 +21,7 @@ use iroha_config::parameters::{
     is_production_runtime_handle, validate_webauthn_origin_v1, validate_webauthn_rp_id_v1,
 };
 use iroha_data_model::NetworkId;
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use std::fmt;
 mod beacon_provisioning;
 mod binding_collection;
@@ -2252,7 +2252,7 @@ fn qualify_governance_dag_signer_dependency(
         return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
     }
     let mut nonce = [0_u8; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
     let challenge_digest = governance_dag_signer_startup_challenge_v1(

@@ -248,7 +248,7 @@ impl DaPublisher {
     }
 
     fn canonical_auth_headers(&self, body: &[u8]) -> Result<CanonicalAuthHeaders> {
-        use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+        use rand::{rand_core::TryRng as _, rngs::SysRng};
 
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -257,7 +257,7 @@ impl DaPublisher {
             .try_into()
             .wrap_err("DA canonical request timestamp exceeds u64 milliseconds")?;
         let mut nonce_bytes = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut nonce_bytes)
             .map_err(|err| eyre!("DA canonical request nonce OS RNG failed: {err}"))?;
         let nonce = hex::encode(nonce_bytes);

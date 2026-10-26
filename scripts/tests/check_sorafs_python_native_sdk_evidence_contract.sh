@@ -58,7 +58,7 @@ required_workflow_tokens = (
     f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}",
     "name: Upload verified Python ABI-33 evidence",
     evidence_file,
-    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     "if-no-files-found: error",
     "retention-days: 30",
 )

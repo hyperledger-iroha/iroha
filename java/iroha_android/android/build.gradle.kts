@@ -12,16 +12,7 @@ plugins {
     `maven-publish`
 }
 
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-    dependencies {
-        classpath("org.cyclonedx:cyclonedx-gradle-plugin:3.1.0")
-    }
-}
+// The root supplies the current CycloneDX plugin and its patched classpath.
 
 val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
 @Suppress("UNCHECKED_CAST")

@@ -17,7 +17,7 @@ use iroha_core::{
     state::{State, World, derive_committee_key_id},
     sumeragi::network_topology::Topology as CoreTopology,
 };
-use iroha_crypto::{Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     Registrable as _,
     account::{Account, AccountId},

@@ -7,11 +7,9 @@
 use crate::privacy_engines::prover_randomness::{
     HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
 };
-use rand_core_06::{CryptoRng, RngCore};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use rand_core::{TryCryptoRng, TryRng};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use zeroize::{Zeroize, Zeroizing};
 const MASTER_ROOT_BYTES_V1: usize = 64;
 const STREAM_KEY_BYTES_V1: usize = 64;
@@ -39,7 +37,7 @@ impl core::fmt::Debug for BootleLanternIssuanceRandomnessRootV1 {
 }
 impl BootleLanternIssuanceRandomnessRootV1 {
     /// Draw exactly one canonical health-checked master block.
-    pub(crate) fn from_rng_v1<R: CryptoRng + RngCore>(
+    pub(crate) fn from_rng_v1<R: TryCryptoRng + TryRng>(
         source: &mut R,
     ) -> Result<Self, ProverRandomnessErrorV1> {
         let mut checked = HealthCheckedCryptoRngV1::new(source)?;
@@ -148,26 +146,29 @@ impl BootleLanternPurposeRngV1 {
         }
     }
 }
-impl RngCore for BootleLanternPurposeRngV1 {
-    fn next_u32(&mut self) -> u32 {
-        let mut bytes = [0_u8; 4];
-        self.fill_canonical_v1(&mut bytes);
-        u32::from_le_bytes(bytes)
+impl rand::TryRng for BootleLanternPurposeRngV1 {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok({
+            let mut bytes = [0_u8; 4];
+            self.fill_canonical_v1(&mut bytes);
+            u32::from_le_bytes(bytes)
+        })
     }
-    fn next_u64(&mut self) -> u64 {
-        let mut bytes = [0_u8; 8];
-        self.fill_canonical_v1(&mut bytes);
-        u64::from_le_bytes(bytes)
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok({
+            let mut bytes = [0_u8; 8];
+            self.fill_canonical_v1(&mut bytes);
+            u64::from_le_bytes(bytes)
+        })
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        self.fill_canonical_v1(destination);
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         self.fill_canonical_v1(destination);
         Ok(())
     }
 }
-impl CryptoRng for BootleLanternPurposeRngV1 {}
+impl rand::TryCryptoRng for BootleLanternPurposeRngV1 {}
 impl Drop for BootleLanternPurposeRngV1 {
     fn drop(&mut self) {
         self.key.zeroize();
@@ -187,24 +188,27 @@ fn absorb_frame_v1(state: &mut Shake256, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use rand_core::TryRng;
+    use std::io::Error as RngError;
     struct TestRng(u64);
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_le_bytes(bytes)
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_le_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_le_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_le_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("infallible deterministic test source");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 self.0 ^= self.0 << 13;
                 self.0 ^= self.0 >> 7;
@@ -214,41 +218,39 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct FailingRng;
-    impl RngCore for FailingRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for FailingRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("fallible boundary must use try_fill_bytes")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("fallible boundary must use try_fill_bytes")
         }
-        fn fill_bytes(&mut self, _: &mut [u8]) {
-            panic!("fallible boundary must use try_fill_bytes")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             destination.fill(0xa5);
-            Err(RngError::new("injected master entropy failure"))
+            Err(RngError::other("injected master entropy failure"))
         }
     }
-    impl CryptoRng for FailingRng {}
+    impl rand::TryCryptoRng for FailingRng {}
     struct ConstantRng;
-    impl RngCore for ConstantRng {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ConstantRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0x42);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             destination.fill(0x42);
             Ok(())
         }
     }
-    impl CryptoRng for ConstantRng {}
+    impl rand::TryCryptoRng for ConstantRng {}
     fn holder_streams(
         seed: u64,
         context: [u8; 32],
@@ -270,10 +272,16 @@ mod tests {
                 .expect("healthy issuer root")
                 .split_issuer_v1([0x31; 32]);
         let mut outputs = [[0_u8; 96]; 4];
-        mask.fill_bytes(&mut outputs[0]);
-        proof.fill_bytes(&mut outputs[1]);
-        tag.fill_bytes(&mut outputs[2]);
-        preimage.fill_bytes(&mut outputs[3]);
+        mask.try_fill_bytes(&mut outputs[0])
+            .expect("fixed purpose stream draw");
+        proof
+            .try_fill_bytes(&mut outputs[1])
+            .expect("fixed purpose stream draw");
+        tag.try_fill_bytes(&mut outputs[2])
+            .expect("fixed purpose stream draw");
+        preimage
+            .try_fill_bytes(&mut outputs[3])
+            .expect("fixed purpose stream draw");
         for left in 0..outputs.len() {
             for right in left + 1..outputs.len() {
                 assert_ne!(outputs[left], outputs[right]);
@@ -288,12 +296,24 @@ mod tests {
         let mut expected = [0_u8; 193];
         let mut actual = [0_u8; 193];
         let mut separated = [0_u8; 193];
-        whole.fill_bytes(&mut expected);
-        chunked.fill_bytes(&mut actual[..1]);
-        chunked.fill_bytes(&mut actual[1..64]);
-        chunked.fill_bytes(&mut actual[64..129]);
-        chunked.fill_bytes(&mut actual[129..]);
-        other_context.fill_bytes(&mut separated);
+        whole
+            .try_fill_bytes(&mut expected)
+            .expect("fixed purpose stream draw");
+        chunked
+            .try_fill_bytes(&mut actual[..1])
+            .expect("fixed purpose stream draw");
+        chunked
+            .try_fill_bytes(&mut actual[1..64])
+            .expect("fixed purpose stream draw");
+        chunked
+            .try_fill_bytes(&mut actual[64..129])
+            .expect("fixed purpose stream draw");
+        chunked
+            .try_fill_bytes(&mut actual[129..])
+            .expect("fixed purpose stream draw");
+        other_context
+            .try_fill_bytes(&mut separated)
+            .expect("fixed purpose stream draw");
         assert_eq!(actual, expected);
         assert_ne!(separated, expected);
     }

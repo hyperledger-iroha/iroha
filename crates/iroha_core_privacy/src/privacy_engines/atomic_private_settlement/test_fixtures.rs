@@ -23,7 +23,8 @@ use iroha_model_base::{
     peer::PeerId,
     topology::{DataSpaceId, LaneId},
 };
-use rand_08::{SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 #[doc(hidden)]
 pub struct ApsSidecarPartsV1 {
     pub manifest: AtomicPrivateSettlementV1,
@@ -527,7 +528,7 @@ pub fn aps_sidecar_material_fixture_with_threshold_and_ordinal_v1(
         statement.audit_input_commitment,
     );
     let program_id = atomic_private_settlement_program_id_v1().expect("settlement program");
-    let mut output_rng = StdRng::seed_from_u64(0x4150_535f_4f55_5450);
+    let mut output_rng = ChaCha12Rng::seed_from_u64(0x4150_535f_4f55_5450);
     encrypted_outputs.clear();
     for (index, (output, memo)) in plaintext.outputs.iter_mut().zip(output_memos).enumerate() {
         output.note.memo_digest = memo;

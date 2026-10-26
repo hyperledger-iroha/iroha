@@ -269,8 +269,8 @@ initialize_source_seal_tools() {
       's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' \
       "$ROOT_DIR/rust-toolchain.toml"
   )"
-  if [[ "$actual_toolchain" != "1.93.1" ]]; then
-    echo "[mobile-sdk-artifacts] ERROR: source authentication requires exact Rust 1.93.1" >&2
+  if [[ "$actual_toolchain" != "1.99.1" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: source authentication requires exact Rust 1.99.1" >&2
     return 1
   fi
   if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
@@ -324,7 +324,7 @@ PY
       TMPDIR="$CHECK_TMPDIR" \
       LANG=C.UTF-8 \
       LC_ALL=C.UTF-8 \
-      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 cargo
+      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.99.1 cargo
   )" || return 1
   SOURCE_SEAL_RUSTC_BINARY="$(
     env -i \
@@ -336,7 +336,7 @@ PY
       TMPDIR="$CHECK_TMPDIR" \
       LANG=C.UTF-8 \
       LC_ALL=C.UTF-8 \
-      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 rustc
+      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.99.1 rustc
   )" || return 1
   SOURCE_SEAL_RUSTDOC_BINARY="$(
     env -i \
@@ -348,7 +348,7 @@ PY
       TMPDIR="$CHECK_TMPDIR" \
       LANG=C.UTF-8 \
       LC_ALL=C.UTF-8 \
-      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc
+      "$SOURCE_SEAL_RUSTUP_BINARY" which --toolchain 1.99.1 rustdoc
   )" || return 1
   SOURCE_SEAL_CARGO_BINARY="$(run_isolated_checker_python -c \
     'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
@@ -361,7 +361,7 @@ PY
     "$SOURCE_SEAL_RUSTDOC_BINARY")"
   if [[ ! -x "$SOURCE_SEAL_CARGO_BINARY" || ! -x "$SOURCE_SEAL_RUSTC_BINARY" \
     || ! -x "$SOURCE_SEAL_RUSTDOC_BINARY" ]]; then
-    echo "[mobile-sdk-artifacts] ERROR: exact Rust 1.93.1 Cargo/rustc/rustdoc are unavailable" >&2
+    echo "[mobile-sdk-artifacts] ERROR: exact Rust 1.99.1 Cargo/rustc/rustdoc are unavailable" >&2
     return 1
   fi
   developer_dir="${NORITO_BRIDGE_SEAL_DEVELOPER_DIR:-${NORITO_BRIDGE_DEVELOPER_DIR:-}}"

@@ -6,7 +6,7 @@ use std::{hint::black_box, io::Read as _, path::Path, time::Instant};
 use iroha_measurement::probe::ProcessSnapshot;
 use iroha_pasta::{Fp, Fq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 use sha2::{Digest as _, Sha256};
 
 use super::*;
@@ -264,7 +264,10 @@ fn actual_descriptor_node_major_tile_experiment() {
     assert_eq!(bytes.len() as u64, metadata.len());
     let expected =
         std::env::var("DAG_TILE_DESCRIPTOR_SHA256").expect("independently pinned SHA256");
-    let actual = format!("{:x}", Sha256::digest(&bytes));
+    let actual = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     assert_eq!(expected, actual);
     let binding = DescriptorBinding::decode_v2(&bytes).unwrap();
     let width: usize = std::env::var("DAG_TILE_WIDTH").unwrap().parse().unwrap();

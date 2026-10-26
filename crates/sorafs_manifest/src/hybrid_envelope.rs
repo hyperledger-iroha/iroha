@@ -134,19 +134,20 @@ mod tests {
     use super::*;
     use iroha_crypto::HybridKeyPair;
     use rand::SeedableRng as _;
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     use rand_chacha::ChaCha20Rng;
     struct FailingAfterFills {
         remaining_ok_fills: usize,
     }
     #[derive(Debug)]
     struct FailingAfterFillsError;
+    impl std::error::Error for FailingAfterFillsError {}
     impl std::fmt::Display for FailingAfterFillsError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing hybrid envelope RNG")
         }
     }
-    impl TryRngCore for FailingAfterFills {
+    impl TryRng for FailingAfterFills {
         type Error = FailingAfterFillsError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0u8; 4];

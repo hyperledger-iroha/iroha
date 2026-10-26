@@ -15,15 +15,18 @@ fn assert_projection_rejected(proof: &ZkX509SegmentedStarkProofV1) {
 }
 #[derive(Debug)]
 struct MaxValueRng;
-impl RngCore for MaxValueRng {
-    fn next_u32(&mut self) -> u32 {
-        u32::MAX
+impl rand::TryRng for MaxValueRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::MAX)
     }
-    fn next_u64(&mut self) -> u64 {
-        u64::MAX
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::MAX)
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        destination.fill(0xFF);
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+        Ok({
+            destination.fill(0xFF);
+        })
     }
 }
 #[test]
@@ -1519,11 +1522,8 @@ fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
         assert_eq!(decoded.key_openings, expected);
         assert_ne!(decoded.key_openings, values);
         assert_eq!(
-            encode_zk_x509_main_proof_envelope_v1(
-                &decoded.key_openings,
-                decoded.aggregate_proof
-            )
-            .unwrap(),
+            encode_zk_x509_main_proof_envelope_v1(&decoded.key_openings, decoded.aggregate_proof)
+                .unwrap(),
             swapped
         );
     }
@@ -1591,8 +1591,7 @@ fn main_claim_free_partition_is_exact_and_rejects_retired_terminal_frames() {
     for lane in 0..4 {
         let record = 8 + 12 + lane * 16;
         let mut exposed = retired.clone();
-        exposed[record + 8..record + 16]
-            .copy_from_slice(&[2_u64, 3, 5, 7][lane].to_be_bytes());
+        exposed[record + 8..record + 16].copy_from_slice(&[2_u64, 3, 5, 7][lane].to_be_bytes());
         assert!(decode_zk_x509_main_proof_envelope_v1(&exposed).is_err());
         let wrong_lane = u16::try_from((lane + 1) % 4).expect("four governed lanes fit u16");
         exposed[record + 4..record + 6].copy_from_slice(&wrong_lane.to_be_bytes());

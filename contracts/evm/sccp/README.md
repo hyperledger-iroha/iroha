@@ -17,7 +17,7 @@ certified Taira block.
 | `bsc-mainnet` | `0x42` | 56 | 2 | `taira_bsc_xor` |
 
 Both profiles use the same creation code, built by solc
-`0.8.31+commit.fd3a2265`; the runtime code differs only in immutables.
+`0.8.38+commit.1835d247`; the runtime code differs only in immutables.
 
 ## Files
 
@@ -200,8 +200,8 @@ qualification remains in the separate fixture and behaviour suites.
 The toolchain policy (native arm64/x86-64 compiler, no Rosetta or Docker,
 cancun legacy pipeline without metadata hash or CBOR) is described in
 [`scripts/contract_tooling/README.md`](../../../scripts/contract_tooling/README.md).
-Neither source may use `delete` or declare a custom storage layout (0.8.31
-legacy-pipeline bug patterns), and a compiler warning fails the build; the
+Neither source may use `delete` or declare a custom storage layout under the
+retained narrow source policy, and a compiler warning fails the build; the
 corridor enforces both. After any change to either source, regenerate the lock
 with `python3 scripts/contract_artifact_corridor.py lock` and review the diff.
 

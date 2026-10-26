@@ -298,7 +298,7 @@ async function replayFastPause(hardfork, ledger, modelDestination) {
 async function replayForgeryIds(hardfork, ledger, modelDestination) {
   const { createRequire } = require("node:module");
   const runtime = process.env.SCCP_EVM_RUNTIME_DIR || path.join(REPO, "scripts/contract_tooling/evm-runtime");
-  const { blake2b } = createRequire(path.join(runtime, "package.json"))("@noble/hashes/blake2b");
+  const { blake2b } = createRequire(path.join(runtime, "package.json"))("@noble/hashes/blake2.js");
   const id = (generation, message, signers) => {
     const bytes = blake2b(ethers.getBytes(ethers.concat([ethers.toUtf8Bytes("sccp/forgery-evidence/v1"),
       ethers.toBeHex(generation, 8), message, ethers.toBeHex(signers, 4)])), { dkLen: 32 });

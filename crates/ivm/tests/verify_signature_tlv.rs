@@ -269,8 +269,6 @@ fn run_syscall_verify_signature_ed25519(
 #[test]
 fn verify_signature_helper_rejects_all_zero_signature_material() {
     use ivm::signature::{SignatureScheme, verify_signature};
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::PublicKey;
     let ed_key = ed25519_test_key(0x41);
     assert!(
         !verify_signature(
@@ -281,14 +279,22 @@ fn verify_signature_helper_rejects_all_zero_signature_material() {
         ),
         "all-zero Ed25519 signature material must fail"
     );
-    let (ml_public_key, _) = dilithium::keypair();
-    let ml_signature = vec![0u8; dilithium::signature_bytes()];
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x65; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let ml_public_key = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("ML-DSA public key")
+        .1;
+    let _ = keypair.private_key();
+    let ml_signature = vec![0u8; iroha_crypto::ML_DSA_65_SIGNATURE_BYTES];
     assert!(
         !verify_signature(
             SignatureScheme::MlDsa,
             b"ivm-mldsa-zero",
             &ml_signature,
-            ml_public_key.as_bytes(),
+            ml_public_key,
         ),
         "all-zero ML-DSA signature material must fail"
     );
@@ -296,17 +302,19 @@ fn verify_signature_helper_rejects_all_zero_signature_material() {
 #[test]
 fn verify_signature_helper_rejects_all_zero_mldsa_public_key_material() {
     use ivm::signature::{SignatureScheme, verify_signature};
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::DetachedSignature;
-    let (_, secret_key) = dilithium::keypair();
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x66; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let secret_key = keypair.private_key();
     let message = b"ivm-mldsa-zero-public-key";
-    let signature = dilithium::detached_sign(message, &secret_key);
-    let public_key = vec![0u8; dilithium::public_key_bytes()];
+    let signature =
+        iroha_crypto::Signature::try_new(secret_key, message).expect("sign ML-DSA fixture");
+    let public_key = vec![0u8; iroha_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
     assert!(
         !verify_signature(
             SignatureScheme::MlDsa,
             message,
-            signature.as_bytes(),
+            signature.payload(),
             &public_key,
         ),
         "all-zero ML-DSA public-key material must fail"
@@ -430,39 +438,49 @@ fn syscall_verify_signature_rejects_all_zero_ed25519_signature_material() {
 }
 #[test]
 fn syscall_verify_signature_rejects_all_zero_mldsa_signature_material() {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::PublicKey;
-    let (public_key, _) = dilithium::keypair();
-    let signature = vec![0u8; dilithium::signature_bytes()];
-    let result = run_syscall_verify_signature_blob(
-        b"ivm-mldsa-zero-syscall",
-        &signature,
-        public_key.as_bytes(),
-        3,
-    );
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x65; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let public_key = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("ML-DSA public key")
+        .1;
+    let _ = keypair.private_key();
+    let signature = vec![0u8; iroha_crypto::ML_DSA_65_SIGNATURE_BYTES];
+    let result =
+        run_syscall_verify_signature_blob(b"ivm-mldsa-zero-syscall", &signature, public_key, 3);
     assert_eq!(result, 0);
 }
 #[test]
 fn syscall_verify_signature_rejects_all_zero_mldsa_public_key_material() {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::DetachedSignature;
-    let (_, secret_key) = dilithium::keypair();
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x66; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let secret_key = keypair.private_key();
     let message = b"ivm-mldsa-zero-public-key-syscall";
-    let signature = dilithium::detached_sign(message, &secret_key);
-    let public_key = vec![0u8; dilithium::public_key_bytes()];
-    let result = run_syscall_verify_signature_blob(message, signature.as_bytes(), &public_key, 3);
+    let signature =
+        iroha_crypto::Signature::try_new(secret_key, message).expect("sign ML-DSA fixture");
+    let public_key = vec![0u8; iroha_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
+    let result = run_syscall_verify_signature_blob(message, signature.payload(), &public_key, 3);
     assert_eq!(result, 0);
 }
 #[test]
 fn syscall_verify_signature_dilithium_via_tlv() {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
-    let (pk, sk) = dilithium::keypair();
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x65; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let pk = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("ML-DSA public key")
+        .1;
+    let sk = keypair.private_key();
     let msg = b"ivm-dilithium";
-    let sig = dilithium::detached_sign(msg, &sk);
+    let sig = iroha_crypto::Signature::try_new(sk, msg).expect("sign ML-DSA fixture");
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
-    let sig_tlv = make_tlv(PointerType::Blob as u16, sig.as_bytes());
-    let pk_tlv = make_tlv(PointerType::Blob as u16, pk.as_bytes());
+    let sig_tlv = make_tlv(PointerType::Blob as u16, sig.payload());
+    let pk_tlv = make_tlv(PointerType::Blob as u16, pk);
     let mut vm = IVM::new(10_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
     let p_msg = Memory::INPUT_START;
@@ -895,14 +913,20 @@ fn secp256k1_verify_rejects_high_s_signature() {
 }
 #[test]
 fn opcode_verify_dilithium_rejects_all_zero_signature_material() {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::PublicKey;
-    let (pk, _) = dilithium::keypair();
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x65; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let pk = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("ML-DSA public key")
+        .1;
+    let _ = keypair.private_key();
     let msg = b"ivm-op-dilithium-zero";
-    let signature = vec![0u8; dilithium::signature_bytes()];
+    let signature = vec![0u8; iroha_crypto::ML_DSA_65_SIGNATURE_BYTES];
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
     let sig_tlv = make_tlv(PointerType::Blob as u16, &signature);
-    let pk_tlv = make_tlv(PointerType::Blob as u16, pk.as_bytes());
+    let pk_tlv = make_tlv(PointerType::Blob as u16, pk);
     let mut vm = IVM::new(20_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
     let p_msg = Memory::INPUT_START;
@@ -928,14 +952,15 @@ fn opcode_verify_dilithium_rejects_all_zero_signature_material() {
 }
 #[test]
 fn opcode_verify_dilithium_rejects_all_zero_public_key_material() {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::DetachedSignature;
-    let (_, secret_key) = dilithium::keypair();
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x66; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let secret_key = keypair.private_key();
     let msg = b"ivm-op-dilithium-zero-public-key";
-    let sig = dilithium::detached_sign(msg, &secret_key);
-    let public_key = vec![0u8; dilithium::public_key_bytes()];
+    let sig = iroha_crypto::Signature::try_new(secret_key, msg).expect("sign ML-DSA fixture");
+    let public_key = vec![0u8; iroha_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
-    let sig_tlv = make_tlv(PointerType::Blob as u16, sig.as_bytes());
+    let sig_tlv = make_tlv(PointerType::Blob as u16, sig.payload());
     let pk_tlv = make_tlv(PointerType::Blob as u16, &public_key);
     let mut vm = IVM::new(20_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
@@ -962,14 +987,20 @@ fn opcode_verify_dilithium_rejects_all_zero_public_key_material() {
 }
 #[test]
 fn opcode_verify_dilithium_via_tlv() {
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
-    let (pk, sk) = dilithium::keypair();
+    let keypair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x65; 32], iroha_crypto::Algorithm::MlDsa)
+            .expect("seeded ML-DSA fixture");
+    let pk = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("ML-DSA public key")
+        .1;
+    let sk = keypair.private_key();
     let msg = b"ivm-op-dilithium";
-    let sig = dilithium::detached_sign(msg, &sk);
+    let sig = iroha_crypto::Signature::try_new(sk, msg).expect("sign ML-DSA fixture");
     let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
-    let sig_tlv = make_tlv(PointerType::Blob as u16, sig.as_bytes());
-    let pk_tlv = make_tlv(PointerType::Blob as u16, pk.as_bytes());
+    let sig_tlv = make_tlv(PointerType::Blob as u16, sig.payload());
+    let pk_tlv = make_tlv(PointerType::Blob as u16, pk);
     let mut vm = IVM::new(20_000);
     vm.memory.preload_input(0, &msg_tlv).expect("preload input");
     let p_msg = Memory::INPUT_START;

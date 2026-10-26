@@ -1,7 +1,7 @@
 use blake3::Hasher;
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 use rand_chacha::ChaCha20Rng;
-use rand_core::{CryptoRng, RngCore, SeedableRng, TryCryptoRng, TryRngCore};
+use rand_core::{Rng, SeedableRng, TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 const HEDGED_RNG_DOMAIN: &[u8] = b"soranet-pq:hedged-chacha20:v2";
@@ -37,18 +37,20 @@ impl HedgedChaCha20Rng {
         self.status
     }
 }
-impl RngCore for HedgedChaCha20Rng {
-    fn next_u32(&mut self) -> u32 {
-        self.inner.next_u32()
+impl TryRng for HedgedChaCha20Rng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(self.inner.next_u32())
     }
-    fn next_u64(&mut self) -> u64 {
-        self.inner.next_u64()
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(self.inner.next_u64())
     }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
         self.inner.fill_bytes(dest);
+        Ok(())
     }
 }
-impl CryptoRng for HedgedChaCha20Rng {}
+impl TryCryptoRng for HedgedChaCha20Rng {}
 impl HedgedRngSeed {
     /// Create a seed from raw entropy (32 bytes).
     #[must_use]
@@ -60,7 +62,7 @@ impl HedgedRngSeed {
     /// # Errors
     /// Returns [`RngError`] when the OS RNG cannot supply nonzero seed material.
     pub fn from_os() -> Result<Self, RngError> {
-        let mut os = OsRng;
+        let mut os = SysRng;
         Self::from_rng(&mut os)
     }
     /// Draw a fresh seed from a caller-supplied cryptographic RNG.
@@ -92,7 +94,7 @@ impl HedgedRngSeed {
 #[must_use]
 pub fn hedged_chacha20_rng(seed: HedgedRngSeed, personalization: &[u8]) -> HedgedChaCha20Rng {
     let mut os_entropy = Zeroizing::new([0_u8; 32]);
-    let mut os = OsRng;
+    let mut os = SysRng;
     let status = match os.try_fill_bytes(os_entropy.as_mut()) {
         Ok(()) => HedgedEntropyStatus::MixedOsEntropy,
         Err(_) => HedgedEntropyStatus::OsEntropyUnavailable,
@@ -126,7 +128,7 @@ pub fn deterministic_chacha20_rng(
 /// # Errors
 /// Returns [`RngError`] when the initial OS seed draw fails or returns all-zero material.
 pub fn hedged_chacha20_rng_from_os(personalization: &[u8]) -> Result<HedgedChaCha20Rng, RngError> {
-    let mut os = OsRng;
+    let mut os = SysRng;
     hedged_chacha20_rng_from_rng(personalization, &mut os)
 }
 /// Construct a hedged RNG from caller-supplied seed entropy.
@@ -170,8 +172,8 @@ fn build_rng(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::RngCore;
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand::Rng;
+    use rand_core::{TryCryptoRng, TryRng};
     #[derive(Debug)]
     struct FailingSeedRng;
     #[derive(Debug)]
@@ -182,7 +184,7 @@ mod tests {
         }
     }
     impl std::error::Error for FailingSeedRngError {}
-    impl TryRngCore for FailingSeedRng {
+    impl TryRng for FailingSeedRng {
         type Error = FailingSeedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingSeedRngError)
@@ -198,7 +200,7 @@ mod tests {
     struct FixedSeedRng {
         seed: [u8; 32],
     }
-    impl TryRngCore for FixedSeedRng {
+    impl TryRng for FixedSeedRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))

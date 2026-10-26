@@ -78,7 +78,7 @@ class CurrentRecordsTests(unittest.TestCase):
             wire=r.observe(output/'signed-activation.wire')
             receipt={'schema':'iroha.kagemusha.wallet-activation-retained.v1','action':'retain-activation',
                      'signedWireSHA256':wire['sha256'],'signedWireBytes':str(wire['bytes']),
-                     'nativeResult':'not_started','nativeReturnedTicks':'1234',
+                     'nativeResult':'awaiting','entrypointHex':C,'nativeReturnedTicks':'1234',
                      'invocation':'12345678-abcd-1234-abcd-123456789abc','sequence':'0'}
             retained=r.save(output/'activation-retained.json',receipt)
             scope={'schema':'iroha.kagemusha.native-software-activation-retention.v1','source_pins':PINS,
@@ -98,9 +98,26 @@ class CurrentRecordsTests(unittest.TestCase):
             # enclosing DATA digest is updated; DATA never turns into authority.
             for field,bad in [('nativeReturnedTicks','0'),('nativeReturnedTicks','01'),
                               ('nativeReturnedTicks',str(1<<64)),('invocation','foreign'),('sequence','1'),
-                              ('signedWireSHA256',B),('nativeResult','started')]:
+                              ('signedWireSHA256',B),('nativeResult','started'),
+                              ('nativeResult','not_started'),('nativeResult','confirmed'),('nativeResult','rejected'),
+                              ('entrypointHex',None),('entrypointHex',0),('entrypointHex',''),
+                              ('entrypointHex','0'*64),('entrypointHex',C.upper()),
+                              ('entrypointHex',C[:-1]),('entrypointHex','g'*64)]:
                 path=output/'activation-retained.json';path.unlink()
                 changed=r.save(path,dict(receipt,**{field:bad}))
+                scope_path=output/'component-scope.json';scope_path.unlink()
+                r.save(scope_path,dict(scope,retention_sha256=changed['sha256']))
+                with self.assertRaises(ValueError):r.component.output_records('activation-retention',output,env)
+
+            # The current closed receipt has nine fields. Recomputing the enclosing
+            # DATA digest cannot admit a retired receipt, missing field or extension.
+            retired=dict(receipt,nativeResult='not_started');del retired['entrypointHex']
+            candidates=[retired,dict(receipt,extra='forbidden')]
+            for field in receipt:
+                missing=receipt.copy();del missing[field];candidates.append(missing)
+            for candidate in candidates:
+                path=output/'activation-retained.json';path.unlink()
+                changed=r.save(path,candidate)
                 scope_path=output/'component-scope.json';scope_path.unlink()
                 r.save(scope_path,dict(scope,retention_sha256=changed['sha256']))
                 with self.assertRaises(ValueError):r.component.output_records('activation-retention',output,env)

@@ -16,7 +16,7 @@ fn initialized_outputs_match_original_backend_bytes_and_rng_for_every_suite() {
         original_rng.fill_bytes(&mut coins[..]);
         let mut expected_public = vec![0; suite.public_key_len()];
         let mut expected_secret = Zeroizing::new(vec![0; suite.secret_key_len()]);
-        mlkem_ffi::keypair_derand(
+        backend::keypair_derand(
             suite,
             &mut expected_public,
             &mut expected_secret[..],
@@ -49,7 +49,7 @@ fn initialized_outputs_match_original_backend_bytes_and_rng_for_every_suite() {
         original_rng.fill_bytes(&mut encapsulation_coins[..]);
         let mut expected_ciphertext = vec![0; suite.ciphertext_len()];
         let mut expected_shared = Zeroizing::new([0; 32]);
-        mlkem_ffi::encapsulate_derand(
+        backend::encapsulate_derand(
             suite,
             &mut expected_ciphertext,
             &mut expected_shared[..],

@@ -18,9 +18,10 @@
 use super::Hash;
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use sha3::{
-    Sha3_384, Shake256,
+    Sha3_384,
     digest::{ExtendableOutput as _, Update as _, XofReader as _},
 };
+use shake::Shake256;
 
 const VECTORS: &str = include_str!("hash_native_candidate_vectors.txt");
 const FRAME_MAGIC_V1: &[u8] = b"iroha:native-commitment:frame:v1\0";

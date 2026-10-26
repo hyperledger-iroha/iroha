@@ -119,12 +119,15 @@ class ReleaseConsumersTests(unittest.TestCase):
         sdk_manifest = (OWNER.FIXTURES / "sdk/Package.swift").read_text()
         self.assertIn('.executableTarget(', sdk_manifest)
         self.assertIn('.product(name: "IrohaSwift", package: "IrohaSwift")', sdk_manifest)
+        self.assertIn('.product(name: "IrohaSwiftMobileTransports", package: "IrohaSwift")', sdk_manifest)
+        sdk_source = (OWNER.FIXTURES / "sdk/Sources/IrohaNativeConsumer/main.swift").read_text()
+        self.assertIn("import IrohaSwiftMobileTransports", sdk_source)
         for kind, product in (("sdk", "IrohaNativeConsumer"), ("archive", "ArchiveConsumer")):
             manifest = (OWNER.FIXTURES / kind / "Package.swift").read_text()
             self.assertNotIn("unsafeFlags", manifest)
             source = (OWNER.FIXTURES / kind / "Sources" / product / "main.swift").read_text()
             self.assertIn("all-zero peer key", source)
-            self.assertIn("== 29", source)
+            self.assertIn("== 33", source)
             self.assertIn("changed message", source)
 
 

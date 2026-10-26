@@ -37,7 +37,7 @@ impl SharedState {
     fn acquire(&self, bytes: usize) -> bool {
         let previous = self
             .used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes).filter(|&next| next <= self.limit)
             });
         previous.is_ok_and(|previous| {

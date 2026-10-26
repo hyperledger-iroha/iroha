@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import IrohaSwift
+import IrohaSwiftMobileTransports
 
 enum SmokeFailure: Error {
     case failed(String)

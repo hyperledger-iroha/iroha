@@ -450,7 +450,7 @@ impl LiveQueryStore {
     }
     fn random_query_id() -> QueryId {
         let mut bytes = [0_u8; QUERY_ID_BYTES];
-        if rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut bytes).is_err() {
+        if rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut bytes).is_err() {
             return String::new();
         }
         hex::encode(bytes)

@@ -1,0 +1,171 @@
+name: CI Check
+on:
+  merge_group:
+  pull_request:
+  push:
+    branches:
+      - main
+env:
+  CARGO_TERM_COLOR: always
+  # Disable incremental compilation.
+  #
+  # Incremental compilation is useful as part of an edit-build-test-edit cycle,
+  # as it lets the compiler avoid recompiling code that hasn't changed. However,
+  # on CI, we're not making small edits; we're almost always building the entire
+  # project from scratch. Thus, incremental compilation on CI actually
+  # introduces *additional* overhead to support making future builds
+  # faster...but no future builds will ever occur in any given CI environment.
+  #
+  # See https://matklad.github.io/2021/09/04/fast-rust-builds.html#ci-workflow
+  # for details.
+  CARGO_INCREMENTAL: 0
+  # Allow more retries for network requests in cargo (downloading crates) and
+  # rustup (installing toolchains). This should help to reduce flaky CI failures
+  # from transient network timeouts or other issues.
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  # Don't emit giant backtraces in the CI logs.
+  RUST_BACKTRACE: short
+
+# Jobs launched for a PR event cancel the ongoing one for the same workflow + PR,
+# Only retries (of the same run) for a Push event cancel the prior one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  no_std:
+    if: github.event.pull_request.draft == false
+    name: no_std-compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: [default, bn256-table, derive_serde, ""]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+
+      - name: Download no_std target
+        run: rustup target add thumbv7em-none-eabi
+
+      #  Check if build passes on `thumbv7em-none-eabi` no_std target with and without specific features (default, bn256-table and derive_serde)
+      - name: Build
+        # Script that checks if feature is empty or script should be ran with feature
+        run: |
+          if [ -z "${{ matrix.feature }}" ]; then
+            cargo build --release --target thumbv7em-none-eabi --no-default-features
+          else
+            cargo build --release --target thumbv7em-none-eabi --no-default-features --features ${{ matrix.feature }}
+          fi
+  compat:
+    if: github.event.pull_request.draft == false
+    name: Wasm-compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - wasm32-unknown-unknown
+          - wasm32-wasip1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+
+      - name: Download WASM targets
+        run: rustup target add "${{ matrix.target }}"
+      # We run WASM build (for tests) which compiles the lib allowig us to have
+      # `getrandom` as a dev-dependency.
+      - name: Build
+        run: cargo build --tests --release --features "bn256-table derive_serde" --target "${{ matrix.target }}"
+  test:
+    if: github.event.pull_request.draft == false
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - feature: default
+          - feature: bn256-table
+          - feature: derive_serde
+          - feature: asm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+      # use the more efficient nextest
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        # This build will be reused by nextest,
+        # and also checks (--all-targets) that benches don't bit-rot
+        run: cargo build --release --all-targets --no-default-features --features "${{ matrix.feature }}"
+      - name: Test
+        run: |
+          cargo nextest run --profile ci --release --workspace --no-default-features --features "${{ matrix.feature }}"
+      - name: Doctests # nextest does not support doc tests
+        run: |
+          cargo test --doc
+
+  fmt:
+    if: github.event.pull_request.draft == false
+    name: Rustfmt
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup component add rustfmt
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  clippy:
+    if: github.event.pull_request.draft == false
+    name: Clippy lint checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --verbose --release --tests --all-features
+
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use typos with config file
+        uses: crate-ci/typos@master
+        with:
+          config: .config/typos.toml
+
+  bench:
+    if: github.event.pull_request.draft == false
+    name: Bench
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - feature: default
+          - feature: asm
+          - feature: bn256-table
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+      - name: Bench arithmetic
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --profile bench test_field -- --nocapture
+      - name: Bench assembly arithmetic
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --profile bench test_field --features ${{ matrix.feature }} -- --nocapture

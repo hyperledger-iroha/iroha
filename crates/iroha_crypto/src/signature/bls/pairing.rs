@@ -91,7 +91,7 @@ pub(super) struct FalliblePairing {
 
 /// Fixed stack storage for adapters that return only a cryptographic verdict.
 ///
-/// blst 0.3.16's `aggregate.c` uses `N_MAX = 8`: 24 scalar/pointer bytes,
+/// blst 0.3.17's `aggregate.c` uses `N_MAX = 8`: 24 scalar/pointer bytes,
 /// 576 target-group bytes, 288 aggregate-point bytes and 8 * (192 + 96)
 /// affine-point bytes, totalling 3192 bytes on 64-bit hosts. The 4096-byte
 /// ceiling also covers its supported 32-bit pointer layout. Check the linked

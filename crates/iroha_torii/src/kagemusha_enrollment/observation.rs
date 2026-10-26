@@ -45,10 +45,7 @@ impl EligibilityObservationTransport {
         let (tls_root, builder) = match provider.observation_tls_root.as_deref() {
             Some(path) => {
                 let (root, certificate) = TlsRoot::open(path)?;
-                (
-                    Some(root),
-                    client_builder().add_root_certificate(certificate),
-                )
+                (Some(root), client_builder().tls_certs_merge([certificate]))
             }
             None => (None, client_builder()),
         };

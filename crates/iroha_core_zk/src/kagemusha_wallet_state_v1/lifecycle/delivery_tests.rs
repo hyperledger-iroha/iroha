@@ -106,7 +106,7 @@ fn retained_delivery_with_open_request(
             KagemushaWalletSigningDomainV1::Receipt,
             &owner.receipt_body(capsule, &archive_capsule).unwrap(),
         ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     let record = owner
         .assemble(capsule, &archive_capsule, &signature)

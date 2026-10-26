@@ -202,7 +202,7 @@ use pyo3::{
     types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
-use rand_core_06::{OsRng as OsRng06, RngCore as _};
+use rand::{TryRng as _, rngs::SysRng};
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
@@ -5596,8 +5596,8 @@ mod tests {
     include!("tests/python_transaction_account_context_tests.rs");
     include!("tests/python_ensure_alias_tests.rs");
     #[test]
-    fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 32);
+    fn native_sdk_bridge_abi_version_is_exactly_thirty_three() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 33);
     }
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
@@ -10839,15 +10839,25 @@ impl Instruction {
         #[pyo3(from_py_with = exact_chain_discriminant)] chain_discriminant: u16,
     ) -> PyResult<Self> {
         if !arguments.is_exact_instance_of::<PyBytes>() {
-            return Err(PyTypeError::new_err("arguments must be exact immutable bytes"));
+            return Err(PyTypeError::new_err(
+                "arguments must be exact immutable bytes",
+            ));
         }
         let authority = parse_selected_account_id(authority, "authority", chain_discriminant)?;
-        let instruction = scheduled_contract_trigger::build(
-            scheduled_contract_trigger::ScheduledContractCall {
-                trigger_id, authority, contract_address, expected_code_hash_hex, entrypoint,
-                arguments: arguments.as_bytes(), start_ms, period_ms, max_retries, retry_after_ms,
-            },
-        ).map_err(PyValueError::new_err)?;
+        let instruction =
+            scheduled_contract_trigger::build(scheduled_contract_trigger::ScheduledContractCall {
+                trigger_id,
+                authority,
+                contract_address,
+                expected_code_hash_hex,
+                entrypoint,
+                arguments: arguments.as_bytes(),
+                start_ms,
+                period_ms,
+                max_retries,
+                retry_after_ms,
+            })
+            .map_err(PyValueError::new_err)?;
         Ok(Self::new(instruction))
     }
     #[classmethod]
@@ -12355,7 +12365,7 @@ fn sign_query_request(
     let time_to_live_ms =
         NonZeroU64::new(QUERY_TIME_TO_LIVE_MS).expect("query TTL constant is nonzero");
     let mut nonce = [0_u8; 32];
-    OsRng06
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| PyValueError::new_err(format!("query nonce OS RNG failed: {error}")))?;
     request
@@ -15799,7 +15809,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         verify_committed_transaction_inclusion_py,
         module
     )?)?;
-    module.add_function(wrap_pyfunction!(scheduled_execution_verification::verify, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        scheduled_execution_verification::verify,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         contract_arguments::encode_contract_arguments_v1_py,
         module

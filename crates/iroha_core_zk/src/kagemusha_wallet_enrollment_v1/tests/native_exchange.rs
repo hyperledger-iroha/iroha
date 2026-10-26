@@ -1216,6 +1216,55 @@ fn finish_exchange_to(
     ));
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
+    // A completed Receive binds every original even after its owner and folded head reopen.
+    // Canonically valid substitutions must reach the fixed binding, not pass by returning
+    // a prior completion or be counted as coverage merely because decoding failed.
+    let OperationActionV1::Receive {
+        payer_credential: other_payer,
+        ..
+    } = &incoming_ab.action
+    else {
+        unreachable!("A-to-B Receive originals");
+    };
+    let empty_certificates =
+        norito::encode_canonical(&KagemushaWalletCertificateSetV1::new(vec![]).unwrap()).unwrap();
+    for changed_original in 0..3 {
+        let mut conflicting = credit_operation.clone();
+        let OperationActionV1::Receive {
+            payment,
+            payer_credential,
+            certificates,
+        } = &mut conflicting.action
+        else {
+            unreachable!("retained C Receive");
+        };
+        match changed_original {
+            0 => *payment = payment_ab.clone(),
+            1 => *payer_credential = other_payer.clone(),
+            // An empty set is valid intake DATA, never substitute issuer authority.
+            2 => *certificates = empty_certificates.clone(),
+            _ => unreachable!(),
+        }
+        assert_eq!(conflicting.request_id, credit_operation.request_id);
+        assert_eq!(conflicting.kind(), credit_operation.kind());
+        assert_ne!(conflicting, credit_operation);
+        conflicting.validate(&f_c.config.scheme).unwrap();
+        let (result, derivations) = derived(|| c.execute(conflicting));
+        assert!(matches!(result, Err(state::Error::OperationConflict)));
+        assert_eq!(derivations, 0, "conflicting Receive must not derive");
+        assert_eq!(c.snapshot().unwrap(), folded_c);
+        assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
+        assert_eq!(
+            c.retry_request(&credit_operation.request_id).unwrap(),
+            state::RequestStatusV1::Outcome(Completion::Complete(received_bc.clone()))
+        );
+        assert_eq!(
+            derived(|| complete(c.execute(credit_operation.clone()).unwrap())),
+            (received_bc.clone(), 0)
+        );
+        assert_eq!(c.snapshot().unwrap(), folded_c);
+        assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
+    }
     assert_eq!(complete(c.execute(credit_operation).unwrap()), received_bc);
     assert_eq!(c.snapshot().unwrap(), folded_c);
     assert_eq!(device_c.platform.with(|state| state.sign_calls), signed);
@@ -1623,7 +1672,7 @@ fn finish_unload(
         &output.join("c-unload-bad-sigma-claim.norito"),
         &bad_sigma_claim,
     );
-    let message_envelopes = message_census::retain(
+    let (message_envelopes, payer_companions) = message_census::retain(
         &output,
         &sources,
         [(&request_ab, &companion_ab), (&request_bc, &companion_bc)],
@@ -1687,6 +1736,7 @@ fn finish_unload(
         "archive_receive_folded": true, "archive_status_folded": true,
         "archive_exact_replay_after_restart": true, "archive_originals": archive_originals,
         "message_envelopes": message_envelopes,
+        "payer_companions": payer_companions,
         "b_final_credit_status": b_final_credit_status,
         "ledger_settlement_executed": false, "physical_device_qualified": false,
         "scope": "Real installed proof source, finalized receipt proof, native host custody, exact replay and local folds; simulated hardware. Exported Unload claim still requires actual ledger execution and replay qualification." });

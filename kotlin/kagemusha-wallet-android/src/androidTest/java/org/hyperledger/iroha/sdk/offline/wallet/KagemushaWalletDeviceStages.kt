@@ -4,28 +4,6 @@ package org.hyperledger.iroha.sdk.offline.wallet
 
 import android.os.SystemClock
 
-/** One live actual capability shared by the existing monetary and carrier command owners. */
-internal class KagemushaProbeReviewAttempt(
-    val review: KagemushaWalletReviewV1, val origin: KagemushaWalletExchangeV1,
-    val wallet: KagemushaWalletV1, val sequence: Int, val fence: String, val continuation: Boolean,
-) {
-    val requestId = review.requestId()
-    val phase = KagemushaProbeReviewPhase()
-}
-internal class KagemushaProbeReviewHolder {
-    var current: KagemushaProbeReviewAttempt? = null
-        private set
-    fun retain(value: KagemushaProbeReviewAttempt) { check(current == null); current = value }
-    fun clear(value: KagemushaProbeReviewAttempt) { check(current === value); current = null }
-    fun released() { current?.phase?.finish(); current = null }
-    fun endRequested(origin: KagemushaWalletExchangeV1): KagemushaProbeReviewAttempt? {
-        val selected = current ?: return null
-        check(selected.origin === origin)
-        selected.phase.endRequested(); selected.phase.finish(); current = null
-        return selected
-    }
-}
-
 /** Worker-only real SDK monetary lifecycle. This driver neither signs ledger transactions nor owns keys. */
 internal class KagemushaWalletDeviceStages(
     private val config: EnrollmentProbeConfiguration,
@@ -247,11 +225,8 @@ internal class KagemushaWalletDeviceStages(
                 if (continuation) probeRequire(config.files.exists(binding), "recovery-required")
                 bind("operation", identity, family(actionFamily))
                 val root = executedPath(identity)
-                val expectation = if (continuation) KagemushaWalletReviewExpectationV1.OriginalUnstarted(
-                    config.files.read(root, KagemushaWalletReviewProjectionV1.MAXIMUM_BYTES)) else {
-                    probeRequire(!config.files.exists(root), "recovery-required")
-                    KagemushaWalletReviewExpectationV1.Fresh
-                }
+                val expectation = KagemushaProbeReviewCustody.expectation(config.files.reviewCustody,
+                    identity, actionFamily, values - "request-id", continuation)
                 val decision = if (actionFamily == "review-send") accepted().reviewSend(identity, input("request"), input("destination"), expectation)
                     else accepted().reviewUnload(identity, KagemushaMonetaryProbeManifest.amount(input("amount")),
                         values["quote"], values["certificates"], values["beneficiary"], expectation)

@@ -5,7 +5,7 @@ use std::{hint::black_box, time::Instant};
 use ff::Field;
 use iroha_pasta::{Fp, Fq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::{evaluate_horner_interleaved, evaluate_polynomial};
 

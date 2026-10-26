@@ -77,7 +77,7 @@ fn role_metadata(role: impl norito::json::JsonSerialize) -> Metadata {
     deny_unknown_fields
 )]
 pub enum LocalnetServiceProfile {
-    /// Minimal preparation without token authorities, used by private roots and explicit generators.
+    /// Default localnet and private-root preparation without storage-service authorities.
     #[default]
     Standard,
     /// Prepare native identities, signed-genesis admission and retained TLS; services stay disabled.
@@ -1554,8 +1554,6 @@ pub(crate) fn capture_retained(
         .map_err(|_| invalid())?;
     let metadata = authenticated.metadata();
     let epoch = authenticated.into_parts().0;
-    let signed_fees =
-        iroha_genesis::signed_genesis_root_fee_policy(&block).map_err(|_| invalid())?;
     let registered_roles = validate_signed_profile(prepared, &block, &metadata)?;
     if prepared.context.dataspace_id != 0
         || prepared.context.dataspace_alias != "universal"
@@ -1571,6 +1569,10 @@ pub(crate) fn capture_retained(
     .map_err(|_| Error::Invalid("managed client configuration is invalid".into()))?;
     prepared.context.validate_client_config(&client)?;
     let _address_profile = ChainDiscriminantGuard::enter(client.account_chain_discriminant);
+    // Signed monetary policy contains strict account literals from this retained
+    // network. Decode them under its validated profile, not a parent's ambient one.
+    let signed_fees =
+        iroha_genesis::signed_genesis_root_fee_policy(&block).map_err(|_| invalid())?;
     let retained = image.authority();
     let network_directory = image.network();
     let bytes = retained.read(MANIFEST, MAX_MANIFEST)?;

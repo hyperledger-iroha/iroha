@@ -765,7 +765,7 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
             &PrivacyConsensusLimitsV1::taira_default(),
             genesis,
             &witness,
-            &mut rand::rngs::OsRng,
+            &mut rand::rngs::SysRng,
         )
     });
     drop(public_capture);

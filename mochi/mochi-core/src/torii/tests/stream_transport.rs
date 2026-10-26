@@ -480,3 +480,42 @@ async fn readiness_falls_back_only_for_throttled_upgrades_and_submits_exact_byte
         assert_eq!(transaction.encode_versioned(), signed_bytes);
     }
 }
+
+fn injected_reader() -> (FrameSender, AccountClient) {
+    let (sender, transport) = TestStreamTransport::channel();
+    let account = reader_builder("http://127.0.0.1:8080/")
+        .stream_transport(Arc::new(transport))
+        .build()
+        .expect("injected reader")
+        .account_client()
+        .expect("explicit Alice authority");
+    (sender, account)
+}
+
+#[tokio::test]
+async fn on_demand_block_read_returns_the_requested_block_and_its_frame_length() {
+    let (sender, account) = injected_reader();
+    let block = sample_block();
+    let frame = block_stream_frame(&block);
+    sender
+        .send(Ok(StreamFrame::Binary(frame.clone())))
+        .expect("script the block");
+    let fetched = crate::block_detail::fetch_block(&account, NonZeroU64::MIN)
+        .await
+        .expect("read block #1");
+    assert_eq!(fetched.block, block);
+    assert_eq!(fetched.bytes, frame.len());
+}
+
+#[tokio::test]
+async fn on_demand_block_read_reports_a_stream_closed_before_the_block() {
+    let (sender, account) = injected_reader();
+    sender.send(normal_close()).expect("script the close");
+    let error = crate::block_detail::fetch_block(&account, NonZeroU64::MIN)
+        .await
+        .expect_err("no block arrived");
+    assert!(
+        matches!(error, crate::block_detail::BlockFetchError::Closed(1)),
+        "{error:?}"
+    );
+}

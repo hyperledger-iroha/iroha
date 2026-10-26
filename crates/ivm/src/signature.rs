@@ -6,8 +6,6 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 /// between classical Ed25519 and post-quantum ML-DSA (Crystals Dilithium) verification.
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
 use iroha_crypto::{EcdsaSecp256k1Sha256, ed25519_parse_public_key};
-use pqcrypto_mldsa::mldsa65 as dilithium;
-use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 use sha2::{Digest as _, Sha512};
 /// Norito-encoded bundle describing a single Ed25519 verification item.
 #[derive(Debug, Clone, norito::Encode, norito::Decode, PartialEq, Eq)]
@@ -167,8 +165,8 @@ pub fn verify_signature(
             pk.verify_strict(message, &sig).is_ok()
         }
         SignatureScheme::MlDsa => {
-            if public_key.len() != dilithium::public_key_bytes()
-                || signature.len() != dilithium::signature_bytes()
+            if public_key.len() != iroha_crypto::ML_DSA_65_PUBLIC_KEY_BYTES
+                || signature.len() != iroha_crypto::ML_DSA_65_SIGNATURE_BYTES
             {
                 return false;
             }
@@ -178,15 +176,7 @@ pub fn verify_signature(
             if signature_bytes_are_all_zero(signature) {
                 return false;
             }
-            let pk = match dilithium::PublicKey::from_bytes(public_key) {
-                Ok(pk) => pk,
-                Err(_) => return false,
-            };
-            let sig = match dilithium::DetachedSignature::from_bytes(signature) {
-                Ok(s) => s,
-                Err(_) => return false,
-            };
-            iroha_crypto::verify_mldsa65_detached(&sig, message, &pk).is_ok()
+            iroha_crypto::verify_mldsa65_detached(signature, message, public_key).is_ok()
         }
         SignatureScheme::Secp256k1 => {
             if signature.len() != 64 {

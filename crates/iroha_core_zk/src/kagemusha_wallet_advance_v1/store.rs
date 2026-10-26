@@ -1406,9 +1406,9 @@ mod std_fs {
             }
         }
         fn staging_name(&self) -> io::Result<String> {
-            use rand::rand_core::TryRngCore as _;
+            use rand::rand_core::TryRng as _;
             super::staging_name_with_entropy(|bytes| {
-                rand::rngs::OsRng
+                rand::rngs::SysRng
                     .try_fill_bytes(bytes)
                     .map_err(io::Error::other)
             })

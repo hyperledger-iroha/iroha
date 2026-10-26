@@ -1914,7 +1914,6 @@ mod tests {
         BootleLanternAttributeValueV1, PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1,
         PrivacyParameterIdV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use std::{
         collections::VecDeque,
         sync::{
@@ -1948,22 +1947,19 @@ mod tests {
             Self(seed)
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for TestRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_le_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_le_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_le_bytes(bytes))
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("infallible deterministic test RNG");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 self.0 ^= self.0 << 13;
                 self.0 ^= self.0 >> 7;
@@ -1973,7 +1969,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     fn valid_config() -> BootleLanternIssuanceRuntimeConfigV1 {
         BootleLanternIssuanceRuntimeConfigV1 {
             state_dir: PathBuf::from("/var/lib/iroha/privacy-bootle-lantern"),

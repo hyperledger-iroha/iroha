@@ -5,7 +5,7 @@
 use super::ROWS_PER_TASK;
 use iroha_pasta::{CancellationToken, Cancelled, Fp, Fq, PastaField, fft::FftDomain};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 use rayon::prelude::*;
 
 #[allow(clippy::too_many_arguments)]

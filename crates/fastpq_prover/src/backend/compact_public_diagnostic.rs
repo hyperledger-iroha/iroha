@@ -137,7 +137,7 @@ fn public_fixture_and_columns(
 }
 
 fn retain_public_frame(label: &str, bytes: &[u8]) -> String {
-    let sha = format!("{:x}", Sha256::digest(bytes));
+    let sha = hex::encode(Sha256::digest(bytes));
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/fastpq-production-validation");
     std::fs::create_dir_all(&dir).unwrap();

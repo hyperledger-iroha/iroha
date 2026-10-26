@@ -62,8 +62,9 @@ internal class KagemushaNearbyDeviceStages(
         // Keep one accepted task across pairing, authentication, Native work and carrier waits.
         val origin = if (command.action in setOf("nearby-identity", "nearby-permissions")) null else exchangeOwner()
         val accepted = origin?.admit()
-        try { return executeAccepted(command, sequence, origin, accepted) }
-        finally { accepted?.finish() }
+        try {
+            return reviews.command(origin, sequence) { executeAccepted(command, sequence, origin, accepted) }
+        } finally { accepted?.finish() }
     }
     private fun executeAccepted(command: EnrollmentProbeCommand, sequence: Int,
         origin: KagemushaWalletExchangeV1?, accepted: KagemushaWalletExchangeCallV1?): String {
@@ -226,6 +227,7 @@ internal class KagemushaNearbyDeviceStages(
                 "operationID" to EnrollmentProbeFiles.hex(released.operationId()), "outputSHA256" to digest(released.original())))
             return released
         }
+        var attemptFailure: Throwable? = null
         try {
             if (sender) transport.startDiscovering(context) else transport.startAdvertising(context)
             while (!connected) handle(event())
@@ -252,11 +254,8 @@ internal class KagemushaNearbyDeviceStages(
                 } else {
                     probeRequire(reviews.current == null, "lifecycle")
                     val rootFence = marker(requestId)
-                    val expectation = if (continuation) KagemushaWalletReviewExpectationV1.OriginalUnstarted(
-                        config.files.read(rootFence, KagemushaWalletReviewProjectionV1.MAXIMUM_BYTES)) else {
-                        probeRequire(!config.files.exists(rootFence), "recovery-required")
-                        KagemushaWalletReviewExpectationV1.Fresh
-                    }
+                    val expectation = KagemushaProbeReviewCustody.expectation(config.files.reviewCustody,
+                        requestId, "review-send", mapOf("request" to request, "destination" to destination), continuation)
                     val decision = call().reviewSend(requestId, request, destination, expectation)
                     fun existing(value: KagemushaWalletBoundRequestStatusV1): String {
                         val status = if (value is KagemushaWalletBoundRequestStatusV1.Outcome) value.completion.status else 11
@@ -402,10 +401,29 @@ internal class KagemushaNearbyDeviceStages(
                 return "native-durable-receive-acknowledged-over-nearby"
             }
         } catch (failure: Throwable) {
-            trace("attempt-incomplete", fields = arrayOf("failureClass" to failure.javaClass.simpleName,
-                "latencyUsable" to "false", "automaticResampling" to "false"))
+            attemptFailure = failure
+            try {
+                trace("attempt-incomplete", fields = arrayOf("failureClass" to failure.javaClass.simpleName,
+                    "latencyUsable" to "false", "automaticResampling" to "false"))
+            } catch (diagnostic: Throwable) {
+                if (diagnostic !== failure) failure.addSuppressed(diagnostic)
+            }
             throw failure
-        } finally { transport.listener = null; transport.close(); session.close() }
+        } finally {
+            transport.listener = null
+            var cleanupFailure: Throwable? = null
+            try { transport.close() } catch (failure: Throwable) { cleanupFailure = failure }
+            try { session.close() } catch (failure: Throwable) {
+                val previous = cleanupFailure
+                if (previous == null) cleanupFailure = failure
+                else if (failure !== previous) previous.addSuppressed(failure)
+            }
+            cleanupFailure?.let { cleanup ->
+                val previous = attemptFailure
+                if (previous == null) throw cleanup
+                if (cleanup !== previous) previous.addSuppressed(cleanup)
+            }
+        }
     }
     override fun close() { identity.close() }
 }

@@ -1,8 +1,14 @@
 # Native SDK bridge
 
-`connect_norito_bridge` exposes the current ABI-30 C and JNI bridge to the SDKs.
+`connect_norito_bridge` exposes the current ABI-33 C and JNI bridge to the SDKs.
 The ordinary Rust target emits `cdylib`, `staticlib`, and `rlib` outputs; Rust
 consumers and tests retain the `rlib` interface.
+
+JNI entrypoints use `jni` 0.22's FFI-safe `EnvUnowned` and borrow `Env` only
+inside the native-call scope. Pending Java exceptions retain their original cause;
+unexpected Rust panics become Java runtime exceptions. Rust worker upcalls retain
+only a global Java object, use a bounded local frame, and detach their scoped
+thread attachment before returning to background work.
 
 Detached scaffold inspection exposes a single `SetAssetFiLinkV1` as
 `asset_fi_link_set`, retaining all twelve instruction fields. The reference
@@ -30,9 +36,10 @@ pass does not reapply O3 to the broad data-model modules. Dependencies retain
 the release profile's crypto O3 and data-model O1 settings. The build preserves
 symbols and the existing unwind behavior.
 
-Every slice retains authenticated PQClean normalization and complete-archive C
-link checks. The native host check exercises ABI identity, SHA3/SHAKE, ML-DSA,
-and ML-KEM. Static XCFramework layout, headers, exports, and authenticated ZIP
+Every slice retains authenticated RustCrypto Cargo provenance, rejects duplicate
+or retired PQClean archive members, and passes complete-archive C link checks.
+The native host check exercises ABI identity, every ML-DSA/ML-KEM parameter set,
+and tamper rejection. Static XCFramework layout, headers, exports, and authenticated ZIP
 limits remain enforced by their existing owners. SwiftPM is the sole supported
 Swift delivery path; qualify the packaged archive and an ordinary Release SDK
 consumer. Profile selection alone is

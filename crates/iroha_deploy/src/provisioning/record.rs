@@ -10,13 +10,12 @@ impl Binding {
         account_alias: String,
         registration: PrivateDataspaceRegistration,
     ) -> Result<Self> {
-        let release = bootstrap.release();
+        let release = bootstrap.metadata();
         let faucet = release.faucet.clone().ok_or(ProvisioningError::Invalid(
             "installed network has no signed developer funding allowance",
         ))?;
         let result = Self {
             parent_name: release.network_name.clone(),
-            parent_generation: release.generation,
             parent_network_id: release.network_id,
             parent_chain_id: release.chain_id.clone(),
             parent_profile: release.account_chain_discriminant,
@@ -41,9 +40,8 @@ impl Binding {
 
     pub(super) fn validate_parent(&self, bootstrap: &AuthenticatedBootstrap) -> Result<()> {
         self.owner_alias()?;
-        let release = bootstrap.release();
+        let release = bootstrap.metadata();
         if self.parent_name != release.network_name
-            || self.parent_generation != release.generation
             || self.parent_network_id != release.network_id
             || self.parent_chain_id != release.chain_id
             || self.parent_profile != release.account_chain_discriminant

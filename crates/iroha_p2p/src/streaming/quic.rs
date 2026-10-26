@@ -265,11 +265,14 @@ impl StreamingServer {
         let cert_der = cert.der().clone().into_owned();
         let certificate_fingerprint = crate::transport::certificate_fingerprint(cert_der.as_ref());
         let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-        let mut rustls_config =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![cert_der], priv_key.into())
-                .map_err(|e| Error::TlsServer(e.to_string()))?;
+        let mut rustls_config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(|error| Error::TlsServer(error.to_string()))?
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], priv_key.into())
+        .map_err(|e| Error::TlsServer(e.to_string()))?;
         rustls_config.max_early_data_size = 0;
         rustls_config.alpn_protocols = vec![ALPN.to_vec()];
         let rustls_config = Arc::new(rustls_config);
@@ -355,10 +358,14 @@ impl StreamingClient {
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
             crate::transport::CertificateKeyProofVerifier::pinned(expected_certificate_fingerprint),
         );
-        let mut tls_config = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+        let mut tls_config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|error| Error::TlsClient(error.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
         tls_config.enable_early_data = false;
         tls_config.alpn_protocols = vec![ALPN.to_vec()];
         let tls_config = Arc::new(tls_config);
@@ -2175,10 +2182,14 @@ mod tests {
             let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
                 crate::transport::CertificateKeyProofVerifier::pinned(fingerprint),
             );
-            let mut tls_config = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(verifier)
-                .with_no_client_auth();
+            let mut tls_config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .expect("test TLS provider")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
             tls_config.alpn_protocols = vec![ALPN.to_vec()];
             let crypto = QuinnRustlsClientConfig::try_from(Arc::new(tls_config))
                 .expect("QUIC client config");
@@ -2440,10 +2451,14 @@ mod tests {
                 Arc::new(crate::transport::CertificateKeyProofVerifier::pinned(
                     server_certificate_fingerprint,
                 ));
-            let mut tls_config = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(verifier)
-                .with_no_client_auth();
+            let mut tls_config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .expect("test TLS provider")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
             tls_config.enable_early_data = false;
             tls_config.alpn_protocols = vec![ALPN.to_vec()];
             let tls_config = Arc::new(tls_config);

@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { blake3 } from "@noble/hashes/blake3";
-import { ed25519 } from "@noble/curves/ed25519";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import {
   _createDataAvailabilityApi,

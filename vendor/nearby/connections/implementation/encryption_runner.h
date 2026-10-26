@@ -1,0 +1,86 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef CORE_INTERNAL_ENCRYPTION_RUNNER_H_
+#define CORE_INTERNAL_ENCRYPTION_RUNNER_H_
+
+#include <memory>
+#include <string>
+
+#include "securegcm/ukey2_handshake.h"
+#include "absl/functional/any_invocable.h"
+#include "connections/implementation/client_proxy.h"
+#include "connections/implementation/endpoint_channel.h"
+#include "internal/platform/atomic_boolean.h"
+#include "internal/platform/byte_array.h"
+#include "internal/platform/scheduled_executor.h"
+#include "internal/platform/single_thread_executor.h"
+
+namespace nearby {
+namespace connections {
+
+// Encrypts a connection over UKEY2.
+//
+// NOTE: Stalled EndpointChannels will be disconnected after kTimeout.
+// This is to prevent unverified endpoints from maintaining an
+// indefinite connection to us.
+class EncryptionRunner {
+ public:
+  EncryptionRunner() = default;
+  ~EncryptionRunner();
+
+  struct ResultListener {
+    void CallSuccessCallback(const std::string& endpoint_id,
+                             std::unique_ptr<securegcm::UKey2Handshake> ukey2,
+                             const std::string& auth_token,
+                             const ByteArray& raw_auth_token);
+    void CallFailureCallback(const std::string& endpoint_id);
+    void Reset();
+
+    // @EncryptionRunnerThread
+    absl::AnyInvocable<void(const std::string& endpoint_id,
+                            std::unique_ptr<securegcm::UKey2Handshake> ukey2,
+                            const std::string& auth_token,
+                            const ByteArray& raw_auth_token) &&>
+        on_success_cb;
+
+    // Encryption has failed.
+    //
+    // @EncryptionRunnerThread
+    absl::AnyInvocable<void(const std::string& endpoint_id)> on_failure_cb;
+  };
+
+  // @AnyThread
+  void StartServer(ClientProxy* client, const std::string& endpoint_id,
+                   std::shared_ptr<EndpointChannel> endpoint_channel,
+                   ResultListener result_listener);
+  // @AnyThread
+  void StartClient(ClientProxy* client, const std::string& endpoint_id,
+                   std::shared_ptr<EndpointChannel> endpoint_channel,
+                   ResultListener result_listener);
+
+  // @AnyThread
+  void Shutdown();
+
+ private:
+  AtomicBoolean is_stopped_{false};
+  ScheduledExecutor alarm_executor_;
+  SingleThreadExecutor server_executor_;
+  SingleThreadExecutor client_executor_;
+};
+
+}  // namespace connections
+}  // namespace nearby
+
+#endif  // CORE_INTERNAL_ENCRYPTION_RUNNER_H_

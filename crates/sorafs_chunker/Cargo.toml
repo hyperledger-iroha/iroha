@@ -26,7 +26,7 @@ path = "src/bin/sorafs_chunk_dump.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
-sha3 = "0.10.8"
+sha3 = "0.12.0"
 blake3 = "1.8.2"
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }

@@ -15,10 +15,8 @@ use iroha_zkp_vole::{
     transcript::{Challenge3, challenge_1, challenge_2, derive_iv, message_digest},
     vole::{corrections_bytes, mult_corrections_bytes},
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 
 const LEVEL: SecurityLevel = SecurityLevel::L256;
 

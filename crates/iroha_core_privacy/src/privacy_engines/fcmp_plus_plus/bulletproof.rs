@@ -23,29 +23,28 @@ mod tests {
         GeneralizedBulletproofErrorV1, MAX_PROVER_SCALAR_ATTEMPTS_V1, ProofGenerators,
         random_scalar,
     };
-    use rand_08::{SeedableRng as _, rngs::StdRng};
-    use rand_core_06::{CryptoRng, RngCore};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     #[derive(Default)]
     struct NonCanonicalRng {
         calls: usize,
     }
-    impl RngCore for NonCanonicalRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
+    impl rand::TryRng for NonCanonicalRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::MAX)
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::MAX)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0xff);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.calls += 1;
             destination.fill(0xff);
             Ok(())
         }
     }
-    impl CryptoRng for NonCanonicalRng {}
+    impl rand::TryCryptoRng for NonCanonicalRng {}
     fn circuit_constraints() -> Vec<LinComb<Field25519>> {
         vec![
             LinComb::empty()
@@ -165,7 +164,7 @@ mod tests {
             Vec::new(),
         )
         .expect("statement");
-        let mut rng = StdRng::seed_from_u64(0xfca5_0001);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xfca5_0001);
         statement
             .prove(
                 &mut FcmpProofRandomSource::new(&mut rng),

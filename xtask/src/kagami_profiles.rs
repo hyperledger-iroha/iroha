@@ -541,10 +541,10 @@ impl Drop for PrivateProfileStaging {
 }
 fn create_profile_staging(output_root: &Path, slug: &str) -> AnyResult<PrivateProfileStaging> {
     let parent = iroha_fs::OwnerDirectory::open_or_create(output_root)?;
-    let mut rng = rand_core_06::OsRng;
+    let mut rng = rand::rngs::SysRng;
     for _ in 0..32 {
         let mut entropy = [0_u8; 16];
-        rand_core_06::RngCore::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
+        rand::TryRng::try_fill_bytes(&mut rng, &mut entropy).map_err(|error| {
             std::io::Error::other(format!("profile staging entropy unavailable: {error}"))
         })?;
         let name = format!(".{slug}-staging-{}", hex::encode(entropy));

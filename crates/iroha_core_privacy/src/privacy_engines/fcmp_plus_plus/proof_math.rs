@@ -28,7 +28,7 @@ pub(super) use iroha_zkp_halo2::generalized_bulletproof::{
 };
 use p256::elliptic_curve::bigint::U256;
 use p256::elliptic_curve::subtle::Choice;
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use std::{
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     sync::OnceLock,
@@ -327,7 +327,7 @@ impl<'a, R> FcmpProofRandomSource<'a, R> {
         Self { rng }
     }
 }
-impl<R: RngCore + CryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> {
+impl<R: TryRng + TryCryptoRng> ProofRandomSource for FcmpProofRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), GeneralizedBulletproofErrorV1> {
         self.rng
             .try_fill_bytes(destination)
@@ -339,7 +339,7 @@ pub(super) fn random_scalar_from_fcmp_rng<F, R>(
 ) -> Result<Option<SecretScalar<F>>, FcmpNativeErrorV1>
 where
     F: ProofScalar,
-    R: RngCore + CryptoRng,
+    R: TryRng + TryCryptoRng,
 {
     F::random(&mut FcmpProofRandomSource::new(rng)).map_err(Into::into)
 }
@@ -622,23 +622,22 @@ mod tests {
     struct ZeroRandomV1 {
         calls: usize,
     }
-    impl RngCore for ZeroRandomV1 {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ZeroRandomV1 {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.calls += 1;
             destination.fill(0);
             Ok(())
         }
     }
-    impl CryptoRng for ZeroRandomV1 {}
+    impl rand::TryCryptoRng for ZeroRandomV1 {}
     #[test]
     fn fcmp_random_adapter_forwards_the_one_attempt_owner() {
         fn require_owner_result<F: ProofScalar>(

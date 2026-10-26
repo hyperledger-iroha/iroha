@@ -52,7 +52,7 @@ use curve25519_dalek::{
     traits::Identity,
 };
 use p256::elliptic_curve::subtle::{Choice, ConstantTimeEq as _, ConstantTimeLess as _};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use zeroize::{Zeroize, Zeroizing};
 const MAX_PROVER_SCALAR_ATTEMPTS_V1: usize = 128;
 const MAX_MEMBERSHIP_PROVER_RESTARTS_V1: usize = 128;
@@ -1823,7 +1823,7 @@ fn parse_path(
     })
 }
 fn random_proof_scalar<F: ProofScalar>(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
 ) -> Result<ProverSecretScalarV1<F>, FcmpNativeErrorV1> {
     for _ in 0..MAX_PROVER_SCALAR_ATTEMPTS_V1 {
         if let Some(sampled) = random_scalar_from_fcmp_rng::<F, _>(rng)? {
@@ -1958,7 +1958,7 @@ struct PreparedInput {
     transcripted: TranscriptedInput,
 }
 fn prove_fcmp_plus_plus_once_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     inputs: &[FcmpProverInputV1],
     new_output_openings: &[FcmpOutputCommitmentOpeningV1],
@@ -2528,7 +2528,7 @@ fn preflight_fcmp_plus_plus_v1(
 /// round point with negligible probability; the prover rebuilds the commitments and transcript with
 /// fresh randomness at a fixed bound instead of exposing an honest-abort failure.
 pub fn prove_fcmp_plus_plus_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     inputs: &[FcmpProverInputV1],
     new_output_openings: &[FcmpOutputCommitmentOpeningV1],

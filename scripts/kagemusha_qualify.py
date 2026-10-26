@@ -1048,11 +1048,16 @@ def prepare(output: Path, *, component: bool = False, target_slot: str = "m3b") 
 
 
 def parse_vm_stat(text: str) -> dict[str, int]:
+    """Require one complete kernel row per counter; ambiguous probes invalidate."""
     counters = {}
     for label in (*QUIET_MEMORY_COUNTERS, "Swapins"):
-        match = re.search(rf"^{label}:\s+(\d+)\.", text, re.MULTILINE)
-        if not match:
-            raise ValueError(f"missing vm_stat counter {label}")
+        rows = [line for line in text.splitlines()
+                if re.match(rf"[ \t]*{label}[ \t]*:", line)]
+        if len(rows) != 1:
+            raise ValueError(f"missing or duplicate vm_stat counter {label}")
+        match = re.fullmatch(rf"{label}:[ \t]+([0-9]+)\.[ \t]*", rows[0])
+        if match is None:
+            raise ValueError(f"malformed vm_stat counter {label}")
         counters[label] = int(match[1])
     return counters
 

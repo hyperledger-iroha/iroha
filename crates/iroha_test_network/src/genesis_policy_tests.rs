@@ -54,7 +54,7 @@ fn fixture_with_instructions(
         None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
         None,
-        default_test_network_staking_policy(),
+        config::default_test_network_staking_policy(),
     )
 }
 
@@ -374,8 +374,13 @@ fn assert_startup_retains_rejection_and_rolls_back(
         &nexus.dataspace_catalog,
     )
     .expect("authenticated genesis SNS bootstrap");
-    let state =
-        State::new_with_pre_genesis_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
+    let state = State::new_with_pre_genesis_nexus_and_identities_for_testing(
+        world,
+        nexus,
+        LiveQueryStore::start_test(),
+        config::chain_id(),
+        iroha_data_model::NetworkId::from_genesis_hash(proposal.0.hash()),
+    );
     config::install_preexec_lane_manifests(&state, None).unwrap();
     let original_wire = proposal.0.encode_wire().unwrap();
     let startup = apply_genesis(
@@ -389,11 +394,14 @@ fn assert_startup_retains_rejection_and_rolls_back(
     let StartupError::InvalidGenesis(error) = &startup else {
         panic!("startup erased the native validation error: {startup:?}");
     };
-    assert!(matches!(
-        error.as_ref(),
-        BlockValidationError::InvalidGenesis(InvalidGenesisError::RejectedOutput(actual))
-            if actual == expected
-    ));
+    assert!(
+        matches!(
+            error.as_ref(),
+            BlockValidationError::InvalidGenesis(InvalidGenesisError::RejectedOutput(actual))
+                if actual == expected
+        ),
+        "startup must preserve the exact pre-execution rejection {expected:?}: {error:?}"
+    );
     assert!(
         startup
             .source()

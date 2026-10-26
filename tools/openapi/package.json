@@ -12,7 +12,7 @@
     "generate:openapi-unsigned": "node scripts/generate-unsigned-openapi.mjs"
   },
   "dependencies": {
-    "@noble/hashes": "1.8.0"
+    "@noble/hashes": "2.4.0"
   },
   "engines": {
     "node": ">=24.0.0"

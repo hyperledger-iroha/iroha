@@ -1051,14 +1051,14 @@ if [[ "${MATURIN_VERSION}" != "1.14.1" ]]; then
 fi
 export IROHA_PRIVACY_AUTHENTICATED_MATURIN_VERSION="${MATURIN_VERSION}"
 case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
-  1.93.1-x86_64-unknown-linux-gnu)
+  1.99.1-x86_64-unknown-linux-gnu)
     AUTHENTICATED_RUST_HOST_TRIPLE="x86_64-unknown-linux-gnu"
     unset \
       IROHA_PRIVACY_AUTHENTICATED_MATURIN_ENCODED_RUSTFLAGS \
       IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG \
       IROHA_PRIVACY_AUTHENTICATED_MACOSX_DEPLOYMENT_TARGET
     ;;
-  1.93.1-aarch64-apple-darwin)
+  1.99.1-aarch64-apple-darwin)
     AUTHENTICATED_RUST_HOST_TRIPLE="aarch64-apple-darwin"
     export IROHA_PRIVACY_AUTHENTICATED_MATURIN_ENCODED_RUSTFLAGS=$'-C\x1flink-arg=-undefined\x1f-C\x1flink-arg=dynamic_lookup'
     export IROHA_PRIVACY_AUTHENTICATED_MATURIN_RUSTC_LINK_ARG="link-args=-Wl,-install_name,@rpath/iroha_native._crypto.abi3.so"

@@ -61,10 +61,10 @@ fi
 
 privacy_sdk_authenticated_host_triple() {
   case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
-    1.93.1-x86_64-unknown-linux-gnu)
+    1.99.1-x86_64-unknown-linux-gnu)
       printf '%s\n' "x86_64-unknown-linux-gnu"
       ;;
-    1.93.1-aarch64-apple-darwin)
+    1.99.1-aarch64-apple-darwin)
       printf '%s\n' "aarch64-apple-darwin"
       ;;
     *)
@@ -173,7 +173,7 @@ assert_authenticated_maturin_darwin_rustc_policy() {
 
   if [[ "${AUTHENTICATED_COMMAND_NAME}" != "rustc" || \
     "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" != \
-      "1.93.1-aarch64-apple-darwin" || \
+      "1.99.1-aarch64-apple-darwin" || \
     "${IROHA_PRIVACY_AUTHENTICATED_MATURIN_VERSION:-}" != "1.14.1" || \
     "${IROHA_PRIVACY_AUTHENTICATED_MATURIN_ENCODED_RUSTFLAGS:-}" != \
       "${expected_encoded}" || \
@@ -308,7 +308,7 @@ assert_authenticated_python_command_environment() {
   fi
   assert_authenticated_maturin_pyo3_config || return 1
   case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
-    1.93.1-x86_64-unknown-linux-gnu)
+    1.99.1-x86_64-unknown-linux-gnu)
       if [[ "${CARGO_ENCODED_RUSTFLAGS+x}" != "x" || \
         -n "${CARGO_ENCODED_RUSTFLAGS}" || \
         -n "${MACOSX_DEPLOYMENT_TARGET+x}" || \
@@ -319,7 +319,7 @@ assert_authenticated_python_command_environment() {
         return 1
       fi
       ;;
-    1.93.1-aarch64-apple-darwin)
+    1.99.1-aarch64-apple-darwin)
       if [[ "${MACOSX_DEPLOYMENT_TARGET+x}" != "x" || \
         "${MACOSX_DEPLOYMENT_TARGET}" != "11.0" ]]; then
         echo "error: Darwin Maturin deployment target is missing" >&2
@@ -362,7 +362,7 @@ assert_authenticated_maturin_arguments() {
         --lib
       )
       if [[ "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" == \
-        "1.93.1-aarch64-apple-darwin" ]]; then
+        "1.99.1-aarch64-apple-darwin" ]]; then
         expected_arguments+=(
           --
           -C
@@ -476,7 +476,7 @@ assert_no_cargo_policy_environment() {
       MACOSX_DEPLOYMENT_TARGET)
         if [[ "${AUTHENTICATED_COMMAND_NAME}" != "rustc" || \
           "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" != \
-            "1.93.1-aarch64-apple-darwin" || \
+            "1.99.1-aarch64-apple-darwin" || \
           "${IROHA_PRIVACY_AUTHENTICATED_MACOSX_DEPLOYMENT_TARGET:-}" != \
             "11.0" || \
           "${environment_value}" != "11.0" ]]; then
@@ -1161,7 +1161,7 @@ if [[ "${command_name}" == "rustc" ]]; then
   post_rustc_argument_count=$((argument_count - cargo_argument_limit - 1))
   if [[ -n "${IROHA_PRIVACY_AUTHENTICATED_PYTHON_BUILD_POLICY:-}" && \
     "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" == \
-      "1.93.1-aarch64-apple-darwin" ]]; then
+      "1.99.1-aarch64-apple-darwin" ]]; then
     if ! assert_authenticated_maturin_darwin_rustc_policy || \
       [[ "${post_rustc_argument_count}" -ne 2 ]] || \
       [[ "${original_arguments[$((cargo_argument_limit + 1))]-}" != "-C" ]] || \

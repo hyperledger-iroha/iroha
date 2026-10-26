@@ -231,14 +231,14 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
             ),
             "environment_profiles": validator.EXPECTED_ENVIRONMENT_PROFILES,
             "cargo_build_jobs": 1,
-            "rust_toolchain_channel": "1.93.1",
-            "cargo_release": "1.93.1",
+            "rust_toolchain_channel": "1.99.1",
+            "cargo_release": "1.99.1",
             "cargo_commit_hash": "4" * 40,
             "cargo_binary_sha256": "4" * 64,
-            "rustc_release": "1.93.1",
+            "rustc_release": "1.99.1",
             "rustc_commit_hash": "5" * 40,
             "rustc_binary_sha256": "5" * 64,
-            "rustdoc_release": "1.93.1",
+            "rustdoc_release": "1.99.1",
             "rustdoc_commit_hash": "5" * 40,
             "rustdoc_binary_sha256": "6" * 64,
             "python_version": "3.12.13",
@@ -995,7 +995,7 @@ else:
         wallet_exports = re.findall(r'"(connect_norito_kagemusha_[A-Za-z0-9_]+)"', required_inventory)
         self.assertEqual(wallet_exports, [
             "connect_norito_kagemusha_wallet_" + suffix + "_v1"
-            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "setup", "execute", "load_original_validate", "request_status", "retry", "resume", "fold", "credit_status", "snapshot", "review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "observe", "account_original", "account_display", "enrollment", "enrollment_refusal")
+            for suffix in ("revision", "open_begin", "open_finish", "open_cancel", "close", "activity", "begin_exchange", "end_exchange", "setup", "execute", "load_original_validate", "request_status", "retry", "resume", "fold", "credit_status", "snapshot", "review", "execute_reviewed", "discard_review", "installation_begin", "installation_register", "installation_close", "registration_source_relocate", "observe", "account_original", "account_display", "enrollment", "enrollment_refusal")
         ])
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",

@@ -4,8 +4,8 @@
 //! frames, and wraps each chunk in a CRC32-protected frame. The format matches the existing
 //! Swift/Android/JS SDK implementations to ensure cross-platform parity for the first release.
 use blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
+    Blake2b,
+    digest::{Digest, consts::U32},
 };
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -780,13 +780,7 @@ fn xor_parity(
     parity
 }
 fn blake2b256(payload: &[u8]) -> [u8; 32] {
-    let mut hasher = Blake2bVar::new(32).expect("blake2b var init");
-    hasher.update(payload);
-    let mut out = [0u8; 32];
-    hasher
-        .finalize_variable(&mut out)
-        .expect("blake2b finalize");
-    out
+    Blake2b::<U32>::digest(payload).into()
 }
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
@@ -822,6 +816,15 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32, QrStreamError> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn payload_hash_matches_independent_blake2b_256_vector() {
+        // Python hashlib.blake2b(b"abc", digest_size=32), not truncated BLAKE2b-512.
+        assert_eq!(
+            super::blake2b256(b"abc"),
+            hex_literal::hex!("bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319")
+        );
+    }
+
     use super::*;
     use norito::json::{self, Value};
     use std::fs;

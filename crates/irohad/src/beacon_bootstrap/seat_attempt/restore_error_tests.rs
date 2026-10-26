@@ -243,7 +243,7 @@ fn original_checkpoint_enclosing_refusal_keeps_the_prepared_owner_and_same_sourc
 struct RefusingRng {
     calls: usize,
 }
-impl rand::TryRngCore for RefusingRng {
+impl rand::TryRng for RefusingRng {
     type Error = std::io::Error;
     fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
         self.calls += 1;

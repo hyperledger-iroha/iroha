@@ -8,8 +8,8 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
-arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = { version = "0.4.13", features = ["arbitrary-derive"] }
+arbitrary = { version = "1.5.0", features = ["derive"] }
 norito = {path = ".."}
 
 [workspace]

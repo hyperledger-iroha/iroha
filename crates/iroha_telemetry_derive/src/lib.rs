@@ -207,12 +207,8 @@ pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
     emitter.finish_token_stream_with(result)
 }
 fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) -> TokenStream {
-    let syn::ItemFn {
-        attrs,
-        vis,
-        sig,
-        block,
-    } = func;
+    let sig = &func.sig;
+    let block = &func.block;
     match sig.output.clone() {
         syn::ReturnType::Default => emit!(
             emitter,
@@ -266,7 +262,7 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
             TokenStream::new()
         };
         quote!(
-            #(#attrs)* #vis #sig {
+            {
                 #timing_start
                 let res = (|| #block)();
                 #times
@@ -282,12 +278,17 @@ fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) 
     let generated = {
         let _ = specs;
         quote!(
-            #(#attrs)* #vis #sig {
+            {
                 #block
             }
         )
     };
-    generated
+    let mut output = func.clone();
+    let Some(block) = emitter.handle(syn::parse2(generated)) else {
+        return TokenStream::new();
+    };
+    output.block = block;
+    quote!(#output)
 }
 // NOTE: metrics wiring stays behind `metric-instrumentation` so builds can
 // opt in to ISI counters/timing without forcing telemetry overhead by default.

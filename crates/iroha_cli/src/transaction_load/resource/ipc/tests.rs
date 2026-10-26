@@ -24,7 +24,7 @@ fn capture(captures: &Captures, request: Request, available: bool) -> (Response,
     .unwrap();
     let manifest = Manifest {
         name: request.kind.manifest_name(request.sequence),
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(&bytes)),
         bytes: bytes.len() as u64,
     };
     let mut file = OpenOptions::new()
@@ -232,7 +232,7 @@ fn authenticated_manifest_never_accepts_remote_offsets_as_its_identity() {
         .insert("start_offset_ns".to_owned(), norito::json!(0));
     let bytes = json::to_vec(&value).unwrap();
     std::fs::write(&path, &bytes).unwrap();
-    manifest.sha256 = format!("{:x}", Sha256::digest(&bytes));
+    manifest.sha256 = hex::encode(Sha256::digest(&bytes));
     manifest.bytes = bytes.len() as u64;
     assert!(
         captures
@@ -260,7 +260,7 @@ fn hash_correct_manifest_with_duplicate_identity_field_is_rejected() {
     let duplicate = text.replacen("{", "{\"sequence\":1,", 1).into_bytes();
     std::fs::write(&path, &duplicate).unwrap();
     manifest.bytes = duplicate.len() as u64;
-    manifest.sha256 = format!("{:x}", Sha256::digest(&duplicate));
+    manifest.sha256 = hex::encode(Sha256::digest(&duplicate));
     assert!(
         captures
             .authenticate(request, &response, &manifest, &ctl, ctl.lifetime_ns)

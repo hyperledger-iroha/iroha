@@ -2581,7 +2581,8 @@ mod tests {
         test_fixtures::{fixture, three_output_fixture},
     };
     use iroha_data_model::privacy::{PrivacyActionDigestV1, PrivacyRootV1};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use std::collections::BTreeSet;
     fn changed(value: F) -> F {
         if value == F::ZERO { F::ONE } else { F::ZERO }
@@ -2983,7 +2984,7 @@ mod tests {
         let recipient_public_key =
             ivm_private_recipient_public_key_v1(&[0x95; 32]).expect("second recipient public key");
         let second_encrypted_output = encrypt_ivm_private_wallet_note_v1(
-            &mut StdRng::seed_from_u64(0x49_50_4e_45_02),
+            &mut ChaCha12Rng::seed_from_u64(0x49_50_4e_45_02),
             value.statement.pool_id,
             value.statement.program_id,
             &second_output_note,

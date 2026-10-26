@@ -520,6 +520,6 @@ and derives the expected network from its local signing context.
 
 Account identity construction, canonical parsing, and controller checks require the
 separate `iroha-native` wheel (`pip install iroha-torii-client[native]`). These
-operations use its ABI-30 Rust owner for all eleven curves and full weighted
+operations use its ABI-33 Rust owner for all eleven curves and full weighted
 multisig policies. Missing native validation is an explicit error; anonymous HTTP
 transport can operate without loading the native package.

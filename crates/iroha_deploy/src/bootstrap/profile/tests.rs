@@ -1,62 +1,93 @@
-//! Installation-selected trust and canonical native bundle custody regressions.
+//! Installed network selection and canonical native bundle custody regressions.
 
 use super::*;
-use iroha_crypto::{Algorithm, KeyPair};
 
 fn profile(name: &str) -> InstalledNetworkProfile {
     InstalledNetworkProfile::new(
         name.into(),
-        KeyPair::from_seed(vec![31; 32], Algorithm::Ed25519)
-            .public_key()
-            .clone(),
-        7,
-        "https://releases.example/checkpoint.nrt",
+        "https://network.example/",
+        "fixture-chain".into(),
+        369,
     )
     .unwrap()
 }
 
 #[test]
-fn installed_profiles_require_explicit_canonical_authority_floor_and_https_location() {
+fn installed_profiles_require_canonical_https_root_and_exact_network_expectations() {
     let valid = profile("fixture");
     assert_eq!(valid.network_name(), "fixture");
-    assert_eq!(valid.release_trust().minimum_serial, 7);
+    assert_eq!(valid.torii_root().as_str(), "https://network.example/");
+    assert_eq!(valid.chain_id(), "fixture-chain");
+    assert_eq!(valid.account_chain_discriminant(), 369);
     for url in [
-        "http://releases.example/checkpoint.nrt",
-        "https://RELEASES.example/checkpoint.nrt",
-        "https://releases.example:443/checkpoint.nrt",
-        "https://releases.example/a/../checkpoint.nrt",
-        "https://user:secret@releases.example/checkpoint.nrt",
-        "https://releases.example/checkpoint.nrt?key=attacker",
-        "https://releases.example/checkpoint.nrt#fragment",
+        "http://network.example/",
+        "https://NETWORK.example/",
+        "https://network.example:443/",
+        "https://network.example/a/../",
+        "https://user:secret@network.example/",
+        "https://network.example/?key=attacker",
+        "https://network.example/#fragment",
+        "https://network.example",
+        "https://network.example/api",
     ] {
         assert!(
-            InstalledNetworkProfile::new("fixture".into(), valid.trust.public_key.clone(), 7, url)
+            InstalledNetworkProfile::new("fixture".into(), url, "fixture-chain".into(), 369)
                 .is_err(),
             "{url}"
         );
     }
-    for (name, floor) in [("Fixture", 1), ("fixture", 0), ("", 1)] {
+    for name in ["Fixture", "", "1fixture", "fixture_name"] {
         assert!(
             InstalledNetworkProfile::new(
                 name.into(),
-                valid.trust.public_key.clone(),
-                floor,
-                valid.checkpoint_url.as_str()
+                valid.torii_root().as_str(),
+                "fixture-chain".into(),
+                369,
             )
             .is_err()
+        );
+    }
+    for chain in ["", " fixture", "fixture ", "fixture/chain", "chain\0id"] {
+        assert!(
+            InstalledNetworkProfile::new(
+                "fixture".into(),
+                valid.torii_root().as_str(),
+                chain.into(),
+                369,
+            )
+            .is_err(),
+            "{chain:?}"
         );
     }
     assert!(
         InstalledNetworkProfile::new(
             "fixture".into(),
-            KeyPair::from_seed(vec![31; 32], Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-            1,
-            valid.checkpoint_url.as_str()
+            valid.torii_root().as_str(),
+            "fixture-chain".into(),
+            0,
         )
         .is_err()
     );
+    assert!(
+        InstalledNetworkProfile::new(
+            "fixture".into(),
+            &format!(
+                "https://network.example/{}/",
+                "a".repeat(MAX_TORII_ROOT_BYTES)
+            ),
+            "fixture-chain".into(),
+            369,
+        )
+        .is_err()
+    );
+    let nested = InstalledNetworkProfile::new(
+        "nested".into(),
+        "https://network.example/native/",
+        "fixture-chain".into(),
+        369,
+    )
+    .unwrap();
+    assert_eq!(nested.torii_root().path(), "/native/");
     let absent = InstalledNetworkProfiles::new(vec![]).unwrap();
     assert!(absent.select("taira").is_err());
     assert!(
@@ -74,14 +105,11 @@ fn installed_profile_set_roundtrips_sorted_and_loads_from_retained_custody() {
     let bytes = profiles.encode_installation().unwrap();
     let decoded = InstalledNetworkProfiles::from_installation_bytes(&bytes).unwrap();
     assert_eq!(decoded.names().collect::<Vec<_>>(), ["first", "second"]);
-    assert_eq!(
-        decoded
-            .select("first")
-            .unwrap()
-            .release_trust()
-            .minimum_serial,
-        7
-    );
+    let first = decoded.select("first").unwrap();
+    assert_eq!(first.network_name(), "first");
+    assert_eq!(first.torii_root().as_str(), "https://network.example/");
+    assert_eq!(first.chain_id(), "fixture-chain");
+    assert_eq!(first.account_chain_discriminant(), 369);
     assert!(decoded.select("FIRST").is_err());
     assert_eq!(decoded.encode_installation().unwrap(), bytes);
     let temporary = tempfile::tempdir().unwrap();
@@ -102,6 +130,29 @@ fn installed_profile_set_roundtrips_sorted_and_loads_from_retained_custody() {
         bytes
     );
     assert!(InstalledNetworkProfiles::load(&directory.path().join("missing.nrt")).is_err());
+}
+
+#[test]
+fn installed_profile_decoder_revalidates_each_network_selection() {
+    let corruptions: [fn(&mut ProfileRecord); 4] = [
+        |record| record.network_name = "Invalid".into(),
+        |record| record.torii_root = "http://network.example/".into(),
+        |record| record.expected_chain_id = "uncanonical chain".into(),
+        |record| record.account_chain_discriminant = 0,
+    ];
+    for corrupt in corruptions {
+        let mut record = profile("fixture").record();
+        corrupt(&mut record);
+        let records = ProfileRecords {
+            profiles: vec![record],
+        };
+        assert!(
+            InstalledNetworkProfiles::from_installation_bytes(
+                &norito::encode_canonical(&records).unwrap()
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

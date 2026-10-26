@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::privacy_engines::zk_x509::private_table::inspection;
-use rand::{RngCore as _, SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 
 #[test]
 fn retained_fri_copy_fits_original_allowance_and_rejects_capacity_overflow() {
@@ -172,14 +173,14 @@ fn retained_fri_seeded_input_matches_two_replays_roots_transcript_and_openings()
         let rows = layout.common_lde_size();
         let root = goldilocks_primitive_root_v1(layout.common_lde_log2()).unwrap();
         let evaluations = || {
-            let mut rng = StdRng::from_seed([73; 32]);
+            let mut rng = ChaCha12Rng::from_seed([73; 32]);
             let coefficients = (0..17)
                 .map(|_| {
                     E::from_coefficients([
-                        F(rng.next_u64() % 97),
-                        F(rng.next_u64() % 97),
-                        F(rng.next_u64() % 97),
-                        F(rng.next_u64() % 97),
+                        F(rng.try_next_u64().expect("test RNG draw succeeds") % 97),
+                        F(rng.try_next_u64().expect("test RNG draw succeeds") % 97),
+                        F(rng.try_next_u64().expect("test RNG draw succeeds") % 97),
+                        F(rng.try_next_u64().expect("test RNG draw succeeds") % 97),
                     ])
                     .unwrap()
                 })
@@ -191,7 +192,7 @@ fn retained_fri_seeded_input_matches_two_replays_roots_transcript_and_openings()
             parameters,
             &AGGREGATE_DOMAINS_V1,
             &layout,
-            &mut StdRng::from_seed([79; 32]),
+            &mut ChaCha12Rng::from_seed([79; 32]),
         )
         .unwrap();
         assert_eq!(

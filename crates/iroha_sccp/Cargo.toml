@@ -20,7 +20,7 @@ test-fixtures = [
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true, optional = true }
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11.1", default-features = false }
 norito = { path = "../norito", default-features = false, features = ["base-codec"] }
 halo2curves = { workspace = true, optional = true }
 # The curve library behind `iroha_crypto`'s BLS. `v1::committee` converts points between the

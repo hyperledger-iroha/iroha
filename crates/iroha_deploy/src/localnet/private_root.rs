@@ -4,7 +4,7 @@ use super::*;
 use crate::managed::{Error, LocalnetPorts, ManagedContext, ManagedPeer, PreparedLocalnet};
 use iroha_data_model::{
     NetworkId,
-    block::consensus::{RootFeePolicy, SumeragiRootScope},
+    block::consensus::{RootFeeExemptions, RootFeePolicy, SumeragiRootScope},
     hijiri::HijiriParametersV1,
     parameter::{Parameter, Parameters},
     sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
@@ -450,7 +450,7 @@ fn prepare_fresh(
     let owner = localnet_ephemeral_identity(None, b"private-root-owner")?;
     let operator = localnet_ephemeral_identity(None, b"private-root-http-operator")?;
     let mut token_bytes = Zeroizing::new([0_u8; 32]);
-    OsRng
+    SysRng
         .try_fill_bytes(token_bytes.as_mut())
         .map_err(|error| eyre!("private-root token generation failed: {error}"))?;
     let api_token = Zeroizing::new(hex::encode(*token_bytes));
@@ -748,7 +748,7 @@ pub fn private_fee_policy(
         fee_asset_id: private_fee_asset(spec)?,
         fee_sink_account_id: gas_account.clone(),
         sponsor_vault_custody_account_id: gas_account.clone(),
-        successful_claim_fee_exempt_authorities: BTreeSet::new(),
+        successful_claim_fee_exempt_authorities: RootFeeExemptions::new(),
         base_fee: "0.001".parse()?,
         per_byte_fee: Quantity::zero(),
         per_instruction_fee: "0.001".parse()?,

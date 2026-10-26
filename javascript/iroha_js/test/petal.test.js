@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 
 import { build } from "esbuild";
-import ts from "typescript";
+import { inspectTypeScriptProject } from "./helpers/typescriptInspection.js";
 
 import { findForbiddenBrowserInputs } from "../scripts/bundle-size-check.mjs";
 import {
@@ -2827,21 +2827,22 @@ test("the declarations type-check a strict browser consumer", () => {
         "void new PetalDecodedFrame();",
       ].join("\n"),
     );
-    const program = ts.createProgram([consumer], {
+    const { program } = inspectTypeScriptProject(consumer, {
       strict: true,
       exactOptionalPropertyTypes: true,
       noUncheckedIndexedAccess: true,
       skipLibCheck: false,
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      lib: ["lib.es2022.d.ts", "lib.dom.d.ts"],
+      target: "es2022",
+      module: "nodenext",
+      moduleResolution: "nodenext",
+      lib: ["es2022", "dom"],
       types: [],
       noEmit: true,
     });
-    const diagnostics = ts
-      .getPreEmitDiagnostics(program)
-      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    const diagnostics = [
+      ...program.getProgramDiagnostics(), ...program.getSyntacticDiagnostics(),
+      ...program.getSemanticDiagnostics(), ...program.getGlobalDiagnostics(),
+    ];
     assert.deepEqual(diagnostics, []);
   } finally {
     rmSync(work, { recursive: true, force: true });

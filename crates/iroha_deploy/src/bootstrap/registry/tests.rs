@@ -1,6 +1,6 @@
 //! Registry context rejection and mandatory fresh quorum before any provider read.
 
-use std::{cell::Cell, num::NonZeroU64};
+use std::{cell::Cell, num::NonZeroU64, time::Duration};
 
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
 use iroha_data_model::sumeragi_finality::{
@@ -10,8 +10,8 @@ use iroha_model_base::peer::PeerId;
 
 use super::*;
 use crate::bootstrap::{
-    ReleaseBuildRegistry, ReleaseCheckpointStore,
-    tests::{metadata, signed, trust},
+    BuildRegistryPolicy,
+    tests::{authenticated, metadata},
 };
 
 struct Offline(Cell<usize>);
@@ -31,36 +31,26 @@ impl FinalitySource for Offline {
 }
 
 #[test]
-fn registry_requires_explicit_public_context_current_release_and_fresh_quorum() {
+fn registry_requires_explicit_public_context_selected_policy_and_fresh_quorum() {
     let native = NativeFinalityFixture::new();
     let checkpoint = native.checkpoint();
     let key = KeyPair::from_seed(vec![151; 32], Algorithm::Ed25519);
-    let now = unix_ms().unwrap();
-    let mut release = metadata(&checkpoint);
-    release.issued_at_ms = now - 1_000;
-    release.expires_at_ms = now + 60_000;
-    release.build_registry = Some(ReleaseBuildRegistry {
-        torii_roots: release.torii_roots.clone(),
+    let mut metadata_record = metadata(&checkpoint);
+    metadata_record.build_registry = Some(BuildRegistryPolicy {
+        torii_roots: metadata_record.torii_roots.clone(),
     });
     let directory = tempfile::tempdir().unwrap();
-    let release_store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let bootstrap = release_store
-        .authenticate(
-            &trust(&key, 1),
-            &signed(release.clone(), &checkpoint, &key),
-            now,
-        )
-        .unwrap();
+    let bootstrap = authenticated(metadata_record.clone(), &checkpoint);
     let mut store =
         ParentFinalityStore::open(&directory.path().join("finality"), &bootstrap).unwrap();
     let config = Config::load_table(
         "fixture.toml",
         toml::toml! {
-            chain = (release.chain_id.clone())
-            network_id = (release.network_id.to_string())
-            torii_url = (release.torii_roots[0].as_str())
+            chain = (metadata_record.chain_id.clone())
+            network_id = (metadata_record.network_id.to_string())
+            torii_url = (metadata_record.torii_roots[0].as_str())
             [account]
-            chain_discriminant = (release.account_chain_discriminant)
+            chain_discriminant = (metadata_record.account_chain_discriminant)
             public_key = (key.public_key().to_string())
             private_key = (ExposedPrivateKey(key.private_key().clone()).to_string())
         },
@@ -70,27 +60,13 @@ fn registry_requires_explicit_public_context_current_release_and_fresh_quorum() 
     let deadline = Instant::now() + Duration::from_secs(5);
     assert_eq!(
         store
-            .registry_deadline(&bootstrap, &config, provider, deadline, now)
+            .registry_deadline(&bootstrap, &config, provider, deadline)
             .unwrap(),
         deadline
     );
-    let capped = store
-        .registry_deadline(
-            &bootstrap,
-            &config,
-            provider,
-            Instant::now() + Duration::from_secs(600),
-            now,
-        )
-        .unwrap();
-    assert!(capped < Instant::now() + Duration::from_secs(61));
-    for now in [release.issued_at_ms - 1, release.expires_at_ms] {
-        assert!(
-            store
-                .registry_deadline(&bootstrap, &config, provider, deadline, now)
-                .is_err()
-        );
-    }
+    let longer = Instant::now() + Duration::from_secs(600);
+    assert_eq!(store.registry_deadline(&bootstrap, &config, provider, longer).unwrap(), longer);
+    assert!(store.registry_deadline(&bootstrap, &config, provider, Instant::now()).is_err());
     for mutation in 0..5 {
         let mut changed = config.clone();
         match mutation {
@@ -130,11 +106,8 @@ fn registry_requires_explicit_public_context_current_release_and_fresh_quorum() 
     );
     assert!(source.0.get() >= 3);
     assert!(!called.get());
-    release.serial += 1;
-    release.build_registry = None;
-    let without_registry = release_store
-        .authenticate(&trust(&key, 1), &signed(release, &checkpoint, &key), now)
-        .unwrap();
+    metadata_record.build_registry = None;
+    let without_registry = authenticated(metadata_record, &checkpoint);
     assert!(
         store
             .discover_build_provider(&without_registry, &config, provider, deadline)

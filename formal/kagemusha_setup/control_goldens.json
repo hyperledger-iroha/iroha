@@ -2,27 +2,27 @@
   "cases": {
     "0-contradictory": {
       "parameter_sha256": "4d0159c5fbee5bb133bae91a6f702d615cd16411cbd5c01e31ee3ade65be1c3e",
-      "proof_bytes": 1312,
-      "proof_sha256": "85df4c275b1b555c492b71ae140e6f814bf3a5e22456cad5abf511826a90b8c5"
+      "proof_bytes": 1376,
+      "proof_sha256": "eb232d05a440afbc0058df6e4f52858eee7add6322ed362783e428da85c88bdd"
     },
     "0-ordinary": {
       "parameter_sha256": "4d0159c5fbee5bb133bae91a6f702d615cd16411cbd5c01e31ee3ade65be1c3e",
-      "proof_bytes": 1312,
-      "proof_sha256": "a8ff84f607020083f94e50b4650cb5f24d68c9ee99ecf7dc7aaa92b2c8923ee5"
+      "proof_bytes": 1376,
+      "proof_sha256": "3afa3171dc73b774439892c64774a25b5548617b2adc8a8bfd68b99142fa4feb"
     },
     "1-contradictory": {
       "parameter_sha256": "69da1d3a88cd7a10442301722cec7ca5910ae533e72a74acba8f91d5445532f7",
-      "proof_bytes": 1312,
-      "proof_sha256": "98f325a94fbe0a05338f0f970593911b4b71d9fbe3edb80cfd3b1d0f745aea1a"
+      "proof_bytes": 1376,
+      "proof_sha256": "593bfa87e1c11ca548e49bae24f01f450b3f08e978070a5a6f889e8d8acd65e7"
     },
     "1-ordinary": {
       "parameter_sha256": "69da1d3a88cd7a10442301722cec7ca5910ae533e72a74acba8f91d5445532f7",
-      "proof_bytes": 1312,
-      "proof_sha256": "26d80838b44f3066b96c49800644eeef5405f8ee81f1710cd04396f10110efdf"
+      "proof_bytes": 1376,
+      "proof_sha256": "3930e6cbd5add6ea5e68880bf74e2af82c4553664a3c54ea0b1f2937a80c25dd"
     }
   },
-  "independent_output_review_sha256": "484c995168f24b3e28f684d36599e8ea32e96c8a9742c17d5b47c48c96b56418",
+  "diagnostic_refresh_review_sha256": "f143feb0ec1c29eec89d3a7424eaf1334a0a65eb548be70b746a2cd2d3553717",
   "schema": "kagemusha.setup.control-goldens.v1",
   "scope": "Deterministic counterfactual controls, not production proof vectors or distribution evidence",
-  "source_execution_sha256": "16be203eaa8c7d129dc7425ddcb02641a4d9c29bbf56288f34583938dc1db5ac"
+  "source_execution_sha256": "e730969c0164d83e48efc51723d4daf0fa637479da763c8617cc9743890d6171"
 }

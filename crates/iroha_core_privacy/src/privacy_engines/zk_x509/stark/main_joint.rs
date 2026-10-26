@@ -86,7 +86,7 @@ impl<'a> ZkX509MainCompositionPhaseV1<'a> {
     /// Build the original combined composition before CA working LDEs exist.
     /// Every actual ordinary registration uses the narrowed joint cache plan.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn commit_joint_oracles_v1<R: TryRngCore>(
+    pub(crate) fn commit_joint_oracles_v1<R: TryRng>(
         mut self,
         ca: &CaAwaitingMainAuxiliaryV1,
         auxiliary: JointAuxiliaryBindingV1,
@@ -768,7 +768,7 @@ pub fn main_joint_auxiliary_from_proofs_v1(
 /// Complete both original subproofs using one shared point and paired openings.
 /// Calling this function never changes the production activation policy.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub fn finish_joint_main_ca_v1<R: TryRngCore>(
+pub fn finish_joint_main_ca_v1<R: TryRng>(
     main: ZkX509MainCompositionPhaseV1<'_>,
     ca: CaAwaitingMainAuxiliaryV1,
     rng: &mut R,
@@ -800,7 +800,7 @@ pub fn finish_joint_main_ca_v1<R: TryRngCore>(
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Admit retained CA originals before allocating MAIN auxiliary replay and
     /// masks; the same owner is passed to every later joint phase.
-    pub(crate) fn bind_joint_credential_pre_aux_v1_with_rng<R: TryRngCore>(
+    pub(crate) fn bind_joint_credential_pre_aux_v1_with_rng<R: TryRng>(
         self,
         ca: &CaAwaitingMainAuxiliaryV1,
         rng: &mut R,

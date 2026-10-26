@@ -5,7 +5,7 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize, Value},
     to_bytes,
 };
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rand_distr::{Distribution, Normal};
 use std::{

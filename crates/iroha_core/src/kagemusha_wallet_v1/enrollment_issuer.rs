@@ -100,8 +100,7 @@ pub fn enrollment_issuer_journal_scope_v1(scope: [u8; 32]) -> Result<Vec<u8>> {
 
 fn random_nonce() -> Result<[u8; 32]> {
     let mut value = [0; 32];
-    rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut value)
-        .map_err(|_| Unavailable)?;
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut value).map_err(|_| Unavailable)?;
     if value == [0; 32] {
         return Err(Unavailable);
     }

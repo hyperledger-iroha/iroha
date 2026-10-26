@@ -42,7 +42,7 @@ use iroha_data_model::privacy::{
     IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1, IrohaJindoPolynomialCommitmentStatementV1,
     PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyStatementV1,
 };
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 /// Exact byte length of a canonical native Jindo proof.
@@ -348,7 +348,7 @@ pub fn commit_polynomial_v1<R>(
     rng: &mut R,
 ) -> Result<(PrivacyJindoLatticeCommitmentV1, JindoOpeningV1), JindoErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let polynomial = parse_polynomial(coefficients, 0)?;
     let mut rng = health_checked_jindo_rng_v1(rng)?;
@@ -359,7 +359,7 @@ pub(super) fn commit_polynomial_with_checked_rng_v1<R>(
     rng: &mut R,
 ) -> Result<(PrivacyJindoLatticeCommitmentV1, JindoOpeningV1), JindoErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     commit_parsed_polynomial_v1(parse_polynomial(coefficients, 0)?, rng)
 }
@@ -368,7 +368,7 @@ fn commit_parsed_polynomial_v1<R>(
     rng: &mut R,
 ) -> Result<(PrivacyJindoLatticeCommitmentV1, JindoOpeningV1), JindoErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let mut encoded = Zeroizing::new(Vec::with_capacity(JINDO_PARAMETERS_V1.rows + 1));
     for row in 0..JINDO_PARAMETERS_V1.rows {
@@ -417,7 +417,7 @@ pub fn prove_batched_evaluation_v1(
     openings: &[JindoOpeningV1],
     binding: &TranscriptBindingV1<'_>,
 ) -> Result<Vec<u8>, JindoErrorV1> {
-    let mut os_rng = rand_core_06::OsRng;
+    let mut os_rng = rand::rngs::SysRng;
     let mut rng = health_checked_jindo_rng_v1(&mut os_rng)?;
     prove_batched_evaluation_with_checked_rng_v1(
         statement,
@@ -435,7 +435,7 @@ pub(super) fn prove_batched_evaluation_with_checked_rng_v1<R>(
     rng: &mut R,
 ) -> Result<Vec<u8>, JindoErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let public = validate_statement_and_binding(statement, binding)?;
     require_exact_batch(witness_polynomials.len())?;

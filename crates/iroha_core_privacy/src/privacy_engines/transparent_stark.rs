@@ -21,7 +21,7 @@ use super::privacy_outer_hash::{
     PrivacyOuterDomainPrefixV1, PrivacyOuterDomainV1, PrivacyOuterFrameV1,
 };
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1, PrivacyProtocolIdV1};
-use rand::TryRngCore;
+use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -1227,7 +1227,7 @@ pub fn goldilocks_batch_invert_v1(
     Ok(())
 }
 /// Draw one unbiased canonical Goldilocks field element.
-pub fn random_goldilocks_v1<R: TryRngCore>(
+pub fn random_goldilocks_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
@@ -1241,7 +1241,7 @@ pub fn random_goldilocks_v1<R: TryRngCore>(
     Err(TransparentStarkErrorV1::RandomnessUnavailable)
 }
 /// Draw one uniform quartic-extension element, including zero.
-pub fn random_goldilocks_fp4_v1<R: TryRngCore>(
+pub fn random_goldilocks_fp4_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
     let mut coefficients = zeroize::Zeroizing::new([GoldilocksFieldV1::ZERO; 4]);
@@ -1253,7 +1253,7 @@ pub fn random_goldilocks_fp4_v1<R: TryRngCore>(
 }
 /// Draw one uniform nonzero quartic-extension element.
 #[cfg(test)]
-pub fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
+pub fn random_nonzero_goldilocks_fp4_v1<R: TryRng>(
     rng: &mut R,
 ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
     for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
@@ -1442,7 +1442,7 @@ impl Drop for ReplayableTraceMaskV1 {
 /// Streaming provers keep these few coefficients until post-query openings are reconstructed,
 /// instead of retaining the entire LDE column. Callers should drop them as soon as proof
 /// construction completes; [`Drop`] overwrites the backing allocation before release.
-pub fn sample_trace_mask_v1<R: TryRngCore>(
+pub fn sample_trace_mask_v1<R: TryRng>(
     mask_degree: usize,
     rng: &mut R,
 ) -> Result<ReplayableTraceMaskV1, TransparentStarkErrorV1> {
@@ -1463,7 +1463,7 @@ pub fn sample_trace_mask_v1<R: TryRngCore>(
 }
 /// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
 #[cfg(test)]
-pub fn masked_trace_lde_column_v1<R: TryRngCore>(
+pub fn masked_trace_lde_column_v1<R: TryRng>(
     base_column: &[GoldilocksFieldV1],
     base_log_size: u8,
     lde_log_size: u8,
@@ -2389,7 +2389,8 @@ pub fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4V1) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     const TEST_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
         TransparentStarkDigestContextV1::new(
             PrivacyProtocolIdV1::PqMaspStarkV1,
@@ -2503,13 +2504,14 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedRngError;
+    impl std::error::Error for InjectedRngError {}
     impl core::fmt::Display for InjectedRngError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected transparent-STARK RNG failure")
         }
     }
     struct FailingTryRng;
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = InjectedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedRngError)
@@ -2559,7 +2561,7 @@ mod tests {
         draws: usize,
         panic_on_failure: bool,
     }
-    impl TryRngCore for PartialMaskRng {
+    impl TryRng for PartialMaskRng {
         type Error = InjectedRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             unreachable!("field sampler requests bytes")
@@ -2637,27 +2639,33 @@ mod tests {
         assert_eq!(rng.draws, 2);
     }
     struct MaxValueRng;
-    impl RngCore for MaxValueRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::MAX
+    impl rand::TryRng for MaxValueRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::MAX)
         }
-        fn next_u64(&mut self) -> u64 {
-            u64::MAX
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::MAX)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0xff);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0xff);
+            })
         }
     }
     struct ZeroRng;
-    impl RngCore for ZeroRng {
-        fn next_u32(&mut self) -> u32 {
-            0
+    impl rand::TryRng for ZeroRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
         }
-        fn next_u64(&mut self) -> u64 {
-            0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            destination.fill(0);
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            Ok({
+                destination.fill(0);
+            })
         }
     }
     #[test]
@@ -2831,17 +2839,18 @@ mod tests {
                 assert!(product.0 < GOLDILOCKS_MODULUS_V1);
             }
         }
-        let mut rng = StdRng::from_seed([0x6D; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0x6D; 32]);
         for sample in 0..200_000 {
-            let value = (u128::from(rng.next_u64()) << 64) | u128::from(rng.next_u64());
+            let value = (u128::from(rng.try_next_u64().expect("test RNG draw succeeds")) << 64)
+                | u128::from(rng.try_next_u64().expect("test RNG draw succeeds"));
             let reduced = GoldilocksFieldV1::reduce(value);
             assert_eq!(
                 u128::from(reduced.0),
                 value % modulus,
                 "arbitrary reduction sample {sample}"
             );
-            let left = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
-            let right = rng.next_u64() % GOLDILOCKS_MODULUS_V1;
+            let left = rng.try_next_u64().expect("test RNG draw succeeds") % GOLDILOCKS_MODULUS_V1;
+            let right = rng.try_next_u64().expect("test RNG draw succeeds") % GOLDILOCKS_MODULUS_V1;
             let sum = GoldilocksFieldV1(left).add(GoldilocksFieldV1(right));
             let product = GoldilocksFieldV1(left).mul(GoldilocksFieldV1(right));
             assert_eq!(
@@ -3190,8 +3199,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(predicate_exhausted.state(), initial_state);
-        let mut first_rng = StdRng::from_seed([0x44; 32]);
-        let mut replay_rng = StdRng::from_seed([0x44; 32]);
+        let mut first_rng = ChaCha12Rng::from_seed([0x44; 32]);
+        let mut replay_rng = ChaCha12Rng::from_seed([0x44; 32]);
         assert_eq!(
             random_goldilocks_fp4_v1(&mut first_rng).expect("random Fp4"),
             random_goldilocks_fp4_v1(&mut replay_rng).expect("replayed random Fp4")
@@ -3329,10 +3338,10 @@ mod tests {
     #[test]
     fn masked_trace_lde_is_randomized_and_preserves_degree_capacity() {
         let base = (0..16).map(GoldilocksFieldV1).collect::<Vec<_>>();
-        let mut first_rng = StdRng::from_seed([0x11; 32]);
-        let mut second_rng = StdRng::from_seed([0x22; 32]);
+        let mut first_rng = ChaCha12Rng::from_seed([0x11; 32]);
+        let mut second_rng = ChaCha12Rng::from_seed([0x22; 32]);
         let first = masked_trace_lde_column_v1(&base, 4, 7, 7, &mut first_rng).expect("first mask");
-        let mut replay_rng = StdRng::from_seed([0x11; 32]);
+        let mut replay_rng = ChaCha12Rng::from_seed([0x11; 32]);
         let replay_mask = sample_trace_mask_v1(7, &mut replay_rng).expect("replayable mask");
         let replay = masked_trace_lde_column_with_mask_v1(&base, 4, 7, replay_mask.coefficients())
             .expect("replayed mask");

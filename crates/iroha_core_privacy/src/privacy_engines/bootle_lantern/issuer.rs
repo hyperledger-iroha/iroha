@@ -56,7 +56,8 @@ use iroha_data_model::{
         PrivacyStatementContextV1,
     },
 };
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -350,7 +351,7 @@ impl BootleLanternIssuerKeyPairV1 {
     ///
     /// Rejects a zero parameter identity, unavailable or unhealthy cryptographic randomness,
     /// key-generation exhaustion, or a public-key structural invariant failure.
-    pub fn generate_with_rng_v1<R: CryptoRng + RngCore>(
+    pub fn generate_with_rng_v1<R: TryCryptoRng + TryRng>(
         issuer_parameter_id: PrivacyParameterIdV1,
         rng: &mut R,
     ) -> Result<Self, BootleLanternIssuanceErrorV1> {
@@ -425,7 +426,7 @@ impl BootleLanternIssuerKeyPairV1 {
 ///
 /// Rejects an invalid key/policy/scope, zero requester authorization, an invalid or overlong
 /// lifetime, unhealthy randomness, identifier collision exhaustion, or any persistence failure.
-pub fn issuer_authorize_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
+pub fn issuer_authorize_blind_issuance_with_rng_v1<R: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -488,7 +489,9 @@ pub fn issuer_authorize_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
 ///
 /// Rejects an invalid key, policy, context, principal binding, lifetime, unhealthy randomness, a
 /// zero identifier draw, or an inconsistent canonical authorization.
-pub fn issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1<R: CryptoRng + RngCore>(
+pub fn issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1<
+    R: TryCryptoRng + TryRng,
+>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -545,7 +548,7 @@ pub fn issuer_prepare_blind_issuance_authorization_candidate_v1(
     issued_at_height: u64,
     expires_at_height: u64,
 ) -> Result<BootleLanternIssuanceAuthorizationV1, BootleLanternIssuanceErrorV1> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
         issuer,
         context,
@@ -1146,7 +1149,7 @@ impl BootleLanternCredentialV1 {
 /// Rejects an invalid/non-active policy or scope, unavailable/unhealthy
 /// randomness, holder-sampler exhaustion, matrix expansion, invalid request
 /// authorization, transcript construction, or P1 proof failure.
-pub fn holder_prepare_blind_issuance_with_rng_v1<R: CryptoRng + RngCore>(
+pub fn holder_prepare_blind_issuance_with_rng_v1<R: TryCryptoRng + TryRng>(
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
     policy: &BootleLanternIssuerPolicyV1,
@@ -1260,7 +1263,7 @@ pub fn holder_prepare_blind_issuance_v1(
     ),
     BootleLanternIssuanceErrorV1,
 > {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     holder_prepare_blind_issuance_with_rng_v1(
         context,
         canonical_genesis_hash,
@@ -1336,7 +1339,9 @@ pub fn issuer_validate_blind_issuance_request_for_issuer_encoded_v1(
 ///
 /// Rejects any non-canonical wire, key/policy/context/authorization/request substitution, invalid
 /// P1 proof, unhealthy randomness, sampling failure, or response invariant failure.
-pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<R: CryptoRng + RngCore>(
+pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<
+    R: TryCryptoRng + TryRng,
+>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1373,7 +1378,7 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1<R: Cryp
 }
 /// Revalidate and issue one claimed request with fresh operating-system randomness.
 ///
-/// This production provider entrypoint creates a new `OsRng` value for every
+/// This production provider entrypoint creates a new `SysRng` value for every
 /// operation. All canonical/key/policy/P1 checks still run before the generic
 /// implementation first consumes randomness.
 ///
@@ -1390,7 +1395,7 @@ pub fn issuer_issue_validated_blind_issuance_request_encoded_v1(
     request_bytes: &[u8],
     current_height: u64,
 ) -> Result<BootleLanternBlindIssuanceResponseV1, BootleLanternIssuanceErrorV1> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     issuer_issue_validated_blind_issuance_request_encoded_with_rng_v1(
         issuer,
         context,
@@ -1509,7 +1514,7 @@ fn validate_encoded_request_v1(
 /// genesis, authorization, request, height, or proof substitution; replay-store failures; unhealthy
 /// randomness; sampling exhaustion; and response-invariant failures. A completed retry returns its
 /// exact cached response without consuming the supplied RNG.
-pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: CryptoRng + RngCore>(
+pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1544,7 +1549,7 @@ pub fn issuer_blind_issue_once_encoded_with_rng_v1<R: CryptoRng + RngCore>(
 /// completed retry of the same request returns the exact cached `ILR1` response without touching
 /// either RNG. Once a fresh claim succeeds, every later failure is terminal and can never reset the
 /// authorization to fresh.
-pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
+pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
     context: &PrivacyStatementContextV1,
     canonical_genesis_hash: [u8; 32],
@@ -1646,7 +1651,7 @@ pub(crate) fn issuer_blind_issue_once_with_rng_v1<R: CryptoRng + RngCore>(
     }
     Ok(response)
 }
-fn issue_claimed_request_v1<RTag: CryptoRng + RngCore, RPreimage: CryptoRng + RngCore>(
+fn issue_claimed_request_v1<RTag: TryCryptoRng + TryRng, RPreimage: TryCryptoRng + TryRng>(
     issuer: &BootleLanternIssuerKeyPairV1,
     matrix_seed: super::transcript::MatrixSeedV1,
     scope: &BootleLanternCredentialScopeV1,
@@ -1697,7 +1702,7 @@ fn sample_preimage_bounded_v1<T, R, Sample>(
     mut sample: Sample,
 ) -> Result<T, BootleLanternIssuanceErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
     Sample: FnMut(&[u8; 56]) -> Option<T>,
 {
     let mut checked_rng = HealthCheckedCryptoRngV1::new(rng).map_err(map_randomness_error_v1)?;
@@ -1999,7 +2004,7 @@ fn masked_target_v1(
     }
     Ok(target)
 }
-fn sample_tag_v1<R: CryptoRng + RngCore>(
+fn sample_tag_v1<R: TryCryptoRng + TryRng>(
     rng: &mut R,
 ) -> Result<Zeroizing<[ApplicationPolynomialV1; 8]>, BootleLanternIssuanceErrorV1> {
     let mut bytes = Zeroizing::new([0_u8; 64]);
@@ -2467,7 +2472,7 @@ mod tests {
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
         },
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     use std::sync::{
         OnceLock,
         atomic::{AtomicU32, Ordering},
@@ -2517,22 +2522,24 @@ mod tests {
             Self { state: seed }
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_le_bytes(bytes)
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_le_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_le_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_le_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            self.try_fill_bytes(destination)
-                .expect("infallible deterministic test RNG");
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 self.state ^= self.state << 13;
                 self.state ^= self.state >> 7;
@@ -2542,39 +2549,37 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
-        fn fill_bytes(&mut self, _: &mut [u8]) {
-            panic!("issuer RNG was touched before a successful fresh claim")
-        }
-        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
             panic!("issuer RNG was touched before a successful fresh claim")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     struct FailingRng;
-    impl RngCore for FailingRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for FailingRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("fallible path must use try_fill_bytes")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("fallible path must use try_fill_bytes")
         }
-        fn fill_bytes(&mut self, _: &mut [u8]) {
-            panic!("fallible path must use try_fill_bytes")
-        }
-        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), RngError> {
-            Err(RngError::new("injected issuer RNG failure"))
+
+        fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
+            Err(RngError::other("injected issuer RNG failure"))
         }
     }
-    impl CryptoRng for FailingRng {}
+    impl rand::TryCryptoRng for FailingRng {}
     struct IssuanceFixture {
         issuer: BootleLanternIssuerKeyPairV1,
         context: PrivacyStatementContextV1,

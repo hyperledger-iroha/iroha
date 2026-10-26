@@ -97,6 +97,7 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("norito", "norito_regen_goldens"),
         ("norito_codegen_exporter", "norito-schema-inventory"),
         ("norito_codegen_exporter", "norito_codegen_exporter"),
+        ("oss-scanner-build-features", "oss-scanner-build-features"),
         ("soradns-resolver", "soradns_transparency_report"),
         ("soradns-resolver", "soradns_transparency_tail"),
         ("sorafs_car", "da_reconstruct"),

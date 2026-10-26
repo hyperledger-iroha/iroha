@@ -236,9 +236,11 @@ mod tests {
         },
     };
     use p256::{
-        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
+        FieldBytes, NistP256, ProjectivePoint, Scalar, Sec1Point,
         ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner as _},
-        elliptic_curve::{PrimeField as _, group::Group as _, sec1::ToEncodedPoint as _},
+        elliptic_curve::{
+            PrimeField as _, group::Group as _, hazmat::FieldArithmetic, sec1::ToSec1Point as _,
+        },
     };
     use thiserror::Error;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -311,10 +313,15 @@ mod tests {
             self.scalar_values.push(value);
             Ok(assigned)
         }
-        fn base_field(&self, value: BaseValue) -> Result<FieldElement, TestError> {
-            Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(
-                self.base_values[value.0],
-            )))
+        fn base_field(
+            &self,
+            value: BaseValue,
+        ) -> Result<<NistP256 as FieldArithmetic>::FieldElement, TestError> {
+            Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                <NistP256 as FieldArithmetic>::FieldElement::from_bytes(&FieldBytes::from(
+                    self.base_values[value.0],
+                )),
+            )
             .ok_or(TestError::NonCanonical)
         }
         fn scalar_field(&self, value: ScalarValue) -> Result<Scalar, TestError> {
@@ -406,8 +413,10 @@ mod tests {
             Ok(())
         }
         fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
-            let inverse = Option::<FieldElement>::from(self.base_field(value)?.invert())
-                .ok_or(TestError::ZeroInverse)?;
+            let inverse = Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                self.base_field(value)?.invert(),
+            )
+            .ok_or(TestError::ZeroInverse)?;
             let inverse = self.push_base(inverse.to_bytes().into())?;
             let product = self.multiply_v1(value, inverse)?;
             let one = self.constant_v1({
@@ -525,7 +534,7 @@ mod tests {
                     z: circuit.push_base([0; 32]).expect("zero"),
                 };
             }
-            let encoded = point.to_affine().to_encoded_point(false);
+            let encoded = point.to_affine().to_sec1_point(false);
             let mut x = [0_u8; 32];
             let mut y = [0_u8; 32];
             x.copy_from_slice(encoded.x().expect("x"));
@@ -540,7 +549,7 @@ mod tests {
         })
     }
     fn witness_for(key: &SigningKey, digest: [u8; 32], signature: Signature) -> P256EcdsaWitnessV1 {
-        let encoded = key.verifying_key().to_encoded_point(false);
+        let encoded = key.verifying_key().to_sec1_point(false);
         let mut public_key_x_be = [0_u8; 32];
         let mut public_key_y_be = [0_u8; 32];
         public_key_x_be.copy_from_slice(encoded.x().expect("x"));
@@ -586,7 +595,7 @@ mod tests {
         let key = signing_key(7);
         let digest = core::array::from_fn(|index| (index as u8).wrapping_mul(29).wrapping_add(3));
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let witness = witness_for(&key, digest, signature);
         assert_eq!(
             execute(witness, P256EcdsaRoleV1::WalletOwnership),
@@ -608,7 +617,7 @@ mod tests {
                     .rotate_left((index % 8) as u32);
             }
             let signature: Signature = key.sign_prehash(&digest).expect("prehash signature");
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             let circuit = execute(
                 witness_for(&key, digest, signature),
                 P256EcdsaRoleV1::WalletOwnership,
@@ -634,7 +643,7 @@ mod tests {
         let key = signing_key(29);
         let digest = [0xa5_u8; 32];
         let low: Signature = key.sign_prehash(&digest).expect("signature");
-        let low = low.normalize_s().unwrap_or(low);
+        let low = low.normalize_s();
         let high = Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes())
             .expect("high-s representative");
         execute(
@@ -656,14 +665,14 @@ mod tests {
         let key = signing_key(41);
         let digest = [0x3c_u8; 32];
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let witness = witness_for(&key, digest, signature);
         let mut wrong_digest = witness;
         wrong_digest.digest_be[0] ^= 1;
         assert!(execute(wrong_digest, P256EcdsaRoleV1::WalletOwnership).is_err());
         let other_key = signing_key(43);
         let mut wrong_key = witness;
-        let other = other_key.verifying_key().to_encoded_point(false);
+        let other = other_key.verifying_key().to_sec1_point(false);
         wrong_key
             .public_key_x_be
             .copy_from_slice(other.x().expect("x"));
@@ -701,7 +710,7 @@ mod tests {
         let key = signing_key(53);
         let digest = [0xff_u8; 32];
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let circuit = execute(
             witness_for(&key, digest, signature),
             P256EcdsaRoleV1::WalletOwnership,
@@ -719,7 +728,7 @@ mod tests {
                 assert_eq!(circuit.base_values[point.z.0], [0; 32]);
                 continue;
             }
-            let encoded = EncodedPoint::from_affine_coordinates(
+            let encoded = Sec1Point::from_affine_coordinates(
                 &FieldBytes::from(circuit.base_values[point.x.0]),
                 &FieldBytes::from(circuit.base_values[point.y.0]),
                 false,
@@ -728,7 +737,7 @@ mod tests {
                 encoded,
                 (ProjectivePoint::GENERATOR * Scalar::from(multiple as u64))
                     .to_affine()
-                    .to_encoded_point(false)
+                    .to_sec1_point(false)
             );
         }
     }

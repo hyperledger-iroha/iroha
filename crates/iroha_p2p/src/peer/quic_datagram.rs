@@ -331,11 +331,14 @@ mod tests {
             rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
                 .map_err(std::io::Error::other)?;
         let private_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-        let mut tls =
-            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                .with_no_client_auth()
-                .with_single_cert(vec![cert.der().clone().into_owned()], private_key.into())
-                .map_err(std::io::Error::other)?;
+        let mut tls = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .map_err(std::io::Error::other)?
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone().into_owned()], private_key.into())
+        .map_err(std::io::Error::other)?;
         tls.max_early_data_size = 0;
         tls.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
         let crypto = QuicServerConfig::try_from(Arc::new(tls)).map_err(std::io::Error::other)?;
@@ -351,10 +354,14 @@ mod tests {
         let mut client_endpoint = Endpoint::client("127.0.0.1:0".parse().expect("test address"))?;
         let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> =
             Arc::new(crate::transport::CertificateKeyProofVerifier::unpinned());
-        let mut client_tls = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
+        let mut client_tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(std::io::Error::other)?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
         client_tls.enable_early_data = false;
         client_tls.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
         let client_crypto =
@@ -487,7 +494,11 @@ mod tests {
         };
         let budget = SharedByteBudget::new(1024, 0).expect("test byte budget");
         ingress
-            .authenticate(InboundSourceByteBudget::shared_only(Arc::clone(&budget)))
+            .authenticate(InboundSourceByteBudget {
+                shared: Arc::clone(&budget),
+                peer_reserve: None,
+                decode_scratch: SharedByteBudget::new(1024, 0).expect("decode scratch owner"),
+            })
             .await
             .expect("activate ingress");
         let charge = quic_datagram_queue_charge(6).expect("small charge");
@@ -542,7 +553,11 @@ mod tests {
         let mut ingress = QuicDatagramIngress::spawn(&server, 32);
         let budget = SharedByteBudget::new(1024, 0).expect("test byte budget");
         ingress
-            .authenticate(InboundSourceByteBudget::shared_only(budget))
+            .authenticate(InboundSourceByteBudget {
+                shared: budget,
+                peer_reserve: None,
+                decode_scratch: SharedByteBudget::new(1024, 0).expect("decode scratch owner"),
+            })
             .await
             .expect("activate ingress after draining pre-authentication traffic");
 

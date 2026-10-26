@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use ff::Field;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, PastaField};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 use super::*;
 use crate::{

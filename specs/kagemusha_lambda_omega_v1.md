@@ -60,7 +60,7 @@ record.
 
 | Constraint | Met by | Status |
 |---|---|---|
-| Two-second p95 to durable completion; Ω verified on the path unless pre-verified | Matching native/SDK/device campaign, initially Pixel 6 and the connected iPhone 17 Pro Max | open; the estimates in §4 do not qualify durable completion |
+| Two-second p95 to durable completion; Ω verified on the path unless pre-verified | Matching native/SDK/device campaign, initially Pixel 6 and the specified iPhone 16 Pro Max | open; the estimates in §4 do not qualify durable completion |
 | R9: Ω + largest σ_send ≤ 10,034 − 1,394 = 8,640 B | Independent role caps σ ≤ 3,520 B and Ω ≤ 5,120 B, plus the checked joint bound (§3.5) | model/SDK boundary rules implemented; current candidate validation and genuine complete-catalog artifact qualification are open |
 | Credited::Status ≤ 10,034 B | Fixed status overhead 2,188 B plus Ω ≤ 5,120 B gives at most 7,308 B; the carrier-derived 7,846 B budget does not replace the Ω role cap | envelope arithmetic [C]; genuine artifact qualification open |
 | Fold peak RAM ≤ 1 GiB | §6: one prover at a time, ≤ 0.85 GiB per sub-proof plus ≤ 0.15 GiB wallet core | estimate only; current candidate measurement remains open (G3.6, G3.7, G4.6, G5.3) |

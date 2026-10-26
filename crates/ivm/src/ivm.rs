@@ -61,7 +61,8 @@ use iroha_allocation::AllocationBudget;
 use likely_stable::unlikely;
 #[cfg(feature = "beep")]
 use rodio::{
-    OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
+    DeviceSinkBuilder, DeviceSinkError, MixerDeviceSink, Player, Source, mixer::Mixer,
+    source::SineWave,
 };
 use sha2::{Digest, Sha256};
 #[cfg(feature = "beep")]
@@ -94,7 +95,7 @@ const WIDE_INSTRUCTION_LEN: u64 = 4;
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 #[cfg(feature = "beep")]
 fn with_audio_mixer(
-    open_stream: impl FnOnce() -> Result<OutputStream, StreamError>,
+    open_stream: impl FnOnce() -> Result<MixerDeviceSink, DeviceSinkError>,
     play: impl FnOnce(&Mixer),
 ) {
     if let Ok(stream) = open_stream() {
@@ -1487,7 +1488,7 @@ impl IVM {
         fn play_element(mixer: &Mixer, note: Note, beats: f32) {
             let dur_ms = (BEAT_MS as f32 * beats) as u64;
             if let Some(f) = note.freq() {
-                let sink = Sink::connect_new(mixer);
+                let sink = Player::connect_new(mixer);
                 let src = SineWave::new(f as f32)
                     .take_duration(Duration::from_millis(dur_ms))
                     .amplify(0.20);
@@ -1560,7 +1561,7 @@ impl IVM {
                 play_element(mixer, n, b);
             }
         }
-        with_audio_mixer(OutputStreamBuilder::open_default_stream, play_kagome);
+        with_audio_mixer(DeviceSinkBuilder::open_default_sink, play_kagome);
     }
     fn startup_banner(
         core_count: usize,
@@ -6498,7 +6499,7 @@ mod tests {
     fn unavailable_audio_output_is_safe() {
         let played = Cell::new(false);
         with_audio_mixer(
-            || Err(StreamError::NoDevice),
+            || Err(DeviceSinkError::NoDevice),
             |_| {
                 played.set(true);
             },

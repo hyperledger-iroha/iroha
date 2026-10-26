@@ -130,7 +130,7 @@ impl Source {
                 _ => Role::RegulatoryPolicy,
             },
             key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-                signing.verifying_key().to_encoded_point(false).as_bytes(),
+                signing.verifying_key().to_sec1_point(false).as_bytes(),
             )
             .unwrap(),
             serial: 99,

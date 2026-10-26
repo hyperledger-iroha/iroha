@@ -5,7 +5,7 @@ use norito::{
     DecodeLimits,
     json::{self, Value},
 };
-use rand::{CryptoRng, RngCore};
+use rand::{CryptoRng, Rng};
 use soranet_pq::MlDsaSuite;
 use std::{
     collections::{HashSet, TryReserveError},
@@ -968,7 +968,7 @@ pub enum TokenToolError {
     DuplicateRevocation { index: usize, token_id_hex: String },
 }
 /// Mint a token bundle using the provided RNG.
-pub fn mint_token<R: RngCore + CryptoRng>(
+pub fn mint_token<R: Rng + CryptoRng>(
     request: &MintRequest<'_>,
     rng: &mut R,
 ) -> Result<TokenBundle, TokenToolError> {

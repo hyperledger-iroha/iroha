@@ -243,16 +243,21 @@ async fn committed_retry_revalidates_expiry_and_current_signature_policy() {
         Algorithm::Secp256k1,
     ])
     .expect("explicit committed policy excludes this Ed25519 signer");
-    let mut parameters = app.state.world.parameters.block();
-    parameters
-        .get_mut()
+    let mut world = app.state.world.block();
+    let mut parameter_update = world.transaction_without_telemetry(
+        iroha_config::parameters::actual::LaneConfig::default(),
+        0,
+    );
+    parameter_update
+        .parameters_mut_for_testing()
         .set_parameter(
             policy
                 .into_parameter()
                 .expect("canonical replacement policy"),
         )
         .expect("replace original committed policy");
-    parameters.commit();
+    parameter_update.apply();
+    world.commit();
     let error = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect_err("committed identity cannot bypass the current signing policy");

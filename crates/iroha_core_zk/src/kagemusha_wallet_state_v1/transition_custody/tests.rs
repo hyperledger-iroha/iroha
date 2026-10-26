@@ -186,10 +186,8 @@ fn setup_quote(source: &FrozenTransition) -> KagemushaWalletRequestV1 {
         receiver_credential: local,
         certificates,
         fee_schedule: KagemushaWalletFeeScheduleSlotV1::None,
-        signature: KagemushaDeviceSignatureV1::from_raw_bytes(
-            &signature.normalize_s().unwrap_or(signature).to_bytes(),
-        )
-        .unwrap(),
+        signature: KagemushaDeviceSignatureV1::from_raw_bytes(&signature.normalize_s().to_bytes())
+            .unwrap(),
     };
     let scheme: KagemushaWalletSchemeV1 = fixture("KagemushaWalletSchemeV1");
     request.verify_open(&scheme).unwrap();
@@ -212,10 +210,8 @@ fn begin_setup_request(
     let plan = wallet.setup([74; 32], &action).unwrap();
     request.body.nonce = plan.nonce;
     let signature: Signature = signer(&source.credential).sign(&request.body.signing_message());
-    request.signature = KagemushaDeviceSignatureV1::from_raw_bytes(
-        &signature.normalize_s().unwrap_or(signature).to_bytes(),
-    )
-    .unwrap();
+    request.signature =
+        KagemushaDeviceSignatureV1::from_raw_bytes(&signature.normalize_s().to_bytes()).unwrap();
     request.validate_open().unwrap();
     (action, plan, request)
 }

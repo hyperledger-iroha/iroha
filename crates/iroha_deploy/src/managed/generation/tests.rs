@@ -243,6 +243,7 @@ fn staged_service_authorities_publish_exact_identity_and_private_custody() {
     let pin = store::pin_binary(&binary).unwrap();
     let mut request = LocalnetRequest::new(binary.clone(), binary);
     request.name = "native-authorities".into();
+    request.service_profile = crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities;
     assert_eq!(
         request.service_profile,
         crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities

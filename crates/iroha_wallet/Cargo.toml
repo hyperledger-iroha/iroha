@@ -25,10 +25,10 @@ norito = { workspace = true, default-features = false, features = ["json"] }
 eyre = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
-reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
 scrypt = { workspace = true }
 sorafs_manifest = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 toml = { workspace = true }
 url = { workspace = true }
 zeroize = { workspace = true }

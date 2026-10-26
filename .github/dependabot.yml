@@ -40,6 +40,12 @@ updates:
     target-branch: "main"
     directories:
       - /
+      - /fuzz
+      - /crates/fastpq_prover/fuzz
+      - /crates/iroha_parliament_ballot_proof/fuzz
+      - /crates/ivm/fuzz
+      - /crates/norito/fuzz
+      - /tools/soranet-handshake-harness/fuzz
     schedule:
       interval: "daily"
     commit-message:

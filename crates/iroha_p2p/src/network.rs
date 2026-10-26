@@ -10622,10 +10622,14 @@ mod accept_stream_tests {
 
         let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap())
             .expect("create QUIC client endpoint");
-        let mut crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-            .with_no_client_auth();
+        let mut crypto = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("test TLS provider")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+        .with_no_client_auth();
         crypto.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
         let mut client_config = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
@@ -10798,11 +10802,14 @@ mod accept_stream_tests {
             alpn_protocols: Vec<Vec<u8>>,
         ) -> std::io::Result<()> {
             let tcp = tokio::net::TcpStream::connect(addr).await?;
-            let mut client_cfg =
-                ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-                    .with_no_client_auth();
+            let mut client_cfg = ClientConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(std::io::Error::other)?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+            .with_no_client_auth();
             client_cfg.alpn_protocols = alpn_protocols;
             let connector = TlsConnector::from(Arc::new(client_cfg));
             let server_name = rustls::pki_types::ServerName::try_from("iroha-tls")
@@ -11124,10 +11131,14 @@ mod accept_stream_tests {
                 panic!("quic endpoint failed: {err:?}");
             }
         };
-        let mut crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
-            .with_no_client_auth();
+        let mut crypto = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("test TLS provider")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+        .with_no_client_auth();
         crypto.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
         let mut client_config = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
@@ -11439,10 +11450,14 @@ where
     let cert_der = cert.der().clone().into_owned();
     let transport_binding = crate::transport::certificate_fingerprint(cert_der.as_ref());
     let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-    let mut tls = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(vec![cert_der], priv_key.into())
-        .map_err(|e| Error::from(std::io::Error::other(format!("rustls server config: {e}"))))?;
+    let mut tls = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])
+    .map_err(std::io::Error::other)?
+    .with_no_client_auth()
+    .with_single_cert(vec![cert_der], priv_key.into())
+    .map_err(|e| Error::from(std::io::Error::other(format!("rustls server config: {e}"))))?;
     // Signed application authentication runs after QUIC setup, so replayable
     // 0-RTT data is never accepted on the P2P transport.
     tls.max_early_data_size = 0;
@@ -11933,11 +11948,14 @@ where
         rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
     )
     .clone_key();
-    let mut server_cfg =
-        rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, priv_key)
-            .map_err(|e| std::io::Error::other(format!("tls config: {e}")))?;
+    let mut server_cfg = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])
+    .map_err(std::io::Error::other)?
+    .with_no_client_auth()
+    .with_single_cert(cert_chain, priv_key)
+    .map_err(|e| std::io::Error::other(format!("tls config: {e}")))?;
     server_cfg.alpn_protocols = vec![crate::transport::P2P_ALPN.to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_cfg));
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -69,13 +69,19 @@ store. `down` retains the ledger; `localnet reset local` deliberately retires it
 default localnet when no context has been selected. Use `context list`,
 `context show`, or `context use NAME` to inspect or select retained environments.
 
+The default network starts four validators and funds a developer account.
+Local storage and package-registry services are explicit:
+`kagami localnet up registry --with-storage`. This creates and selects a separate
+network; an existing network always retains its original profile.
+
 For contracts declaring `hajimari`/`始まり`, the deployment result includes the
 canonical hook name and parameter types. Deployment does not invoke that hook;
 run it before other calls or views if it has not already succeeded. Repeat and
 resume results do not infer its current state from the artifact.
 
 `kagami package publish .` explicitly publishes a Musubi package using the retained generated
-developer client and its `dev.universal` namespace intent. Begin may start the default localnet;
+developer client and its `dev.universal` namespace intent. Select a network created with
+`--with-storage` for local publication;
 `--resume OPERATION_ID` and `--recover OPERATION_ID` require its existing selected context.
 An explicit member manifest or directory selects that member; `--package dev.universal/NAME`
 must match it. A workspace-root input keeps declared defaults and explicit package selection.
@@ -202,6 +208,8 @@ into the output directory.
   Applied evidence and artifact/alias readback before reporting completion.
 - `--resume JOURNAL` recovers the original operation without rebuilding or signing
   replacements. Identical repeated deployments reconcile their retained operation.
+- `kagami contract saved` lists each alias's resumable journal and whether it applied,
+  without starting validators or signing; Mochi's Resume card shows the same list.
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use

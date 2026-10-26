@@ -105,16 +105,14 @@ pub(super) fn signing_key(seed: u8) -> SigningKey {
 
 /// Canonical public key of `key`.
 pub(super) fn public_key(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-    KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
-    )
-    .expect("public key")
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(key.verifying_key().to_sec1_point(false).as_bytes())
+        .expect("public key")
 }
 
 /// Low-S canonical signature of `message` by `key`.
 pub(super) fn low_s_signature(key: &SigningKey, message: &[u8]) -> KagemushaDeviceSignatureV1 {
     let signature: Signature = key.sign(message);
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     KagemushaDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_slice()).expect("signature")
 }
 
@@ -845,8 +843,9 @@ impl KagemushaWalletPlatformV1 for FakePlatformV1 {
                 .ok_or(KagemushaWalletUnavailableV1::KeyUnusable)?;
             // Randomized: a second signature over the same body differs, so byte-identical
             // retries can only come from retained records.
-            let signature: Signature =
-                key.sign_with_rng(&mut rand_core_06::OsRng, message.as_bytes());
+            let signature: Signature = key
+                .try_sign_with_rng(&mut rand::rngs::SysRng, message.as_bytes())
+                .map_err(|_| KagemushaWalletUnavailableV1::KeyUnusable)?;
             Ok(KagemushaWalletPlatformSignatureV1::Der(
                 signature.to_der().as_bytes().to_vec(),
             ))

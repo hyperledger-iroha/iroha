@@ -99,10 +99,10 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1> {
     }
 }
 fn fresh_grant_issuance_nonce() -> Result<[u8; 32], EvidenceViewerErrorV1> {
-    use rand::TryRngCore as _;
+    use rand::TryRng as _;
     let mut nonce = [0; 32];
     for _ in 0..4 {
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut nonce)
             .map_err(|_| EvidenceViewerErrorV1::RuntimeUnavailable)?;
         if !is_zero_digest(nonce) {

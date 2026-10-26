@@ -2531,10 +2531,9 @@ fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        catalog_commitment,
+        catalog_commitment.as_slice(),
         iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::canonical()
-            .digest()
-            .to_le_bytes()
+            .as_bytes()
     );
     let details = openapi_operation(&document, "/v1/pipeline/transactions/details", "post");
     assert_eq!(

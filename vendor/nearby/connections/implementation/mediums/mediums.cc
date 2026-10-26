@@ -1,0 +1,71 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "connections/implementation/mediums/mediums.h"
+
+#include <memory>
+
+#include "connections/implementation/mediums/awdl/awdl_interface.h"
+#include "connections/implementation/mediums/ble.h"
+#include "connections/implementation/mediums/bluetooth/bluetooth_classic_interface.h"
+#include "connections/implementation/mediums/bluetooth_radio.h"
+#ifndef NO_WEBRTC
+#include "connections/implementation/mediums/webrtc/webrtc_impl.h"
+#endif
+#include "connections/implementation/mediums/webrtc.h"
+#include "connections/implementation/mediums/wifi.h"
+#include "connections/implementation/mediums/wifi_aware/wifi_aware_interface.h"
+#include "connections/implementation/mediums/wifi_direct/wifi_direct_interface.h"
+#include "connections/implementation/mediums/wifi_hotspot/wifi_hotspot.h"
+#include "connections/implementation/mediums/wifi_lan.h"
+
+namespace nearby {
+namespace connections {
+
+Mediums::Mediums()
+    : bluetooth_classic_(CreateBluetoothClassic(bluetooth_radio_)),
+      wifi_aware_(CreateWifiAware()),
+      wifi_direct_(CreateWifiDirect()),
+#ifndef NO_WEBRTC
+      webrtc_(std::make_unique<mediums::WebRtcImpl>()),
+#else
+      webrtc_(std::make_unique<mediums::WebRtc>()),
+#endif
+      awdl_(CreateAwdl()) {
+}
+
+BluetoothRadio& Mediums::GetBluetoothRadio() { return bluetooth_radio_; }
+
+BluetoothClassicInterface& Mediums::GetBluetoothClassic() {
+  return *bluetooth_classic_;
+}
+
+Ble& Mediums::GetBle() { return ble_; }
+
+Wifi& Mediums::GetWifi() { return wifi_; }
+
+WifiLan& Mediums::GetWifiLan() { return wifi_lan_; }
+
+WifiAwareInterface& Mediums::GetWifiAware() { return *wifi_aware_; }
+
+WifiHotspot& Mediums::GetWifiHotspot() { return wifi_hotspot_; }
+
+WifiDirectInterface& Mediums::GetWifiDirect() { return *wifi_direct_; }
+
+mediums::WebRtc& Mediums::GetWebRtc() { return *webrtc_; }
+
+AwdlInterface& Mediums::GetAwdl() { return *awdl_; }
+
+}  // namespace connections
+}  // namespace nearby

@@ -44,7 +44,7 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::json::Json;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
-use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -4209,7 +4209,10 @@ async fn await_worker_shutdown_with_timeout(
 }
 fn seeded_rng_from_seed(seed: Option<u64>) -> Result<StdRng> {
     seed.map_or_else(
-        || StdRng::try_from_os_rng().wrap_err("failed to seed Izanami chaos RNG from OS"),
+        || {
+            StdRng::try_from_rng(&mut rand::rngs::SysRng)
+                .wrap_err("failed to seed Izanami chaos RNG from OS")
+        },
         |seed| Ok(StdRng::seed_from_u64(seed)),
     )
 }

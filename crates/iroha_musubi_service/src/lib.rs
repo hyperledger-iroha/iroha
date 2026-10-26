@@ -3812,7 +3812,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         timeout: Duration,
     ) -> Result<Self, MusubiPublicationRuntimeTransportErrorV1> {
         Self::validate_configuration(&publisher, &authorization_signer, timeout)?;
-        let http = HttpClient::builder()
+        let http = iroha::http::tls::configure_blocking_client(HttpClient::builder())
             .https_only(true)
             .no_proxy()
             .redirect(RedirectPolicy::none())

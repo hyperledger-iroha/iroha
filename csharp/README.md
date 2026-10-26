@@ -1,6 +1,6 @@
 # Hyperledger Iroha SDK for .NET
 
-The C# SDK is the typed .NET 8 client for Hyperledger Iroha 3. This first-release
+The C# SDK is the typed .NET 10 client for Hyperledger Iroha 3. This first-release
 surface exposes the V1 protocol directly and removes pre-release wrappers, fallback
 codecs, compatibility modes, and deprecated transport APIs. Parser vocabulary shared
 with other SDKs changes only through coordinated cross-SDK updates.
@@ -27,7 +27,7 @@ field and the `TriggerId`/`Json` newtype fields; transaction metadata uses that 
 
 ## Requirements
 
-- .NET SDK 8.0.426, as pinned by `global.json`
+- .NET SDK 10.0.402, as pinned by `global.json`; consumers require .NET 10 or newer
 - A Torii endpoint
 - The exact genesis-derived `NetworkId` for authenticated requests
 - A canonical, domainless I105 account ID and its 32-byte Ed25519 seed for signing
@@ -385,7 +385,7 @@ selector. Microsoft.Testing.Platform ignores the VSTest `dotnet test --filter`
 and `--logger` switches. From the same `csharp/` directory after the build above:
 
 ```bash
-dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Explorer*' -noLogo -noColor
+dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net10.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Explorer*' -noLogo -noColor
 ```
 
 The selector matches the fully qualified method name. Use `Debug` in the artifact
@@ -516,7 +516,7 @@ operations in the same order. The shared fixtures
 the Petal tests through the same built xUnit v3 runner:
 
 ```bash
-dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Petal*' -noLogo -noColor
+dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net10.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Petal*' -noLogo -noColor
 ```
 
 ## Local confidential wallet proofs

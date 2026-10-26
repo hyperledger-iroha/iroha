@@ -4,7 +4,10 @@
 //! parity checks. Repository-facing command wrappers should delegate here so
 //! every caller exercises the same implementation.
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use blake2::{Blake2bVar, digest::VariableOutput};
+use blake2::{
+    Blake2b,
+    digest::{Digest, consts::U32},
+};
 use eyre::{Context, Result, bail, eyre};
 use hex::encode as hex_encode;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
@@ -3372,12 +3375,7 @@ impl FixtureEntry {
     }
 }
 fn blake2b256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Blake2bVar::new(32).expect("32-byte BLAKE2b digest");
-    blake2::digest::Update::update(&mut hasher, bytes);
-    let mut out = [0_u8; 32];
-    hasher
-        .finalize_variable(&mut out)
-        .expect("finalize BLAKE2b digest");
+    let mut out: [u8; 32] = Blake2b::<U32>::digest(bytes).into();
     out[out.len() - 1] |= 1;
     hex_encode(out)
 }

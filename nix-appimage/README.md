@@ -1,52 +1,64 @@
-# nix-appimage
+# Nix AppImage bundler
 
-Create an AppImage, bundling a derivation and all its dependencies into a single-file executable.
-Like [nix-bundle](https://github.com/matthewbauer/nix-bundle), but much faster and without the glibc dependency.
+The repository bundles Linux derivations as a Type 2 AppImage: a statically
+linked runtime followed by a Zstandard SquashFS image. The image contains the
+complete derivation closure, the existing user-namespace/chroot `AppRun`, an
+explicit executable symlink, and a mode-0755 mount root. Iroha's entrypoint is
+`iroha3d`; the bundle filename remains `iroha3-<architecture>.AppImage`.
 
-## Getting started
+The locked graph uses the supported NixOS 26.05 package set, maintained
+[AppImage/type2-runtime](https://github.com/AppImage/type2-runtime) source at
+`fedfad51acc2860b2916a1eef32ba4a500ff31ef`, Squashfuse 0.6.5, and libfuse 3.18.2.
+The libfuse override uses the source/hash published by current nixpkgs; all
+runtime libraries are built statically. The runtime requires Squashfuse's
+private headers, which are installed from the same locked source as its
+libraries. Its Clang/compiler-rt toolchain follows upstream and supplies the
+self-relocating musl startup code required by static PIE. There is no retired
+AppImageCrafters runtime or FUSE 2 dependency.
 
-To use this, you will need to have [Nix](https://nixos.org/) available.
-Then, run this via the [nix bundle](https://nixos.org/manual/nix/unstable/command-ref/new-cli/nix3-bundle.html) interface, replacing `nixpkgs.hello` with the flake you want to build:
+`flake.lock` hashes were recomputed from the immutable upstream GitHub archives
+using `nix-nar` 0.6.0. The same serializer reproduced the previous runtime,
+Squashfuse, and flake-compat lock hashes and flake-utils' systems dependency hash
+before the current source hashes were recorded. Nix 2.34.3 subsequently accepted
+the unchanged lock during the Linux validation below.
 
+## Validation
+
+Run on each supported Linux architecture (`x86_64-linux` and `aarch64-linux`):
+
+```sh
+nix flake lock ./nix-appimage --no-update-lock-file
+nix build ./nix-appimage#checks.$(nix eval --impure --raw --expr builtins.currentSystem).type2-structure --no-update-lock-file
+nix build ./nix-appimage#smoke --out-link result-appimage-smoke --no-update-lock-file
+APPIMAGE_EXTRACT_AND_RUN=1 ./result-appimage-smoke
+./result-appimage-smoke
+nix build .#appimage --out-link result-iroha-appimage
+APPIMAGE_EXTRACT_AND_RUN=1 ./result-iroha-appimage --version
+./result-iroha-appimage --version
 ```
-$ nix bundle --bundler github:ralismark/nix-appimage nixpkgs#hello
-```
 
-This produces `hello-2.12.1-x86_64.AppImage`, which prints "Hello world!" when run:
+The structure check verifies Type 2 magic, absence of a dynamic ELF interpreter
+and shared-library requirements, runtime version execution, extraction, the
+executable symlink, and mount-root permissions. The two smoke invocations then
+exercise extraction and FUSE mounting through the real `AppRun`; they must print
+`Hello, world!`. Iroha must report its daemon version through both paths.
+The archive must contain a mode-0755 mount root; the upstream extractor creates
+its private extracted directory with mode 0700. Both permissions are checked
+independently.
+Unprivileged user namespaces and an operational FUSE mount helper are required
+for those execution checks. On Ubuntu with restricted unprivileged user
+namespaces, AppArmor must explicitly allow `userns` for the admitted image;
+otherwise `AppRun` fails while establishing its UID mapping. Grant permission
+only to the reviewed executable, preserving the global restriction.
 
-```
-$ ./hello-2.12.1-x86_64.AppImage
-Hello, world!
-```
+The locked runtime, structure check, and both hello execution paths passed on
+Ubuntu 26.04 aarch64 with Nix 2.34.3. Qualification used an AppArmor profile
+attached to the exact immutable test-image path and retained the global
+user-namespace restriction. The x86_64 checks and full Iroha daemon AppImage
+remain separate release qualification requirements.
 
-If you get a `main program ... does not exist` error, or want to specify a different binary to run, you can instead use the `./bundle` script:
-
-```
-$ ./bundle dnsutils /bin/dig # or ./bundle dnsutils dig
-$ ./dig-x86_64.AppImage -v
-DiG 9.18.14
-```
-
-### Caveats
-
-- The produced file isn't a fully conforming AppImage.
-For example, it's missing the relevant .desktop file and icons -- this doesn't affect the running of bundled apps in any way, but might cause issues with showing up correctly in application launchers (e.g. rofi).
-Please open an issue if this is something you want.
-- This requires Linux User Namespaces (i.e. `CAP_SYS_USER_NS`), which are available since Linux 3.8 (released in 2013).
-- Plain files in the root directory aren't visible to the bundled app.
-
-### OpenGL
-
-Addressing issues with running OpenGL apps on non-NixOS systems is also *out of scope* for this project -- you'll still have to use e.g. [nixGL](https://github.com/guibou/nixGL) to make those graphical programs work without NixOS.
-
-### How it works / Comparison with nix-bundle
-
-This project wouldn't be possible without the groundwork already laid out in [nix-bundle](https://github.com/matthewbauer/nix-bundle), and a lot here is inspired by what's done there.
-
-The main benefit over nix-bundle's default arx format is that we don't need to unpack the files every time we start up.
-This significantly speeds up startup to the point that it's practically instant.
-
-Thanks to using [AppImageCrafers/appimage-runtime](https://github.com/AppImageCrafters/appimage-runtime), the produced bundle doesn't depend on glibc, avoiding the [issue described here](https://github.com/AppImage/AppImageKit/issues/877) and meaning it should be portable to more system.
-Since the AppImage format itself (specifically [type 2 images](https://github.com/AppImage/AppImageSpec/blob/ce1910e6443357e3406a40d458f78ba3f34293b8/draft.md#type-2-image-format)) is essentially just the runtime binary concatenated with a squashfs file system, we also avoid unnecessary copies in the build step.
-
-We do something similar to `nix-user-chroot`, but instead only mount in the `/nix` directory before running the entrypoint symlink.
+To update sources, update the explicit upstream pins and run
+`nix flake update --flake ./nix-appimage` on a Nix-enabled host, review the lock
+and source changes, and repeat the checks above. The repository release-feature
+guard verifies that the bundle still contains the reviewed Cargo derivation
+and daemon entrypoint; the helper cannot introduce Cargo features.

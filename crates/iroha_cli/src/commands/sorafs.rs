@@ -87,9 +87,9 @@ use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROO
 use norito::json::{Map, Number, Value};
 use norito::{NoritoSerialize, decode_from_bytes};
 use rand::{
-    CryptoRng, RngCore, SeedableRng,
-    rand_core::{TryCryptoRng, TryRngCore},
-    rngs::{OsRng, StdRng},
+    CryptoRng, Rng, SeedableRng,
+    rand_core::{TryCryptoRng, TryRng},
+    rngs::{StdRng, SysRng},
 };
 use reqwest::blocking::Client as BlockingHttpClient;
 use sorafs_car::{
@@ -3915,7 +3915,7 @@ impl GarReceiptArgs {
     }
 }
 fn parse_receipt_id(receipt_id_hex: Option<&str>) -> Result<[u8; 16]> {
-    parse_receipt_id_with_rng(receipt_id_hex, &mut OsRng)
+    parse_receipt_id_with_rng(receipt_id_hex, &mut SysRng)
 }
 fn parse_receipt_id_with_rng<R: TryCryptoRng>(
     receipt_id_hex: Option<&str>,
@@ -5144,7 +5144,7 @@ fn persist_owner_private_guard_cache(path: &Path, payload: &[u8]) -> Result<()> 
         .parent()
         .ok_or_else(|| eyre!("guard cache path has no parent directory"))?;
     let mut nonce = [0_u8; 16];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| eyre!("failed to generate guard cache staging name: {error}"))?;
     let staging_path = parent.join(format!(".guard-cache-{}.tmp", hex::encode(nonce)));
@@ -10346,7 +10346,7 @@ impl HandshakeTokenIssueArgs {
     ) -> Result<TokenIssueArtifacts>
     where
         C: RunContext,
-        R: RngCore + CryptoRng,
+        R: Rng + CryptoRng,
     {
         let suite = self.suite;
         let secret_key = read_owner_private_handshake_file(
@@ -10510,7 +10510,7 @@ fn canonical_default_token_timestamp(now: SystemTime) -> Result<OffsetDateTime> 
     })
 }
 fn token_issue_rng() -> Result<StdRng> {
-    token_issue_rng_from_rng(&mut OsRng)
+    token_issue_rng_from_rng(&mut SysRng)
 }
 fn token_issue_rng_from_rng<R: TryCryptoRng>(rng: &mut R) -> Result<StdRng> {
     StdRng::try_from_rng(rng).map_err(|error| {
@@ -13617,11 +13617,11 @@ fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 fn generate_nonce_hex(bytes: usize) -> Result<String> {
-    generate_nonce_hex_with_rng(bytes, &mut OsRng)
+    generate_nonce_hex_with_rng(bytes, &mut SysRng)
 }
 fn generate_moderation_operator_csrf_token() -> Result<String> {
     let mut token = [0_u8; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut token)
         .map_err(|error| eyre!("SoraFS moderation operator CSRF token OS RNG failed: {error}"))?;
     Ok(URL_SAFE_NO_PAD.encode(token))

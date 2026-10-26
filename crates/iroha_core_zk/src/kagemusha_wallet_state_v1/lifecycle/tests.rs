@@ -2954,7 +2954,7 @@ pub(super) fn fresh_delivery_receipt() -> (
             KagemushaWalletSigningDomainV1::Receipt,
             &body.transcript(),
         ));
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let mut signed = package.clone();
         signed.receipt.signature =
             KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();

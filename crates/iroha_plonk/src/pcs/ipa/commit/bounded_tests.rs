@@ -4,7 +4,7 @@ use super::*;
 use ff::Field;
 use iroha_pasta::{Ep, Eq};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 fn parity<C: PastaCurve>() {
     let params = ParamsIpa::<C>::new(6).unwrap();

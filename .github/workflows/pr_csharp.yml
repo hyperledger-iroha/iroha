@@ -78,13 +78,13 @@ jobs:
       GIT_CONFIG_KEY_1: core.symlinks
       GIT_CONFIG_VALUE_1: "false"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           target: ${{ matrix.target }}
@@ -134,7 +134,7 @@ jobs:
       - name: Upload authenticated target-native input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-${{ matrix.target }}
           path: ${{ runner.temp }}/csharp-native-upload
@@ -143,7 +143,7 @@ jobs:
 
       - name: Retry authenticated target-native input upload once
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-${{ matrix.target }}
           path: ${{ runner.temp }}/csharp-native-upload
@@ -160,13 +160,13 @@ jobs:
       CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           target: aarch64-unknown-linux-gnu
@@ -221,7 +221,7 @@ jobs:
       - name: Upload immutable Linux ARM cross-build candidate
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           # This deliberately does not match the final csharp-native-* pattern.
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
@@ -232,7 +232,7 @@ jobs:
 
       - name: Retry immutable Linux ARM candidate upload once
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-linux-arm-cross-candidate-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-linux-arm-cross-candidate
@@ -252,9 +252,9 @@ jobs:
     outputs:
       artifact_id: ${{ steps.upload_primary.outcome == 'success' && steps.upload_primary.outputs.artifact-id || steps.upload_retry.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -296,7 +296,7 @@ jobs:
       - name: Upload authenticated Linux ARM input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -307,7 +307,7 @@ jobs:
       - name: Retry authenticated Linux ARM input upload once
         id: upload_retry
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -333,9 +333,9 @@ jobs:
     outputs:
       artifact_id: ${{ steps.upload_primary.outcome == 'success' && steps.upload_primary.outputs.artifact-id || steps.upload_retry.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -377,7 +377,7 @@ jobs:
       - name: Upload authenticated Linux ARM input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -389,7 +389,7 @@ jobs:
       - name: Retry authenticated Linux ARM input upload once
         id: upload_retry
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -414,9 +414,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -458,7 +458,7 @@ jobs:
       - name: Upload authenticated Linux ARM input
         id: upload_primary
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -470,7 +470,7 @@ jobs:
       - name: Retry authenticated Linux ARM input upload once
         id: upload_retry
         if: steps.upload_primary.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-native-aarch64-unknown-linux-gnu
           path: ${{ runner.temp }}/csharp-native-upload
@@ -504,13 +504,13 @@ jobs:
       run:
         working-directory: csharp
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.402
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -584,7 +584,7 @@ jobs:
           cp -R "$RUNNER_TEMP/csharp-native-package" "$bundle/native-package"
 
       - name: Upload five-RID C# SDK package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: csharp-sdk-native-package-${{ github.sha }}
           path: ${{ runner.temp }}/csharp-package-bundle
@@ -620,13 +620,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.402
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 

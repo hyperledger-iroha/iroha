@@ -1387,7 +1387,7 @@ fn callback_generation_recovery_preserves_original_none_unavailable_and_bounds()
     let payment = p256::ecdsa::SigningKey::from_bytes((&[9; 32]).into()).unwrap();
     let bytes = payment
         .verifying_key()
-        .to_encoded_point(false)
+        .to_sec1_point(false)
         .as_bytes()
         .to_vec();
     let expected =

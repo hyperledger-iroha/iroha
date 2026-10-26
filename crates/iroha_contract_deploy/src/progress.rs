@@ -42,6 +42,23 @@ pub enum DeploymentProgress {
     },
 }
 
+/// One human line per event, shared by the Kagami and Mochi frontends.
+impl std::fmt::Display for DeploymentProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Prepared(_) => f.write_str("Deployment prepared with exact fee quotes"),
+            Self::Submitting(stage) => write!(
+                f,
+                "Submitting {} ({}/{})",
+                stage.name, stage.number, stage.total
+            ),
+            Self::Recovering(stage) => write!(f, "Recovering {} by its retained hash", stage.name),
+            Self::Applied { stage, .. } => write!(f, "{} applied", stage.name),
+            Self::ReadingBack { .. } => f.write_str("Verifying deployed code and alias"),
+        }
+    }
+}
+
 pub fn stage(record: &PlanRecord, index: usize) -> DeploymentStage {
     let transaction = &record.transactions[index];
     DeploymentStage {
@@ -49,5 +66,28 @@ pub fn stage(record: &PlanRecord, index: usize) -> DeploymentStage {
         total: record.transactions.len(),
         name: transaction.name.clone(),
         hash: transaction.hash.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_reads_as_one_human_line_per_stage() {
+        let stage = DeploymentStage {
+            number: 2,
+            total: 3,
+            name: "register_contract".into(),
+            hash: "ab".repeat(32),
+        };
+        assert_eq!(
+            DeploymentProgress::Submitting(stage.clone()).to_string(),
+            "Submitting register_contract (2/3)"
+        );
+        assert_eq!(
+            DeploymentProgress::Recovering(stage).to_string(),
+            "Recovering register_contract by its retained hash"
+        );
     }
 }

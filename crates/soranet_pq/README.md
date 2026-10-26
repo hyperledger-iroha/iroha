@@ -54,18 +54,15 @@ verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_by
   the fallible `_from_os` convenience helpers.
 - SoraNet ML-DSA key generation, secret-key recovery, and signing use a safe
   portable Rust implementation of the FIPS 204 polynomial operations. The
-  `pqcrypto-mldsa` dependency is used through public byte-oriented interfaces;
-  no private PQClean C structures cross into Rust.
-  Verification selects the portable CLEAN implementation when AArch64 NEON or
-  SHA3 capability is unavailable. Supported hardware retains the existing
-  accelerated verifier, and other architectures retain upstream dispatch.
-  `verify_mldsa65_detached` preserves the typed verifier API for Iroha and IVM
-  consumers so they share the same hardware guard.
-- The typed-key `sign_mldsa65_detached` helper retains the ISO 20022 caller's
-  pqcrypto key decoding, empty FIPS context, direct OS randomness, and entropy
-  failure behavior. It uses the same capability guard and a CLEAN signing
-  fallback. This helper does not add SoraNet's canonical-key checks or hedged
-  RNG policy to that existing signing API.
+  maintained RustCrypto `ml-dsa` implementation verifies signatures, and
+  RustCrypto `ml-kem` supplies key generation, encapsulation and decapsulation.
+  Their allocation features are disabled so the borrowed verification and
+  caller-owned output paths retain their fixed-buffer behavior. The same
+  FIPS byte encodings and seeded results apply on every architecture.
+- `verify_mldsa65_detached` accepts borrowed signature/public-key bytes.
+  `sign_mldsa65_detached` validates canonical secret-key bytes and returns a
+  fallible signature using empty FIPS context and direct OS randomness.
+  SoraNet's explicit hedged RNG APIs remain separate.
 
 ## Independent known-answer coverage
 

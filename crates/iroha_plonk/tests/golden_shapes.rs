@@ -2,8 +2,8 @@
 //! (originally `vendor/halo2-axiom/tests/golden_proof_bytes.rs`): the sigma-shaped
 //! and wide circuit, written against the `iroha_plonk` frontend.
 //!
-//! They check that the frontend expresses the golden shapes (degree and
-//! permutation width), that the constraint checker accepts the honest
+//! They check the native norm-lookup degree and original permutation width
+//! of those circuit shapes, that the constraint checker accepts the honest
 //! witnesses and rejects tampered ones, and that their descriptors are
 //! deterministic. The native unit suite `src/captured_goldens.rs` freshly
 //! rebuilds circuits and compares keys and proof bytes with the retained corpus;
@@ -21,7 +21,7 @@ use iroha_plonk::{
     frontend::{Cell, Circuit, Error, Layouter, SimpleFloorPlanner, Value, synthesize},
 };
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::{RngCore, SeedableRng};
+use rand_core::{Rng, SeedableRng};
 
 /// Rows left unassigned at the end of the domain.
 const RESERVED_ROWS: usize = 16;
@@ -428,16 +428,19 @@ impl<F: PastaField> Circuit<F> for WideCircuit<F> {
     }
 }
 
-/// The golden shape assertions: `(degree, permutation columns)`.
+/// The native shape assertions: `(degree, permutation columns)`.
 fn shape<F: PastaField, C: Circuit<F>>(circuit: &C) -> (usize, usize) {
     let (cs, _) = iroha_plonk::frontend::configure(circuit).expect("configure");
     (cs.degree(), cs.permutation().columns().len())
 }
 
 #[test]
-fn golden_shapes_match_the_vendored_constants() {
-    assert_eq!(shape(&SigmaCircuit::<Fp>::new(6)), (7, 5));
-    assert_eq!(shape(&WideCircuit::<Fp>::new(8)), (4, WIDE_ADVICE + 1));
+fn golden_shapes_match_the_native_lookup_degree_and_original_width() {
+    // The native norm lookup requires 2 + 2 * (input_degree + table_degree):
+    // sigma's enabled byte has degree 2, while both wide inputs have degree 1.
+    // These are degrees 8 and 6, independently of the historical gate degrees.
+    assert_eq!(shape(&SigmaCircuit::<Fp>::new(6)), (8, 5));
+    assert_eq!(shape(&WideCircuit::<Fp>::new(8)), (6, WIDE_ADVICE + 1));
 }
 
 fn check_sigma<F: PastaField>(k: u32) {
@@ -591,7 +594,7 @@ fn golden_descriptors_are_deterministic() {
     assert_ne!(first, pallas);
     let wide = descriptor_bytes(&WideCircuit::<Fq>::new(8), 8, CurveV1::Pallas, true);
     let decoded = CircuitDescriptorV1::decode(&wide).expect("decode");
-    assert_eq!(decoded.degree, 4);
+    assert_eq!(decoded.degree, 6);
     assert_eq!(decoded.permutation.len(), WIDE_ADVICE + 1);
     assert_eq!(decoded.lookups.len(), 2);
     // No selectors: the selector map is empty and adds no column.

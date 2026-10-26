@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign as signRaw } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import {
   AccountAddress,

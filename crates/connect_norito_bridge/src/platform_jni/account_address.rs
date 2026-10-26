@@ -65,7 +65,7 @@ fn validate_canonical_address(bytes: &[u8]) -> Result<(), AddressAdmissionError>
     Ok(())
 }
 
-fn throw_address_error(env: &mut jni::JNIEnv<'_>, original: AddressAdmissionError) {
+fn throw_address_error(env: &mut jni::Env<'_>, original: AddressAdmissionError) {
     let code = original.code();
     let capability = original.capability();
     let message = original.message();
@@ -77,8 +77,10 @@ fn throw_address_error(env: &mut jni::JNIEnv<'_>, original: AddressAdmissionErro
         let algorithm = env.new_string(algorithm)?;
         let operation = env.new_string(operation)?;
         let throwable = env.new_object(
-            "org/hyperledger/iroha/sdk/address/AccountAddressNativeException",
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            jni::jni_str!("org/hyperledger/iroha/sdk/address/AccountAddressNativeException"),
+            jni::jni_sig!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
+            ),
             &[
                 JValue::Object(code.as_ref()),
                 JValue::Object(message.as_ref()),
@@ -86,12 +88,13 @@ fn throw_address_error(env: &mut jni::JNIEnv<'_>, original: AddressAdmissionErro
                 JValue::Object(operation.as_ref()),
             ],
         )?;
-        env.throw(JThrowable::from(throwable))
+        let throwable = JThrowable::cast_local(env, throwable)?;
+        env.throw(throwable)
     })();
     if result.is_err() {
         // JNI allocation/class loading can already have raised its original exception.
         // Never erase that pending cause with an address-invalid replacement.
-        if matches!(env.exception_check(), Ok(false)) {
+        if !env.exception_check() {
             throw_java_illegal_state(
                 env,
                 "structured address exception could not be constructed".to_owned(),
@@ -106,37 +109,39 @@ fn throw_address_error(env: &mut jni::JNIEnv<'_>, original: AddressAdmissionErro
 /// The JVM must provide the native environment and a valid byte-array handle for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeValidateAccountAddressCanonical(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let Some(bytes) = read_java_byte_array_bounded(
-        &mut env,
-        &input,
-        "canonicalAccountAddress",
-        MAX_CANONICAL_ADDRESS_BYTES_V1,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(result) = catch_unwind_to_java(&mut env, "canonical account validation", || {
-        validate_canonical_address(&bytes)
-    }) else {
-        return std::ptr::null_mut();
-    };
-    if let Err(original) = result {
-        throw_address_error(&mut env, original);
-        return std::ptr::null_mut();
-    }
-    match env.byte_array_from_slice(&bytes) {
-        Ok(value) => value.into_raw(),
-        Err(error) => {
-            super::throw_java_illegal_state(
-                &mut env,
-                format!("canonical account output allocation failed: {error}"),
-            );
-            std::ptr::null_mut()
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let Some(bytes) = read_java_byte_array_bounded(
+            &mut env,
+            &input,
+            "canonicalAccountAddress",
+            MAX_CANONICAL_ADDRESS_BYTES_V1,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(result) = catch_unwind_to_java(&mut env, "canonical account validation", || {
+            validate_canonical_address(&bytes)
+        }) else {
+            return std::ptr::null_mut();
+        };
+        if let Err(original) = result {
+            throw_address_error(&mut env, original);
+            return std::ptr::null_mut();
         }
-    }
+        match env.byte_array_from_slice(&bytes) {
+            Ok(value) => value.into_raw(),
+            Err(error) => {
+                super::throw_java_illegal_state(
+                    &mut env,
+                    format!("canonical account output allocation failed: {error}"),
+                );
+                std::ptr::null_mut()
+            }
+        }
+    })
 }
 
 #[cfg(test)]

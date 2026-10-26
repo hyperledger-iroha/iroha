@@ -5163,7 +5163,7 @@ pub async fn handle_connect_session(
     network_id: iroha_data_model::NetworkId,
     NoritoJson(req): NoritoJson<ConnectSessionRequest>,
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     handle_connect_session_with_rng(network_id, req, &mut rng).await
 }
 #[cfg(feature = "connect")]
@@ -5287,16 +5287,17 @@ mod connect_session_tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     struct FailingConnectSessionRng;
     #[derive(Debug)]
     struct FailingConnectSessionRngError;
+    impl std::error::Error for FailingConnectSessionRngError {}
     impl std::fmt::Display for FailingConnectSessionRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing Connect session RNG")
         }
     }
-    impl TryRngCore for FailingConnectSessionRng {
+    impl TryRng for FailingConnectSessionRng {
         type Error = FailingConnectSessionRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingConnectSessionRngError)
@@ -10858,7 +10859,7 @@ fn collect_contract_state_schemas(
 ) -> core::result::Result<BTreeMap<String, Option<ivm::EmbeddedStateType>>, ()> {
     let mut registry = BTreeMap::new();
     let mut retained_canonical_bytes = 0usize;
-    let mut register_schemas_for = |address: &iroha_data_model::smart_contract::ContractAddress, code_hash: &iroha_crypto::Hash| {
+    let mut register_schemas_for = |address: &iroha_data_model::smart_contract::ContractAddress, code_hash: &iroha_crypto::Hash| -> core::result::Result<(), ()> {
         let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(address, *code_hash).map_err(|_| ())?;
         let Some(code_bytes) = world.contract_code().get(&artifact_id) else {
             return Ok(());
@@ -49068,7 +49069,6 @@ fn faucet_pow_scrypt_params(
         faucet.pow_scrypt_log_n,
         faucet.pow_scrypt_r,
         faucet.pow_scrypt_p,
-        32,
     )
     .map_err(|_| faucet_invalid_request("invalid faucet pow scrypt configuration"))
 }

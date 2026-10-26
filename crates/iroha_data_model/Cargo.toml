@@ -57,15 +57,15 @@ iroha_zkp_poseidon = { workspace = true }
 # and credit-digest trees, and the packed-byte `proof_digest` and Payment digests.
 iroha_pasta = { workspace = true }
 hex = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 # SHA3-512 of the anonymous Parliament ballot's framed public digests
 # (`governance::anonymous_ballot::framing`), the hash of the proof profile's `Frame`.
-sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+sha3 = { version = "0.12.0", default-features = false, features = ["alloc"] }
 
 derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 norito_derive = { workspace = true }
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa"] }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 thiserror = { workspace = true }
 regex = "1.11.0"
@@ -75,7 +75,7 @@ base64 = { workspace = true, features = ["alloc"] }
 bech32 = { workspace = true }
 nonzero_ext = { workspace = true }
 rustc-hash = { workspace = true }
-blake2 = "0.10.6"
+blake2 = "0.11.0"
 blake3 = { workspace = true }
 bs58 = "0.5.1"
 time = { workspace = true }

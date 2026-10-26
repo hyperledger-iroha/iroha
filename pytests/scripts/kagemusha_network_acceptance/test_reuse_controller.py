@@ -5,9 +5,10 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import run as r
 import test_native as native_tests
@@ -21,6 +22,8 @@ class ReuseControllerTests(unittest.TestCase):
     catalog_data = native_tests.NativeMigrationTests.catalog_data
 
     def setUp(self):
+        self.assertEqual(r._UNFINISHED_CHILDREN, [])
+        self.addCleanup(r._UNFINISHED_CHILDREN.clear)
         self.temp = tempfile.TemporaryDirectory(prefix='controller7-data-', dir=QUAL)
         self.assertTrue(Path(self.temp.name).is_relative_to(QUAL))
         self.assertEqual(Path(self.temp.name).stat().st_mode & 0o777, 0o700)
@@ -138,6 +141,64 @@ class ReuseControllerTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertTrue(r.read_document(self.root / 'raw-reuse-after.json')['accepted'])
         self.assertFalse((self.root / 'new-anchor-catalog.json').exists())
+
+    def test_uncertain_prover_defers_raw_scan_and_preserves_observed_child(self):
+        failure = subprocess.TimeoutExpired(['/inert/prover'], 1)
+        subject = Mock(pid=4100)
+        subject.wait.side_effect = failure
+        def unfinished(*args):
+            self.fake_catalog(*args)
+            r.await_natural_exit(subject, args[2], float('inf'))
+        with patch.object(r.native_catalog.REUSE, 'check', wraps=r.native_catalog.REUSE.check) as check:
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                self.run_catalog(unfinished)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(r._UNFINISHED_CHILDREN, [{'pid': subject.pid,
+                         'directory': str(self.root / 'catalog')}])
+        self.assertTrue(check.call_args_list)
+        self.assertFalse(any(call.kwargs['hash_bytes'] for call in check.call_args_list))
+        after = r.read_document(self.root / 'raw-reuse-after.json')
+        self.assertEqual(after, {'accepted': False, 'postcheck_performed': False,
+            'state': 'deferred_unfinished_or_uncertain_child',
+            'automatic_retry_permitted': False, 'custody_reconciliation_required': True})
+        self.assertFalse((self.root / 'new-anchor-catalog.json').exists())
+        self.assertEqual(len(self.calls), 1)
+        subject.kill.assert_not_called()
+        subject.terminate.assert_not_called()
+
+    def test_uncertain_source_query_is_registered_before_fallible_deferred_receipt(self):
+        failure = r.child_process.UnfinishedChild(['cargo', 'metadata'], 4200)
+        def unfinished(*args):
+            self.fake_catalog(*args)
+            # The old finally scan would replace this exception with a raw
+            # custody error, causing main to request an ordinary owned abort.
+            os.link(self.file, self.root / 'unexplained')
+            raise failure
+        expected = {'pid': failure.pid, 'command': failure.argv,
+                    'directory': str(self.root), 'role': 'compiler_custody'}
+        original_save = r.save
+        def save(path, value):
+            if path == self.root / 'raw-reuse-after.json':
+                self.assertEqual(r._UNFINISHED_CHILDREN, [expected])
+                raise OSError('synthetic receipt I/O refusal')
+            return original_save(path, value)
+        with patch.object(r, 'save', side_effect=save), \
+                patch.object(r.native_catalog.REUSE, 'check', wraps=r.native_catalog.REUSE.check) as check:
+            with self.assertRaises(r.child_process.UnfinishedChild) as caught:
+                self.run_catalog(unfinished)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(r._UNFINISHED_CHILDREN, [expected])
+        self.assertFalse(any(call.kwargs['hash_bytes'] for call in check.call_args_list))
+        self.assertFalse((self.root / 'raw-reuse-after.json').exists())
+        self.assertFalse((self.root / 'new-anchor-catalog.json').exists())
+        self.assertTrue((self.root / 'unexplained').is_file())
+        self.assertEqual(len(self.calls), 1)
+        retained = r.retain_failure(self.root, failure)
+        self.assertEqual(r._UNFINISHED_CHILDREN, [expected])
+        owner = Mock(pid=4300)
+        self.assertIsNone(r.request_owned_abort(self.root / 'live', self.setup, retained, owner))
+        owner.poll.assert_not_called()
+        self.assertFalse((self.root / 'live/abort-command.json').exists())
 
     def test_content_hash_is_not_replaced_by_matching_metadata(self):
         self.file.write_bytes(b'wrong bytes')

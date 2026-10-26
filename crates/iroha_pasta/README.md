@@ -9,8 +9,8 @@ gadget or recursion code.
 
 | Module | What it provides |
 | --- | --- |
-| `field` | `Fp`, `Fq`: 4x64-bit Montgomery arithmetic specialised to the Pasta moduli (no-carry CIOS multiplication and squaring), `ff` 0.13 `PrimeField`, `PrimeFieldBits`, `FromUniformBytes<64>`, `WithSmallOrderMulGroup<3>`; constant-time Fermat `invert`, safegcd `invert_vartime`, `batch_invert`, table-based `sqrt` |
-| `curve` | Pallas `Ep`/`EpAffine`, Vesta `Eq`/`EqAffine`: complete Renes-Costello-Batina formulas, compressed encodings, GLV decomposition and endomorphism, hash-to-curve (simplified SWU + 3-isogeny), batch normalisation and lockstep batch multiplication; `group` 0.13 traits |
+| `field` | `Fp`, `Fq`: 4x64-bit Montgomery arithmetic specialised to the Pasta moduli (no-carry CIOS multiplication and squaring), `ff` 0.14 `PrimeField`, `PrimeFieldBits`, `FromUniformBytes<64>`, `WithSmallOrderMulGroup<3>`; constant-time Fermat `invert`, safegcd `invert_vartime`, `batch_invert`, table-based `sqrt` |
+| `curve` | Pallas `Ep`/`EpAffine`, Vesta `Eq`/`EqAffine`: complete Renes-Costello-Batina formulas, compressed encodings, GLV decomposition and endomorphism, hash-to-curve (simplified SWU + 3-isogeny), batch normalisation and lockstep batch multiplication; `group` 0.14 traits |
 | `msm` | `msm_public`, `msm_secret` (batch-affine signed-digit Pippenger on the caller's Rayon pool), `FixedBaseTable`, per-kernel `MemoryBudget`, process-wide `SharedMemoryBudget` |
 | `fold` | lockstep batch-affine GLV generator fold (`G[i] + u * G[i + h]`): `fold_generators_vartime`, `fold_generators_with` (precomputed `FoldChallenge`), `fold_generators_reference` (complete formulas) |
 | `fft` | `FftDomain`: radix-4 (fused radix-2) DIF transforms, cached twiddles, coset transforms (a zero coset shift is an error) |

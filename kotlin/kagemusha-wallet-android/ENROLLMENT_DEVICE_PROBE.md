@@ -68,7 +68,7 @@ out of staged command/catalog inputs. Busy publication ownership fails explicitl
 
 `src/androidTest/cpp/enrollment_probe_rename.c` owns this test-only atomic operation.
 The instrumentation APK packages `libkagemusha_enrollment_probe_files.so` for arm64-v8a,
-armeabi-v7a and x86_64, compiled with the same pinned NDK 28.0.12674087-beta2 at API26.
+armeabi-v7a and x86_64, compiled with the same pinned NDK 30.0.16248370 at API26.
 The helper retains the selected private parent descriptor, validates bounded leaf names
 and a single-link mode0600 source, and calls Linux `renameat2(RENAME_NOREPLACE)`.
 A destination symlink or any existing name returns EEXIST. Unsupported syscall, policy
@@ -124,12 +124,74 @@ The instrumentation arguments contain only public selection DATA:
 `kagemushaTestAPK_SHA256`, and `kagemushaTimeoutSeconds` (1–1800).
 No argument carries token, DPoP, account key, issuer key or signing secret.
 Select only `KagemushaEnrollmentPhysicalDeviceTest#retainedNativeEnrollmentMailbox`
-for the campaign. An absent opt-in skips this case in ordinary instrumentation; an
+for the ordinary campaign. An absent opt-in skips this case in ordinary instrumentation; an
 explicit campaign with missing or invalid input fails. A skip is never device evidence.
-The separate thirteen device-mailbox contract cases exercise only descriptors and isolated mailbox files,
+The separate device-mailbox contract cases exercise only descriptors and isolated mailbox files,
 including interrupted publication, exclusive attempt markers, the actual merged confirmation Activity and concurrent helper instances. Host fault-
 injection tests exercise the same publication state machine; they do not qualify Android
 filesystem behavior or Native custody.
+
+## Receive publication and driver reconstruction trials
+
+Two additional physical tests compose genuine Native Receive completion with a failed
+public export and exact recovery after acknowledged driver close. They are authored
+trial callers; execution requires matching compiled artifacts and explicit approval for
+the selected phone actions. Select exactly one fully qualified method in the standard
+instrumentation `class` argument:
+
+- `org.hyperledger.iroha.sdk.offline.wallet.KagemushaEnrollmentPhysicalDeviceTest#retainedReceiveBeforePublicationDriverReconstruction`
+- `org.hyperledger.iroha.sdk.offline.wallet.KagemushaEnrollmentPhysicalDeviceTest#retainedReceiveAfterPublicationDriverReconstruction`
+
+Class-only, suite, multiple-method and ordinary-mailbox selections skip these additional
+tests before any filesystem or Native action. The existing `kagemushaProbe=enrollment-v1`
+opt-in, candidate/device arguments and configuration remain mandatory. There is no new
+mailbox command or fault-setting argument. Use `requiredStage=received`, a fresh invocation
+UUID and a new Receive request ID for each trial while preserving the admitted actor and
+application namespace. Never clear or restore Native custody between variants.
+
+Use the ordinary install/enrollment/open and exchange commands with genuine admitted
+originals. Immediately before the selected `receive`, issue `request-status` for that
+same nonzero request ID and require Native UNKNOWN. Then stage the exact Payment and
+payer companion through the existing `receive` command. The test injects one exception
+only at that command's `released-original.norito` publication: either immediately before
+the checked publisher or after it acknowledges file and parent synchronization. The
+callback receives a detached copy of the actual retained Native output; it cannot change
+the original passed to the publisher. Other paths and the ordinary mailbox have no
+active fault callback. Pending or Preparing, an unfired boundary, a different failure,
+or absent COMPLETE/identity records fails this trial without automatic Receive retry.
+
+The selected Receive retains a failed `finished.json` diagnostic. Before publishing that
+finished record, the test preserves the exact output baseline and request/operation
+binding, acknowledges real driver close, constructs a fresh driver over the same
+configuration/namespace, and publishes `publication-trial-reconstructed.json`. If close
+or reconstruction fails, the attempt fails and the retained diagnostics remain unresolved.
+Wait for the failed finished record, then issue exactly these existing commands in order:
+
+1. `install`, authenticating the same catalog.
+2. `open`, supplying the same credential. Answer the new Native account challenge through
+   the existing open-signature mailbox; the previous challenge signature cannot be reused.
+3. `request-status`, with the original Receive request ID, requiring Native COMPLETE.
+4. `released-request`, with that same request ID.
+5. `released-operation`, with the operation ID retained in the failed Receive's
+   `durable-call-return.json` and the trial fault record.
+6. `stop`.
+
+No fresh monetary or review command is accepted after the fault. All three recovery reads
+must return Receive with byte-identical retained output and the original operation ID.
+Their Credited originals and envelopes are compared with each other after reconstruction;
+the trial does not claim a pre-fault Credited comparison because the selected failure
+precedes its export. The original Payment, companion and immutable operation binding must
+remain unchanged. Recovery keeps the exact Native request identity and does not reconstruct
+an approved live review or introduce a managed signing counter.
+
+The ordinary mailbox still requires zero failed commands. A dedicated trial preserves
+`failedCommands=1` and requires exactly the injected exception, zero unexpected failures,
+one acknowledged reconstruction and all three exact recovery observations. Its separate
+`publication-trial-complete.json` records the bounded result with qualification, delivery,
+original-latency and process-death claims disabled. These cases do not establish physical
+crash durability, nonrollback, Send/companion or activation-wire recovery, QR/Nearby
+delivery, or release readiness. Actual process-death and other operation/carrier trials
+remain separate requirements.
 
 ## Commands and retained originals
 
@@ -360,7 +422,12 @@ an uncertain outcome. Ordinary exact Native recovery remains available even when
 older hash-only or JSON-only marker lacks continuation evidence.
 
 `continue-review-send`, `continue-review-unload` and `nearby-continue-send` require the
-existing exact operation binding and full root projection. Native compares those DATA
+existing exact operation binding, full root projection, and every full original retained
+under `private/intents/review-originals-<id>`, including the request ID, action family and
+all charge companions. Both review drivers use the same checked private-file helper;
+continuation only reads and compares those bytes. Missing or changed originals refuse
+without recreating them from new inputs. Exact Native status and retained-Payment recovery
+remain available through their existing commands. Native compares the projection DATA
 against its authenticated source and original request identity; neither a local file nor
 Unknown grants permission. A new Ready receives a fresh explicit decision/authentication,
 an immutable invocation/command attempt binding to the root, and a distinct exclusive

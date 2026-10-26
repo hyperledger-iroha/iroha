@@ -53,7 +53,7 @@ futures = { version = "0.3.31", default-features = false, features = ["std", "ex
 futures-timer = "3.0.4"
 tokio = { workspace = true, features = ["time", "rt", "macros"] }
 tempfile = "3.23.0"
-ed25519-dalek = { version = "2.2.0", optional = true, default-features = false, features = ["std"] }
+ed25519-dalek = { version = "3.0.0", optional = true, default-features = false, features = [] }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false, optional = true }
 iroha_crypto = { workspace = true, optional = true, default-features = false, features = ["application"] }
 iroha_data_model = { workspace = true, optional = true, default-features = false, features = ["application-model"] }
@@ -62,8 +62,8 @@ eyre = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 hex = "0.4.3"
 httpdate = { version = "1.0.3", optional = true }
-reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
-base64 = { version = "0.22.1" }
+reqwest = { workspace = true, features = ["rustls", "blocking"] }
+base64 = { workspace = true }
 url = { workspace = true, optional = true }
 rand = { workspace = true }
 flate2 = "1.1.5"

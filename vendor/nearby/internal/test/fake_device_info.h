@@ -1,0 +1,141 @@
+// Copyright 2022 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_NEARBY_INTERNAL_TEST_FAKE_DEVICE_INFO_H_
+#define THIRD_PARTY_NEARBY_INTERNAL_TEST_FAKE_DEVICE_INFO_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/string_view.h"
+#include "internal/base/file_path.h"
+#include "internal/base/files.h"
+#include "internal/platform/implementation/device_info.h"
+
+namespace nearby {
+
+class FakeDeviceInfo : public api::DeviceInfo {
+ public:
+  std::optional<std::string> GetOsDeviceName() const override {
+    return device_name_;
+  }
+
+  api::DeviceInfo::DeviceType GetDeviceType() const override {
+    return device_type_;
+  }
+
+  api::DeviceInfo::OsType GetOsType() const override { return os_type_; }
+
+  FilePath GetDownloadPath() const override {
+    return download_path_;
+  }
+
+  FilePath GetLocalAppDataPath(FilePath sub_path) const override {
+    FilePath path = app_data_path_;
+    path.append(sub_path);
+    return path;
+  }
+
+  FilePath GetTemporaryPath() const override { return temp_path_; }
+
+  FilePath GetLogPath() const override { return temp_path_; }
+
+  std::optional<size_t> GetAvailableDiskSpaceInBytes(
+      const FilePath& path) const override {
+    std::wstring path_key = path.ToWideString();
+    auto it = available_space_map_.find(path_key);
+    if (it != available_space_map_.end()) {
+      return it->second;
+    }
+    return std::numeric_limits<int64_t>::max();
+  }
+
+  bool IsScreenLocked() const override { return is_screen_locked_; }
+
+  void RegisterScreenLockedListener(
+      absl::string_view listener_name,
+      std::function<void(api::DeviceInfo::ScreenStatus)> callback) override {
+    screen_locked_listeners_.emplace(listener_name, callback);
+  }
+
+  void UnregisterScreenLockedListener(
+      absl::string_view listener_name) override {
+    screen_locked_listeners_.erase(listener_name);
+  }
+
+  bool PreventSleep() override { return true; }
+
+  bool AllowSleep() override { return true; }
+
+  int GetScreenLockedListenerCount() { return screen_locked_listeners_.size(); }
+
+  // Mock methods.
+  void SetOsDeviceName(std::string_view device_name) {
+    device_name_ = device_name;
+  }
+
+  void SetDeviceType(api::DeviceInfo::DeviceType device_type) {
+    device_type_ = device_type;
+  }
+
+  void SetOsType(api::DeviceInfo::OsType os_type) { os_type_ = os_type; }
+
+  void SetDownloadPath(FilePath path) { download_path_ = path; }
+
+  void SetAppDataPath(FilePath path) { app_data_path_ = path; }
+
+  void SetTemporaryPath(FilePath path) { temp_path_ = path; }
+
+  void SetAvailableDiskSpaceInBytes(const FilePath& path,
+                                    size_t available_bytes) {
+    available_space_map_.emplace(path.ToWideString(), available_bytes);
+  }
+
+  void ResetDiskSpace() { available_space_map_.clear(); }
+
+  void SetScreenLocked(bool locked) {
+    is_screen_locked_ = locked;
+    for (auto& listener : screen_locked_listeners_) {
+      if (locked) {
+        listener.second(api::DeviceInfo::ScreenStatus::kLocked);
+      } else {
+        listener.second(api::DeviceInfo::ScreenStatus::kUnlocked);
+      }
+    }
+  }
+
+ private:
+  std::string device_name_ = "nearby";
+  api::DeviceInfo::DeviceType device_type_ =
+      api::DeviceInfo::DeviceType::kLaptop;
+  api::DeviceInfo::OsType os_type_ = api::DeviceInfo::OsType::kWindows;
+  FilePath download_path_ = Files::GetTemporaryDirectory();
+  FilePath app_data_path_ = Files::GetTemporaryDirectory();
+  FilePath temp_path_ = Files::GetTemporaryDirectory();
+  absl::flat_hash_map<std::wstring, size_t> available_space_map_;
+  absl::flat_hash_map<std::string,
+                      std::function<void(api::DeviceInfo::ScreenStatus)>>
+      screen_locked_listeners_;
+  bool is_screen_locked_ = false;
+};
+
+}  // namespace nearby
+
+#endif  // THIRD_PARTY_NEARBY_INTERNAL_TEST_FAKE_DEVICE_INFO_H_

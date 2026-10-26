@@ -81,7 +81,7 @@ impl StatementCells {
     pub const fn fields(&self) -> &[Word<Fp>; STATEMENT_FIELDS] {
         &self.fields
     }
-    /// The digest verified by the corresponding Q sigma slot.
+    /// The canonical statement digest bound by the operation and any configured sigma slot.
     #[must_use]
     pub const fn digest(&self) -> &Word<Fp> {
         &self.digest

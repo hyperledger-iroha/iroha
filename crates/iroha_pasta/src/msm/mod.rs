@@ -36,7 +36,7 @@ pub use budget::{
 pub use fixed_base::FixedBaseTable;
 
 use crate::{CancellationToken, Cancelled};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rayon::prelude::*;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -496,7 +496,7 @@ mod tests {
     use ff::Field;
     use group::{Curve, Group};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     fn shared_msm_parity<C: PastaCurve>() {
         let scalars = (0..48)

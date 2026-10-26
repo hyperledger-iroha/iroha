@@ -112,7 +112,7 @@ fn admission_actor_requires_one_ack_before_creation_and_real_preflight() {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
         let manifest = norito::json!({"name": name,
-            "sha256": (format!("{:x}", Sha256::digest(&bytes))), "bytes": (bytes.len())});
+            "sha256": (hex::encode(Sha256::digest(&bytes))), "bytes": (bytes.len())});
         output
             .write_all(&response(request(Kind::Preflight), "complete", manifest))
             .unwrap();
@@ -342,7 +342,7 @@ fn admission_actor_does_not_extend_preflight_after_admission_spends_time() {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
         let manifest = norito::json!({"name": name,
-            "sha256": (format!("{:x}", Sha256::digest(&bytes))), "bytes": (bytes.len())});
+            "sha256": (hex::encode(Sha256::digest(&bytes))), "bytes": (bytes.len())});
         while peer_control.now() < deadline + 50_000_000 {
             std::thread::sleep(TURN);
         }

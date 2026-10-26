@@ -2,7 +2,7 @@
 //! caller-supplied signing body.
 
 use super::*;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 const ACTION_MAX: usize = KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 4096;
 
@@ -42,7 +42,7 @@ impl Plan {
 fn nonce() -> Result<[u8; 32], Error> {
     for _ in 0..128 {
         let mut value = [0; 32];
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut value)
             .map_err(|_| Error::Invalid("setup entropy unavailable"))?;
         if value != [0; 32] {
@@ -492,10 +492,9 @@ mod tests {
             nonce: [73; 32],
         };
         let signature: Signature = signer(&local).sign(&request.body.signing_message());
-        request.signature = KagemushaDeviceSignatureV1::from_raw_bytes(
-            &signature.normalize_s().unwrap_or(signature).to_bytes(),
-        )
-        .unwrap();
+        request.signature =
+            KagemushaDeviceSignatureV1::from_raw_bytes(&signature.normalize_s().to_bytes())
+                .unwrap();
         request.verify_open(&scheme).unwrap();
         request
     }
@@ -518,10 +517,9 @@ mod tests {
             request.body.nonce = plan.nonce;
             let signature: Signature =
                 signer(&request.receiver_credential).sign(&request.body.signing_message());
-            request.signature = KagemushaDeviceSignatureV1::from_raw_bytes(
-                &signature.normalize_s().unwrap_or(signature).to_bytes(),
-            )
-            .unwrap();
+            request.signature =
+                KagemushaDeviceSignatureV1::from_raw_bytes(&signature.normalize_s().to_bytes())
+                    .unwrap();
             let original = archive::encode(&request).unwrap();
             let signatures = wallet.custody.signatures;
             wallet.custody.fail_publication = Some(selected_before_error);

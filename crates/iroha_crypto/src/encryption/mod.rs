@@ -21,14 +21,15 @@ use crate::SessionKey;
 use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload, TagPosition};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use displaydoc::Display;
-use rand::rngs::OsRng;
-use rand_core::{OsError, TryRngCore};
+use rand::rngs::SysError;
+use rand::rngs::SysRng;
+use rand_core::TryRng;
 use std::{convert::TryFrom, mem, vec::Vec};
 /// An error that can occur during encryption or decryption
 #[derive(thiserror::Error, Display, Debug, Clone, Copy)]
 pub enum Error {
     /// Failed to generate nonce for an encryption operation
-    NonceGeneration(#[source] OsError),
+    NonceGeneration(#[source] SysError),
     /// Generated nonce material must not be an inert all-zero placeholder
     InertNonce,
     /// Failed to encrypt data
@@ -41,12 +42,12 @@ pub enum Error {
     InvalidKeyLength,
 }
 fn random_nonce<E: AeadCore>() -> Result<aead::Nonce<E>, Error> {
-    random_nonce_from_rng::<E, _>(&mut OsRng)
+    random_nonce_from_rng::<E, _>(&mut SysRng)
 }
 fn random_nonce_from_rng<E, R>(rng: &mut R) -> Result<aead::Nonce<E>, Error>
 where
     E: AeadCore,
-    R: TryRngCore<Error = OsError>,
+    R: TryRng<Error = SysError>,
 {
     let mut value = aead::Nonce::<E>::default();
     rng.try_fill_bytes(value.as_mut_slice())
@@ -174,10 +175,10 @@ where
     where
         E: AeadInOut,
     {
-        self.encrypt_easy_in_place_from_rng(aad.as_ref(), data, &mut OsRng)
+        self.encrypt_easy_in_place_from_rng(aad.as_ref(), data, &mut SysRng)
     }
 
-    fn encrypt_easy_in_place_from_rng<R: TryRngCore<Error = OsError>>(
+    fn encrypt_easy_in_place_from_rng<R: TryRng<Error = SysError>>(
         &self,
         aad: &[u8],
         data: &mut [u8],
@@ -360,8 +361,8 @@ mod tests {
     struct FixedTryRng {
         byte: u8,
     }
-    impl TryRngCore for FixedTryRng {
-        type Error = OsError;
+    impl TryRng for FixedTryRng {
+        type Error = SysError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }

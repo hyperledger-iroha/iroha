@@ -55,13 +55,12 @@ where
                                     iroha_data_model::events::pipeline::TransactionStatus::Rejected(reason) => {
                                         return Err(ToriiError::SmokeRejected {
                                             hash: tx_hash_str.clone(),
-                                            reason: format!("{reason:?}"),
+                                            reason: rejection_message(reason),
                                         });
                                     }
                                     iroha_data_model::events::pipeline::TransactionStatus::Expired => {
-                                        return Err(ToriiError::SmokeRejected {
+                                        return Err(ToriiError::SmokeExpired {
                                             hash: tx_hash_str.clone(),
-                                            reason: "expired".to_owned(),
                                         });
                                     }
                                     iroha_data_model::events::pipeline::TransactionStatus::Approved => {

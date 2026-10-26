@@ -174,14 +174,14 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 ).hexdigest(),
                 "environment_profiles": validator.EXPECTED_ENVIRONMENT_PROFILES,
                 "cargo_build_jobs": 1,
-                "rust_toolchain_channel": "1.93.1",
-                "cargo_release": "1.93.1",
+                "rust_toolchain_channel": "1.99.1",
+                "cargo_release": "1.99.1",
                 "cargo_commit_hash": "c" * 40,
                 "cargo_binary_sha256": exact_hash,
-                "rustc_release": "1.93.1",
+                "rustc_release": "1.99.1",
                 "rustc_commit_hash": rust_commit,
                 "rustc_binary_sha256": exact_hash,
-                "rustdoc_release": "1.93.1",
+                "rustdoc_release": "1.99.1",
                 "rustdoc_commit_hash": rust_commit,
                 "rustdoc_binary_sha256": exact_hash,
                 "python_version": "3.12.13",
@@ -903,9 +903,9 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ).hexdigest()
         environment["python_version"] = validator.platform.python_version()
         actual_rust_identities = {
-            "cargo": ("1.93.1", "c" * 40),
-            "rustc": ("1.93.1", "b" * 40),
-            "rustdoc": ("1.93.1", "b" * 40),
+            "cargo": ("1.99.1", "c" * 40),
+            "rustc": ("1.99.1", "b" * 40),
+            "rustdoc": ("1.99.1", "b" * 40),
         }
 
         def tool_output(

@@ -11,7 +11,7 @@ use iroha_data_model::{
     sccp::params::{SCCP_MIN_EPOCH_MS_V1, SccpParametersV1},
 };
 use iroha_genesis::RawGenesisTransaction;
-use rand::{TryRngCore as _, rngs::OsRng};
+use rand::{TryRng as _, rngs::SysRng};
 use std::{num::NonZeroU64, path::Path};
 
 /// Genesis-pinned liability coverage: fourteen-day validity plus seven-day evidence grace.
@@ -123,7 +123,7 @@ pub fn reserve_reset_nonce(history: &Path, nonce: [u8; 32]) -> Result<()> {
 /// Returns an error if entropy or durable identity reservation fails.
 pub fn fresh_reset_nonce(history: &Path) -> Result<[u8; 32]> {
     let mut nonce = [0; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| eyre!("SCCP reset entropy unavailable: {error}"))?;
     reserve_reset_nonce(history, nonce)?;
@@ -228,7 +228,7 @@ mod tests {
             cadence.max(
                 iroha_data_model::parameter::system::Parameters::default()
                     .sumeragi()
-                    .payload_retry_interval_ms()
+                    .payload_retry_interval_ms
                     .get(),
             ),
         )
@@ -304,7 +304,7 @@ mod tests {
         for cadence in [100, 1_000, 4_000, 7_000] {
             let profile = append_profile(manifest(cadence), [1; 32]).unwrap();
             let parameters = profile.effective_parameters().unwrap();
-            assert!(parameters.sumeragi().payload_retry_interval_ms().get() >= cadence);
+            assert!(parameters.sumeragi().payload_retry_interval_ms.get() >= cadence);
             let npos = SumeragiNposParameters::from_custom_parameter(
                 parameters
                     .custom()

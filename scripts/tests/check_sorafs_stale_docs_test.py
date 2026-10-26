@@ -122,7 +122,7 @@ def test_fixture_readmes_do_not_claim_native_or_provider_qualification() -> None
         in provider
     )
     assert (
-        "It is not evidence of clean ABI-30 builds for all five native release "
+        "It is not evidence of clean ABI-33 builds for all five native release "
         "targets, skip-free SDK parity, published packages, external software signing, "
         "a qualified provider deployment, or L1/L2 promotion."
         in cookbook

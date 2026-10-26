@@ -589,11 +589,9 @@ STAGES += (("exact signed asset lookup and native missing-asset diagnostics", (
 )),)
 
 DAEMON_STAGES = (("offline final genesis deployment authority", (
-    "tests::manifest_crypto_checks::manifest_crypto_matches_config",
-    "tests::manifest_crypto_checks::detects_hash_mismatch",
-    "tests::manifest_crypto_checks::detects_allowed_signing_mismatch",
-    "tests::manifest_crypto_checks::detects_allowed_curve_ids_mismatch",
-    "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_crypto_mismatch_in_block",
+    "tests::manifest_crypto_checks::explicit_policy_verifier_readiness_has_no_ed25519_or_signing_requirement",
+    "tests::manifest_crypto_checks::unsigned_manifest_policy_cannot_initialize_node_admission",
+    "tests::manifest_crypto_checks::genesis_validation_accepts_bls_controllers_when_crypto_config_applied",
     "tests::manifest_crypto_checks::check_config_offline_executes_available_genesis",
     "tests::manifest_crypto_checks::check_config_accepts_taira_without_offline_backend_settings",
     "tests::manifest_crypto_checks::check_config_qualifies_the_fixed_moderation_strict_ingress",
@@ -2691,7 +2689,7 @@ CORE_SHARED_BLOCK_HISTORY_STAGES = (("original canonical history and hydration r
     'state::axt_source_transfer_tests::finalized_source_capacity_refusal_retains_original_owner_and_exact_claim',
     'snapshot::tests::snapshot_commit_evidence_refusal_retains_original_pool_and_captured_publication',
     'telemetry::tests::classified_status_tests::cold_status_history_refusal_retains_original_pool_and_unpublished_counters',
-    'telemetry::tests::classified_status_tests::cold_genesis_uptime_refusal_remains_deferred_after_classified_prefix',
+    'telemetry::tests::classified_status_tests::cold_genesis_read_refusal_is_deferred_until_genesis_time_is_cached',
     'sumeragi::lanes::evidence::tests::anchor_history_refusal_retains_exact_source_through_lane_evidence_retry',
 )),)
 CORE_STAGES += CORE_SHARED_BLOCK_HISTORY_STAGES
@@ -2707,6 +2705,19 @@ CORE_CANONICAL_XOR_STAGES = (("exact network XOR scope precision and rollback", 
 CORE_STAGES += CORE_CANONICAL_XOR_STAGES
 CORE_STARTUP_STAGES += CORE_CANONICAL_XOR_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_CANONICAL_XOR_STAGES
+# The signed genesis owns crypto admission. Local config/unsigned manifest
+# comparisons were retired; retain authentication, substitution and refusal controls
+# at the current Core owner as well as the daemon readiness checks above.
+CORE_GENESIS_CRYPTO_POLICY_STAGES = (("authenticated genesis crypto policy custody", (
+    'block::genesis_crypto_policy::tests::configured_root_selects_policy_from_later_input_without_ordinary_root_exemption',
+    'block::genesis_crypto_policy::tests::initial_policy_rejects_missing_and_equal_or_conflicting_duplicates_across_all_inputs',
+    'block::genesis_crypto_policy::tests::policy_capability_cannot_switch_original_source_or_configured_root',
+    'block::genesis_crypto_policy::tests::public_genesis_policy_inspection_authenticates_original_and_keeps_callback_result',
+    'block::genesis_crypto_policy::tests::local_crypto_settings_do_not_change_original_policy_or_execution_digest',
+)),)
+CORE_STAGES += CORE_GENESIS_CRYPTO_POLICY_STAGES
+CORE_STARTUP_STAGES += CORE_GENESIS_CRYPTO_POLICY_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_GENESIS_CRYPTO_POLICY_STAGES
 CORE_NATIVE_STAKING_PENALTY_STAGES = (("authenticated detector and funded XOR penalties", (
     'sumeragi::evidence_history::lane::tests::native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission',
     'sumeragi::evidence::tests::original_carrier_admits_then_finality_terminalizes_exact_parent_evidence',

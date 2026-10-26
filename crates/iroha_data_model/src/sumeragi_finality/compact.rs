@@ -129,9 +129,26 @@ impl SumeragiCommitCertificateV1 {
     /// Genesis has no `CommitQC`; malformed or oversized original components are rejected.
     pub fn from_verified(block: &VerifiedSumeragiBlock) -> Result<Self, FinalityError> {
         need(block.height() >= 2, "genesis has no Commit certificate")?;
-        let certificate = block.block().commit_certificate().ok_or_else(|| {
-            FinalityError("verified block has no embedded Commit certificate".into())
-        })?;
+        Self::from_block(block.block())
+    }
+
+    /// Extract original certificate DATA from one structurally checked global full proof.
+    ///
+    /// This does not authenticate the offered committee. The selected compact reader must
+    /// verify the returned certificate against its signed-genesis-rooted epoch authority.
+    ///
+    /// # Errors
+    /// Rejects genesis, malformed canonical blocks, substituted execution or invalid certificates.
+    pub fn from_proof(proof: &SumeragiFinalityProof) -> Result<Self, FinalityReadError> {
+        need(proof.height() >= 2, "genesis has no Commit certificate")?;
+        let decoded = proof.decode_checked(CertifiedResultScope::TairaGlobal)?;
+        Self::from_block(&decoded.block).map_err(Into::into)
+    }
+
+    fn from_block(block: &SignedBlock) -> Result<Self, FinalityError> {
+        let certificate = block
+            .commit_certificate()
+            .ok_or_else(|| FinalityError("block has no embedded Commit certificate".into()))?;
         let value = Self {
             consensus_header: certificate.consensus_header().to_vec(),
             commit_qc: certificate.commit_qc().to_vec(),
@@ -280,6 +297,81 @@ impl SumeragiCommitVerifierV1 {
     #[must_use]
     pub fn chain_id(&self) -> &str {
         &self.chain
+    }
+
+    /// Produce a full restart checkpoint from native quorum-certified recent decisions.
+    ///
+    /// The original height-one checkpoint must name this reader's selected signed genesis.
+    /// Each later decision is authenticated by this reader's exact native Commit quorum;
+    /// missing epochs still require their incumbent boundary certificates first. Exactly the
+    /// last three full proofs (or all heights below three) bind canonical executed bodies to
+    /// those certified results. Every retained successor additionally undergoes the ordinary
+    /// native parent, schedule and payload-availability checks before checkpoint export.
+    /// No remote checkpoint or candidate roster becomes a trust root. Success authenticates
+    /// historical execution only; it does not establish fresh peer or quorum readiness.
+    ///
+    /// # Errors
+    /// Refuses a changed genesis, missing or reordered witnesses, absent epoch authority,
+    /// invalid exact-quorum certificates, substituted bodies or broken native successors.
+    /// Failure leaves this reader's authenticated epochs unchanged.
+    pub fn checkpoint_from_proofs(
+        &mut self,
+        genesis: &SumeragiFinalityCheckpoint,
+        proofs: &[SumeragiFinalityProof],
+    ) -> Result<SumeragiFinalityCheckpoint, FinalityReadError> {
+        need(
+            genesis.height() == 1
+                && genesis.network_id() == self.network
+                && genesis.chain_id() == self.chain
+                && genesis.block_hash() == self.genesis_hash,
+            "compact checkpoint requires the selected original genesis",
+        )?;
+        let tip = proofs
+            .last()
+            .ok_or_else(|| FinalityError("compact checkpoint requires recent proofs".into()))?;
+        need(
+            tip.height() >= 2
+                && tip.height() < u64::MAX
+                && proofs.len() == usize::try_from(tip.height().min(3)).map_err(malformed)?,
+            "compact checkpoint requires the exact recent proof window",
+        )?;
+        let first = tip.height().saturating_sub(2).max(1);
+        let mut native =
+            SumeragiFinalityVerifier::from_trusted_checkpoint(genesis, &self.network, &self.chain)?;
+        need(
+            native.initial_epoch() == &self.initial && native.instance() == self.instance,
+            "compact checkpoint changes signed genesis authority",
+        )?;
+        native.decisions.clear();
+        let mut candidate = self.clone();
+        for (offset, proof) in proofs.iter().enumerate() {
+            need(
+                proof.height() == first + u64::try_from(offset).map_err(malformed)?,
+                "compact checkpoint recent proofs are discontinuous",
+            )?;
+            let (decoded, proposal, crypto) =
+                proof.decode_parts(CertifiedResultScope::TairaGlobal)?;
+            if proof.height() >= 2 {
+                let certificate = SumeragiCommitCertificateV1::from_block(&decoded.block)?;
+                let certified = candidate.verify(&certificate)?;
+                need(
+                    certified.core_hash == decoded.core_hash
+                        && certified.certified_result == decoded.certified_result,
+                    "compact checkpoint differs from certified execution",
+                )?;
+            }
+            // The oldest non-genesis decision is authenticated directly by its incumbent
+            // quorum. All available parent edges retain the full native verifier checks.
+            if proof.height() == 1 || offset > 0 {
+                native.check_trusted(proof, &decoded, proposal.as_deref(), &crypto, None)?;
+            }
+            native
+                .decisions
+                .insert(proof.height(), SumeragiFinalityVerifier::decision(&decoded));
+        }
+        let checkpoint = native.export_checkpoint(tip)?;
+        *self = candidate;
+        Ok(checkpoint)
     }
 
     /// Verify one incumbent boundary and export only its authenticated successor epoch.

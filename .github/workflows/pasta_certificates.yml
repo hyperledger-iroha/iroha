@@ -12,7 +12,10 @@ on:
       - "formal/kagemusha_pasta/**"
       - "formal/kagemusha_setup/**"
       - "formal/kagemusha_fold/**"
+      - "formal/kagemusha_committed_fold/**"
+      - "specs/kagemusha_c12_composition_v1.md"
       - "fixtures/native_prover/kats_v1.json"
+      - "fixtures/native_prover/reference_v1.json"
       - "fixtures/native_prover/reference_verifier/**"
       - ".github/workflows/pasta_certificates.yml"
   workflow_dispatch:
@@ -27,16 +30,23 @@ concurrency:
 jobs:
   arithmetic:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # Allow the complete portable control suites; protocol time gates are unchanged.
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Verify exact source primes, groups and SWU cover hypotheses
         run: python3 -B -S formal/kagemusha_pasta/check.py
       - name: Exercise arithmetic certificate rejection controls
         run: python3 -B -S -m unittest discover -s formal/kagemusha_pasta -p 'test_*.py' -v
+      - name: Exercise committed-fold stopped-path scalar controls
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/qualification
+          python3 -B -S -m unittest discover -s formal/kagemusha_committed_fold -p 'test_*.py' -v 2>&1 | tee target/qualification/committed-fold-ci.log
       - name: Exercise fold polynomial, transcript and ideal-model controls
         shell: bash
         run: |
@@ -51,12 +61,13 @@ jobs:
           python3 -B -S -m formal.kagemusha_setup.check --output target/qualification/setup-ci 2>&1 | tee target/qualification/setup-ci.log
       - name: Retain setup controls and partial failure evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: pasta-setup-controls
           path: |
             target/qualification/setup-ci
             target/qualification/setup-ci.log
             target/qualification/fold-algebra-ci.log
+            target/qualification/committed-fold-ci.log
           if-no-files-found: warn
           retention-days: 7

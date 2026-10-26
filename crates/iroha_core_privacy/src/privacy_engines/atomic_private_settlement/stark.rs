@@ -29,7 +29,7 @@ use iroha_data_model::{
     nexus::{PrivateSettlementProofIntentV1, PrivateSettlementProofStatementV1},
     privacy::{IrohaIvmPrivateNoteStarkStatementV1, PrivacyProtocolIdV1},
 };
-use rand::TryRngCore;
+use rand::TryRng;
 
 /// Exact settlement proof relation and transcript descriptor.
 pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-virtual-zero-inputs-and-audited-input-openings:public-input=sha3-384-opaque48(canonical-manifest-intent-proof-binding,canonical-leg-statement-including-successor-root+epoch,canonical-internal-statement,canonical-genesis):successor-correctness=validator-derived-frontier:post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms+success-fee-carriers-2:transparent-amx=separate:governed-disabled-by-default";
@@ -241,7 +241,7 @@ impl ProofManagedNoteStarkAdapterV1 for AtomicPrivateSettlementStarkAdapterV1<'_
     }
 }
 
-pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRngCore>(
+pub(crate) fn prove_atomic_private_settlement_stark_v1_with_rng<R: TryRng>(
     manifest: &PrivateSettlementProofIntentV1,
     statement: &PrivateSettlementProofStatementV1,
     canonical_genesis_hash: [u8; 32],

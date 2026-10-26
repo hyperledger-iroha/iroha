@@ -93,7 +93,7 @@ use iroha_plonk_gadgets::{
 };
 use rand_chacha::{
     ChaCha20Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 use sha2::{Digest as _, Sha256};
 

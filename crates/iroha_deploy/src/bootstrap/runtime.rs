@@ -1,4 +1,4 @@
-//! Owner-private advancing checkpoints, separate from the release bootstrap watermark.
+//! Owner-private advancing checkpoints rooted in the retained native network identity.
 
 use std::{fs::File, num::NonZeroU64, path::Path};
 
@@ -6,37 +6,35 @@ use iroha_data_model::sumeragi_finality::{SumeragiFinalityCheckpoint, SumeragiFi
 use iroha_fs::{FileIdentity, OwnerDirectory, PrivateDirectory, PublishMode};
 use norito::{Decode, Encode};
 
-use super::{AuthenticatedBootstrap, BootstrapError, MAX_RELEASE_CHECKPOINT_BYTES, Result, decode};
+use super::{AuthenticatedBootstrap, BootstrapError, MAX_BOOTSTRAP_BYTES, Result, decode};
 use crate::verify::finality::{AttestationQuorum, FinalityError, FinalitySource, FinalityVerifier};
 
 #[derive(Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::bootstrap::RuntimeCheckpointV1")]
 struct Record {
     network_name: String,
-    generation: u64,
     checkpoint: Vec<u8>,
 }
 
 /// Exclusive custody of one parent generation's advancing native finality prefix.
 ///
-/// Reopening retains newer verified progress even when the current release starts earlier.
+/// Reopening retains newer verified progress even when the bootstrap starts earlier.
 /// A reset needs a separate context. Only verification operations can advance this store;
 /// publication succeeds before their in-memory state or readiness report is exposed.
 pub struct ParentFinalityStore {
     directory: PrivateDirectory,
     lock: File,
     network_name: String,
-    generation: u64,
     verifier: FinalityVerifier,
     publication_uncertain: bool,
 }
 
 impl ParentFinalityStore {
-    /// Create from independently authenticated release material or reopen the same generation.
+    /// Create from authenticated native bootstrap material or reopen the same generation.
     /// Missing/corrupt records or locks are not repaired. This does not establish fresh readiness.
     ///
     /// # Errors
-    /// Unsafe custody, concurrent ownership, incomplete creation, changed network/generation,
+    /// Unsafe custody, concurrent ownership, incomplete creation, changed network,
     /// noncanonical checkpoint or a conflicting independently signed same-height decision.
     pub fn open(path: &Path, bootstrap: &AuthenticatedBootstrap) -> Result<Self> {
         let name = path
@@ -46,10 +44,9 @@ impl ParentFinalityStore {
             .parent()
             .ok_or(BootstrapError::Invalid("parent checkpoint path"))?;
         let parent = OwnerDirectory::open_or_create(parent)?;
-        let release = bootstrap.release();
+        let release = bootstrap.metadata();
         let initial = record_bytes(
             &release.network_name,
-            release.generation,
             &bootstrap.verifier,
         )?;
         let (directory, created) = match parent
@@ -70,14 +67,13 @@ impl ParentFinalityStore {
             bootstrap.verifier.clone()
         } else {
             let record: Record = decode(
-                &directory.read("verified.nrt", MAX_RELEASE_CHECKPOINT_BYTES)?,
-                MAX_RELEASE_CHECKPOINT_BYTES,
+                &directory.read("verified.nrt", MAX_BOOTSTRAP_BYTES)?,
+                MAX_BOOTSTRAP_BYTES,
             )?;
             if record.network_name != release.network_name
-                || record.generation != release.generation
             {
                 return Err(BootstrapError::Invalid(
-                    "parent generation differs; create a new context",
+                    "parent network differs; create a new context",
                 ));
             }
             let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&record.checkpoint)
@@ -105,16 +101,21 @@ impl ParentFinalityStore {
                 )
                 .map_err(FinalityError::from)?;
             }
-            verifier
+            if bootstrap.verifier.checkpoint().height() > verifier.checkpoint().height() {
+                bootstrap.verifier.clone()
+            } else {
+                verifier
+            }
         };
-        let result = Self {
+        let mut result = Self {
             directory,
             lock,
             network_name: release.network_name.clone(),
-            generation: release.generation,
             verifier,
             publication_uncertain: false,
         };
+        let selected = result.verifier.clone();
+        result.publish(&selected, PublishMode::Replace)?;
         Ok(result)
     }
 
@@ -126,11 +127,6 @@ impl ParentFinalityStore {
     /// Independently installed network label retained by this runtime context.
     pub fn network_name(&self) -> &str {
         &self.network_name
-    }
-
-    /// Authenticated reset generation; it cannot be changed by advancing certified blocks.
-    pub fn generation(&self) -> u64 {
-        self.generation
     }
 
     /// Verify one bounded page and durably retain progress without claiming current readiness.
@@ -148,6 +144,27 @@ impl ParentFinalityStore {
         self.publish(&next, PublishMode::Replace)?;
         self.verifier = next;
         Ok(height)
+    }
+
+    /// Advance to a certificate-verified parent state through one public endpoint.
+    /// This establishes a certified historical cut for registration and inclusion proofs;
+    /// it does not assert fresh quorum readiness. Ledger execution still enforces the
+    /// current owner, lease generation and exact signed operation.
+    ///
+    /// # Errors
+    /// Invalid certificates, a regressed tip, bounded-read or durable-publication failure.
+    pub fn refresh_certified<S: FinalitySource + ?Sized>(&mut self, source: &S) -> Result<u64> {
+        self.revalidate()?;
+        let member = self.verifier.checkpoint().tip().committee.first()
+            .ok_or(BootstrapError::Invalid("parent checkpoint has no committee"))?;
+        let peer = iroha_model_base::peer::PeerId::new(member.public_key.clone());
+        let proof = source.latest_finality_proof(&peer, &rand::random())
+            .map_err(|_| BootstrapError::Invalid("cannot retrieve parent certified tip"))?;
+        let mut next = self.verifier.clone();
+        next.advance(source, &proof)?;
+        self.publish(&next, PublishMode::Replace)?;
+        self.verifier = next;
+        Ok(proof.height())
     }
 
     /// Require fresh exact committee quorum, then durably publish before exposing readiness.
@@ -216,7 +233,7 @@ impl ParentFinalityStore {
 
     fn publish(&mut self, verifier: &FinalityVerifier, mode: PublishMode) -> Result<()> {
         self.revalidate()?;
-        let bytes = record_bytes(&self.network_name, self.generation, verifier)?;
+        let bytes = record_bytes(&self.network_name, verifier)?;
         if let Err(error) = self.directory.write_atomic("verified.nrt", &bytes, mode) {
             self.publication_uncertain = true;
             return Err(error.into());
@@ -227,12 +244,10 @@ impl ParentFinalityStore {
 
 fn record_bytes(
     network_name: &str,
-    generation: u64,
     verifier: &FinalityVerifier,
 ) -> Result<Vec<u8>> {
     let record = Record {
         network_name: network_name.to_owned(),
-        generation,
         checkpoint: verifier
             .checkpoint()
             .encode_canonical()
@@ -240,13 +255,13 @@ fn record_bytes(
     };
     let bytes = norito::encode_canonical(&record)
         .map_err(|_| BootstrapError::Invalid("cannot encode retained parent record"))?;
-    if bytes.len() > MAX_RELEASE_CHECKPOINT_BYTES {
+    if bytes.len() > MAX_BOOTSTRAP_BYTES {
         return Err(BootstrapError::Invalid(
             "retained parent checkpoint exceeds byte bound",
         ));
     }
     // Publication must fit the exact reopen decoder, including its nested archive limits.
     // A refusal here has not attempted filesystem publication and does not poison custody.
-    let _: Record = decode(&bytes, MAX_RELEASE_CHECKPOINT_BYTES)?;
+    let _: Record = decode(&bytes, MAX_BOOTSTRAP_BYTES)?;
     Ok(bytes)
 }

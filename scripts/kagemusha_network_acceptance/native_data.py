@@ -10,6 +10,8 @@ from paths import ROOT, QUAL
 CAP = 64 << 20
 JSON_LIMIT = CAP
 EVIDENCE_LIMIT = 128 << 20
+# Mirrors the current native model's complete KAGEMUSHA message bound.
+MESSAGE_LIMIT = 10_034
 SOURCE_PINS = (
  'KAGEMUSHA_SIGNED_GENESIS_FIXTURE_SHA256',
  'KAGEMUSHA_WALLET_CATALOG_PRODUCER_SHA256', 'KAGEMUSHA_WALLET_CATALOG_SOURCE_SHA256',
@@ -186,8 +188,9 @@ def output_records(name, output, env, *, expected_heights=None):
                 and type(value['new_payment_signatures']) is int and value['new_payment_signatures'] == 0
                 and value['physical_device_qualified'] is False, 'native activation retention scope differs')
         require(set(receipt) == {'schema', 'action', 'signedWireSHA256', 'signedWireBytes', 'nativeResult',
-                                'nativeReturnedTicks', 'invocation', 'sequence'}
-                and receipt['action'] == 'retain-activation' and receipt['nativeResult'] == 'not_started'
+                                'entrypointHex', 'nativeReturnedTicks', 'invocation', 'sequence'}
+                and receipt['action'] == 'retain-activation' and receipt['nativeResult'] == 'awaiting'
+                and pin(receipt['entrypointHex'])
                 and receipt['signedWireSHA256'] == wire['sha256'] and receipt['signedWireBytes'] == str(wire['bytes'])
                 and receipt['invocation'] == env['KAGEMUSHA_NATIVE_ACTIVATION_INVOCATION']
                 and receipt['sequence'] == '0' and type(receipt['nativeReturnedTicks']) is str
@@ -238,8 +241,8 @@ def output_records(name, output, env, *, expected_heights=None):
             'archive_exact_replay_after_restart')), 'both Archive folds and restart replay required')
         result = {'exchange': item, 'claim': claim}
         for filename in ('a-b-payment.norito', 'b-c-payment.norito', 'b-receive.norito', 'c-receive.norito'):
-            result[filename] = observe(output / filename, 10000)
-        result.update(manifest_rows(output, value.get('archive_originals'), ARCHIVE_NAMES, cap=10000))
+            result[filename] = observe(output / filename, MESSAGE_LIMIT)
+        result.update(manifest_rows(output, value.get('archive_originals'), ARCHIVE_NAMES, cap=MESSAGE_LIMIT))
         for filename, original in manifest_rows(output / 'wallet-c', value['c_open_originals'],
                                                 {'credential.norito', 'certificates.norito', 'account.norito', 'asset.norito'}).items():
             result['c-' + filename] = original

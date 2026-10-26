@@ -10,7 +10,8 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.MultiThreadIoEventLoopGroup
+import io.netty.channel.nio.NioIoHandler
 import javax.net.ssl.SSLContext
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -206,7 +207,7 @@ class NettyWebSocketConnectorTest {
     fun `closing borrowed connector leaves sibling socket and event loop usable`() {
         MockWebServer().use { server ->
             repeat(2) { server.enqueue(MockResponse().withWebSocketUpgrade(EchoPeer())) }
-            val shared = NioEventLoopGroup(1)
+            val shared = MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory())
             try {
                 NettyWebSocketConnector(shared, SSLContext.getDefault()).use { first ->
                     NettyWebSocketConnector(shared, SSLContext.getDefault()).use { second ->

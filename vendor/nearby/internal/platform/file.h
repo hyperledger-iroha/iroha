@@ -1,0 +1,113 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef PLATFORM_PUBLIC_FILE_H_
+#define PLATFORM_PUBLIC_FILE_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+
+#include "absl/strings/string_view.h"
+#include "absl/time/time.h"
+#include "internal/platform/byte_array.h"
+#include "internal/platform/exception.h"
+#include "internal/platform/implementation/input_file.h"
+#include "internal/platform/implementation/output_file.h"
+#include "internal/platform/implementation/platform.h"
+#include "internal/platform/input_stream.h"
+
+namespace nearby {
+
+class InputFile final {
+ public:
+  using Platform = api::ImplementationPlatform;
+#if defined(NEARBY_CHROMIUM)
+  explicit InputFile(PayloadId payload_id);
+#endif  // defined(NEARBY_CHROMIUM)
+  explicit InputFile(std::string file_path);
+  ~InputFile();
+  InputFile(InputFile&&) noexcept;
+  InputFile& operator=(InputFile&&);
+
+  // Reads up to size bytes and returns as a ByteArray object wrapped by
+  // ExceptionOr.
+  // Returns Exception::kIo on error, or end of file.
+  ExceptionOr<ByteArray> Read(std::int64_t size);
+
+  // Returns a string that uniquely identifies this file.
+  std::string GetFilePath() const;
+
+  // Returns total size of this file in bytes.
+  std::int64_t GetTotalSize() const;
+
+  ExceptionOr<size_t> Skip(size_t offset);
+
+  // Disallows further reads from the file and frees system resources,
+  // associated with it.
+  Exception Close();
+
+  // Returns a handle to the underlying input stream.
+  //
+  // Returned handle will remain valid even if InputFile is moved, for as long
+  // as original InputFile lifetime continues.
+  // Side effects of any non-const operation invoked for InputFile (such as
+  // Read, or Close will be observable through InputStream& handle, and vice
+  // versa.
+  InputStream& GetInputStream();
+
+  absl::Time GetLastModifiedTime() const;
+
+ private:
+  std::unique_ptr<api::InputFile> impl_;
+};
+
+class OutputFile final {
+ public:
+  using Platform = api::ImplementationPlatform;
+#if defined(NEARBY_CHROMIUM)
+  explicit OutputFile(PayloadId payload_id);
+#endif  // defined(NEARBY_CHROMIUM)
+  explicit OutputFile(std::string file_path);
+  ~OutputFile();
+  OutputFile(OutputFile&&) noexcept;
+  OutputFile& operator=(OutputFile&&) = delete;
+
+  bool IsValid() const;
+
+  std::string GetFilePath() const { return file_path_; }
+
+  // Writes all data from string_view object to the underlying stream.
+  // Returns Exception::kIo on error, Exception::kSuccess otherwise.
+  Exception Write(absl::string_view data);
+
+  // Disallows further writes to the file and frees system resources,
+  // associated with it.
+  Exception Close();
+
+  // Closes the file if open and deletes it from the filesystem.
+  // Returns true if the file was deleted.
+  bool Delete();
+
+  void SetLastModifiedTime(absl::Time last_modified_time);
+
+ private:
+  std::unique_ptr<api::OutputFile> impl_;
+  const std::string file_path_;
+};
+
+}  // namespace nearby
+
+#endif  // PLATFORM_PUBLIC_FILE_H_

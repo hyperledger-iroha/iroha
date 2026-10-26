@@ -1,7 +1,5 @@
 //! End-to-end multihash roundtrip tests for `MlDsa` / ML-DSA-65 keys.
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
-use pqcrypto_mldsa::mldsa65;
-use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 #[test]
 fn mldsa_public_key_multihash_roundtrip() {
     let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:multihash:pk".to_vec(), Algorithm::MlDsa)
@@ -11,8 +9,7 @@ fn mldsa_public_key_multihash_roundtrip() {
         .try_to_bytes()
         .expect("fixture ML-DSA public key must be well-formed");
     assert_eq!(algorithm, Algorithm::MlDsa);
-    let pk = mldsa65::PublicKey::from_bytes(public_bytes).expect("seeded ML-DSA public key");
-    let pubkey = PublicKey::from_bytes(iroha_crypto::Algorithm::MlDsa, pk.as_bytes())
+    let pubkey = PublicKey::from_bytes(iroha_crypto::Algorithm::MlDsa, public_bytes)
         .expect("mldsa pk from bytes");
     // Serialize to multihash string
     let s = format!("{pubkey}");
@@ -34,11 +31,9 @@ fn mldsa_public_key_multihash_roundtrip() {
 fn mldsa_private_key_multihash_roundtrip_exposed() {
     let kp = KeyPair::try_from_seed(b"iroha:ml-dsa:multihash:sk".to_vec(), Algorithm::MlDsa)
         .expect("fixture seed derives ML-DSA private-key fixture");
-    let sk = mldsa65::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
-        .expect("seeded ML-DSA secret key");
-    let prikey =
-        iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::MlDsa, sk.as_bytes())
-            .expect("mldsa sk from bytes");
+    let sk = kp.private_key().to_bytes().1;
+    let prikey = iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::MlDsa, &sk)
+        .expect("mldsa sk from bytes");
     let exposed = ExposedPrivateKey(prikey.clone());
     // Serialize to multihash string via ExposedPrivateKey
     let s = format!("{exposed}");

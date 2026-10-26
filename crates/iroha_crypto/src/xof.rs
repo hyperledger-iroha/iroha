@@ -5,10 +5,8 @@
 //! them, and different output lengths share the SHAKE prefix unless the caller
 //! includes the requested length in its input frame.
 
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput as _, Update as _, XofReader as _},
-};
+use sha3::digest::{ExtendableOutput as _, Update as _, XofReader as _};
+use shake::Shake256;
 
 /// Expand the concatenation of `parts` with SHAKE256 into `output`.
 ///

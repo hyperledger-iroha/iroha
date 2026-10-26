@@ -106,6 +106,18 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     {
         let _parent_profile = ChainDiscriminantGuard::enter(369);
+        let root = prepared.context.client_config.parent().unwrap();
+        let signed =
+            iroha_fs::read_private(root.join("genesis.signed.nrt"), SIGNED_GENESIS_MAX_BYTES_V1)
+                .unwrap();
+        let block = iroha_data_model::block::decode_framed_signed_block(&signed)
+            .expect("retained binary genesis is independent of the parent address profile");
+        iroha_data_model::sumeragi_finality::authenticated_genesis(&block)
+            .expect("retained genesis authentication is independent of the parent address profile");
+        assert!(
+            iroha_genesis::signed_genesis_root_fee_policy(&block).is_err(),
+            "strict account literals reject the foreign parent address profile"
+        );
         assert_eq!(
             prepared.stream_token_authorities().unwrap(),
             Some(manifest.clone())

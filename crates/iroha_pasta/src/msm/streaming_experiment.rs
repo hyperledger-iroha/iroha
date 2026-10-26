@@ -9,7 +9,7 @@ use super::*;
 use group::GroupEncoding;
 use rand_chacha::{
     ChaCha20Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 use sha2::{Digest, Sha256};
 

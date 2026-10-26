@@ -57,9 +57,9 @@ rand = { workspace = true, features = ["std_rng"] }
 blake3 = { workspace = true, features = ["zeroize"] }
 time = { workspace = true }
 iroha_primitives = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 tokio-tungstenite = { workspace = true }
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = [] }
 soranet_pq = { workspace = true }
 tempfile = "3.23.0"
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }

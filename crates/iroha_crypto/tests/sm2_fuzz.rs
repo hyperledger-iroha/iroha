@@ -201,7 +201,7 @@ fn sm2_compute_z_matches_signing_key() {
         hasher.update(za);
         hasher.update(&message);
         let digest = hasher.finalize();
-        let raw = Sm2RawSignature::from_bytes(&signature.as_bytes())
+        let raw = Sm2RawSignature::from_bytes((&signature.as_bytes()).into())
             .expect("signature converts to raw SM2 form");
         public
             .as_inner()

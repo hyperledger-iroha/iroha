@@ -1,7 +1,7 @@
 //! Finite-RHS mixed-addition invariants and a bounded public component diagnostic.
 use super::*;
 use crate::{Ep, Eq};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 use std::{hint::black_box, time::Instant};
 

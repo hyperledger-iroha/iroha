@@ -1,4 +1,4 @@
-//! Signed discovery hints, credential separation and bounded faucet authorization.
+//! Selected discovery routes, credential separation and bounded faucet authorization.
 
 use std::time::Duration;
 
@@ -6,16 +6,16 @@ use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::sumeragi_finality::test_fixtures::NativeFinalityFixture;
 
 use super::*;
-use crate::bootstrap::tests::{metadata, signed, trust};
+use crate::bootstrap::tests::{authenticated, metadata};
 
 #[test]
-fn signed_provisioning_fields_require_bls_endpoints_and_bounded_faucet_authority() {
+fn selected_provisioning_fields_require_bls_endpoints_and_bounded_faucet_authority() {
     let checkpoint = NativeFinalityFixture::new().checkpoint();
-    let mut release = metadata(&checkpoint);
-    validate(&release).unwrap();
+    let mut metadata_record = metadata(&checkpoint);
+    validate(&metadata_record).unwrap();
     let issuer = KeyPair::from_seed(vec![91; 32], Algorithm::Ed25519);
-    release.faucet = Some(ReleaseFaucet {
-        torii_root: release.torii_roots[0].clone(),
+    metadata_record.faucet = Some(FaucetPolicy {
+        torii_root: metadata_record.torii_roots[0].clone(),
         issuer: AccountId::new(issuer.public_key().clone()),
         asset_definition_id: iroha_wallet::operations::XOR_ASSET_DEFINITION
             .parse()
@@ -24,42 +24,37 @@ fn signed_provisioning_fields_require_bls_endpoints_and_bounded_faucet_authority
         max_operation_fee: 2_u64.into(),
         max_namespace_rent: 50_u64.into(),
     });
-    release.build_registry = Some(ReleaseBuildRegistry {
-        torii_roots: vec![release.torii_roots[0].clone()],
+    metadata_record.build_registry = Some(BuildRegistryPolicy {
+        torii_roots: vec![metadata_record.torii_roots[0].clone()],
     });
-    validate(&release).unwrap();
-    let bytes = signed(release.clone(), &checkpoint, &issuer);
-    let directory = tempfile::tempdir().unwrap();
-    let store = ReleaseCheckpointStore::open(&directory.path().join("release")).unwrap();
-    let authenticated = store
-        .authenticate(&trust(&issuer, 1), &bytes, 2_000)
-        .unwrap();
-    assert_eq!(authenticated.release(), &release);
+    validate(&metadata_record).unwrap();
+    let bootstrap = authenticated(metadata_record.clone(), &checkpoint);
+    assert_eq!(bootstrap.metadata(), &metadata_record);
     for roots in [
         vec![],
         vec!["https://foreign.example/".into()],
-        vec![release.torii_roots[0].clone(); 2],
+        vec![metadata_record.torii_roots[0].clone(); 2],
     ] {
-        let mut invalid = release.clone();
+        let mut invalid = metadata_record.clone();
         invalid.build_registry.as_mut().unwrap().torii_roots = roots;
         assert!(validate(&invalid).is_err());
     }
-    let options = authenticated
+    let options = bootstrap
         .private_operation_options(Instant::now() + Duration::from_secs(5))
         .unwrap();
-    let faucet = release.faucet.as_ref().unwrap();
+    let faucet = metadata_record.faucet.as_ref().unwrap();
     assert_eq!(
         options.max_total_fees.get(&faucet.asset_definition_id),
         Some(&faucet.max_operation_fee)
     );
     assert_eq!(options.max_total_fees.len(), 1);
     assert!(
-        authenticated
+        bootstrap
             .private_operation_options(Instant::now())
             .is_err()
     );
     for mutation in [0, 1, 2, 3, 4, 5, 6] {
-        let mut changed = release.clone();
+        let mut changed = metadata_record.clone();
         match mutation {
             0 => changed.account_chain_discriminant = 0,
             1 => changed.peers.push(changed.peers[0].clone()),
@@ -71,41 +66,26 @@ fn signed_provisioning_fields_require_bls_endpoints_and_bounded_faucet_authority
         }
         assert!(validate(&changed).is_err());
     }
-    let mut missing_member = release.clone();
-    missing_member.peers.pop();
-    assert!(
-        SignedNetworkCheckpoint::sign(missing_member, &checkpoint, issuer.private_key()).is_err()
-    );
-    let mut changed_profile = release;
-    changed_profile.serial += 1;
-    changed_profile.account_chain_discriminant += 1;
-    let bytes = signed(changed_profile, &checkpoint, &issuer);
-    assert!(
-        store
-            .authenticate(&trust(&issuer, 1), &bytes, 2_001)
-            .is_err()
-    );
+    let mut public_root_only = metadata_record;
+    public_root_only.peers.clear();
+    validate(&public_root_only).unwrap();
+
 }
 
 #[test]
-fn automatic_parent_clients_use_only_signed_hints_and_never_forward_child_credentials() {
+fn automatic_parent_clients_use_only_selected_routes_and_never_forward_child_credentials() {
     let checkpoint = NativeFinalityFixture::new().checkpoint();
     let key = KeyPair::from_seed(vec![92; 32], Algorithm::Ed25519);
-    let release = metadata(&checkpoint);
-    let bytes = signed(release.clone(), &checkpoint, &key);
-    let directory = tempfile::tempdir().unwrap();
-    let bootstrap = ReleaseCheckpointStore::open(&directory.path().join("release"))
-        .unwrap()
-        .authenticate(&trust(&key, 1), &bytes, 2_000)
-        .unwrap();
+    let metadata_record = metadata(&checkpoint);
+    let bootstrap = authenticated(metadata_record.clone(), &checkpoint);
     let config = Config::load_table(
         "public-parent.toml",
         toml::toml! {
-            chain = (release.chain_id)
-            network_id = (release.network_id.to_string())
-            torii_url = (release.torii_roots[0].as_str())
+            chain = (metadata_record.chain_id.clone())
+            network_id = (metadata_record.network_id.to_string())
+            torii_url = (metadata_record.torii_roots[0].as_str())
             [account]
-            chain_discriminant = (release.account_chain_discriminant)
+            chain_discriminant = (metadata_record.account_chain_discriminant)
             public_key = (key.public_key().to_string())
             private_key = (ExposedPrivateKey(key.private_key().clone()).to_string())
         },
@@ -121,6 +101,10 @@ fn automatic_parent_clients_use_only_signed_hints_and_never_forward_child_creden
     assert_eq!(network.torii_url, config.torii_api_url.as_str());
     assert!(bootstrap.private_operation_options(deadline).is_err());
     bootstrap.parent_http_source(&config, deadline).unwrap();
+    let mut public_root_only = metadata_record.clone();
+    public_root_only.peers.clear();
+    let public_bootstrap = authenticated(public_root_only, &checkpoint);
+    public_bootstrap.parent_http_source(&config, deadline).unwrap();
     let mut changed = config.clone();
     changed.api_token = Some(iroha::secrecy::SecretString::new(
         "private-child-token".into(),

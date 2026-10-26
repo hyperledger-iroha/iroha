@@ -23,16 +23,18 @@ verification memory. This finite initial campaign does not establish full fuzz,
 cryptographic, constant-time, denial-of-service or production qualification.
 
 Toolchain: `cargo-fuzz 0.13.1`, `rustc 1.96.0-nightly (80381278a 2026-03-01)`,
-`aarch64-apple-darwin`, libfuzzer-sys 0.4.10. The isolated lock keeps every shared
-dependency at a version in the root lock; `arbitrary` and `libfuzzer-sys` are
+`aarch64-apple-darwin`, libfuzzer-sys 0.4.10. The campaign lock kept every shared
+dependency at a version in the then-current root lock; `arbitrary` and `libfuzzer-sys` are
 test-only additions. The binary links `librustc-nightly_rt.asan.dylib`.
 These ASan campaigns used ordinary cargo-fuzz build metadata, without
 `--stable-local-metadata`. The exact isolated lock is retained as
 `Cargo.lock.template` because repository ignore rules exclude nested
-`Cargo.lock` files. Restore it before building this workspace:
+`Cargo.lock` files. It is historical evidence for those campaigns. The current
+manifest uses libfuzzer-sys 0.4.13 and AES 0.9.3; resolve its current local lock
+before building this workspace:
 
 ```sh
-cp crates/iroha_parliament_ballot_proof/fuzz/Cargo.lock.template crates/iroha_parliament_ballot_proof/fuzz/Cargo.lock
+cargo generate-lockfile --manifest-path crates/iroha_parliament_ballot_proof/fuzz/Cargo.toml
 ```
 
 The manifest hashes the template, which is byte-identical to the lock used by
@@ -80,7 +82,7 @@ manifest.
 Extract into a fresh directory and replay with both feature modes:
 
 ```sh
-cp crates/iroha_parliament_ballot_proof/fuzz/Cargo.lock.template crates/iroha_parliament_ballot_proof/fuzz/Cargo.lock
+cargo generate-lockfile --manifest-path crates/iroha_parliament_ballot_proof/fuzz/Cargo.toml
 mkdir -p /tmp/parliament-parser-fuzz-retained
 tar -xJf crates/iroha_parliament_ballot_proof/fuzz/evidence/corpus.tar.xz -C /tmp/parliament-parser-fuzz-retained
 scripts/cargo_fast.sh --stable-local-metadata --target-dir /tmp/parliament-backend-fuzz-replay-target --incremental -- run --manifest-path crates/iroha_parliament_ballot_proof/fuzz/Cargo.toml --release --bin replay -- /tmp/parliament-parser-fuzz-retained/corpus

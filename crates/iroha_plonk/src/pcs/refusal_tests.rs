@@ -18,7 +18,7 @@ use crate::{
 use ff::{Field, PrimeField};
 use iroha_pasta::{Ep, Eq, PastaCurve, msm::MemoryBudget};
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 struct Script<C: PastaCurve> {
     challenges: Vec<C::ScalarExt>,

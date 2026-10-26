@@ -901,6 +901,14 @@
     "scope": "out",
     "reason": "Asset-owner FI eligibility, FI-authorized opaque reference attestations, wallet-owner link consent and transparent linked-FI transfers. The native handler derives the destination from the current retained link and consumes VerifiedLinkedFiTransfer in the numeric movement kernel; that private Rust capability is not a proof. No proof-bearing field or ZK/FHE verifier."
    },
+   "asset_fi_context": {
+    "scope": "out",
+    "reason": "Native FI context and historical receipt assertions compare canonical retained rows and hashes under exact authority, incarnation, challenge and checkpoint checks (crates/iroha_core/src/smartcontracts/isi/asset_fi_context.rs). They carry no proof and call no ZK/FHE verifier."
+   },
+   "asset_escrow_scope": {
+    "scope": "out",
+    "reason": "Exact asset-owner initialization derives the escrow completeness scope from canonical native rows and the current incarnation/revision (crates/iroha_core/src/state/asset_escrow_scope.rs). It carries no caller-supplied proof and invokes no ZK/FHE verifier."
+   },
    "asset_uid_enrollment": {
     "scope": "out",
     "reason": "Asset-owner system-account classification and mandatory UID enrollment reconcile every positive transparent balance against retained retail, FI, system or native custody records. Authority, revision and numeric-state checks carry no proof and call no ZK/FHE verifier."
@@ -10810,7 +10818,7 @@
    {"id": "turboshake", "pattern": "\\bTurboShake(?:128|256)\\b"},
    {"id": "blake2s", "pattern": "\\bBlake2s(?:Var|256|Mac)?\\b|\\bblake2s_simd\\b"},
    {"id": "keccak_other", "pattern": "\\bKeccak(?:224|384|512)\\b"},
-   {"id": "hkdf", "pattern": "\\bHkdf\\b|\\bhkdf::"},
+   {"id": "hkdf", "pattern": "\\b(?:Simple)?Hkdf\\b|\\bhkdf::"},
    {"id": "hmac", "pattern": "\\bHmac\\b"},
    {"id": "ripemd", "pattern": "\\bRipemd(?:160|256|320)\\b"},
    {"id": "rescue", "pattern": "[Rr]escue"},
@@ -11031,7 +11039,7 @@
    {
     "product": "exact12_admission",
     "owner_paths": ["crates/iroha_core_privacy/src/privacy_profiles.rs", "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"],
-    "census": {"poseidon": 12, "sha2_256": 5, "sha3_384": 5},
+    "census": {"poseidon": 12, "sha2_256": 5, "sha3_384": 3},
     "native": [
      {
       "role": "parameter, verifier and engine-manifest digests",
@@ -11141,7 +11149,9 @@
       "symbol": "use sha2::{Digest, Sha256};"
      }
     ],
-    "in_circuit": {"none": "Spartan/Nova/Hyrax over T256; native transcript and generator hashes are owned by iroha_zkp_halo2::vega and recorded in primitive_roles below. vendor/vega-prover supplies independent test reference material."},
+    "in_circuit": {
+     "none": "Spartan/Nova/Hyrax over T256; native transcript and generator hashes are owned by iroha_zkp_halo2::vega and recorded in primitive_roles below. vendor/vega-prover supplies independent test reference material."
+    },
     "primitive_roles": [
      {"inventory": "primitive", "key": "digest_roles/vega.transcript-keccak"},
      {"inventory": "primitive", "key": "digest_roles/vega.xof-shake256"}
@@ -11150,7 +11160,7 @@
    {
     "product": "zk_x509",
     "owner_paths": ["crates/iroha_core_privacy/src/privacy_engines/zk_x509", "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"],
-    "census": {"poseidon": 1, "sha2_256": 39, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 39, "sha3_384": 3},
     "native": [
      {
       "role": "hash frames and CRL digests",
@@ -11239,7 +11249,7 @@
      "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs",
      "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs"
     ],
-    "census": {"poseidon": 1, "sha2_256": 26, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 26, "sha3_384": 3},
     "native": [
      {
       "role": "statement digest and outer commitments",
@@ -11269,7 +11279,7 @@
      "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs",
      "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs"
     ],
-    "census": {"poseidon": 1, "sha2_256": 13, "sha3_256": 1, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 13, "sha3_256": 1, "sha3_384": 3},
     "native": [
      {
       "role": "statement digest",
@@ -11332,7 +11342,7 @@
      "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs",
      "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"
     ],
-    "census": {"poseidon": 1, "sha2_256": 2, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 2, "sha3_384": 3},
     "native": [
      {
       "role": "carrier and bundle digests",

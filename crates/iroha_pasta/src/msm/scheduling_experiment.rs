@@ -7,9 +7,9 @@
 use super::*;
 use crate::msm::{MsmError, ScratchReservation, SharedMemoryBudget};
 use crate::{Ep, Eq};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::{RngCore, SeedableRng};
+use rand_core::{Rng, SeedableRng};
 use rayon::prelude::*;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -185,7 +185,7 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
             if CancellationToken::checkpoint(cancellation).is_err() {
                 break;
             }
-            let claimed = next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            let claimed = next.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 if value < tasks { Some(value + 1) } else { None }
             });
             let Ok(task) = claimed else {

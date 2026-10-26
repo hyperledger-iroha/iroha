@@ -204,7 +204,7 @@ fn hex_digit(digit: u8) -> u8 {
 pub fn hash_array(data: &[u8]) -> [u8; 64] {
     use sha3::digest::{ExtendableOutput, Update, XofReader};
 
-    let mut sponge = sha3::Shake256::default();
+    let mut sponge = shake::Shake256::default();
     sponge.update(data);
     let mut digest = [0u8; 64];
     sponge.finalize_xof().read(&mut digest);

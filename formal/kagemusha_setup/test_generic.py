@@ -50,8 +50,8 @@ def source_toy(curve_tag, modules, fixture, contradictory=False):
     columns = [frame(uint(kind)) + frame(uint(0)) for kind in (0, 2)]
     lookup = frame(seq([expr([a0])])) + frame(seq([expr([q0])]))
     fields = [uint(1, 2), uint(curve_tag), uint(curve.base, 32), uint(curve.scalar, 32),
-              params.digest, uint(6, 1), uint(2), uint(1), uint(1), uint(4, 1),
-              uint(5, 2), uint(2, 1), uint(3, 1), uint(0), uint(1), uint(1),
+              params.digest, uint(6, 1), uint(2), uint(1), uint(1), uint(6, 1),
+              uint(5, 2), uint(2, 1), uint(5, 1), uint(0), uint(1), uint(1),
               seq([uint(1)]), seq([query]), seq([query]), seq([query]),
               frame(uint(0, 1)) + frame(uint(1)) + frame(seq([])),
               seq([seq([expr(gate)]) for gate in gates]), seq(columns), seq([lookup]),
@@ -276,6 +276,170 @@ class GenericKnownLog(unittest.TestCase):
                                      (REFERENCE/name).read_bytes())
                 type(self).verified_adapted_toy_proofs += 1
 
+    def test_total_roles_map_raw_zero_without_extra_squeezes(self):
+        """Both curves verify the selected zero-role boundaries with one fixed tape."""
+        for tag in (0, 1):
+            with self.subTest(curve=tag):
+                d, key, _, _, _, original = self.sources[tag, 'ordinary']
+                case = make_case(OUTPUT/f'total-zero-{tag}', d.raw, key, original,
+                    {'descriptor':sha(d.raw), 'key':sha(key), 'original':sha(original)},
+                    self.families[tag])
+                original_transcript = case.transcript.Transcript
+                changed = {4, 7, 9, *range(11, 11+d['k'])}
+                observed = []
+
+                class TestOnlyRoleZeros(original_transcript):
+                    """Advance RP57, replacing only raw x, x3, Xi and u outputs."""
+                    test_only_challenge_adapter = 'test-only/total-role-zeros/v1'
+
+                    def __init__(self, *args, **kwargs):
+                        super().__init__(*args, **kwargs)
+                        self.raw = []
+                        observed.append(self)
+
+                    def squeeze(self):
+                        index = len(self.challenges)
+                        value = super().squeeze()
+                        self.raw.append(value)
+                        if index in changed:
+                            self.challenges[-1] = 0
+                            return 0
+                        return value
+
+                coins = CountedCoins(2919+tag)
+                with patch.object(case.transcript, 'Transcript', TestOnlyRoleZeros), \
+                     patch.object(case.verifier, 'Transcript', TestOnlyRoleZeros):
+                    args, result, record = simulate(case, [[1]], coins)
+                    self.assertEqual(case.verifier.verify(**args), result)
+                    self.assertEqual(record['evaluation_point'], 5)
+                    self.assertEqual(record['opening_point'], 25)
+                    self.assertEqual(record['masking_challenge'], 1)
+                    self.assertEqual(result.rounds, (1,)*d['k'])
+                    self.assertFalse(record['fixed_poseidon'])
+                    self.assertEqual(record['test_only_challenge_adapter'],
+                                     TestOnlyRoleZeros.test_only_challenge_adapter)
+                    self.assertEqual(len(args['proof']), sample_budget(case)['expected_proof_bytes'])
+                    self.assertLessEqual(coins.calls, sample_budget(case)['source_calls_max'])
+                    self.assertEqual(len(observed), 3)  # writer and two complete reads
+                    for transcript in observed:
+                        self.assertEqual(len(transcript.raw), 11+d['k'])
+                        self.assertEqual(transcript.challenges, list(result.challenges))
+                        for index, raw in enumerate(transcript.raw):
+                            self.assertEqual(transcript.challenges[index],
+                                             0 if index in changed else raw)
+                    m = case.descriptor.curve.scalar
+                    # Independent field character checks establish the selected
+                    # coset separation; these do not call the role-map helpers.
+                    self.assertEqual(pow(5, (m-1)//2, m), m-1)
+                    self.assertEqual(pow(25, (m-1)//2, m), 1)
+                    self.assertEqual(pow(25, (m-1)//4, m), m-1)
+                    self.assertNotEqual(pow(5, d.n, m), 1)
+                    self.assertNotEqual(pow(25, d.n, m), 1)
+                    rotations = case.verifier.opening_shape(case.descriptor)[1]
+                    self.assertNotIn(25, [5*pow(case.descriptor.curve.omega(d['k']), r % d.n, m) % m
+                                          for r in rotations])
+                    # Check general role formulas and malformed canonical inputs
+                    # independently of the simulator's zero-only observations.
+                    for raw in (0, 1, 2, m-1):
+                        nonzero = 1 if raw == 0 else raw
+                        self.assertEqual(case.transcript.nonzero_challenge(raw, m), nonzero)
+                        self.assertEqual(case.transcript.evaluation_challenge(raw, m),
+                                         5*nonzero*nonzero % m)
+                        self.assertEqual(case.transcript.multiopening_challenge(raw, m),
+                                         25*nonzero**4 % m)
+                    fourth_root = case.descriptor.curve.omega(2)
+                    self.assertEqual(pow(fourth_root, 2, m), m-1)
+                    evaluation_fiber = {0, 1, m-1}
+                    opening_fiber = {*evaluation_fiber, fourth_root, -fourth_root % m}
+                    self.assertEqual(len(evaluation_fiber), 3)
+                    self.assertEqual(len(opening_fiber), 5)
+                    self.assertTrue(all(case.transcript.evaluation_challenge(raw, m) == 5
+                                        for raw in evaluation_fiber))
+                    self.assertTrue(all(case.transcript.multiopening_challenge(raw, m) == 25
+                                        for raw in opening_fiber))
+                    for role in (case.transcript.nonzero_challenge,
+                                 case.transcript.evaluation_challenge,
+                                 case.transcript.multiopening_challenge):
+                        for raw in (-1, m, True):
+                            with self.assertRaisesRegex(ValueError, 'canonical role challenge'):
+                                role(raw, m)
+                self.assertIs(case.transcript.Transcript, original_transcript)
+                self.assertIs(case.verifier.Transcript, original_transcript)
+                with self.assertRaises(ValueError):
+                    case.verifier.verify(**args)
+                type(self).verified_adapted_toy_proofs += 1
+
+    def test_identity_final_generator_keeps_finite_absorbed_messages(self):
+        """One explicit round tuple has G=0; every absorbed point remains finite."""
+        for tag in (0, 1):
+            with self.subTest(curve=tag):
+                d, key, _, _, _, original = self.sources[tag, 'ordinary']
+                case = make_case(OUTPUT/f'identity-generator-{tag}', d.raw, key, original,
+                    {'descriptor':sha(d.raw), 'key':sha(key), 'original':sha(original)},
+                    self.families[tag])
+                curve, m = case.descriptor.curve, case.descriptor.curve.scalar
+                even, odd = (sum(case.logs['g'][offset::2]) % m for offset in (0, 1))
+                self.assertNotEqual(even, 0)
+                self.assertNotEqual(odd, 0)
+                # u=(1,...,1,-even/odd) gives alternating weights (1,u_last),
+                # so their known-log sum is zero, without retry or resampling.
+                rounds = (1,)*(d['k']-1) + (-even*pow(odd, -1, m) % m,)
+                self.assertNotEqual(rounds[-1], 0)
+                self.assertEqual((even+rounds[-1]*odd) % m, 0)
+                original_transcript = case.transcript.Transcript
+                observed = []
+
+                class TestOnlyIdentityGenerator(original_transcript):
+                    """Keep the RP57 state while replacing exactly the six IPA rounds."""
+                    test_only_challenge_adapter = 'test-only/identity-generator-rounds/v1'
+
+                    def __init__(self, *args, **kwargs):
+                        super().__init__(*args, **kwargs)
+                        self.forced = []
+                        observed.append(self)
+
+                    def squeeze(self):
+                        index = len(self.challenges)
+                        value = super().squeeze()
+                        if 11 <= index < 11+len(rounds):
+                            self.forced.append(index)
+                            self.challenges[-1] = rounds[index-11]
+                            return rounds[index-11]
+                        return value
+
+                coins = CountedCoins(3919+tag)
+                with patch.object(case.transcript, 'Transcript', TestOnlyIdentityGenerator), \
+                     patch.object(case.verifier, 'Transcript', TestOnlyIdentityGenerator):
+                    args, result, record = simulate(case, [[1]], coins)
+                    self.assertEqual(case.verifier.verify(**args), result)
+                    self.assertEqual(result.rounds, rounds)
+                    self.assertEqual(result.generator[2], 0)
+                    self.assertEqual(args['proof'][-32:], bytes(32))
+                    self.assertEqual(record['derived_logs']['folded_G']['log'], 0)
+                    self.assertFalse(record['fixed_poseidon'])
+                    self.assertEqual(record['test_only_challenge_adapter'],
+                                     TestOnlyIdentityGenerator.test_only_challenge_adapter)
+                    self.assertEqual(curve.decode_generator(bytes(32))[2], 0)
+                    with self.assertRaisesRegex(ValueError, 'identity'):
+                        curve.decode(bytes(32))
+                    proof = args['proof']
+                    # A finite but incorrect G still fails the full decision.
+                    with self.assertRaisesRegex(ValueError, 'generator decision'):
+                        case.verifier.verify(**dict(args, proof=proof[:-32]+curve.encode(case.params.w)))
+                    # Identity is legal only at the unabsorbed G suffix.
+                    with self.assertRaisesRegex(ValueError, 'identity'):
+                        case.verifier.verify(**dict(args, proof=bytes(32)+proof[32:]))
+                    self.assertEqual(len(observed), 5)
+                    self.assertTrue(all(t.forced == list(range(11, 11+d['k']))
+                                        for t in observed[:4]))
+                    self.assertEqual(observed[-1].forced, [])
+                    self.assertLessEqual(coins.calls, sample_budget(case)['source_calls_max'])
+                self.assertIs(case.transcript.Transcript, original_transcript)
+                self.assertIs(case.verifier.Transcript, original_transcript)
+                with self.assertRaises(ValueError):
+                    case.verifier.verify(**args)
+                type(self).verified_adapted_toy_proofs += 1
+
     def test_ordinary_bytes_match_frozen_known_log_simulator(self):
         for tag in (0, 1):
             prior = self.baselines[tag]
@@ -399,7 +563,7 @@ class GenericKnownLog(unittest.TestCase):
             for role in ('historical-reference', 'chosen-reference'):
                 directory = case.directory/role
                 receipt = json.loads((directory/'copy-receipt.json').read_text())
-                self.assertIsNone(receipt['exact_k16_descriptor'])
+                self.assertNotIn('exact_k16_descriptor', receipt)
                 self.assertTrue(all(row['before_sha256'] == row['after_sha256']
                                     for row in receipt['source_changes']))
                 package = next(path for path in directory.iterdir() if path.is_dir())
@@ -414,7 +578,7 @@ class GenericKnownLog(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'descriptor parameter identity'):
                 old_descriptor.Descriptor.decode(case.descriptor.raw, 2)
 
-    def test_k16_exception_is_not_general_admission(self):
+    def test_unmodified_reference_rejects_large_descriptor(self):
         d, key, _, _, _, original = self.sources[0, 'ordinary']
         codec = next(module for name,module in sys.modules.items()
                      if name.endswith('.codec') and
@@ -501,31 +665,40 @@ class GenericKnownLog(unittest.TestCase):
             self.assertGreaterEqual(owner.per_request_draws,budget['source_calls_max'])
         self.assertGreaterEqual(owner.per_request_draws,128*(10000//32))
         self.assertGreaterEqual(owner.total_draws,8*128*(10000//32))
-        self.assertEqual(sample_budget(self.cases[0,'ordinary'])['scalar_samples_max'],36)
+        self.assertEqual(sample_budget(self.cases[0,'ordinary'])['scalar_samples_max'],38)
         self.assertFalse(sample_budget(self.cases[0,'ordinary'])['native_polynomial_draws_counted'])
 
-    def test_large_rebinding_and_simulation_require_pre_io_opt_in(self):
+    def test_rebinding_is_small_only_and_simulation_keeps_its_opt_in(self):
         from . import rebind
         from .requests import Owner
         d,key,_,_,_,original = self.sources[0,'ordinary']
         chosen = SimpleNamespace(**dict(vars(self.chosen[0,'ordinary']),k=16))
         directory = OUTPUT/'unadmitted-large'
         with patch.object(rebind,'reference',side_effect=RuntimeError('unexpected private reference')):
-            with self.assertRaisesRegex(ValueError,'large historical rebind'):
+            with self.assertRaisesRegex(ValueError,'small rebind k<=6 only'):
                 rebind.make_case(directory,d.raw,key,original,
                     {'descriptor':sha(d.raw),'key':sha(key),'original':sha(original)},chosen)
         self.assertFalse(directory.exists())
-        with self.assertRaisesRegex(ValueError,'large reference'):
-            rebind.reference(directory,'0'*64)
+        with self.assertRaises(TypeError):
+            rebind.make_case(directory,d.raw,key,original,
+                {'descriptor':sha(d.raw),'key':sha(key),'original':sha(original)},chosen,
+                allow_large=True)
+        self.assertFalse(directory.exists())
+        with patch.object(rebind,'reference',side_effect=RuntimeError('unexpected private reference')):
+            with self.assertRaisesRegex(ValueError,'small public original extent'):
+                rebind.make_case(directory,d.raw,key,bytes((1 << 20)+1),{},self.chosen[0,'ordinary'])
+        self.assertFalse(directory.exists())
+        with self.assertRaises(TypeError):
+            rebind.reference(directory,exact_descriptor_sha='0'*64)
         self.assertFalse(directory.exists())
         for digest in (b'0'*64, 7, '0'*63, '0'*65, 'A'*64, 'g'*64, "'"+'0'*63):
             with patch.object(rebind,'sha',side_effect=RuntimeError('unexpected descriptor hash')):
-                with self.assertRaisesRegex(ValueError,'canonical exact descriptor digest'):
-                    rebind.reference(directory,digest,allow_large=True)
+                with self.assertRaises(TypeError):
+                    rebind.reference(directory,exact_descriptor_sha=digest)
             self.assertFalse(directory.exists())
         for tag,k in ((0,7),(0,16),(1,16)):
             with patch.object(rebind,'sha',side_effect=RuntimeError('unexpected authority hash')):
-                with self.assertRaisesRegex(ValueError,'large reference authority'):
+                with self.assertRaisesRegex(ValueError,'small reference authority'):
                     rebind.reference(directory,parameter_authority=(tag,k,b''))
             self.assertFalse(directory.exists())
         for authority,error in (((0,6,b''),'extent'), ((True,6,b''),'private authority'),

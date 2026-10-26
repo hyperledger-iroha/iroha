@@ -11,14 +11,24 @@
 
 [package]
 edition = "2021"
-rust-version = "1.92"
+rust-version = "1.99.1"
 name = "bytes"
-version = "1.11.1"
+version = "1.12.1"
 authors = [
     "Carl Lerche <me@carllerche.com>",
     "Sean McArthur <sean@seanmonstar.com>",
 ]
 build = false
+include = [
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "Cargo.toml",
+    "src/**/*.rs",
+    "tests/**/*.rs",
+    "clippy.toml",
+]
 autolib = false
 autobins = false
 autoexamples = false
@@ -46,7 +56,6 @@ rustdoc-args = [
 
 [features]
 default = ["std"]
-# Required by this native-only fork; retained for dependency feature selection.
 std = []
 
 [lib]
@@ -64,10 +73,6 @@ path = "tests/test_buf_mut.rs"
 [[test]]
 name = "test_bytes"
 path = "tests/test_bytes.rs"
-
-[[test]]
-name = "test_owner_reclaim"
-path = "tests/test_owner_reclaim.rs"
 
 [[test]]
 name = "test_bytes_odd_alloc"
@@ -105,29 +110,12 @@ path = "tests/test_serde.rs"
 name = "test_take"
 path = "tests/test_take.rs"
 
-[[bench]]
-name = "buf"
-path = "benches/buf.rs"
-harness = false
-
-[[bench]]
-name = "bytes"
-path = "benches/bytes.rs"
-harness = false
-
-[[bench]]
-name = "bytes_mut"
-path = "benches/bytes_mut.rs"
-harness = false
 
 [dependencies.serde]
 version = "1.0.60"
 features = ["alloc"]
 optional = true
 default-features = false
-
-[dev-dependencies.criterion]
-workspace = true
 
 [dev-dependencies.serde_test]
 version = "1.0"
@@ -139,3 +127,10 @@ version = "0.7"
 level = "warn"
 priority = 0
 check-cfg = ["cfg(loom)"]
+
+[dev-dependencies.criterion]
+workspace = true
+
+[[test]]
+name = "test_owner_reclaim"
+path = "tests/test_owner_reclaim.rs"

@@ -1,12 +1,12 @@
 //! Audited temporary allocation demand for one exact-NFC comparison.
 //!
 //! The baked profile bounds recursive decomposition by four scalars per source
-//! scalar. ICU4X 2.2.0 `Decomposition` owns one `SmallVec<[CharacterAndClass; 17]>`,
-//! with a four-byte `CharacterAndClass`; smallvec 1.15.1 grows by powers of two.
+//! scalar. ICU4X 2.4.0 `Decomposition` owns one `SmallVec<[CharacterAndClass; 17]>`,
+//! with a four-byte `CharacterAndClass`; smallvec 1.16.4 grows by powers of two.
 //! `gather_and_sort_combining` sorts disjoint decomposed runs once each. There is
 //! no normalized-output String in `split_normalized`.
 //!
-//! Rust 1.93.1 `core::slice::sort::stable::driftsort_main` uses 4 KiB of stack
+//! Rust 1.99.1 `core::slice::sort::stable::driftsort_main` uses 4 KiB of stack
 //! scratch. Larger runs allocate `max(n - n / 2, min(n, 8_000_000 / 4), small)`
 //! u32 entries. At the `StatePath` ceiling (16,384 input bytes, at most 65,536
 //! decomposed scalars), this is exactly n. Summing n over disjoint runs is at

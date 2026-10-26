@@ -43,7 +43,7 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-use p256::{ProjectivePoint, Scalar, elliptic_curve::sec1::ToEncodedPoint as _};
+use p256::{ProjectivePoint, Scalar, elliptic_curve::sec1::ToSec1Point as _};
 use thiserror::Error;
 /// Pointwise equalities packed into one physical row.
 pub const P256_EXTERNAL_BINDINGS_PER_ROW_V1: usize = 3;
@@ -1916,7 +1916,7 @@ fn fixed_generator_point_v1(multiple: usize) -> Result<[[u8; 32]; 3], P256Extern
     }
     let point = ProjectivePoint::GENERATOR
         * Scalar::from(u64::try_from(multiple).map_err(|_| P256ExternalBindingErrorV1::Resource)?);
-    let encoded = point.to_affine().to_encoded_point(false);
+    let encoded = point.to_affine().to_sec1_point(false);
     let mut x = [0_u8; 32];
     let mut y = [0_u8; 32];
     x.copy_from_slice(encoded.x().ok_or(P256ExternalBindingErrorV1::Constant)?);
@@ -2195,8 +2195,8 @@ mod tests {
                 .wrapping_add((index as u8).wrapping_mul(17))
         });
         let signature: Signature = key.sign_prehash(&digest).expect("signature");
-        let signature = signature.normalize_s().unwrap_or(signature);
-        let encoded = key.verifying_key().to_encoded_point(false);
+        let signature = signature.normalize_s();
+        let encoded = key.verifying_key().to_sec1_point(false);
         let mut public_key_x_be = [0_u8; 32];
         let mut public_key_y_be = [0_u8; 32];
         public_key_x_be.copy_from_slice(encoded.x().expect("x"));

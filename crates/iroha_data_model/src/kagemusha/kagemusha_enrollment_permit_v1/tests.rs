@@ -6,7 +6,7 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
 fn public(signing: &SigningKey) -> KagemushaDevicePublicKeyV1 {
     KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        signing.verifying_key().to_encoded_point(false).as_bytes(),
+        signing.verifying_key().to_sec1_point(false).as_bytes(),
     )
     .unwrap()
 }

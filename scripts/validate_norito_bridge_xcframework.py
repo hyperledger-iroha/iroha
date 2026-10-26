@@ -342,10 +342,10 @@ def _validate_build_environment(root: Path, environment: object) -> None:
         != "iroha.mobile-hermetic-command.v1"
         or type(environment["cargo_build_jobs"]) is not int
         or environment["cargo_build_jobs"] != 1
-        or environment["rust_toolchain_channel"] != "1.93.1"
-        or environment["cargo_release"] != "1.93.1"
-        or environment["rustc_release"] != "1.93.1"
-        or environment["rustdoc_release"] != "1.93.1"
+        or environment["rust_toolchain_channel"] != "1.99.1"
+        or environment["cargo_release"] != "1.99.1"
+        or environment["rustc_release"] != "1.99.1"
+        or environment["rustdoc_release"] != "1.99.1"
         or environment["rustdoc_commit_hash"] != environment["rustc_commit_hash"]
         or environment["iphoneos_deployment_target"] != "15.0"
         or environment["iphonesimulator_deployment_target"] != "15.0"

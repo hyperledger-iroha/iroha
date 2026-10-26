@@ -247,7 +247,7 @@ use p256::ecdsa::{
 };
 use p256::elliptic_curve::PrimeField as _;
 use rand::{SeedableRng as _, rngs::StdRng};
-use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
+
 use sha2::{Digest, Sha256};
 /// Evidence schema version. Any incompatible change requires a new version.
 pub const PRIVACY_RELEASE_EVIDENCE_SCHEMA_VERSION_V1: u16 = 1;
@@ -3644,7 +3644,7 @@ fn zk_ams_admission_lineage_material_v1(
             let signature: P256Signature = issuer_signing_key
                 .sign_prehash(credential.digest().as_bytes())
                 .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-            let signature = signature.normalize_s().unwrap_or(signature);
+            let signature = signature.normalize_s();
             Ok(<[u8; 64]>::from(signature.to_bytes()))
         })
         .collect::<Result<Vec<_>, PrivacyReleaseEvidenceErrorClassV1>>()?;
@@ -3849,7 +3849,7 @@ fn zk_ams_provision_transaction_context_v1()
 fn zk_ams_issuer_key_v1() -> Result<PrivacyP256PointV1, PrivacyReleaseEvidenceErrorClassV1> {
     let signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     let bytes: [u8; 33] = encoded
         .as_bytes()
         .try_into()
@@ -4772,7 +4772,7 @@ fn orchard_maximum_spend_fixture_v1()
             anchor = Some(derived_anchor);
         }
         spends.push(OrchardSpendProverInputV1::new(
-            spending_key,
+            spending_key.clone(),
             note,
             merkle_path,
         ));

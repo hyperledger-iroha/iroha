@@ -2,10 +2,7 @@ use crate::common;
 use common::{assemble, assemble_zk};
 use iroha_crypto::{
     Hash, HashOf, MerkleProof,
-    blake2::{
-        Blake2bVar,
-        digest::{Update as Blake2Update, VariableOutput},
-    },
+    blake2::{Blake2b, digest::consts::U32},
 };
 use iroha_data_model::prelude::AccountId;
 use iroha_model_base::name::Name;
@@ -45,13 +42,7 @@ fn sample_account() -> AccountId {
     )
 }
 fn raw_blake2b256(payload: &[u8]) -> [u8; 32] {
-    let mut digest = [0u8; 32];
-    let mut hasher = Blake2bVar::new(32).expect("32-byte Blake2b output size");
-    hasher.update(payload);
-    hasher
-        .finalize_variable(&mut digest)
-        .expect("fixed output buffer has the requested length");
-    digest
+    Blake2b::<U32>::digest(payload).into()
 }
 #[test]
 fn debug_print_is_handled_by_default_host() {

@@ -141,11 +141,11 @@ fn invalid_payloads(algorithm: Algorithm, payload: &[u8]) -> Vec<Vec<u8>> {
             );
         }
         Algorithm::Secp256k1 => {
-            use k256::elliptic_curve::sec1::ToEncodedPoint as _;
+            use k256::elliptic_curve::sec1::ToSec1Point as _;
             cases.push(
                 k256::PublicKey::from_sec1_bytes(payload)
                     .unwrap()
-                    .to_encoded_point(false)
+                    .to_sec1_point(false)
                     .as_bytes()
                     .to_vec(),
             );

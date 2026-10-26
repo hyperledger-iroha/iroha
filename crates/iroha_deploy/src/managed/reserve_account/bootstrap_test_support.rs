@@ -2,11 +2,8 @@
 use super::*;
 use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::attempts::metadata;
-use crate::managed::native_operation::test_support::native_fixture::{
-    NativeFixture, NativeReadHttp,
-};
+use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
 use iroha_fs::PublishMode;
-use std::sync::Arc;
 
 impl ManagedReserveAccountRegistration {
     pub(in crate::managed) fn bootstrap_native(
@@ -35,7 +32,7 @@ impl ManagedReserveAccountRegistration {
         let operator = self.authority.reserve_operations_config().unwrap();
         let wallet = AccountService::new(operator.clone()).unwrap();
         let path = original.directory().path().join("transaction");
-        let mut http = NativeReadHttp::start_config(&operator, Arc::clone(native.chain.state()));
+        let mut http = native.read_http(&operator);
         wallet
             .prepare_reserve_account_registration(
                 &original.request(original.terms.signing_deadline(options.deadline).unwrap()),

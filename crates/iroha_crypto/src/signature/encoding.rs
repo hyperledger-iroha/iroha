@@ -70,12 +70,6 @@ pub fn mldsa65_validate_signature_encoding(payload: &[u8]) -> Result<(), Signatu
     if payload.len() != ML_DSA_65_SIGNATURE_BYTES {
         return Err(SignatureEncodingError::Malformed);
     }
-    #[cfg(feature = "pqc")]
-    {
-        use pqcrypto_traits::sign::DetachedSignature as _;
-        pqcrypto_mldsa::mldsa65::DetachedSignature::from_bytes(payload)
-            .map_err(|_| SignatureEncodingError::Malformed)?;
-    }
     Ok(())
 }
 

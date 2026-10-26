@@ -13,7 +13,7 @@ use iroha_core_zk::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{NetworkId, asset::AssetDefinitionId, block::BlockHeader};
-use rand_core_06::{OsRng, RngCore};
+use rand::{TryRng as _, rngs::SysRng};
 use zeroize::Zeroizing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,14 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
     ])?;
     let mut spend_key = Zeroizing::new([0; 32]);
-    OsRng.try_fill_bytes(spend_key.as_mut())?;
+    SysRng.try_fill_bytes(spend_key.as_mut())?;
     let mut input = ConfidentialUnshieldInputV2 {
         amount: 42,
         rho: [0; 32],
         diversifier: default_confidential_diversifier_v2(),
         leaf_index: 0,
     };
-    OsRng.try_fill_bytes(&mut input.rho)?;
+    SysRng.try_fill_bytes(&mut input.rho)?;
     let owner =
         derive_confidential_owner_tag_v2_with_diversifier(spend_key.as_ref(), input.diversifier)?;
     let commitment =

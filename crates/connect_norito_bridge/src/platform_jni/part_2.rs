@@ -32,7 +32,7 @@ pub(super) fn java_privacy_validate_exact12_fixture_bundle_bytes(
     validate_privacy_exact12_fixture_bundle_v1(archive).code()
 }
 pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     if archive.is_null() {
@@ -59,7 +59,7 @@ pub(super) fn java_native_privacy_validate_compiled_profile_catalog(
     }
 }
 pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
     expected_network: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
@@ -99,7 +99,7 @@ pub(super) fn java_native_privacy_validate_exact12_capability_manifest(
     }
 }
 fn java_privacy_expected_network(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     network: &jni::objects::JByteArray<'_>,
 ) -> Option<[u8; 32]> {
     if network.is_null() || env.get_array_length(network).ok()? != 32 {
@@ -166,7 +166,7 @@ pub(super) fn java_privacy_exact12_capability_tuple_admitted(
         && committed.compiled_profile == local.compiled_profile
 }
 pub(super) fn java_native_privacy_require_exact12_capability_tuple(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
     expected_network: jni::objects::JByteArray<'_>,
@@ -250,7 +250,7 @@ pub(super) fn java_privacy_exact12_submit_proof_admitted(
             .is_ok()
 }
 pub(super) fn java_native_privacy_validate_exact12_submit_proof_construction(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     manifest_archive: jni::objects::JByteArray<'_>,
     protocol_index: jni::sys::jint,
     instruction_archive: jni::objects::JByteArray<'_>,
@@ -345,7 +345,7 @@ pub(super) fn java_privacy_exact12_capability_manifest_inspection(
         .map_err(|error| format!("failed to encode exact-12 capability inspection: {error}"))
 }
 pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     if archive.is_null() {
@@ -381,7 +381,7 @@ pub(super) fn java_native_privacy_inspect_exact12_capability_manifest(
     }
 }
 pub(super) fn java_native_privacy_compiled_profile_catalog(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_compiled_profile_catalog_archive()?;
@@ -401,7 +401,7 @@ pub(super) fn java_native_privacy_compiled_profile_catalog(
     }
 }
 pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
     if archive.is_null() {
@@ -425,7 +425,7 @@ pub(super) fn java_native_privacy_validate_exact12_fixture_bundle(
     }
 }
 pub(super) fn java_native_privacy_exact12_fixture_bundle(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
 ) -> jni::sys::jbyteArray {
     let result = (|| -> Result<jni::sys::jbyteArray, String> {
         let mut archive = java_privacy_exact12_fixture_bundle_archive()?;

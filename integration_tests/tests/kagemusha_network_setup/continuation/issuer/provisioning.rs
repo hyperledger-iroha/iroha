@@ -12,7 +12,7 @@ use iroha_core::kagemusha_wallet_v1::{
 use iroha_fs::{FileSnapshot, PublishMode, RetainedFile};
 use norito::json::{JsonDeserialize, Value};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
-use rand::TryRngCore as _;
+use rand::TryRng as _;
 use zeroize::Zeroizing;
 
 const INPUT_MAX: usize = 64 << 10;
@@ -206,7 +206,7 @@ fn platform(
 
 fn public(key: &SigningKey) -> Result<KagemushaDevicePublicKeyV1> {
     Ok(KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
+        key.verifying_key().to_sec1_point(false).as_bytes(),
     )?)
 }
 fn certificate(
@@ -237,7 +237,7 @@ fn certificate(
 fn fresh_signer() -> Result<SigningKey> {
     for _ in 0..16 {
         let mut bytes = Zeroizing::new([0; 32]);
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(bytes.as_mut())
             .map_err(|_| eyre!("entropy unavailable"))?;
         if let Ok(key) = SigningKey::from_slice(bytes.as_ref()) {

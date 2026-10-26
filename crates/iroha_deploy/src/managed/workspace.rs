@@ -71,7 +71,7 @@ impl InstalledRuntime {
 
     /// Construct a fresh global startup request with the installed worker and daemon.
     ///
-    /// Service-authority prerequisites are generated in the original genesis; services stay disabled.
+    /// The standard profile supports contract deployment without provisioning storage services.
     #[must_use]
     pub fn localnet_request(&self, name: &str, timeout: std::time::Duration) -> LocalnetRequest {
         let mut request = LocalnetRequest::new(self.kagami.clone(), self.daemon.clone());
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(request.launcher.parent(), request.daemon.parent());
         assert_eq!(
             request.service_profile,
-            crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities
+            crate::localnet::LocalnetServiceProfile::Standard
         );
         let private = runtime.private_root_request("private", std::time::Duration::from_secs(9));
         assert_eq!(private.name, "private");

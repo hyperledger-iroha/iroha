@@ -1,0 +1,12 @@
+[submodule "third_party/protobuf"]
+	path = third_party/protobuf
+	url = https://github.com/protocolbuffers/protobuf
+[submodule "third_party/ukey2/ukey2"]
+	path = third_party/ukey2/ukey2
+	url = https://github.com/google/ukey2
+[submodule "third_party/smhasher/smhasher"]
+	path = third_party/smhasher/smhasher
+	url = https://github.com/aappleby/smhasher
+[submodule "third_party/json/json"]
+	path = third_party/json/json
+	url = https://github.com/nlohmann/json

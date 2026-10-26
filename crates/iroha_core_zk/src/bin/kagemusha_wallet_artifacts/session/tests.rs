@@ -83,7 +83,7 @@ fn fixture() -> (Scope, Request, PrivateKey, SigningKey, Vec<u8>) {
         token_lifetime_seconds: 300,
         issuer_custody_directory: "/test-only/issuer".into(),
         device_custody_directory: "/test-only/device".into(),
-        dpop_public_key_hex: hex::encode(dpop.verifying_key().to_encoded_point(false).as_bytes()),
+        dpop_public_key_hex: hex::encode(dpop.verifying_key().to_sec1_point(false).as_bytes()),
         output_parent: "/test-only/output".into(),
         output_name: "session".into(),
     };

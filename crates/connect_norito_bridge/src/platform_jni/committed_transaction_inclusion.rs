@@ -60,7 +60,7 @@ fn java_query_payload(
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeCommittedTransactionQueryPayloadHash(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     network_id: JByteArray<'_>,
     authority: JByteArray<'_>,
@@ -68,52 +68,55 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     creation_time_ms: jni::sys::jlong,
     nonce: JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let Some(network) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32) else {
-        return std::ptr::null_mut();
-    };
-    let Some(authority) = read_java_byte_array_bounded(&mut env, &authority, "authority", 1024)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(transaction) =
-        read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(nonce) = read_java_byte_array_bounded(&mut env, &nonce, "queryNonce", 32) else {
-        return std::ptr::null_mut();
-    };
-    let Some(result) =
-        catch_unwind_to_java(&mut env, "committed transaction query prehash", || {
-            java_query_payload(&network, &authority, &transaction, creation_time_ms, &nonce)
-                .map(|payload| query_payload_hash(&payload))
-        })
-    else {
-        return std::ptr::null_mut();
-    };
-    let hash = match result {
-        Ok(hash) => hash,
-        Err(error) => {
-            throw_java_illegal_argument(&mut env, error);
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let Some(network) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32)
+        else {
             return std::ptr::null_mut();
+        };
+        let Some(authority) = read_java_byte_array_bounded(&mut env, &authority, "authority", 1024)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(transaction) =
+            read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(nonce) = read_java_byte_array_bounded(&mut env, &nonce, "queryNonce", 32) else {
+            return std::ptr::null_mut();
+        };
+        let Some(result) =
+            catch_unwind_to_java(&mut env, "committed transaction query prehash", || {
+                java_query_payload(&network, &authority, &transaction, creation_time_ms, &nonce)
+                    .map(|payload| query_payload_hash(&payload))
+            })
+        else {
+            return std::ptr::null_mut();
+        };
+        let hash = match result {
+            Ok(hash) => hash,
+            Err(error) => {
+                throw_java_illegal_argument(&mut env, error);
+                return std::ptr::null_mut();
+            }
+        };
+        match env.byte_array_from_slice(&hash) {
+            Ok(value) => value.into_raw(),
+            Err(error) => {
+                throw_java_illegal_state(
+                    &mut env,
+                    format!("query prehash allocation failed: {error}"),
+                );
+                std::ptr::null_mut()
+            }
         }
-    };
-    match env.byte_array_from_slice(&hash) {
-        Ok(value) => value.into_raw(),
-        Err(error) => {
-            throw_java_illegal_state(
-                &mut env,
-                format!("query prehash allocation failed: {error}"),
-            );
-            std::ptr::null_mut()
-        }
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeFinalizeCommittedTransactionQuery(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     network_id: JByteArray<'_>,
     authority: JByteArray<'_>,
@@ -122,53 +125,65 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     nonce: JByteArray<'_>,
     signature: JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let Some(network) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32) else {
-        return std::ptr::null_mut();
-    };
-    let Some(authority) = read_java_byte_array_bounded(&mut env, &authority, "authority", 1024)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(transaction) =
-        read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(nonce) = read_java_byte_array_bounded(&mut env, &nonce, "queryNonce", 32) else {
-        return std::ptr::null_mut();
-    };
-    let Some(signature) = read_java_byte_array_bounded(&mut env, &signature, "querySignature", 64)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(result) =
-        catch_unwind_to_java(&mut env, "committed transaction query finalization", || {
-            let payload =
-                java_query_payload(&network, &authority, &transaction, creation_time_ms, &nonce)?;
-            finalize_query(payload, &signature)
-        })
-    else {
-        return std::ptr::null_mut();
-    };
-    let wire = match result {
-        Ok(wire) => wire,
-        Err(error) => {
-            throw_java_illegal_argument(&mut env, error);
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let Some(network) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32)
+        else {
             return std::ptr::null_mut();
+        };
+        let Some(authority) = read_java_byte_array_bounded(&mut env, &authority, "authority", 1024)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(transaction) =
+            read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(nonce) = read_java_byte_array_bounded(&mut env, &nonce, "queryNonce", 32) else {
+            return std::ptr::null_mut();
+        };
+        let Some(signature) =
+            read_java_byte_array_bounded(&mut env, &signature, "querySignature", 64)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(result) =
+            catch_unwind_to_java(&mut env, "committed transaction query finalization", || {
+                let payload = java_query_payload(
+                    &network,
+                    &authority,
+                    &transaction,
+                    creation_time_ms,
+                    &nonce,
+                )?;
+                finalize_query(payload, &signature)
+            })
+        else {
+            return std::ptr::null_mut();
+        };
+        let wire = match result {
+            Ok(wire) => wire,
+            Err(error) => {
+                throw_java_illegal_argument(&mut env, error);
+                return std::ptr::null_mut();
+            }
+        };
+        match env.byte_array_from_slice(&wire) {
+            Ok(value) => value.into_raw(),
+            Err(error) => {
+                throw_java_illegal_state(
+                    &mut env,
+                    format!("signed query allocation failed: {error}"),
+                );
+                std::ptr::null_mut()
+            }
         }
-    };
-    match env.byte_array_from_slice(&wire) {
-        Ok(value) => value.into_raw(),
-        Err(error) => {
-            throw_java_illegal_state(&mut env, format!("signed query allocation failed: {error}"));
-            std::ptr::null_mut()
-        }
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeBridgeAbiVersion(
-    _env: jni::JNIEnv<'_>,
+    _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
@@ -176,7 +191,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
 
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeVerifierContractVersion(
-    _env: jni::JNIEnv<'_>,
+    _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jint {
     1
@@ -184,65 +199,69 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
 
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeCandidateBlockHash(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     response: JByteArray<'_>,
     transaction_hash: JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let Some(response) = read_java_byte_array_bounded(
-        &mut env,
-        &response,
-        "committedTransactionResponse",
-        MAX_RESPONSE_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(transaction) =
-        read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(result) = catch_unwind_to_java(&mut env, "candidate block hash", || {
-        let transaction: [u8; 32] = transaction
-            .try_into()
-            .map_err(|_| "transactionHash must be exactly 32 bytes".to_owned())?;
-        if transaction[31] & 1 == 0 {
-            return Err("transactionHash must be a marked hash".into());
-        }
-        candidate_block_hash(
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let Some(response) = read_java_byte_array_bounded(
+            &mut env,
             &response,
-            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(transaction)),
-        )
-    }) else {
-        return std::ptr::null_mut();
-    };
-    let hash = match result {
-        Ok(value) => value,
-        Err(error) => {
-            throw_java_illegal_argument(&mut env, error);
+            "committedTransactionResponse",
+            MAX_RESPONSE_BYTES,
+        ) else {
             return std::ptr::null_mut();
+        };
+        let Some(transaction) =
+            read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(result) = catch_unwind_to_java(&mut env, "candidate block hash", || {
+            let transaction: [u8; 32] = transaction
+                .try_into()
+                .map_err(|_| "transactionHash must be exactly 32 bytes".to_owned())?;
+            if transaction[31] & 1 == 0 {
+                return Err("transactionHash must be a marked hash".into());
+            }
+            candidate_block_hash(
+                &response,
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
+                    transaction,
+                )),
+            )
+        }) else {
+            return std::ptr::null_mut();
+        };
+        let hash = match result {
+            Ok(value) => value,
+            Err(error) => {
+                throw_java_illegal_argument(&mut env, error);
+                return std::ptr::null_mut();
+            }
+        };
+        let Some(hash) = hash else {
+            // A canonical, empty committed-transaction page is a pending read.
+            return std::ptr::null_mut();
+        };
+        match env.byte_array_from_slice(&hash) {
+            Ok(value) => value.into_raw(),
+            Err(error) => {
+                throw_java_illegal_state(
+                    &mut env,
+                    format!("candidate block-hash allocation failed: {error}"),
+                );
+                std::ptr::null_mut()
+            }
         }
-    };
-    let Some(hash) = hash else {
-        // A canonical, empty committed-transaction page is a pending read.
-        return std::ptr::null_mut();
-    };
-    match env.byte_array_from_slice(&hash) {
-        Ok(value) => value.into_raw(),
-        Err(error) => {
-            throw_java_illegal_state(
-                &mut env,
-                format!("candidate block-hash allocation failed: {error}"),
-            );
-            std::ptr::null_mut()
-        }
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeVerifyCommittedTransactionInclusion(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     response: JByteArray<'_>,
     chain_json: JByteArray<'_>,
@@ -251,81 +270,85 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     trusted_checkpoint: JByteArray<'_>,
     transaction_hash: JByteArray<'_>,
 ) -> jobjectArray {
-    let Some(response) = read_java_byte_array_bounded(
-        &mut env,
-        &response,
-        "committedTransactionResponse",
-        MAX_RESPONSE_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(chain_json) = read_java_byte_array_bounded(
-        &mut env,
-        &chain_json,
-        "nativeFinalityProofChainJson",
-        MAX_CHAIN_JSON_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(network_id) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(label) =
-        read_java_byte_array_bounded(&mut env, &expected_chain, "expectedChain", 1024)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(checkpoint) = read_java_byte_array_bounded(
-        &mut env,
-        &trusted_checkpoint,
-        "trustedCheckpoint",
-        iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(transaction_hash) =
-        read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(result) = catch_unwind_to_java(&mut env, "committed transaction inclusion", || {
-        let network_bytes: [u8; 32] = network_id
-            .try_into()
-            .map_err(|_| "networkId must be exactly 32 bytes".to_owned())?;
-        let transaction_bytes: [u8; 32] = transaction_hash
-            .try_into()
-            .map_err(|_| "transactionHash must be exactly 32 bytes".to_owned())?;
-        if network_bytes[31] & 1 == 0 || transaction_bytes[31] & 1 == 0 {
-            return Err("networkId and transactionHash must be marked hashes".to_owned());
-        }
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(network_bytes)),
-        );
-        let transaction_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed(transaction_bytes),
-        );
-        let label =
-            std::str::from_utf8(&label).map_err(|_| "expectedChain is not UTF-8".to_owned())?;
-        verify_committed_transaction_inclusion(
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let Some(response) = read_java_byte_array_bounded(
+            &mut env,
             &response,
-            &chain_json,
-            network_id,
-            label,
-            &checkpoint,
-            transaction_hash,
-        )
-    }) else {
-        return std::ptr::null_mut();
-    };
-    let verified = match result {
-        Ok(value) => value,
-        Err(error) => {
-            throw_java_illegal_argument(&mut env, error);
+            "committedTransactionResponse",
+            MAX_RESPONSE_BYTES,
+        ) else {
             return std::ptr::null_mut();
-        }
-    };
-    verified_to_java(&mut env, verified)
+        };
+        let Some(chain_json) = read_java_byte_array_bounded(
+            &mut env,
+            &chain_json,
+            "nativeFinalityProofChainJson",
+            MAX_CHAIN_JSON_BYTES,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(network_id) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(label) =
+            read_java_byte_array_bounded(&mut env, &expected_chain, "expectedChain", 1024)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(checkpoint) = read_java_byte_array_bounded(
+            &mut env,
+            &trusted_checkpoint,
+            "trustedCheckpoint",
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(transaction_hash) =
+            read_java_byte_array_bounded(&mut env, &transaction_hash, "transactionHash", 32)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(result) =
+            catch_unwind_to_java(&mut env, "committed transaction inclusion", || {
+                let network_bytes: [u8; 32] = network_id
+                    .try_into()
+                    .map_err(|_| "networkId must be exactly 32 bytes".to_owned())?;
+                let transaction_bytes: [u8; 32] = transaction_hash
+                    .try_into()
+                    .map_err(|_| "transactionHash must be exactly 32 bytes".to_owned())?;
+                if network_bytes[31] & 1 == 0 || transaction_bytes[31] & 1 == 0 {
+                    return Err("networkId and transactionHash must be marked hashes".to_owned());
+                }
+                let network_id = NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(network_bytes)),
+                );
+                let transaction_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    Hash::prehashed(transaction_bytes),
+                );
+                let label = std::str::from_utf8(&label)
+                    .map_err(|_| "expectedChain is not UTF-8".to_owned())?;
+                verify_committed_transaction_inclusion(
+                    &response,
+                    &chain_json,
+                    network_id,
+                    label,
+                    &checkpoint,
+                    transaction_hash,
+                )
+            })
+        else {
+            return std::ptr::null_mut();
+        };
+        let verified = match result {
+            Ok(value) => value,
+            Err(error) => {
+                throw_java_illegal_argument(&mut env, error);
+                return std::ptr::null_mut();
+            }
+        };
+        verified_to_java(&mut env, verified)
+    })
 }
 
 /// Verify exact retained authorization bytes and successful native execution through the same
@@ -333,7 +356,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTransactionInclusionBridge_nativeVerifyExactSuccessfulCommittedTransaction(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass<'_>,
     response: JByteArray<'_>,
     chain_json: JByteArray<'_>,
@@ -342,80 +365,87 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_CommittedTra
     trusted_checkpoint: JByteArray<'_>,
     original_signed_transaction: JByteArray<'_>,
 ) -> jobjectArray {
-    let Some(response) = read_java_byte_array_bounded(
-        &mut env,
-        &response,
-        "committedTransactionResponse",
-        MAX_RESPONSE_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(chain_json) = read_java_byte_array_bounded(
-        &mut env,
-        &chain_json,
-        "nativeFinalityProofChainJson",
-        MAX_CHAIN_JSON_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(network_id) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(label) =
-        read_java_byte_array_bounded(&mut env, &expected_chain, "expectedChain", 1024)
-    else {
-        return std::ptr::null_mut();
-    };
-    let Some(checkpoint) = read_java_byte_array_bounded(
-        &mut env,
-        &trusted_checkpoint,
-        "trustedCheckpoint",
-        iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(original) = read_java_byte_array_bounded(
-        &mut env,
-        &original_signed_transaction,
-        "originalSignedTransaction",
-        4 * 1024 * 1024,
-    ) else {
-        return std::ptr::null_mut();
-    };
-    let Some(result) = catch_unwind_to_java(&mut env, "exact successful transaction inclusion", || {
-        let network_bytes: [u8; 32] = network_id
-            .try_into()
-            .map_err(|_| "networkId must be exactly 32 bytes".to_owned())?;
-        if network_bytes[31] & 1 == 0 {
-            return Err("networkId must be a marked hash".to_owned());
-        }
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(network_bytes)),
-        );
-        let label =
-            std::str::from_utf8(&label).map_err(|_| "expectedChain is not UTF-8".to_owned())?;
-        verify_exact_successful_committed_transaction(
+    crate::platform_jni::with_java_env(env, |mut env| {
+        let Some(response) = read_java_byte_array_bounded(
+            &mut env,
             &response,
+            "committedTransactionResponse",
+            MAX_RESPONSE_BYTES,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(chain_json) = read_java_byte_array_bounded(
+            &mut env,
             &chain_json,
-            network_id,
-            label,
-            &checkpoint,
-            &original,
-        )
-    }) else {
-        return std::ptr::null_mut();
-    };
-    match result {
-        Ok(verified) => verified_to_java(&mut env, verified),
-        Err(error) => {
-            throw_java_illegal_argument(&mut env, error);
-            std::ptr::null_mut()
+            "nativeFinalityProofChainJson",
+            MAX_CHAIN_JSON_BYTES,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(network_id) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 32)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(label) =
+            read_java_byte_array_bounded(&mut env, &expected_chain, "expectedChain", 1024)
+        else {
+            return std::ptr::null_mut();
+        };
+        let Some(checkpoint) = read_java_byte_array_bounded(
+            &mut env,
+            &trusted_checkpoint,
+            "trustedCheckpoint",
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(original) = read_java_byte_array_bounded(
+            &mut env,
+            &original_signed_transaction,
+            "originalSignedTransaction",
+            4 * 1024 * 1024,
+        ) else {
+            return std::ptr::null_mut();
+        };
+        let Some(result) =
+            catch_unwind_to_java(&mut env, "exact successful transaction inclusion", || {
+                let network_bytes: [u8; 32] = network_id
+                    .try_into()
+                    .map_err(|_| "networkId must be exactly 32 bytes".to_owned())?;
+                if network_bytes[31] & 1 == 0 {
+                    return Err("networkId must be a marked hash".to_owned());
+                }
+                let network_id = NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(network_bytes)),
+                );
+                let label = std::str::from_utf8(&label)
+                    .map_err(|_| "expectedChain is not UTF-8".to_owned())?;
+                verify_exact_successful_committed_transaction(
+                    &response,
+                    &chain_json,
+                    network_id,
+                    label,
+                    &checkpoint,
+                    &original,
+                )
+            })
+        else {
+            return std::ptr::null_mut();
+        };
+        match result {
+            Ok(verified) => verified_to_java(&mut env, verified),
+            Err(error) => {
+                throw_java_illegal_argument(&mut env, error);
+                std::ptr::null_mut()
+            }
         }
-    }
+    })
 }
 
-fn verified_to_java(env: &mut jni::JNIEnv<'_>, verified: VerifiedCommittedTransaction) -> jobjectArray {
+fn verified_to_java(
+    env: &mut jni::Env<'_>,
+    verified: VerifiedCommittedTransaction,
+) -> jobjectArray {
     let fields = [
         verified.row,
         verified.output_hash.to_vec(),
@@ -425,11 +455,11 @@ fn verified_to_java(env: &mut jni::JNIEnv<'_>, verified: VerifiedCommittedTransa
         verified.checkpoint,
     ];
     let array = (|| {
-        let byte_array_class = env.find_class("[B")?;
+        let byte_array_class = env.find_class(jni::jni_str!("[B"))?;
         let array = env.new_object_array(6, byte_array_class, jni::objects::JObject::null())?;
         for (index, field) in fields.iter().enumerate() {
             let value = env.byte_array_from_slice(field)?;
-            env.set_object_array_element(&array, index as i32, &value)?;
+            env.set_object_array_element(&array, index, &value)?;
         }
         Ok::<_, jni::errors::Error>(array.into_raw())
     })();

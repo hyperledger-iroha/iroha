@@ -23,7 +23,7 @@ use iroha_data_model::privacy::{
     PrivacyEncryptedOutputV1, PrivacyNativeConsensusBindingV1,
     PrivacyNativeConsensusBindingValidationErrorV1, PrivacyStatementV1,
 };
-use rand::{TryCryptoRng, rngs::OsRng};
+use rand::{TryCryptoRng, rngs::SysRng};
 use soranet_pq::HedgedRngSeed;
 use thiserror::Error;
 const PQ_MASP_AUTHORIZATION_HEDGE_PURPOSE_V1: &[u8] =
@@ -191,7 +191,7 @@ pub fn prove_pq_masp_v1(
         consensus_limits,
         witness,
         authorization_secret_key,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 /// Verify one complete first-release PQ-MASP authorization and inner STARK.
@@ -266,7 +266,7 @@ pub fn encrypt_pq_masp_note_v1(
     note: &PqMaspNotePlaintextV1,
     recipient_public_key: &[u8],
 ) -> Result<(PrivacyCommitmentV1, PrivacyEncryptedOutputV1), PqMaspWireErrorV1> {
-    encrypt_pq_masp_note_v1_with_rng(statement, note, recipient_public_key, &mut OsRng)
+    encrypt_pq_masp_note_v1_with_rng(statement, note, recipient_public_key, &mut SysRng)
 }
 #[cfg(test)]
 mod tests {
@@ -275,9 +275,10 @@ mod tests {
         PQ_MASP_TREE_DEPTH_V1, PqMaspInputWitnessV1, PqMaspOutputWitnessV1, PqMaspWitnessV1,
         derive_pq_masp_authorization_key_digest_v1, derive_pq_masp_nullifier_key_digest_v1,
     };
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected PQ-MASP entropy failure")
@@ -289,7 +290,7 @@ mod tests {
         Repeated,
     }
     struct AdversarialRng(EntropyMode);
-    impl TryRngCore for AdversarialRng {
+    impl TryRng for AdversarialRng {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)
@@ -350,7 +351,7 @@ mod tests {
             }
         }
     }
-    impl TryRngCore for PartitionFaultRngV1 {
+    impl TryRng for PartitionFaultRngV1 {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)

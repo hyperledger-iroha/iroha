@@ -935,7 +935,7 @@ fn retained_taira_certified_genesis_decodes_and_binds_the_same_empty_world() {
     let wire = include_bytes!("../../tests/fixtures/taira_world_continuity/genesis.block.nrt");
     assert_eq!(wire.len(), 114_919);
     assert_eq!(
-        format!("{:x}", Sha256::digest(wire)),
+        hex::encode(Sha256::digest(wire)),
         "35565d5b041ee144cc5922451423544037f82d2259788c3a9bc2009fc80e8f5c"
     );
     let genesis = decode_framed_signed_block(wire).expect("exact original current native frame");

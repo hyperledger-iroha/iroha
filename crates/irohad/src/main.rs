@@ -237,7 +237,7 @@ fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito:
         norito::json::from_str(raw).map_err(norito::Error::from)?;
     metadata
         .validate()
-        .map_err(|error| norito::Error::Message(error.clone()))?;
+        .map_err(|error| norito::Error::Message(error.to_string()))?;
     Ok(metadata)
 }
 
@@ -8561,7 +8561,7 @@ impl DisposableValidationRoot {
         let parent = env::temp_dir();
         for _ in 0..32 {
             let mut nonce = [0_u8; 16];
-            rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+            rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
                 .map_err(|error| {
                     std::io::Error::other(format!(
                         "operating-system randomness unavailable for temporary validation storage: {error}"
@@ -8937,7 +8937,7 @@ fn signed_genesis_context_metadata(
             metadata.wire_protocol_version
         ));
     }
-    metadata.validate()?;
+    metadata.validate().map_err(|error| error.to_string())?;
     let mode = match metadata.mode {
         iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
             iroha_data_model::block::consensus::ConsensusMode::Permissioned
@@ -11268,8 +11268,8 @@ mod tests {
             let base_raw = base_genesis
                 .build_raw()
                 .expect("build complete offline semantic genesis manifest");
-            ensure_manifest_crypto_matches(&base_raw, &config)
-                .expect("sign the exact configured crypto policy before native staging");
+            require_crypto_verification_implementations(base_raw.crypto_admission_policy())
+                .expect("fixture policy requires available verifier implementations");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_context_parameters();
@@ -12067,6 +12067,8 @@ mod tests {
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
             );
             assert!(
                 state

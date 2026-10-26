@@ -104,7 +104,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_version::codec::EncodeVersioned;
 use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
-use rand_core_06::OsRng;
+use rand::rngs::SysRng;
 use zeroize::Zeroizing;
 use zk_ace_prover::{
     ZkAcePrivacyActionTransactionContextV1, ZkAcePrivacyTransferV1, ZkAcePrivacyWitnessV1,
@@ -1423,7 +1423,7 @@ pub fn build_signed_verange_action_v1(
     let native_statement =
         VeRangeType1BatchStatementV1::new(request.bit_length, commitments, transcript)
             .map_err(|_| PrivacyNativeActionErrorV1::at("verange-native-statement"))?;
-    let proof = prove_batch(&native_statement, &values, &request.blindings, &mut OsRng)
+    let proof = prove_batch(&native_statement, &values, &request.blindings, &mut SysRng)
         .map_err(|_| PrivacyNativeActionErrorV1::at("verange-proving"))?
         .encode();
     finalize(
@@ -1491,7 +1491,7 @@ pub fn build_signed_bootle_lantern_presentation_action_v1(
         &request.policy,
         canonical_genesis_hash,
         &request.witness,
-        &mut OsRng,
+        &mut SysRng,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("bootle-proving"))?
     .encode();
@@ -1611,7 +1611,7 @@ pub fn build_signed_zk_ams_batch_admission_action_v1(
     let config = ZkAmsMaskedProverConfigV1::new(1)
         .map_err(|_| PrivacyNativeActionErrorV1::at("zk-ams-admission-config"))?;
     let proof =
-        prove_zk_ams_batch_admission_v1(&statement, &binding, &witnesses, config, &mut OsRng)
+        prove_zk_ams_batch_admission_v1(&statement, &binding, &witnesses, config, &mut SysRng)
             .map_err(|_| PrivacyNativeActionErrorV1::at("zk-ams-admission-proving"))?;
     finalize(
         &context,
@@ -1676,7 +1676,7 @@ pub fn build_signed_zk_ams_provision_account_action_v1(
         &binding,
         signer_index,
         &request.seed_secret,
-        &mut OsRng,
+        &mut SysRng,
     )
     .map_err(|_| PrivacyNativeActionErrorV1::at("zk-ams-provision-proving"))?;
     finalize(
@@ -1888,7 +1888,7 @@ pub fn build_signed_anonymous_pgc_payment_action_v1(
         sender_index: request.sender_index,
         sender_secret: &request.sender_secret,
     };
-    let proof = prove_payment(&native_statement, &native_witness, &mut OsRng)
+    let proof = prove_payment(&native_statement, &native_witness, &mut SysRng)
         .map_err(|_| PrivacyNativeActionErrorV1::at("pgc-proving"))?
         .encode();
     finalize(
@@ -2186,7 +2186,7 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
         .zip(&outputs)
         .map(|(output, model)| {
             encrypt_fcmp_wallet_note_v1(
-                &mut OsRng,
+                &mut SysRng,
                 request.pool_id,
                 *model,
                 &output.note,
@@ -2225,7 +2225,7 @@ pub fn build_signed_fcmp_membership_payment_action_v1(
         .map_err(|_| PrivacyNativeActionErrorV1::at("fcmp-statement-digest"))?;
     let runtime_context = fcmp_runtime_context_hash(&context, statement_digest, profile);
     let proved = prove_fcmp_plus_plus_v1(
-        &mut OsRng,
+        &mut SysRng,
         runtime_context,
         &request.inputs,
         &output_openings,

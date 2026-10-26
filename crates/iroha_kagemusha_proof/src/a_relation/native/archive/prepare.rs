@@ -5,6 +5,7 @@
 //! No own sigma is checked: A proves the own step inline (lean lineage).
 
 use ff::Field;
+use group::CurveAffine;
 use iroha_pasta::msm::MemoryBudget;
 use iroha_plonk_gadgets::bytes::p_bytes_native;
 use std::sync::Arc;
@@ -44,7 +45,6 @@ impl Prepared {
     // the caller must synthesize the returned source with known=false.
     pub(super) fn unknown_source(plan: &Plan) -> Result<Arc<Self>, Error> {
         use crate::{admin_sigma::StateWitness, tree::IndexedLeaf};
-        use group::prime::PrimeCurveAffine;
 
         let p = AccumulatorT::<Ep>::new(EpAffine::generator(), [Fq::ONE; 16])
             .map_err(|_| Error::Artifact)?;

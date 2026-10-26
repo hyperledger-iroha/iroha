@@ -1347,15 +1347,15 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+            "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
+            "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2",
+            "anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439",
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -1500,7 +1500,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-fixtures-nightly.yml",
-            "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
+            "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
         ),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "runs-on: macos-14"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "bash ci/sdk_sorafs_orchestrator.sh"),
@@ -2890,16 +2890,20 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
     ).splitlines()
     assert requirements == sorted(requirements)
     assert requirements == [
-        "blake3==1.0.9",
+        'blake3==1.0.10; python_version < "3.11"',
+        'blake3==1.0.11; python_version >= "3.11"',
+        'certifi==2026.10.23',
         'cffi==2.1.1; platform_python_implementation != "PyPy"',
-        "cryptography==50.0.1",
-        "jsonschema==4.26.0",
-        'pycparser==3.0; platform_python_implementation != "PyPy"',
-        "pytest==9.0.3",
-        "requests==2.33.0",
-        'tomli==2.4.1; python_version < "3.11"',
-        "tomli_w==1.2.0",
+        'cryptography==50.0.2',
+        'jsonschema==4.26.0',
+        'pycparser==3.11; platform_python_implementation != "PyPy" and python_version < "3.11"',
+        'pycparser==3.12; platform_python_implementation != "PyPy" and python_version >= "3.11"',
+        'pytest==9.1.1',
+        'requests==2.34.2',
+        'tomli==2.5.0; python_version < "3.11"',
+        'tomli_w==1.2.0',
         'typing_extensions==4.16.0; python_version < "3.11"',
+        'urllib3==2.8.0',
     ]
     dependabot = (REPO_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
     assert 'package-ecosystem: "pip"' in dependabot

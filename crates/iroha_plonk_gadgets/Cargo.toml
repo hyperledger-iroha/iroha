@@ -22,7 +22,7 @@ iroha_pasta = { workspace = true }
 # Constraint systems, the circuit frontend and the constraint checker.
 iroha_plonk = { workspace = true }
 # `Field`/`PrimeField` traits of the iroha_pasta field types.
-ff = "0.13.1"
+ff = "0.14.0"
 
 [dev-dependencies]
 # Fallible kernel resource probes for the qualification harness only.
@@ -32,12 +32,12 @@ rayon = { workspace = true }
 # The shared KAGEMUSHA Poseidon vectors in `fixtures/native_prover/kats_v1.json`.
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # Deterministic public arithmetic specimen generation; proof entropy stays fresh.
-rand_chacha = "0.3.1"
+rand_chacha = "0.10.0"
 # Independent SHA-256 oracle for the SHA-256 chip tests (already a
 # dependency of `iroha_plonk`).
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 # Independent big-integer oracle for the foreign-field chip tests.
-num-bigint = "0.4.6"
+num-bigint = "0.5.1"
 # Independent P-256 ECDSA oracle for the P-256 chip tests (already in the
 # lockfile with these features through `iroha_data_model`).
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa"] }

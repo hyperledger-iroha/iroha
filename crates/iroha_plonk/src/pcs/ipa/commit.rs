@@ -44,7 +44,7 @@
 //! stack-only complete scalar multiplication path preserves the result.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{
     CancellationToken, PastaAffine, PastaCurve, PastaField,
     msm::{
@@ -1163,7 +1163,7 @@ mod tests {
     use iroha_pasta::msm::msm_public;
     use iroha_pasta::{Ep, Eq, Fq, msm::msm_naive};
     use rand_chacha::ChaCha20Rng;
-    use rand_core_06::SeedableRng;
+    use rand_core::SeedableRng;
 
     use super::*;
 
@@ -1284,8 +1284,8 @@ mod tests {
             0x8000_0000_0000_0001_8000_0000_0000_0001,
         ];
         values.extend((0..200).map(|_| {
-            let high = u128::from(rand_core_06::RngCore::next_u64(&mut rng));
-            let low = u128::from(rand_core_06::RngCore::next_u64(&mut rng));
+            let high = u128::from(rand_core::Rng::next_u64(&mut rng));
+            let low = u128::from(rand_core::Rng::next_u64(&mut rng));
             (high << 64) | low
         }));
         // Runs of digits at the half boundary, where the carries chain.

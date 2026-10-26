@@ -61,7 +61,7 @@ def prepare_record(artifact_directory: Path, *, allow_source_head_drift: bool) -
         raise ValueError("the original archive hash differs")
     evidence = manifest.get("evidence")
     names = {"producer-launch.json", "producer-record.json", "cargo-messages.jsonl",
-             "pqcrypto-normalization.json", "consumer", "source-observation.json"}
+             "native-archive-audit.json", "consumer", "source-observation.json"}
     if not isinstance(evidence, dict) or set(evidence) != names:
         raise ValueError("the original producer evidence inventory differs")
     if any(sha256(artifact / "evidence" / name) != value for name, value in evidence.items()):

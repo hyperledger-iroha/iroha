@@ -767,10 +767,8 @@ fn ownership_signature_v1(
     let ownership_signature: P256Signature = leaf_key
         .sign_prehash(&ownership_challenge)
         .map_err(|_| "deterministic release ownership signature failed")?;
-    let ownership_signature = ownership_signature
-        .normalize_s()
-        .unwrap_or(ownership_signature);
-    if ownership_signature.normalize_s().is_some() {
+    let ownership_signature = ownership_signature.normalize_s();
+    if ownership_signature.normalize_s() != ownership_signature {
         return Err("deterministic release ownership signature is not low-S");
     }
     Ok(ownership_signature.to_bytes().into())
@@ -1178,7 +1176,7 @@ fn time_tlv_v1(unix_seconds: u64) -> Result<Vec<u8>, &'static str> {
     Ok(tlv(tag, encoded.as_bytes()))
 }
 fn spki(key: &P256SigningKey) -> Vec<u8> {
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     sequence(&[
         ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
         bit_string(point.as_bytes(), 0),

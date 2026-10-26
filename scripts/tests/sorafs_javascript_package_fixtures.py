@@ -16,10 +16,12 @@ import sorafs_javascript_dependencies as dependencies
 CHECKSUM = b'{"component_control":"opaque original manifest; not native qualification"}'
 # Reviewed census of the captured candidate, shared by every SoraFS JavaScript
 # test so that adding or removing an SDK module changes it in one place.
-SOURCE_FILES = 234
-PROJECTED_MEMBERS = 231
-PROJECTED_DIST_MEMBERS = 193
-INSTALLED_MEMBERS = 248
+# The reviewed expansion adds 28 source modules and iso_bridge_context.mjs;
+# seven dependency fixtures contribute 14 members plus one hidden lock.
+SOURCE_FILES = 263
+PROJECTED_MEMBERS = 260
+PROJECTED_DIST_MEMBERS = 221
+INSTALLED_MEMBERS = 275
 REQUIRED_OUTPUTS = (
     "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "native.js", "nativeArtifactHash.js", "numericV1.js",

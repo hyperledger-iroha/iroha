@@ -11,7 +11,8 @@ import io.netty.channel.ChannelInitializer
 import io.netty.channel.ChannelOption
 import io.netty.channel.EventLoopGroup
 import io.netty.channel.FixedRecvByteBufAllocator
-import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.MultiThreadIoEventLoopGroup
+import io.netty.channel.nio.NioIoHandler
 import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.NioSocketChannel
 import io.netty.handler.codec.http.DefaultHttpHeaders
@@ -485,7 +486,7 @@ class NettyWebSocketConnector private constructor(
             require(maximumQueuedBytes in 1..MAXIMUM_QUEUED_BYTES)
             val tls = SSLContext.getDefault()
             return NettyWebSocketConnector(
-                NioEventLoopGroup(1, daemonThreads("iroha-websocket-io")),
+                MultiThreadIoEventLoopGroup(1, daemonThreads("iroha-websocket-io"), NioIoHandler.newFactory()),
                 tls, true, maximumMessageBytes, maximumQueuedBytes,
             )
         }

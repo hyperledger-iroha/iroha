@@ -1,7 +1,7 @@
 /** Payload-derived attachment context from the authenticated canonical Rust owner. */
 import { Buffer } from "buffer";
-import { blake3 } from "@noble/hashes/blake3";
-import { blake2b } from "@noble/hashes/blake2b";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { blake2b } from "@noble/hashes/blake2.js";
 import { defaultNativeRuntime, resolveNativeRuntimeBinding } from "./nativeRuntime.js";
 import { decodeSignedAttachmentsV1 } from "./signedAttachments.js";
 import { inspectSignedAttachmentProofBindingsV1 } from "./signedAttachmentProofs.js";

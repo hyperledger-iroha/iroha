@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::{account::AccountId, kagemusha::kagemusha_wallet_v1::*};
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 use crate::{
     kagemusha_wallet_advance_v1::{
@@ -586,7 +586,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
             // cannot silently reselect another marker/source on retry.
             pin_selected_source(&mut intake.selected_source, (slot, marker_file_digest))?;
             let mut nonce = [0; 32];
-            rand::rngs::OsRng.try_fill_bytes(&mut nonce).map_err(|_| {
+            rand::rngs::SysRng.try_fill_bytes(&mut nonce).map_err(|_| {
                 KagemushaWalletProviderErrorV1::Unavailable(KagemushaWalletUnavailableV1::Platform(
                     0,
                 ))

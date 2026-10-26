@@ -1041,8 +1041,8 @@ export IROHA_KOTLIN_FIXTURE_GEN_BIN=/absolute/path/to/kotlin-fixture-gen
 |------|---------|-------------|
 | JDK | 21 | All modules |
 | Android SDK | compileSdk 37 | `client-android` |
-| Rust | exactly 1.93.1 | Native `.so` build |
-| Android NDK | exactly 28.0.12674087-beta2 (r28-beta2) | Native `.so` build |
+| Rust | exactly 1.99.1 | Native `.so` build |
+| Android NDK | exactly 30.0.16248370 (r30) | Native `.so` build |
 | `cargo-ndk` | exactly 4.1.2 | Native `.so` build |
 
 ### Step 1: Build core-jvm
@@ -1067,13 +1067,13 @@ The `libconnect_norito_bridge.so` files are **not tracked in git** — they are 
 
 ```bash
 # Install Rust Android targets
-rustup target add --toolchain 1.93.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+rustup target add --toolchain 1.99.1 aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 
 # Install cargo-ndk
 cargo install cargo-ndk --version 4.1.2 --locked
 
 # Select the authenticated Android NDK and an external artifact root
-export ANDROID_NDK_HOME=/absolute/path/to/android-ndk/28.0.12674087
+export ANDROID_NDK_HOME=/absolute/path/to/android-ndk/30.0.16248370
 export MOBILE_SDK_ANDROID_ARTIFACT_DIR=/absolute/non-symlink/path/to/android-artifacts
 mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 ```
@@ -1161,7 +1161,7 @@ an empty provenance marker and grants no provider, proving, hardware or release
 qualification. The `privacyProductionEnabled` property has been removed.
 
 For every ABI, Gradle resolves canonical `cargo`, `rustc`, and `rustdoc`
-executables from exact Rust 1.93.1. It requires one job, incremental compilation
+executables from exact Rust 1.99.1. It requires one job, incremental compilation
 off and offline dependency resolution, then invokes stock Cargo through
 cargo-ndk with the authenticated root manifest and lock:
 

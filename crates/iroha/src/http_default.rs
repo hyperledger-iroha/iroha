@@ -657,6 +657,9 @@ impl RequestBuilder for DefaultWebSocketRequestBuilder {
     }
 }
 fn blocking_http_client_builder() -> reqwest::blocking::ClientBuilder {
+    crate::http::tls::configure_blocking_client(base_blocking_http_client_builder())
+}
+fn base_blocking_http_client_builder() -> reqwest::blocking::ClientBuilder {
     BlockingClient::builder()
         // This transport carries one-shot signed requests. Following a redirect
         // could replay a body after the original endpoint already admitted it.
@@ -680,6 +683,9 @@ fn build_async_http_client() -> crate::Result<reqwest::Client> {
         })
 }
 fn async_http_client_builder() -> reqwest::ClientBuilder {
+    crate::http::tls::configure_async_client(base_async_http_client_builder())
+}
+fn base_async_http_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         // A redirect can arrive after ingress admitted a one-shot signed transaction.
         .redirect(reqwest::redirect::Policy::none())
@@ -697,7 +703,7 @@ fn direct_loopback_http_client_builder() -> reqwest::blocking::ClientBuilder {
         std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
         std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
     ];
-    let builder = blocking_http_client_builder()
+    let builder = base_blocking_http_client_builder()
         .no_proxy()
         .resolve_to_addrs("localhost", &addresses);
     // This separate pool accepts only cleartext loopback requests and never follows
@@ -708,7 +714,7 @@ fn direct_loopback_http_client_builder() -> reqwest::blocking::ClientBuilder {
         feature = "tls-rustls-native-roots",
         feature = "tls-rustls-webpki-roots"
     ))]
-    let builder = builder.tls_built_in_root_certs(false);
+    let builder = builder.tls_certs_only(std::iter::empty());
     builder
 }
 fn build_direct_loopback_async_http_client() -> crate::Result<reqwest::Client> {
@@ -725,7 +731,7 @@ fn direct_loopback_async_http_client_builder() -> reqwest::ClientBuilder {
         std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
         std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
     ];
-    let builder = async_http_client_builder()
+    let builder = base_async_http_client_builder()
         .no_proxy()
         .resolve_to_addrs("localhost", &addresses);
     // Keep this policy confined to the cleartext pool; HTTPS uses the ordinary pool.
@@ -735,7 +741,7 @@ fn direct_loopback_async_http_client_builder() -> reqwest::ClientBuilder {
         feature = "tls-rustls-native-roots",
         feature = "tls-rustls-webpki-roots"
     ))]
-    let builder = builder.tls_built_in_root_certs(false);
+    let builder = builder.tls_certs_only(std::iter::empty());
     builder
 }
 struct ClientResponse {

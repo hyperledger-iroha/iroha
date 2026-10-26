@@ -24,6 +24,7 @@ REVIEWED_VENDOR_FILES = (
     "vendor/aes/tests/data/aes128.blb",
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",
+    "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy",
 )
 ROLE_EXAMPLES = REVIEWED_VENDOR_FILES
 
@@ -33,6 +34,8 @@ def public_original(relative: str) -> bytes:
         return b'[package]\nname = "public-synthetic-source"\nversion = "0.0.0"\n'
     if relative.endswith(".codespell_ignore"):
         return b"crate\nser\n"
+    if relative.endswith(".xcprivacy"):
+        return b'<?xml version="1.0"?><plist version="1.0"><dict/></plist>\n'
     # Public patterned bytes exercise binary preservation; these are not curve
     # attestations or key material and confer no cryptographic qualification.
     return bytes(range(256)) * 3 + b"PUBLIC SYNTHETIC VECTOR\x00\xff\n"
@@ -48,7 +51,7 @@ def write_public(root: Path, relative: str) -> bytes:
 
 def test_reviewed_vendor_inventory_is_exactly_the_established_roles() -> None:
     assert seal._REVIEWED_PUBLIC_VENDOR_INPUTS == frozenset(REVIEWED_VENDOR_FILES)
-    assert len(seal._REVIEWED_PUBLIC_VENDOR_INPUTS) == 9
+    assert len(seal._REVIEWED_PUBLIC_VENDOR_INPUTS) == 10
 
 
 @pytest.mark.parametrize("relative", [
@@ -88,7 +91,7 @@ def test_actual_listed_file_admission_keeps_every_reviewed_vendor_input(tmp_path
     lock.write_bytes(b"public synthetic lock original\n")
     filename_inventory = b"\0".join(name.encode() for name in REVIEWED_VENDOR_FILES) + b"\0"
     # Only the filename-only Git boundary is mocked; real lexical/ancestor/file
-    # admission runs for all nine. No repository script, Cargo or Git is invoked.
+    # admission runs for all ten. No repository script, Cargo or Git is invoked.
     with mock.patch.object(seal, "source_seal_tools", return_value=(None, None, None, None)), \
             mock.patch.object(seal, "source_seal_environment", return_value={}), \
             mock.patch.object(seal, "run", return_value=filename_inventory):
@@ -147,6 +150,9 @@ def test_reviewed_vendor_fingerprint_preserves_names_original_bytes_and_lock_dom
     "vendor/concread/public-sentinel.der",
     "vendor/concread/public-sentinel.pem",
     "vendor/concread/credentials.orig",
+    "vendor/boringssl-swiftpm/Other.xcprivacy",
+    "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy.backup",
+    "vendor/another/PrivacyInfo.xcprivacy",
 ])
 def test_neighbor_or_material_role_is_refused_before_any_open(tmp_path: Path, relative: str) -> None:
     root = tmp_path.resolve()

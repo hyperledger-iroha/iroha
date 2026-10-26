@@ -1,0 +1,6 @@
+# Repository-owned self-hosted runner labels used by current workflows.
+self-hosted-runner:
+  labels:
+    - iroha2
+    - cuda
+    - sorafs-release-auth

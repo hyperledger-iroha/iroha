@@ -240,7 +240,10 @@ fn measure(label: &str, shape: SigmaShape, options: KeyOptions) {
     let verifier = prover.verifier();
     let bytes = verifier.proof_bytes().expect("descriptor length");
     assert_eq!(bytes, shape.proof_length::<Eq>().expect("shape length"));
-    let descriptor_sha256 = Sha256::digest(verifier.descriptor_bytes());
+    let descriptor_sha256 = Sha256::digest(verifier.descriptor_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let key_digest = verifier.verifying_key_digest().expect("key digest");
     let key_digest = key_digest.iter().fold(String::new(), |mut out, byte| {
         use core::fmt::Write as _;
@@ -254,7 +257,7 @@ fn measure(label: &str, shape: SigmaShape, options: KeyOptions) {
             "M12 {label} case={} k={} lanes={} limb_bits={} advice_cols={} fixed_cols={} \
              permutations={} cells={} threads={threads} runs={runs} params_ms={params_ms:.0} \
              keygen_ms={keygen_ms:.0} prove_wall_ms={} prove_cpu_ms={} verify_ms={} \
-             proof_bytes={bytes} descriptor_sha256={descriptor_sha256:x} vk_digest={key_digest} \
+             proof_bytes={bytes} descriptor_sha256={descriptor_sha256} vk_digest={key_digest} \
              cpu_source={CPU_SOURCE} load1={} low_load={} catalog_qualified=false",
             relation.label(),
             shape.k,

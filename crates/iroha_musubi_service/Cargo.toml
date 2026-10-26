@@ -24,11 +24,11 @@ tls-native = ["iroha/tls-native", "reqwest/native-tls"]
 tls-native-vendored = ["iroha/tls-native-vendored", "reqwest/native-tls-vendored"]
 tls-rustls-native-roots = [
     "iroha/tls-rustls-native-roots",
-    "reqwest/rustls-tls-native-roots",
+    "reqwest/rustls",
 ]
 tls-rustls-webpki-roots = [
     "iroha/tls-rustls-webpki-roots",
-    "reqwest/rustls-tls-webpki-roots",
+    "reqwest/rustls",
 ]
 
 [dependencies]

@@ -36,7 +36,7 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
             path.mkdir(mode=0o700)
         self.write(self.root / 'kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/NativeSignerBridge.kt',
                    b'external fun inspect(input: ByteArray): ByteArray\n')
-        self.write(self.ndk / 'source.properties', b'Pkg.Revision = 28.0.12674087\n')
+        self.write(self.ndk / 'source.properties', b'Pkg.Desc = Android NDK\nPkg.Revision = 30.0.16248370\nPkg.BaseRevision = 30.0.16248370\nPkg.ReleaseName = r30\n')
         self.strip = self.ndk / 'toolchains/llvm/prebuilt/fixture/bin/llvm-strip'
         self.nm = self.strip.with_name('llvm-nm')
         self.write(self.strip, b'fixture strip tool\n')
@@ -58,7 +58,7 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
                 'source_commit': ORIGINAL_COMMIT, 'source_fingerprint_sha256': 'c' * 64},
             'build-environment.json': {
                 'environment_profile': 'android-cargo', 'cargo_build_jobs': 1,
-                'rust_toolchain_channel': '1.93.1', 'wallet_runtime_authority': 'fixture-authority',
+                'rust_toolchain_channel': '1.99.1', 'wallet_runtime_authority': 'fixture-authority',
                 'wallet_runtime_trust_ed25519_hex': 'd' * 64,
                 'android_ndk_source_properties_sha256': MODULE.digest((self.ndk / 'source.properties').read_bytes())},
             'producer-receipt.json': {

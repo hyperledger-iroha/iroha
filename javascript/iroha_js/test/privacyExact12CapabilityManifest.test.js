@@ -315,7 +315,7 @@ async function fetchTestManifest() {
 
 function fakeNative(payload = manifestPayload(), overrides = {}) {
   return {
-    connectNoritoBridgeAbiVersion: () => 32,
+    connectNoritoBridgeAbiVersion: () => 33,
     privacyCompiledProfileCatalogV1: () => Uint8Array.from(CATALOG),
     privacyValidateCompiledProfileCatalogV1: (bytes) =>
       sameBytes(bytes, CATALOG) ? 0 : 8,
@@ -964,6 +964,20 @@ test("privacy STARK capability bindings reject a different outer suite", async (
     payload.qualification.release_manifest.protocols[0][key][field] = label;
     await withNative(fakeNative(payload), async () => {
       assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+    });
+  }
+});
+
+
+test("privacy admission rejects retired32 and future34 before any catalog call", async () => {
+  for (const version of [32, 34]) {
+    let catalogCalls = 0;
+    await withNative(fakeNative(manifestPayload(), {
+      connectNoritoBridgeAbiVersion: () => version,
+      privacyCompiledProfileCatalogV1() { catalogCalls += 1; return CATALOG; },
+    }), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /requires exact ABI33/u);
+      assert.equal(catalogCalls, 0);
     });
   }
 });

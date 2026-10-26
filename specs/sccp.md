@@ -185,7 +185,7 @@ enacts, and the fast pause panel for pauses only.
 | Destination replay protection | Dense per-(network, revision) outbound nonce assigned by Taira. EVM uses a bitmap `mapping(uint256 ⇒ uint256)`; TON uses sequentially activated bucket child contracts of 512 flags that only the minter activates, once per bucket (§5.3.4) | One storage word per 256 messages. The TON account-state cap (65 536 cells) forbids an in-contract dictionary |
 | Token and bridge shape | One contract per destination: an ERC-20 with the bridge built in (EVM), deployed through deterministic CREATE2; or one Jetton master with the bridge built in plus standard wallets and consumption buckets (TON). 9 decimals everywhere | No cross-contract minting, no code-hash rechecks, no unit scaling, and Taira can recompute every deployment address |
 | Taira resets | Taira identity is the runtime `NetworkId`. Genesis carries a random reset nonce, so every reset has a fresh identity. Nothing Taira-specific is compiled into Rust or contracts. Old deployments freeze when their last generation's deadline passes (§4.18) | A compiled Taira identity would make every reset and devnet unusable |
-| Contract toolchains | Solidity 0.8.31 (`solc` +commit.fd3a2265), legacy pipeline, `evmVersion: cancun`, for Ethereum and BSC; Acton 1.2.0 / Tolk 1.4.2 for TON. All ship native macOS arm64 binaries (§5.5) | Every contract builds natively on macOS arm64 |
+| Contract toolchains | Solidity 0.8.38 (`solc` +commit.1835d247), legacy pipeline, `evmVersion: cancun`, for Ethereum and BSC; Acton 1.2.0 / Tolk 1.4.2 for TON. All ship native macOS arm64 binaries (§5.5) | Every contract builds natively on macOS arm64 |
 
 ### 1.3 End-to-end shape
 
@@ -4130,7 +4130,7 @@ Burns are allowed while paused, after expiry and after a latch.
 ### 5.2 EVM: Ethereum and BSC (`contracts/evm/sccp/SccpTairaXor.sol`)
 
 One contract source and the one library it imports
-(`contracts/evm/sccp/lib/BLS12_381.sol`, §5.2.4) are compiled by `solc` 0.8.31
+(`contracts/evm/sccp/lib/BLS12_381.sol`, §5.2.4) are compiled by `solc` 0.8.38
 for Ethereum and BSC. The contract is the ERC-20/BEP-20 token itself. It makes no external calls other than
 precompiles (so it needs no reentrancy guard), and has no owner, no upgrade
 path and no setters. Token metadata: name `Taira XOR`, symbol `tXOR`, decimals
@@ -4909,7 +4909,7 @@ certificate cells and adds one forward fee.
 
 | Target | Compiler | Settings |
 |---|---|---|
-| ETH, BSC | solc `0.8.31+commit.fd3a2265` (universal macOS arm64/x86-64, linux-amd64, linux-arm64) | `evmVersion: "cancun"`, `optimizer: {enabled: true, runs: 200}`, `viaIR: false`, `metadata.bytecodeHash: "none"`, `metadata.appendCBOR: false` |
+| ETH, BSC | solc `0.8.38+commit.1835d247` (universal macOS arm64/x86-64, linux-amd64, linux-arm64) | `evmVersion: "cancun"`, `optimizer: {enabled: true, runs: 200}`, `viaIR: false`, `metadata.bytecodeHash: "none"`, `metadata.appendCBOR: false` |
 | TON | Acton 1.2.0 bundling Tolk 1.4.2 (`acton-aarch64-apple-darwin`, linux builds) | fixed optimization; code cell hashes and depths locked |
 
 - `scripts/contract_tooling/compiler-lock.json` pins the URLs and sha256 of
@@ -4917,10 +4917,10 @@ certificate cells and adds one forward fee.
   artifacts, including each contract's creation code
   (`SCCP_EVM_CREATION_CODE`), runtime template and `immutableReferences`. No
   Rosetta or Docker is needed on macOS arm64.
-- `evmVersion: cancun` must be explicit because the compiler defaults to
-  `osaka`. The legacy pipeline avoids the via-IR-only 0.8.31 bugs. The source
-  MUST NOT `delete` memory `bytes` elements or use custom storage layouts
-  (0.8.31 legacy-pipeline bug patterns).
+- `evmVersion: cancun` must remain explicit to bind the execution fork. The
+  reviewed build uses the legacy pipeline. The source MUST NOT `delete`
+  memory `bytes` elements or use custom storage layouts; these restrictions
+  remain part of the narrow source policy after the compiler update.
 - The EVM lock lists exactly two sources, `SccpTairaXor.sol` and
   `lib/BLS12_381.sol`, and `scripts/contract_tooling/artifact-lock.json`
   records the creation code built from them. The EDR suites run that locked

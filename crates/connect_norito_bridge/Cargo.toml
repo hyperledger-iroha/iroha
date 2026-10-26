@@ -33,7 +33,7 @@ privacy-production-enabled = []
 cuda = ["ivm/cuda"]
 
 [dependencies]
-p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa"] }
 iroha_core_privacy = { workspace = true, default-features = false, features = ["zk-stark"] }
 iroha_model_base = { workspace = true }
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec"] }
@@ -59,10 +59,10 @@ libc = "0.2.177"
 blake3.workspace = true
 base64 = { workspace = true }
 hex = "0.4"
-x25519-dalek = "2.0.1"
+x25519-dalek = "3.0.0"
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
-rand = { version = "0.9.3", default-features = false, features = ["os_rng", "std", "std_rng"] }
+rand = { version = "0.10.3", default-features = false, features = ["sys_rng", "std", "std_rng"] }
 tracing.workspace = true
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 tempfile = { workspace = true }
@@ -76,4 +76,4 @@ iroha_core = { path = "../iroha_core", default-features = false, features = ["no
 sorafs_chunker = { workspace = true }
 
 [target.'cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-jni = { version = "0.21.1", default-features = false }
+jni = { version = "0.22.4", default-features = false }

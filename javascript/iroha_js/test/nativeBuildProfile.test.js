@@ -69,7 +69,7 @@ function cargoArtifactProfile(cargoProfile) {
   };
 }
 
-function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.93.1" } = {}) {
+function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.99.1" } = {}) {
   const repoRoot = realpathSync(
     mkdtempSync(path.join(os.tmpdir(), "iroha-js-live-root-")),
   );
@@ -102,7 +102,7 @@ function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.93.1
   writeFileSync(path.join(repoRoot, "Cargo.lock"), "version = 4\n");
   writeFileSync(
     path.join(repoRoot, "rust-toolchain.toml"),
-    "[toolchain]\nchannel = \"1.93.1\"\n",
+    "[toolchain]\nchannel = \"1.99.1\"\n",
   );
   writeFileSync(
     path.join(packageRoot, "Cargo.toml"),
@@ -138,9 +138,9 @@ function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.93.1
     assert.equal(options.maxBuffer, 64 * 1024);
     assert.deepEqual(options.stdio, ["ignore", "pipe", "pipe"]);
     const responses = new Map([
-      [cargoPath + " --version", "cargo 1.93.1 (fixture 2026-01-01)\n"],
-      [rustcPath + " -vV", "rustc 1.93.1 (fixture 2026-01-01)\nrelease: 1.93.1\n"],
-      [rustdocPath + " --version", "rustdoc 1.93.1 (fixture 2026-01-01)\n"],
+      [cargoPath + " --version", "cargo 1.99.1 (fixture 2026-01-01)\n"],
+      [rustcPath + " -vV", "rustc 1.99.1 (fixture 2026-01-01)\nrelease: 1.99.1\n"],
+      [rustdocPath + " --version", "rustdoc 1.99.1 (fixture 2026-01-01)\n"],
       [rustcPath + " --print sysroot", path.dirname(binDirectory) + "\n"],
     ]);
     const key = executable + " " + args.join(" ");
@@ -274,7 +274,7 @@ test("native output requires the caller-provided absolute Cargo target", () => {
 });
 
 test("native build admits standalone and rustup layouts by actual pinned versions and sysroot", (t) => {
-  for (const toolchainDirectory of ["rust-1.93.1", "1.93.1-x86_64-unknown-linux-gnu"]) {
+  for (const toolchainDirectory of ["rust-1.99.1", "1.99.1-x86_64-unknown-linux-gnu"]) {
     const fixture = createFixture(t, { toolchainDirectory });
     const probes = [];
     const status = runNativeBuild({
@@ -300,11 +300,11 @@ test("native build admits standalone and rustup layouts by actual pinned version
 
 test("native build rejects unpinned, mixed, or unverifiable toolchains before Cargo", async (t) => {
   const cases = [
-    { executable: "rustc", args: "-vV", stdout: "rustc 1.93.1 (fixture)\nrelease: 1.94.0\n", message: /rustc must report exactly release/u },
-    { executable: "rustc", args: "-vV", stdout: "rustc 1.93.1 (fixture)\nrelease: 1.93.1\nrelease: 1.93.1\n", message: /rustc must report exactly release/u },
+    { executable: "rustc", args: "-vV", stdout: "rustc 1.99.1 (fixture)\nrelease: 1.94.0\n", message: /rustc must report exactly release/u },
+    { executable: "rustc", args: "-vV", stdout: "rustc 1.99.1 (fixture)\nrelease: 1.99.1\nrelease: 1.99.1\n", message: /rustc must report exactly release/u },
     { executable: "cargo", args: "--version", stdout: "cargo 1.94.0 (fixture)\n", message: /cargo must report exactly version/u },
-    { executable: "rustdoc", args: "--version", stdout: "rustdoc 1.93.1-nightly (fixture)\n", message: /rustdoc must report exactly version/u },
-    { executable: "cargo", args: "--version", stdout: "rustdoc 1.93.1 (fixture)\n", message: /cargo must report exactly version/u },
+    { executable: "rustdoc", args: "--version", stdout: "rustdoc 1.99.1-nightly (fixture)\n", message: /rustdoc must report exactly version/u },
+    { executable: "cargo", args: "--version", stdout: "rustdoc 1.99.1 (fixture)\n", message: /cargo must report exactly version/u },
     { executable: "rustc", args: "--print sysroot", stdout: "relative/sysroot\n", message: /sysroot must be an absolute canonical path/u },
     { executable: "rustc", args: "--print sysroot", foreignSysroot: true, message: /bin directory of rustc's reported sysroot/u },
     { executable: "rustc", args: "-vV", result: { status: 9, stdout: "" }, message: /could not verify rustc -vV/u },

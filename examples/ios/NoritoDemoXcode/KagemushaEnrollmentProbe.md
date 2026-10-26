@@ -96,14 +96,14 @@ KAGEMUSHA_ENROLLMENT_ACTOR                  A, B, or C
 KAGEMUSHA_ENROLLMENT_CONFIG_SHA256          exact configuration.plist SHA256
 KAGEMUSHA_ENROLLMENT_GENESIS_SHA256         independent signed genesis SHA256
 KAGEMUSHA_ENROLLMENT_APP_ID_PREFIX          actual 10-character signed App ID prefix
-KAGEMUSHA_ENROLLMENT_EXPECTED_MACHINE       iPhone18,2 for the selected iPhone17 Pro Max
+KAGEMUSHA_ENROLLMENT_EXPECTED_MACHINE       iPhone17,2 for the specified iPhone 16 Pro Max
 KAGEMUSHA_ENROLLMENT_TIMEOUT_SECONDS        integer1..1800
 ```
 
 The timeout bounds mailbox waits. Native/vendor calls retain their real SDK
 lifecycle and deadlines; the probe does not forcibly interrupt uncertain effects.
-Build/app/framework/test/config/catalog hashes and actual OS identity must still
-be pinned by the external run controller. A config hash is not an attestation of
+Build/app/framework/test/config/catalog hashes and freshly observed hardware, OS/build
+and availability must still be pinned by the external run controller for each run. A config hash is not an attestation of
 which native framework the app loaded.
 
 ## Ordered commands and retained outputs
@@ -151,9 +151,74 @@ adjacent `custody/` directory. Every action gets a started/finished record with
 continuous monotonic ticks and duration; native failures include numeric status,
 reason and platform code without error descriptions. Local monotonic ticks cannot
 be compared across devices. A failure is retained even if later retried, and any
-failed command makes the final XCTest fail; `closed.plist` records aggregate counts
+failed command makes the ordinary mailbox XCTest fail; `closed.plist` records aggregate counts
 and the requested/achieved stage. Closing before the configured stage also fails.
 Missing finished/closed records represent interruption, never success.
+
+## Selected Receive publication and actor reconstruction
+
+Two dedicated physical methods compose the existing real Receive, checked file
+publication, acknowledged actor close, fresh open and exact recovery paths:
+
+| Method in `KagemushaEnrollmentPhysicalDeviceTests` | `KAGEMUSHA_ENROLLMENT_PUBLICATION_TRIAL` |
+|---|---|
+| `testDisposableReceiveBeforePublicationDriverReconstruction` | `receive-before-publication` |
+| `testDisposableReceiveAfterPublicationDriverReconstruction` | `receive-after-publication` |
+
+Select the intended method and set its exact test-only environment value alongside
+all the existing physical-run inputs. With this variable absent, both dedicated
+methods skip before any filesystem or Native action and the ordinary method keeps
+its existing behavior. A recognized value selects only the matching dedicated
+method; the other dedicated method and ordinary method skip before effects even
+if the entire class is selected. Every other value fails before effects. Shipping
+SDK and Native code do not read this test selection.
+
+Use a fresh invocation and Receive request ID, the same retained actor/custody
+namespace, and `requiredStage=received`. Complete the real install/open and
+exchange admission using existing commands. Immediately precede the selected
+`receive` with `request-status` for that same ID, which must return actual Native
+UNKNOWN. Supply the original `request-id`, `payment` and `payer-companion` pins.
+The cut applies only to this Receive's `released-original.norito`: before its
+final-name publication or after acknowledged file/full-file and directory
+synchronization. Its baseline is a detached copy of the actual Native original
+passed to publication. The driver verifies the preceding actual COMPLETE and
+durable request/operation identity; Pending, Preparing, an unfired cut, a different
+exception or a cleanup/activity failure cannot satisfy the trial.
+
+The Receive finished record remains **failed**. Before publishing it, the trial
+retains its private baseline, checks original inputs and operation/open bindings,
+independently checks activity health, awaits the real actor's close and constructs
+a fresh real actor using the same configuration. The public
+`publication-trial-fault.plist` and `publication-trial-reconstructed.plist` record
+the observed cut and acknowledged reconstruction. No Native custody is deleted,
+restored or rewritten. The controller then supplies exactly these commands:
+
+1. `install`, using the same authenticated catalog and identity.
+2. `open`, using the same E6/account binding and a newly supplied signature over
+   the fresh Native challenge through the existing signature mailbox.
+3. `request-status`, using the original Receive request ID; it must be COMPLETE.
+4. `released-request`, using that same request ID.
+5. `released-operation`, using the original durable operation ID.
+6. `stop`, which must acknowledge actual close with custody retained.
+
+All three recovery observations must return Receive and exactly match the
+pre-fault original and operation ID. Credited/envelope equality is checked across
+these post-reconstruction observations only: the selected fault precedes their
+initial export. Original Payment, payer companion and operation/open bindings
+must remain unchanged. Every phase check and required diagnostic precedes its
+successful finished fence. Dedicated completion requires exactly one expected
+failed command, zero other failures, zero activity failures and all three exact
+reads. Its `closed.plist` and `publication-trial-complete.plist` precede the final
+successful stop fence. Ordinary campaigns still require zero failed commands.
+
+These are authored, unexecuted physical trials until the approved candidate is
+built and the owner authorizes device actions. A complete record would establish
+only deterministic driver reconstruction for that execution. It explicitly
+claims no carrier delivery, original completion latency, process death or release
+qualification. Acknowledged close/reopen does not establish backup/restore,
+rollback safety or nonrollback authority. The KR1 iOS multiple-write-loss
+residual, physical death/restore, Send/companion and full KR0–KR7 qualification
+remain open.
 
 ## Restart and actor boundaries
 

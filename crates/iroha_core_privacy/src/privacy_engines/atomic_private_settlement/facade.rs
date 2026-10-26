@@ -23,7 +23,7 @@ use crate::privacy_engines::{
 use iroha_data_model::nexus::{
     AtomicPrivateSettlementV1, PrivateSettlementProofIntentV1, PrivateSettlementProofStatementV1,
 };
-use rand::{TryCryptoRng, rngs::OsRng};
+use rand::{TryCryptoRng, rngs::SysRng};
 use thiserror::Error;
 
 /// Failure constructing or verifying one settlement-only private-note proof.
@@ -214,7 +214,7 @@ pub fn prove_atomic_private_settlement_v1(
         canonical_genesis_hash,
         current_height,
         witness,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 
@@ -275,7 +275,12 @@ pub fn prove_atomic_private_settlement_intent_v1(
     witness: &AtomicPrivateSettlementProverWitnessV1,
 ) -> Result<Vec<u8>, AtomicPrivateSettlementProofErrorV1> {
     prove_atomic_private_settlement_intent_v1_with_rng(
-        intent, statement, genesis, height, witness, &mut OsRng,
+        intent,
+        statement,
+        genesis,
+        height,
+        witness,
+        &mut SysRng,
     )
 }
 

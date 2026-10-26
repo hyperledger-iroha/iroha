@@ -271,7 +271,7 @@ impl PreparedLocalGlobalThresholdBeaconDkgSeatV1 {
         if signer.public_key() != self.recipient.record().validator.public_key() {
             return Err(GlobalThresholdBeaconError::InvalidDkgSession.into());
         }
-        let encryption = HybridKeyPair::generate(&mut rand::rngs::OsRng)?;
+        let encryption = HybridKeyPair::generate(&mut rand::rngs::SysRng)?;
         self.recipient.fill_recipient(encryption.public());
         let recipient_key = self
             .recipient

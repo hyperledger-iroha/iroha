@@ -22,7 +22,7 @@ iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
 iroha_telemetry = { workspace = true }
-aead = { version = "0.6.0-rc.3", default-features = false }
+aead = { version = "0.6.1", default-features = false }
 soranet_pq = { workspace = true }
 
 rand = { workspace = true }

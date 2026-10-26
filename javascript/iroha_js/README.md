@@ -127,7 +127,7 @@ python3.12 -I -S -B scripts/native_js_local_unit.py produce \
 
 The tool configuration has exactly `python`, `cargo`, `rustc`, `rustdoc`,
 `node`, `clang`, `ld`, `codesign`, `sdk` and `developer_dir` paths. Use the
-current canonical Python 3.12 and Node executables, stock Rust 1.93.1 tools,
+current canonical Python 3.12 and Node executables, stock Rust 1.99.1 tools,
 and the selected Xcode's macOS SDK, clang and Apple linker. The producer uses
 locked, offline Cargo with one job, incremental compilation disabled and zero
 Debug symbols; it creates no additional Cargo target.
@@ -166,7 +166,7 @@ Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
 
 `scripts/build-native.mjs` requires explicit canonical paths for Cargo, rustc
-and rustdoc from the same stock Rust 1.93.1 toolchain, the repository-root
+and rustdoc from the same stock Rust 1.99.1 toolchain, the repository-root
 `Cargo.lock` and the Cargo target directory. It invokes stable Cargo with the
 original root manifest and `--locked --offline`, and enforces
 `CARGO_BUILD_JOBS=1`, `CARGO_INCREMENTAL=0`, `CARGO_NET_OFFLINE=true`.
@@ -276,7 +276,7 @@ verified native artifact directory.
 ## Native SoraFS Reference Validation
 
 The repository SoraFS qualification runner pins
-`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-30 host
+`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-33 host
 artifact. Plain source-checkout builds remain `debug` unless the profile is
 selected explicitly.
 
@@ -782,7 +782,7 @@ manifest through the Node/N-API client with an HTTPS origin and immutable
 `LocalSigningContext`. Explicit custom fetch implementations are trusted transport
 dependencies and must preserve HTTPS authentication, response URL, and redirect semantics.
 Public archive decoding is inspection-only; copying or re-decoding transport
-bytes loses admission authority. The authenticated ABI30 binding applies
+bytes loses admission authority. The authenticated ABI33 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state, registered production qualification, and byte-exact equality with the
@@ -3786,7 +3786,7 @@ proofs while that relation remains incomplete.
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
 to an immutable exact `NetworkId`/policy-chain binding and a durable checkpoint.
-The ABI 30 native bridge verifies the Norito proof against the complete
+The ABI 33 native bridge verifies the Norito proof against the complete
 independently selected native checkpoint and returns the policy projection together
 with its promoted canonical checkpoint bytes. A checkpoint is exactly
 `{ checkpointNorito: bytes }`; a height/context pair cannot replace it. Persist every
@@ -4508,9 +4508,10 @@ console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 - See `specs/sdk/js/quickstart.md` for an expanded walkthrough covering key management, transaction assembly, Torii configuration, and CI tips.
 
 - Cache both `npm` and `cargo` directories so native bindings rebuild quickly across matrix runs.
-- ESLint 10 uses `eslint.config.mjs`; development tooling requires Node 20.19+, 22.13+, or 24+. The published SDK runtime floor remains Node 20.19.0.
+- TypeScript 7 checks declarations and browser consumers; `@types/node` follows the Node 22 API line so development on newer hosts does not silently add Node 26-only APIs.
+- ESLint 10 uses `eslint.config.mjs`; the SDK and development tooling require Node 22.23.4 or newer. Node 20 has reached end of life; use the latest security patch on a maintained Node release line.
 - Run `npm run lint:test` before the dockerised integration job. The script enforces ESLint with zero warnings, builds the native addon, and runs the zero-skip hermetic profile. Release CI separately provisions and runs the 1 GiB and live qualification profiles.
-- Test the declared minimum Node 20.19.0 and the existing Node 20, 22 and 24 CI lines alongside the `rust-toolchain.toml` version. These selectors do not establish release qualification; retain the exact runtime version and matching-candidate results.
+- Test the declared minimum Node 22.23.4 and the maintained Node 22, 24 and 26 CI lines alongside the `rust-toolchain.toml` version. These selectors do not establish release qualification; retain the exact runtime version and matching-candidate results.
 - Use `node scripts/run-test-profile.mjs unit` for quick hermetic runs when native artifacts are already built. The profile refreshes `dist` from the current source before testing packaged browser exports. Raw `node --test` intentionally selects the fail-closed live and 1 GiB lanes as well.
 - Layer any project-specific linting or formatting checks on top of `npm run lint:test` if your monorepo enforces stricter policies.
 - See `specs/examples/iroha_js_ci.md` for extended guidance and optional smoke-job templates.
@@ -4529,7 +4530,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ["20.19.0", 20, 22, 24]
+        node-version: ["22.23.4", 22, 24, 26]
     steps:
       - uses: actions/checkout@v4
 

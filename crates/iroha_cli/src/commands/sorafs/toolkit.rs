@@ -16,7 +16,7 @@ use kotodama_lang::{
     session::CompilerSession,
 };
 use norito::json::{Map, Value};
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, PorMerkleTree,
     fetch_plan::{TOOLKIT_PACK_REPORT_SCHEMA_V1, try_chunk_fetch_specs_to_json},
@@ -424,7 +424,7 @@ impl PackArgs {
                 chunk_digest_sha3,
                 manifest_filename.as_deref(),
             );
-            let mut rng = OsRng;
+            let mut rng = SysRng;
             let envelope = encrypt_payload(&manifest_bytes, &aad, &recipient, &mut rng)
                 .wrap_err("failed to encrypt hybrid payload envelope")?;
             let envelope_bytes =

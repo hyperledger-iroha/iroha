@@ -16,7 +16,7 @@ blake3 = { workspace = true }
 hex = { workspace = true }
 iroha_crypto = { workspace = true, features = ["application"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }
-nix = { version = "0.30.1", features = ["signal"] }
+nix = { version = "0.31.3", features = ["signal"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 quinn = { version = "0.11.12", default-features = false, features = ["rustls", "runtime-tokio"] }
 rand = { workspace = true }

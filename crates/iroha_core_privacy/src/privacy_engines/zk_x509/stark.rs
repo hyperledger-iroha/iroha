@@ -275,7 +275,7 @@ pub use main_aggregate::{ZkX509MainAwaitingCredentialBindingV1, ZkX509MainCompos
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use main_aggregate::{p256_opened_residues_v1, p256_scalar_opened_residues_v1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-use rand::TryRngCore;
+use rand::TryRng;
 use std::collections::BTreeMap;
 use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
@@ -3733,7 +3733,7 @@ fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> ZkX509StarkErrorV
     }
 }
 #[cfg(test)]
-fn masked_lde_columns_v1<R: TryRngCore>(
+fn masked_lde_columns_v1<R: TryRng>(
     columns: &[Vec<F>],
     layout: SegmentLayoutV1,
     rng: &mut R,
@@ -5931,9 +5931,9 @@ fn absorb_grinding_nonce_v1(
 /// Construct the canonical byte-memory segmented proof with an injected RNG.
 ///
 /// The injected fallible RNG is used by deterministic KATs and entropy-failure
-/// tests. Production callers of this currently internal API use `OsRng`.
+/// tests. Production callers of this currently internal API use `SysRng`.
 #[cfg(test)]
-pub fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
+pub fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRng>(
     statement: &ZkX509IoStarkStatementV1,
     witnesses: &[ZkX509IoChannelWitnessV1],
     rng: &mut R,
@@ -6159,7 +6159,7 @@ pub fn prove_zk_x509_io_segmented_stark_v1_with_rng<R: TryRngCore>(
 /// This bounded proof constrains the projection trace itself. Its SHA and DER byte channels remain
 /// deliberately outside this proof until the aggregate cross-segment I/O registration is complete.
 #[cfg(test)]
-pub fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore>(
+pub fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRng>(
     statement: &IrohaZkX509StarkP256StatementV1,
     witness: &ZkX509ProjectionWitnessV1,
     rng: &mut R,
@@ -6369,7 +6369,7 @@ pub fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRngCore>(
 }
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
-fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRngCore>(
+fn build_zk_x509_der_segmented_stark_proof_v1_with_rng<R: TryRng>(
     shape: &ZkX509DerStarkShapeV1,
     documents: &[&[u8]],
     rng: &mut R,

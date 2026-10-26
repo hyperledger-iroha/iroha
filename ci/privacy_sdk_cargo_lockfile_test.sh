@@ -35,7 +35,7 @@ install_tracked_test_root_lock() {
 
 write_test_rust_toolchain() {
   local root="$1"
-  printf '%s\n' '[toolchain]' 'channel = "1.93.1"' \
+  printf '%s\n' '[toolchain]' 'channel = "1.99.1"' \
     >"${root}/rust-toolchain.toml"
   chmod 600 "${root}/rust-toolchain.toml"
 }
@@ -328,7 +328,7 @@ expect_failure \
   "test replaced selected"
 
 FAKE_CARGO_LOG="${TEST_ROOT}/fake-cargo.log"
-FAKE_TOOLCHAIN_BIN="${TEST_ROOT}/direct-toolchain/1.93.1-aarch64-apple-darwin/bin"
+FAKE_TOOLCHAIN_BIN="${TEST_ROOT}/direct-toolchain/1.99.1-aarch64-apple-darwin/bin"
 FAKE_RUSTUP="${TEST_ROOT}/rustup"
 FAKE_CARGO="${FAKE_TOOLCHAIN_BIN}/cargo"
 FAKE_RUSTC="${FAKE_TOOLCHAIN_BIN}/rustc"
@@ -432,7 +432,7 @@ export IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH="${WRAPPER_CONFIG_PATH}"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL="${WRAPPER_CONFIG_SEAL}"
 export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_PATH="${WRAPPER_TOOLCHAIN_PATH}"
 export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL="${WRAPPER_TOOLCHAIN_SEAL}"
-export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR="1.93.1-aarch64-apple-darwin"
+export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR="1.99.1-aarch64-apple-darwin"
 export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH="${FAKE_RUSTUP}"
 export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL="${FAKE_RUSTUP_SEAL}"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH="${FAKE_CARGO}"
@@ -1306,7 +1306,7 @@ cmp "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" "${PROVISION_HELPER_PATH}"
 # no real Cargo command runs in this self-test.
 PROVISION_REPOSITORY="${TEST_ROOT}/provision-repository"
 PROVISION_CORRIDOR="${TEST_ROOT}/provision-corridor"
-PROVISION_BIN="${TEST_ROOT}/provision-toolchain/1.93.1-x86_64-unknown-linux-gnu/bin"
+PROVISION_BIN="${TEST_ROOT}/provision-toolchain/1.99.1-x86_64-unknown-linux-gnu/bin"
 PROVISION_GITHUB_ENV="${TEST_ROOT}/provision-github-env"
 PROVISION_GITHUB_PATH="${TEST_ROOT}/provision-github-path"
 PROVISION_CARGO_LOG="${TEST_ROOT}/provision-cargo.log"
@@ -1371,7 +1371,7 @@ printf '%s\n' \
   'set -euo pipefail' \
   'printf "%s\\n" "$*" >>"${BASH_SOURCE[0]%/*}/rustup-args.log"' \
   '[[ "${RUSTUP_AUTO_INSTALL:-}" == "0" ]] || exit 97' \
-  'if [[ "${1:-}" != "which" || "${2:-}" != "--toolchain" || "${3:-}" != "1.93.1-x86_64-unknown-linux-gnu" ]]; then' \
+  'if [[ "${1:-}" != "which" || "${2:-}" != "--toolchain" || "${3:-}" != "1.99.1-x86_64-unknown-linux-gnu" ]]; then' \
   '  printf "%s/%s\\n" "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)" "directory-override-${2:-cargo}"' \
   '  exit 0' \
   'fi' \
@@ -1432,7 +1432,7 @@ for policy_environment in \
     "${PROVISION_POLICY_ENV}" \
     "${PROVISION_POLICY_PATH}" \
     "${PROVISION_BIN}/rustup" \
-    "1.93.1-x86_64-unknown-linux-gnu" \
+    "1.99.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}"
 done
 
@@ -1464,7 +1464,7 @@ for descriptor_variant in \
     extra-top-level)
       printf '%s\n' \
         '[toolchain]' \
-        'channel = "1.93.1"' \
+        'channel = "1.99.1"' \
         '[profile]' \
         'name = "poison"' \
         >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
@@ -1472,14 +1472,14 @@ for descriptor_variant in \
     extra-field)
       printf '%s\n' \
         '[toolchain]' \
-        'channel = "1.93.1"' \
+        'channel = "1.99.1"' \
         'components = ["rust-src"]' \
         >"${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
       ;;
   esac
   chmod 600 "${TOOLCHAIN_VARIANT_ROOT}/rust-toolchain.toml"
   expect_failure \
-    "exact Rust 1.93.1 toolchain" \
+    "exact Rust 1.99.1 toolchain" \
     privacy_sdk_validate_rust_toolchain_overrides \
     "${TOOLCHAIN_VARIANT_ROOT}" "${TOOLCHAIN_VARIANT_ROOT}" "${TEST_PYTHON}"
 done
@@ -1496,7 +1496,7 @@ install_tracked_test_root_lock "${PROVISION_NESTED_REPOSITORY}"
 : >"${PROVISION_NESTED_ENV}"
 : >"${PROVISION_NESTED_PATH}"
 write_test_rust_toolchain "${PROVISION_NESTED_REPOSITORY}"
-printf '%s\n' '1.93.1' \
+printf '%s\n' '1.99.1' \
   >"${PROVISION_NESTED_REPOSITORY}/python/iroha_python/rust-toolchain"
 cp "${SOURCE_ROOT}/.cargo/config.toml" \
   "${PROVISION_NESTED_REPOSITORY}/.cargo/config.toml"
@@ -1511,7 +1511,7 @@ expect_failure \
   "${PROVISION_NESTED_ENV}" \
   "${PROVISION_NESTED_PATH}" \
   "${PROVISION_BIN}/rustup" \
-  "1.93.1-x86_64-unknown-linux-gnu" \
+  "1.99.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 
 RUSTUP_SHADOW_BIN="${TEST_ROOT}/rustup-shadow-bin"
@@ -1538,7 +1538,7 @@ expect_failure \
   "${RUSTUP_SHADOW_ENV}" \
   "${RUSTUP_SHADOW_PATH}" \
   "${PROVISION_BIN}/rustup" \
-  "1.93.1-x86_64-unknown-linux-gnu" \
+  "1.99.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 if [[ -e "${RUSTUP_SHADOW_MARKER}" || -L "${RUSTUP_SHADOW_MARKER}" ]]; then
   echo "untrusted PATH rustup executed" >&2
@@ -1568,7 +1568,7 @@ expect_failure \
   "${PROVISION_CONFIG_ENV}" \
   "${PROVISION_CONFIG_PATH}" \
   "${PROVISION_BIN}/rustup" \
-  "1.93.1-x86_64-unknown-linux-gnu" \
+  "1.99.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 
 PROVISION_AMBIENT_CARGO_HOME="${TEST_ROOT}/provision-ambient-cargo-home"
@@ -1617,7 +1617,7 @@ expect_failure \
   "${PROVISION_CARGO_FAILURE_ENV}" \
   "${PROVISION_CARGO_FAILURE_PATH}" \
   "${PROVISION_BIN}/rustup" \
-  "1.93.1-x86_64-unknown-linux-gnu" \
+  "1.99.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 [[ ! -s "${PROVISION_CARGO_FAILURE_ENV}" ]]
 [[ ! -s "${PROVISION_CARGO_FAILURE_PATH}" ]]
@@ -1633,9 +1633,9 @@ assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "arg=--manifest-path" \
   "arg=${PROVISION_CARGO_FAILURE_REPOSITORY}/Cargo.toml"
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu cargo" \
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu rustc" \
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu rustdoc"
 
 PROVISION_RUSTUP_FAILURE_REPOSITORY=\
 "${TEST_ROOT}/provision-rustup-nonzero-repository"
@@ -1660,14 +1660,14 @@ expect_failure \
   "${PROVISION_RUSTUP_FAILURE_ENV}" \
   "${PROVISION_RUSTUP_FAILURE_PATH}" \
   "${PROVISION_BIN}/rustup" \
-  "1.93.1-x86_64-unknown-linux-gnu" \
+  "1.99.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 rm "${PROVISION_BIN}/rustup-exit-after-output"
 [[ ! -s "${PROVISION_RUSTUP_FAILURE_ENV}" ]]
 [[ ! -s "${PROVISION_RUSTUP_FAILURE_PATH}" ]]
 [[ ! -s "${PROVISION_CARGO_LOG}" ]]
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo"
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu cargo"
 
 : >"${PROVISION_CARGO_LOG}"
 : >"${PROVISION_BIN}/rustup-args.log"
@@ -1682,7 +1682,7 @@ PATH="${PROVISION_BIN}:${PATH}" \
     "${PROVISION_GITHUB_ENV}" \
     "${PROVISION_GITHUB_PATH}" \
     "${PROVISION_BIN}/rustup" \
-    "1.93.1-x86_64-unknown-linux-gnu" \
+    "1.99.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
 if [[ -L "${PROVISION_REPOSITORY}/Cargo.lock" || \
   ! -f "${PROVISION_REPOSITORY}/Cargo.lock" || \
@@ -1703,9 +1703,9 @@ assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "arg=--manifest-path" \
   "arg=${PROVISION_REPOSITORY}/Cargo.toml"
 assert_exact_lines "${PROVISION_BIN}/rustup-args.log" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu cargo" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustc" \
-  "which --toolchain 1.93.1-x86_64-unknown-linux-gnu rustdoc"
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu cargo" \
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu rustc" \
+  "which --toolchain 1.99.1-x86_64-unknown-linux-gnu rustdoc"
 # Stock JavaScript Cargo consumes the sealed root; the other privacy corridors
 # retain the independent external snapshot of that exact graph.
 grep -Fxq \
@@ -1717,7 +1717,7 @@ grep -Fxq \
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_PATH=' "${PROVISION_GITHUB_ENV}"
 grep -Fq 'IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL=' "${PROVISION_GITHUB_ENV}"
 grep -Fxq \
-  'IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR=1.93.1-x86_64-unknown-linux-gnu' \
+  'IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR=1.99.1-x86_64-unknown-linux-gnu' \
   "${PROVISION_GITHUB_ENV}"
 grep -Fxq \
   "IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH=${PROVISION_BIN}/rustup" \
@@ -1837,7 +1837,7 @@ PATH="${PROVISION_BIN}:${PATH}" \
     "${PROVISION_EMPTY_CACHE_ENV}" \
     "${PROVISION_EMPTY_CACHE_PATH}" \
     "${PROVISION_BIN}/rustup" \
-    "1.93.1-x86_64-unknown-linux-gnu" \
+    "1.99.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
 [[ -L "${PROVISION_EMPTY_CACHE_CORRIDOR}/cargo-home/registry" ]]
 [[ -L "${PROVISION_EMPTY_CACHE_CORRIDOR}/cargo-home/git" ]]
@@ -1880,7 +1880,7 @@ expect_failure \
   "${PROVISION_BAD_ENV}" \
   "${PROVISION_BAD_PATH}" \
   "${PROVISION_BIN}/rustup" \
-  "1.93.1-x86_64-unknown-linux-gnu" \
+  "1.99.1-x86_64-unknown-linux-gnu" \
   "${TEST_PYTHON}"
 
 # Both a zero and a nonzero Cargo exit must still run the selected-file seal.
@@ -1898,7 +1898,7 @@ for compatibility_child_exit in 0 1; do
     PATH="${PROVISION_BIN}:${PATH}" \
     bash "${PROVISION_HELPER_PATH}" provision-ci \
     "${changed_repository}" "${changed_corridor}" "${changed_env}" "${changed_path}" \
-    "${PROVISION_BIN}/rustup" "1.93.1-x86_64-unknown-linux-gnu" "${TEST_PYTHON}"
+    "${PROVISION_BIN}/rustup" "1.99.1-x86_64-unknown-linux-gnu" "${TEST_PYTHON}"
   if ! [[ ! -s "${changed_env}" && ! -s "${changed_path}" ]]; then
     echo "failed Cargo graph admission published provisioning outputs" >&2
     exit 1
@@ -1934,7 +1934,7 @@ prepare_python_guard_root() {
 INTEGRATION_ROOT="${TEST_ROOT}/integration root"$'\n'"record-boundary"
 INTEGRATION_PRIVATE_ROOT="${TEST_ROOT}/integration private"
 INTEGRATION_VENV="${TEST_ROOT}/fake venv"$'\n'"record-boundary"
-INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.93.1-aarch64-apple-darwin/bin"
+INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.99.1-aarch64-apple-darwin/bin"
 INTEGRATION_SELECTED_LOCK="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
 prepare_python_guard_root "${INTEGRATION_ROOT}"
 INTEGRATION_WORKSPACE_SEAL="$(
@@ -2000,7 +2000,7 @@ INTEGRATION_RUSTDOC_SEAL="$(
 )"
 export INTEGRATION_EXPECTED_RUSTC="${INTEGRATION_BIN}/rustc"
 export INTEGRATION_EXPECTED_RUSTDOC="${INTEGRATION_BIN}/rustdoc"
-export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR="1.93.1-aarch64-apple-darwin"
+export IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR="1.99.1-aarch64-apple-darwin"
 export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_PATH="${FAKE_RUSTUP}"
 export IROHA_PRIVACY_AUTHENTICATED_RUSTUP_SEAL="${FAKE_RUSTUP_SEAL}"
 export IROHA_PRIVACY_AUTHENTICATED_CARGO_PATH="${INTEGRATION_BIN}/cargo"
@@ -2277,8 +2277,8 @@ printf '%s\n' \
   '      "${metadata_environment_command[@]}" cargo metadata --format-version 1 --manifest-path "${metadata_manifest}" --locked --offline' \
   '    fi' \
   '    case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR:-}" in' \
-  '      1.93.1-aarch64-apple-darwin) host_triple="aarch64-apple-darwin"; maturin_host_kind="darwin" ;;' \
-  '      1.93.1-x86_64-unknown-linux-gnu) host_triple="x86_64-unknown-linux-gnu"; maturin_host_kind="linux" ;;' \
+  '      1.99.1-aarch64-apple-darwin) host_triple="aarch64-apple-darwin"; maturin_host_kind="darwin" ;;' \
+  '      1.99.1-x86_64-unknown-linux-gnu) host_triple="x86_64-unknown-linux-gnu"; maturin_host_kind="linux" ;;' \
   '      *) exit 118 ;;' \
   '    esac' \
   '    pyo3_config="${CARGO_TARGET_DIR}/maturin/pyo3-config-${host_triple}-3.12-abi3.txt"' \
@@ -4417,7 +4417,7 @@ PATH="${PROVISION_BIN}:${PATH}" \
     "${PROVISIONED_GATE_ENV}" \
     "${PROVISIONED_GATE_PATH}" \
     "${PROVISION_BIN}/rustup" \
-    "1.93.1-x86_64-unknown-linux-gnu" \
+    "1.99.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
 (
   set -a

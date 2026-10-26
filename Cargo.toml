@@ -1,6 +1,6 @@
 [workspace.package]
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.99.1"
 version = "2.0.0-rc.2.0"
 authors = ["Hyperledger Iroha contributors <https://github.com/hyperledger-iroha/iroha/graphs/contributors>"]
 
@@ -106,41 +106,43 @@ sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest", features = ["pqc"] }
 sorafs_orchestrator = { path = "crates/sorafs_orchestrator", default-features = false, features = ["cli-orchestrator"] }
 soranet_pq = { path = "crates/soranet_pq" }
+ml-dsa = { version = "0.1.1", default-features = false, features = ["zeroize"] }
+ml-kem = { version = "0.3.3", default-features = false, features = ["zeroize", "hazmat"] }
 soranet_incentives = { path = "crates/soranet_incentives" }
 
-# Note: remaining dependencies stay pinned until we resolve the outstanding
-# compatibility issues with their latest major releases.
+# Registry constraints follow maintained upstream APIs; Cargo.lock records the
+# reviewed resolutions. Older trait families remain only at upstream boundaries.
 
 proc-macro2 = "1.0.103"
-syn = { version = "2.0.109", default-features = false }
+syn = { version = "3.0.9", default-features = false }
 quote = "1.0.42"
-manyhow = "0.11.4"
-darling = "0.23.0"
+manyhow = "0.14.1"
+darling = "0.24.0"
 drop_bomb = "0.1.5"
 
 futures = { version = "0.3.31", default-features = false }
 tokio = "1.54.1"
 tokio-stream = "0.1.17"
-tokio-tungstenite = "0.29.0"
+tokio-tungstenite = "0.30.0"
 tokio-util = "0.7.17"
 tokio-rustls = { version = "0.26.4", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std"] }
-tungstenite = "0.29.0"
+tungstenite = "0.30.0"
 crossbeam-queue = "0.3.12"
-parking_lot = { version = "0.12.5" }
+parking_lot = { version = "0.13.0" }
 blake3 = "1.8.2"
-blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
+blake2 = { version = "0.11.0", default-features = false, features = ["alloc"] }
 once_cell = "1.21.3"
 
 tempfile = "3.23.0"
-path-absolutize = "3.1.1"
+path-absolutize = "4.0.1"
 bytes = "1.10.1"
 
 trybuild = "1.0.114"
 impls = "1.0.3"
 
-base64 = { version = "0.22.1", default-features = false }
-bech32 = "0.11.0"
+base64 = { version = "0.23.1", default-features = false }
+bech32 = "0.12.0"
 hex = { version = "0.4.3", default-features = false }
 http-body-util = "0.1.3"
 http = "1.3.1"
@@ -148,7 +150,7 @@ nonzero_ext = { version = "0.3.0", default-features = false }
 rust_decimal = { version = "1.39", default-features = false }
 
 url = "2.5.7"
-reqwest = { version = "0.12.28", default-features = false }
+reqwest = { version = "0.13.5", default-features = false }
 prometheus = { version = "0.14.0", default-features = false }
 
 clap = "4.5.51"
@@ -157,7 +159,7 @@ supports-color = "3.0.2"
 humantime = "2.3.0"
 criterion = "0.8.0"
 expect-test = "1.5.1"
-assertables = "9.8.2"
+assertables = "10.1.0"
 
 eyre = "0.6.12"
 color-eyre = "0.6.5"
@@ -171,10 +173,10 @@ strum = { version = "0.28.0", default-features = false }
 getset = "0.1.6"
 hex-literal = "1.1.0"
 
-rand = { version = "0.9.3", default-features = false, features = ["alloc", "os_rng", "small_rng", "std", "std_rng", "thread_rng"] }
-rand_core_06 = { package = "rand_core", version = "0.6.4", default-features = false, features = ["std"] }
+rand = { version = "0.10.3", default-features = false, features = ["alloc", "sys_rng", "std", "std_rng", "thread_rng"] }
+rand_core = { version = "0.10.1" }
 # Operating-system entropy for the seeds of `iroha_fhe::bgv`.
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 axum = { version = "0.8.6", default-features = false }
 
 # Libraries never force tracing->log forwarding; binaries or SDK consumers that
@@ -187,15 +189,15 @@ rayon = "1.11.0"
 dashmap = { version = "6.1.0" }
 rustc-hash = "2.1.1"
 
-toml = "0.9.8"
+toml = "1.1.8"
 toml_edit = { version = "0.25.11", default-features = false, features = ["parse"] }
-zstd = "0.13.3"
+zstd = "0.14.3"
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
 
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
-scrypt = { version = "0.11.0", default-features = false, features = ["std"] }
-halo2curves = { version = "0.9" }
+scrypt = { version = "0.12.0", default-features = false, features = ["alloc"] }
+halo2curves = { version = "0.10.0" }
 
 iroha_allocation = { path = "crates/iroha_allocation" }
 iroha_measurement = { path = "crates/iroha_measurement" }
@@ -212,12 +214,24 @@ axum-core = { path = "vendor/axum-core" }
 # Allocation custody must follow actual epoch reclamation in the locked EBR owner.
 concread = { path = "vendor/concread" }
 # Quantity admission requires exact fallible native-digit handoff without repacking.
-num-bigint = { path = "vendor/num-bigint-0.4.6" }
+num-bigint = { path = "vendor/num-bigint-0.5.1" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
 cust_raw = { path = "vendor/cust_raw" }
 wayland-scanner = { path = "vendor/wayland-scanner-0.31.10" }
 # Hardware AES is a positive `hardware` feature; `aes::soft` always names the portable backend.
 aes = { path = "vendor/aes" }
+# Maintained macro implementation for upstream stacks still requesting paste.
+ark-ff = { path = "vendor/ark-ff-0.5.0" }
+ark-bls12-381 = { path = "vendor/ark-bls12-381-0.5.0" }
+halo2curves = { path = "vendor/halo2curves-0.10.0" }
+metal = { path = "vendor/metal-0.33.0" }
+# Native accessibility uses the maintained zbus 6 wire stack.
+accesskit_unix = { path = "vendor/accesskit_unix-0.24.0" }
+accesskit_atspi_common = { path = "vendor/accesskit_atspi_common-0.21.0" }
+atspi-common = { path = "vendor/atspi-common-0.14.0" }
+atspi-proxies = { path = "vendor/atspi-proxies-0.14.0" }
+zbus-lockstep = { path = "vendor/zbus-lockstep-0.7.0" }
+zbus-lockstep-macros = { path = "vendor/zbus-lockstep-macros-0.7.0" }
 
 [workspace.lints]
 rustdoc.private_doc_tests = "deny"

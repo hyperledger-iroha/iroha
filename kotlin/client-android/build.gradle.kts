@@ -81,15 +81,15 @@ private object NativeBridgeBuildContract {
         }
         return value
     }
-    const val pinnedRustToolchain = "1.93.1"
+    const val pinnedRustToolchain = "1.99.1"
     const val pinnedCargoNdkVersion = "4.1.2"
     const val pinnedPythonSeries = "3.12"
-    const val pinnedAndroidNdkBaseRevision = "28.0.12674087"
-    const val pinnedAndroidNdkRevision = "28.0.12674087-beta2"
-    const val pinnedAndroidNdkReleaseName = "r28-beta2"
+    const val pinnedAndroidNdkBaseRevision = "30.0.16248370"
+    const val pinnedAndroidNdkRevision = "30.0.16248370"
+    const val pinnedAndroidNdkReleaseName = "r30"
     const val pinnedAndroidNdkDescription = "Android NDK"
     const val pinnedAndroidNdkSourcePropertiesSha256 =
-        "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+        "e73b7dc557cea2da9212c09ee1795434957d62e63b7550eef69fd1887a355d94"
     const val maxAndroidNdkSourcePropertiesBytes = 4096
     val androidCargoEnvironmentAllowlist = listOf(
         "ANDROID_NDK_HOME",
@@ -2242,9 +2242,9 @@ tasks.register("verifyAndroidNdkIdentityContract") {
         }
         val canonicalText = listOf(
             "Pkg.Desc = Android NDK",
-            "Pkg.Revision = 28.0.12674087-beta2",
-            "Pkg.BaseRevision = 28.0.12674087",
-            "Pkg.ReleaseName = r28-beta2",
+            "Pkg.Revision = 30.0.16248370",
+            "Pkg.BaseRevision = 30.0.16248370",
+            "Pkg.ReleaseName = r30",
         ).joinToString(separator = "\n", postfix = "\n")
         val canonicalBytes = canonicalText.toByteArray(StandardCharsets.UTF_8)
 
@@ -2286,11 +2286,11 @@ tasks.register("verifyAndroidNdkIdentityContract") {
 
         val malformedDocuments = linkedMapOf(
             "duplicate property" to canonicalText.replace(
-                "Pkg.ReleaseName = r28-beta2\n",
-                "Pkg.Desc = Android NDK\nPkg.ReleaseName = r28-beta2\n",
+                "Pkg.ReleaseName = r30\n",
+                "Pkg.Desc = Android NDK\nPkg.ReleaseName = r30\n",
             ),
             "missing property" to canonicalText.replace(
-                "Pkg.ReleaseName = r28-beta2\n",
+                "Pkg.ReleaseName = r30\n",
                 "",
             ),
             "malformed delimiter" to canonicalText.replace(
@@ -2307,19 +2307,19 @@ tasks.register("verifyAndroidNdkIdentityContract") {
                 "Pkg.Desc",
                 "pkg.Desc",
             ),
-            "altered preview suffix" to canonicalText.replace(
+            "retired preview revision" to canonicalText.replace(
+                "30.0.16248370",
                 "28.0.12674087-beta2",
-                "28.0.12674087-beta3",
             ),
             "altered base revision" to canonicalText.replace(
-                "Pkg.BaseRevision = 28.0.12674087",
-                "Pkg.BaseRevision = 28.0.12674088",
+                "Pkg.BaseRevision = 30.0.16248370",
+                "Pkg.BaseRevision = 30.0.16248371",
             ),
             "reordered properties" to listOf(
-                "Pkg.Revision = 28.0.12674087-beta2",
+                "Pkg.Revision = 30.0.16248370",
                 "Pkg.Desc = Android NDK",
-                "Pkg.BaseRevision = 28.0.12674087",
-                "Pkg.ReleaseName = r28-beta2",
+                "Pkg.BaseRevision = 30.0.16248370",
+                "Pkg.ReleaseName = r30",
             ).joinToString(separator = "\n", postfix = "\n"),
             "CRLF lines" to canonicalText.replace("\n", "\r\n"),
             "missing final LF" to canonicalText.removeSuffix("\n"),
@@ -2371,7 +2371,7 @@ tasks.register("verifyAndroidNdkIdentityContract") {
         val wrongDirectoryRoot =
             Files.createTempDirectory(temporaryDir.toPath(), "wrong-directory-")
         val wrongDirectory = Files.createDirectory(
-            wrongDirectoryRoot.resolve("28.0.12674087-beta2"),
+            wrongDirectoryRoot.resolve("android-ndk-r30"),
         )
         Files.write(
             wrongDirectory.resolve("source.properties"),

@@ -111,7 +111,7 @@ fn parent_context_and_fresh_quorum_are_required_before_preparation_or_dispatch()
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let dir = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&dir.path().join("parent"), &bootstrap).unwrap();
     let mut store =
         AttachmentStore::open(&dir.path().join("attachment"), fixture.identity.clone()).unwrap();
@@ -267,7 +267,7 @@ fn cancelled_attachment_refuses_new_parent_work_but_preserves_pending_reconcilia
     let mut fixture = Fixture::new();
     fixture.parent_receipt();
     let dir = tempfile::tempdir().unwrap();
-    let bootstrap = fixture.bootstrap(&dir.path().join("release"));
+    let bootstrap = fixture.bootstrap();
     let mut parent = ParentFinalityStore::open(&dir.path().join("parent"), &bootstrap).unwrap();
     let path = dir.path().join("attachment");
     let mut store = AttachmentStore::open(&path, fixture.identity.clone()).unwrap();

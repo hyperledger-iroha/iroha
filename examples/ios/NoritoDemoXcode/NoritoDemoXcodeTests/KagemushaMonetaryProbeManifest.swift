@@ -128,7 +128,7 @@ enum KagemushaActivationRetentionProbe {
     invocation: String, sequence: Int
   ) throws -> Data? {
     guard !signedWire.isEmpty, signedWire.count <= 65_536, returned > 0,
-      (0..<10_034).contains(sequence),
+      (0..<10_000).contains(sequence),
       UUID(uuidString: invocation)?.uuidString == invocation
     else { throw EnrollmentProbeFailure.input }
     // Only the initial Awaiting result, with Native's derived entrypoint, authorizes submission.

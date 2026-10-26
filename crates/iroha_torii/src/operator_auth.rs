@@ -22,7 +22,7 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Algorithm, PublicKey};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
 use parking_lot::Mutex;
-use rand::rand_core::{TryCryptoRng, TryRngCore as _};
+use rand::rand_core::{TryCryptoRng, TryRng as _};
 use sha2::{Digest as _, Sha256};
 use std::{
     cmp::Reverse,
@@ -918,7 +918,7 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.webauthn_registration_options_with_rng(ctx, &mut rng)
     }
     fn webauthn_registration_options_with_rng<R: TryCryptoRng + ?Sized>(
@@ -1066,7 +1066,7 @@ impl OperatorAuth {
         &self,
         ctx: &AuthContext,
     ) -> Result<norito::json::Value, OperatorAuthError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.webauthn_authentication_options_with_rng(ctx, &mut rng)
     }
     fn webauthn_authentication_options_with_rng<R: TryCryptoRng + ?Sized>(
@@ -1146,7 +1146,7 @@ impl OperatorAuth {
         ctx: &AuthContext,
         payload: &norito::json::Value,
     ) -> Result<SessionOutcome, OperatorAuthError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         self.webauthn_finish_authentication_with_rng(ctx, payload, &mut rng)
     }
     fn webauthn_finish_authentication_with_rng<R: TryCryptoRng + ?Sized>(
@@ -1622,7 +1622,7 @@ fn operator_credentials_path(base: &Path) -> PathBuf {
 #[cfg(test)]
 fn random_bytes(len: usize) -> Result<Vec<u8>, OperatorAuthError> {
     let mut buf = vec![0u8; len];
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     random_bytes_with_rng_into(&mut buf, &mut rng)?;
     Ok(buf)
 }
@@ -2932,7 +2932,7 @@ fn create_credential_temp_file(
 ) -> Result<(fs::File, std::ffi::OsString), String> {
     for _ in 0..CREDENTIAL_TEMP_FILE_RETRIES {
         let mut nonce = [0_u8; 16];
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::SysRng;
         rng.try_fill_bytes(&mut nonce).map_err(|error| {
             format!("failed to generate a credential temporary-file name: {error}")
         })?;
@@ -3562,7 +3562,7 @@ fn verify_signature(
             let verifying_key = parse_es256_public_key(public_key)?;
             let sig = P256Signature::from_der(signature)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
-            if sig.normalize_s().is_some() {
+            if sig.normalize_s() != sig {
                 return Err(OperatorAuthError::signature_invalid());
             }
             verifying_key
@@ -3591,9 +3591,9 @@ fn parse_es256_public_key(public_key: &[u8]) -> Result<P256Key, OperatorAuthErro
             "invalid ES256 public key",
         ));
     }
-    let encoded = p256::EncodedPoint::from_bytes(public_key)
+    let encoded = p256::Sec1Point::from_bytes(public_key)
         .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key encoding"))?;
-    P256Key::from_encoded_point(&encoded)
+    P256Key::from_sec1_point(&encoded)
         .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key"))
 }
 fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {

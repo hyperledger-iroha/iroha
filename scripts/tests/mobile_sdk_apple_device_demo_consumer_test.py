@@ -27,7 +27,7 @@ def artifact(tmp_path, monkeypatch):
     evidence = root / "evidence"
     evidence.mkdir()
     names = ("producer-launch.json", "producer-record.json", "cargo-messages.jsonl",
-             "pqcrypto-normalization.json", "consumer", "source-observation.json")
+             "native-archive-audit.json", "consumer", "source-observation.json")
     for name in names:
         (evidence / name).write_text("receipt-only fixture")
     manifest = {

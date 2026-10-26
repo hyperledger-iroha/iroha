@@ -2,7 +2,7 @@
 
 Dependency-free library: no downloads, install scripts, imports or filesystem
 access. The caller supplies the independently selected candidate lock digest and
-eight original tarballs. This binds content and placement, not npm execution,
+seven original tarballs. This binds content and placement, not npm execution,
 loaded modules, platform support or release approval. Updating the production
 closure requires reviewing this profile alongside the canonical package lock.
 """
@@ -21,19 +21,18 @@ MAX_PACKAGE_JSON_BYTES = 128 * 1024
 MAX_ARCHIVES_BYTES = 64 * 1024 * 1024
 MAX_TARS_BYTES = 128 * 1024 * 1024
 VERSIONS = {
-    "node_modules/@noble/ciphers": "1.3.0",
-    "node_modules/@noble/curves": "1.9.7",
-    "node_modules/@noble/hashes": "1.8.0",
+    "node_modules/@noble/ciphers": "2.4.0",
+    "node_modules/@noble/curves": "2.4.0",
+    "node_modules/@noble/hashes": "2.4.0",
     "node_modules/@scure/bip39": "2.4.0",
-    "node_modules/@scure/bip39/node_modules/@noble/hashes": "2.4.0",
     "node_modules/base64-js": "1.5.1",
     "node_modules/buffer": "6.0.3",
     "node_modules/ieee754": "1.2.1",
 }
-ROOT_DEPENDENCIES = {"@noble/ciphers": "^1.2.0", "@noble/curves": "^1.4.0",
-                     "@noble/hashes": "^1.5.0", "@scure/bip39": "^2.2.0", "buffer": "^6.0.3"}
+ROOT_DEPENDENCIES = {"@noble/ciphers": "^2.4.0", "@noble/curves": "^2.4.0",
+                     "@noble/hashes": "^2.4.0", "@scure/bip39": "^2.4.0", "buffer": "^6.0.3"}
 DEPENDENCIES = {
-    "node_modules/@noble/curves": {"@noble/hashes": "1.8.0"},
+    "node_modules/@noble/curves": {"@noble/hashes": "2.4.0"},
     "node_modules/@scure/bip39": {"@noble/hashes": "2.4.0"},
     "node_modules/buffer": {"base64-js": "^1.3.1", "ieee754": "^1.2.1"},
 }
@@ -85,7 +84,7 @@ class DependencyContent:
 
 
 def parse_dependency_lock(raw: bytes, *, expected_sha256: str) -> DependencyLock:
-    """Read the current eight-location graph with an independently selected pin."""
+    """Read the current seven-location graph with an independently selected pin."""
     _require(type(raw) is bytes and 0 < len(raw) <= MAX_LOCK_BYTES,
              "npm lock byte bound")
     _require(type(expected_sha256) is str and re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None
@@ -157,11 +156,11 @@ def _package(archive: NpmArchive, dependency: Dependency) -> None:
 
 
 def parse_dependency_archives(lock: DependencyLock, originals: dict[str, bytes]) -> tuple[DependencyContent, ...]:
-    """Join eight original gzip files, fixed placement and all package members.
+    """Join seven original gzip files, fixed placement and all package members.
 
     Aggregate compressed and inflated budgets are admitted before allocations.
-    The two @noble/hashes versions remain distinct owners; a name-keyed map or
-    registry re-resolution cannot replace the selected nested installation.
+    Curves and bip39 share the sole reviewed hashes owner. Additional nested
+    copies or registry re-resolution cannot replace the selected installation.
     """
     _require(type(lock) is DependencyLock
              and parse_dependency_lock(lock.raw, expected_sha256=lock.sha256) == lock,

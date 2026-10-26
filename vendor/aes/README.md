@@ -2,58 +2,38 @@
 
 ## Iroha patch note
 
-This directory is upstream `aes` 0.8.4 from crates.io (RustCrypto/block-ciphers
-commit `f2dbee516b4d0cf4cb4f3045d09e35b5fd80087b`, path `aes`; registry
-`.crate` SHA-256 `b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0`),
-copied unmodified and then patched as listed below. No cipher arithmetic, key
-expansion, intrinsics or dispatch logic is changed; `src/soft/`, `src/ni/`,
-`src/armv8/`, `src/soft.rs`, `src/ni.rs` and `src/armv8.rs` are byte-identical
-to upstream.
+This directory contains crates.io `aes` 0.9.3, RustCrypto/block-ciphers commit
+`c1534361e7549e29a16c3505f45a04c92d26b62a`, path `aes`. The original registry
+archive SHA-256 is
+`35f0f96ce78e38c3dc6d8948aa8163d06385be74000f3c7a95bf1eef35d3ea32`.
+All files under `src/backends/`, including fixslicing, key expansion and CPU
+intrinsics, are byte-identical to that release.
 
-Why: repository policy admits hardware acceleration only behind a Cargo feature
-with a deterministic fallback. Upstream selects backends by `rustc --cfg` flags
-and keeps its portable implementation private.
+Repository changes:
 
-Changes:
+- `hardware` is a positive, default Cargo feature. Without it only the portable
+  backend is compiled, and top-level cipher names alias the portable types.
+  The upstream `aes_backend="soft"` configuration also selects this behavior.
+- Upstream's public autodetection wrappers moved unchanged into
+  `src/autodetect.rs`, with their imports adjusted for the module boundary.
+  `src/backends.rs` and hazmat dispatch require `hardware` before compiling or
+  selecting CPU intrinsics. Runtime hardware detection and fallback are retained.
+- `src/soft.rs` exposes `aes::soft::{Aes128,Aes192,Aes256}` and their `Enc`/`Dec`
+  variants using thin cipher 0.5 trait wrappers over the upstream soft backend.
+  They remain portable under Cargo feature unification. The `zeroize` feature
+  erases their complete key schedules on drop using upstream's flat-type erasure.
+- `tests/portable.rs` retains all seven FIPS-197, random-block parity and feature
+  selection tests, with current cipher traits and arrays. It also exercises
+  portable encryptor conversions and checks the zeroize-on-drop contracts.
+- Upstream's normalized manifest is retained with these features and the extra
+  test. The nightly benchmark target is excluded from stable all-target checks.
+  Registry-only metadata and the upstream standalone lockfile are omitted.
 
-- `Cargo.toml` (the upstream `Cargo.toml.orig` is not kept, as in
-  `vendor/num-bigint-0.4.6`): new `hardware` feature, included in the new
-  `default` feature set. The `zeroize` target tables key on
-  `target_arch = "aarch64"` alone because Cargo cannot test features there
-  (`default_features` is spelled `default-features`). `autobenches = false`
-  keeps the nightly-only `benches/mod.rs` out of stable builds. An
-  `unexpected_cfgs` table declares `aes_force_soft` and `aes_compact`. A
-  `[lints.clippy]` table allows `doc_lazy_continuation` (one upstream doc
-  line) and `incompatible_msrv` (the unchanged ARMv8 intrinsics are newer than
-  the declared `rust-version = "1.56"`, which upstream only promises for the
-  portable backend), so the vendored sources pass the workspace
-  `clippy -D warnings` gate unedited. The
-  normalized manifest drops `resolver = "1"`, which Cargo ignores for a
-  workspace member.
-- `src/lib.rs`, `src/hazmat.rs`, `src/autodetect.rs`: the AES-NI
-  (`x86`/`x86_64`) and ARMv8 (`aarch64`) modules, the autodetecting top-level
-  types and the `hazmat` intrinsics dispatch are compiled only with
-  `feature = "hardware"`. On `aarch64` the feature replaces `--cfg aes_armv8`,
-  which is no longer read. `--cfg aes_force_soft` still forces the portable
-  backend everywhere.
-- `src/lib.rs`: `mod soft` is now `pub mod soft`, so `aes::soft::{Aes128,
-  Aes192, Aes256}` and their `Enc`/`Dec` variants name the portable fixsliced
-  implementation whether or not `hardware` is enabled. Crate documentation
-  describes the feature.
-- `tests/portable.rs`: new FIPS-197 and cross-backend equality tests.
-- `tests/data/aes{128,192,256}.blb` (unchanged upstream NESSIE vectors) are
-  listed by exact path in `scripts/norito_bridge_source_seal.py`, which takes
-  `vendor/` as a sealed input root.
+Consumers on cipher 0.5 use `BlockCipherEncrypt`, `BlockCipherDecrypt` and
+`Array`. A consumer that must remain portable explicitly names `aes::soft::*`.
+The patch applies to the 0.9.3 resolution; older transitive AES versions do not
+inherit this package's feature policy.
 
-Behaviour: with default features `x86`/`x86_64` is unchanged (runtime AES-NI
-detection, portable fallback). On `aarch64`, default features now use the ARMv8
-Cryptography Extensions when detected at runtime; upstream used the portable
-backend there unless built with `--cfg aes_armv8`. Outputs are identical on
-every backend. The patch applies to every `aes` 0.8.4 consumer in the
-workspace graph (currently `iroha_sccp_rpc` and, through git, `orchard`). With
-`default-features = false` every target uses the portable
-backend, unless another crate in the same build enables `hardware`; code that
-must be portable regardless names `aes::soft::*`.
 
 [![crate][crate-image]][crate-link]
 [![Docs][docs-image]][docs-link]
@@ -69,8 +49,6 @@ Pure Rust implementation of the [Advanced Encryption Standard (AES)][1].
 This crate implements the low-level AES block function, and is intended
 for use for implementing higher-level constructions *only*. It is NOT
 intended for direct use in applications.
-
-[Documentation][docs-link]
 
 <img src="https://raw.githubusercontent.com/RustCrypto/media/85f62bb/img/block-ciphers/aes-round.svg" width="480px">
 
@@ -96,18 +74,6 @@ All implementations contained in the crate are designed to execute in constant
 time, either by relying on hardware intrinsics (i.e. AES-NI on x86/x86_64), or
 using a portable implementation based on bitslicing.
 
-## Minimum Supported Rust Version
-
-Rust **1.56** or higher.
-
-Minimum supported Rust version can be changed in future releases, but it will
-be done with a minor version bump.
-
-## SemVer Policy
-
-- All on-by-default features of this library are covered by SemVer
-- MSRV is considered exempt from SemVer as noted above
-
 ## License
 
 Licensed under either of:
@@ -128,13 +94,13 @@ dual licensed as above, without any additional terms or conditions.
 [crate-image]: https://img.shields.io/crates/v/aes.svg
 [crate-link]: https://crates.io/crates/aes
 [docs-image]: https://docs.rs/aes/badge.svg
-[docs-link]: https://docs.rs/aes/
+[docs-link]: https://docs.rs/aes
 [license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
-[rustc-image]: https://img.shields.io/badge/rustc-1.56+-blue.svg
+[rustc-image]: https://img.shields.io/badge/rustc-1.89+-blue.svg
 [chat-image]: https://img.shields.io/badge/zulip-join_chat-blue.svg
 [chat-link]: https://rustcrypto.zulipchat.com/#narrow/stream/260039-block-ciphers
-[build-image]: https://github.com/RustCrypto/block-ciphers/workflows/aes/badge.svg?branch=master&event=push
-[build-link]: https://github.com/RustCrypto/block-ciphers/actions?query=workflow%3Aaes
+[build-image]: https://github.com/RustCrypto/block-ciphers/actions/workflows/aes.yml/badge.svg?branch=master
+[build-link]: https://github.com/RustCrypto/block-ciphers/actions/workflows/aes.yml
 [downloads-image]: https://img.shields.io/crates/d/aes.svg
 [hazmat-image]: https://img.shields.io/badge/crypto-hazmat%E2%9A%A0-red.svg
 [hazmat-link]: https://github.com/RustCrypto/meta/blob/master/HAZMAT.md
@@ -146,5 +112,5 @@ dual licensed as above, without any additional terms or conditions.
 [3]: https://github.com/RustCrypto/AEADs/tree/master/aes-gcm
 [4]: https://github.com/RustCrypto/AEADs/tree/master/aes-gcm-siv
 [5]: https://github.com/RustCrypto/AEADs
-[6]: https://research.nccgroup.com/2020/02/26/public-report-rustcrypto-aes-gcm-and-chacha20poly1305-implementation-review/
+[6]: https://web.archive.org/web/20240108154854/https://research.nccgroup.com/wp-content/uploads/2020/02/NCC_Group_MobileCoin_RustCrypto_AESGCM_ChaCha20Poly1305_Implementation_Review_2020-02-12_v1.0.pdf
 [7]: https://www.mobilecoin.com/

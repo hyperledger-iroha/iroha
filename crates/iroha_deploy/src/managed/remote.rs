@@ -4,8 +4,8 @@ use super::*;
 use crate::{
     attachment::RelayProgress,
     bootstrap::{
-        AuthenticatedBootstrap, BootstrapError, CheckpointTransport, InstalledNetworkProfile,
-        ReleaseCheckpointStore,
+        AuthenticatedBootstrap, BootstrapError, BootstrapStore, InstalledNetworkProfile,
+        discover_native_bootstrap,
     },
     localnet::PrivateRootSpec,
     provisioning::{ProvisioningProgress, ProvisioningStage, RemoteProvisioning},
@@ -36,25 +36,21 @@ const RELAY_TURN: Duration = Duration::from_secs(15);
 #[norito(deny_unknown_fields)]
 struct ProfileBinding {
     name: String,
-    public_key: iroha_crypto::PublicKey,
-    checkpoint_url: String,
-    minimum_serial: u64,
+    torii_root: String,
+    chain_id: String,
+    account_chain_discriminant: u16,
 }
 impl ProfileBinding {
     fn from_profile(profile: &InstalledNetworkProfile) -> Self {
         Self {
             name: profile.network_name().into(),
-            public_key: profile.release_public_key().clone(),
-            checkpoint_url: profile.checkpoint_url().to_string(),
-            minimum_serial: profile.minimum_serial(),
+            torii_root: profile.torii_root().to_string(),
+            chain_id: profile.chain_id().to_owned(),
+            account_chain_discriminant: profile.account_chain_discriminant(),
         }
     }
     fn verify(&self, profile: &InstalledNetworkProfile) -> Result<()> {
-        if self.name != profile.network_name()
-            || self.public_key != *profile.release_public_key()
-            || self.checkpoint_url != profile.checkpoint_url().as_str()
-            || self.minimum_serial == 0
-            || profile.minimum_serial() < self.minimum_serial
+        if self != &Self::from_profile(profile)
         {
             return Err(Error::Invalid(
                 "retained attachment differs from the installed parent profile".into(),
@@ -69,12 +65,9 @@ fn advance_profile(
     binding: &mut Binding,
     profile: &InstalledNetworkProfile,
 ) -> Result<()> {
-    binding.profile.verify(profile)?;
-    if binding.profile.minimum_serial < profile.minimum_serial() {
-        binding.profile.minimum_serial = profile.minimum_serial();
-        directory.write_atomic(BINDING, &encode(binding)?, PublishMode::Replace)?;
-    }
-    Ok(())
+    let _ = directory;
+    binding.profile.verify(profile)
+
 }
 
 fn bind_installed_profile(
@@ -114,7 +107,7 @@ fn outer_path(store: &ManagedStore, name: &str) -> PathBuf {
     store.root().join("attachments").join(name)
 }
 fn release_path(store: &ManagedStore, name: &str) -> PathBuf {
-    store.root().join("releases").join(name)
+    store.root().join("networks").join(name)
 }
 fn existing_outer(store: &ManagedStore, name: &str) -> Result<Option<PrivateDirectory>> {
     validate_name(name)?;
@@ -391,12 +384,12 @@ pub(super) fn build_registry_context(
     let binding = bind_installed_profile(&directory, profile, deadline)?;
     verify_generation_binding(store, name, &binding, prepared)?;
     let bootstrap = authenticate_parent(&release_path(store, name), profile, deadline, false)?;
-    if bootstrap.release().network_id != binding.spec.parent_network_id {
+    if bootstrap.metadata().network_id != binding.spec.parent_network_id {
         return Err(Error::Invalid(
             "parent reset cannot replace the selected build registry".into(),
         ));
     }
-    let Some(registry) = bootstrap.release().build_registry.as_ref() else {
+    let Some(registry) = bootstrap.metadata().build_registry.as_ref() else {
         return Ok(None);
     };
     let mut parent = RemoteProvisioning::load_parent_config(
@@ -434,29 +427,28 @@ fn authenticate_parent(
 ) -> Result<AuthenticatedBootstrap> {
     remaining(deadline)?;
     let release = loop {
-        match ReleaseCheckpointStore::open(path) {
+        match BootstrapStore::open(path) {
             Ok(release) => break release,
             Err(BootstrapError::Busy) => thread::sleep(POLL.min(remaining(deadline)?)),
             Err(error) => return Err(Error::Invalid(error.to_string())),
         }
     };
     remaining(deadline)?;
-    // Release its interprocess gate immediately after authenticated publication. Native parent
-    // observation and wallet work use their own custody, allowing cold builds to share this pin.
-    if !refresh
-        && let Some(retained) = release
-            .authenticate_retained(profile.release_trust(), now_ms()?)
-            .map_err(|error| Error::Invalid(error.to_string()))?
-    {
+    if !refresh && let Some(retained) = release.load(profile)
+        .map_err(|error| Error::Invalid(error.to_string()))? {
         return Ok(retained);
     }
     remaining(deadline)?;
-    CheckpointTransport::new()
-        .fetch_and_authenticate(profile, &release, deadline)
+    let native = discover_native_bootstrap(profile, deadline)
         .map_err(|source| Error::ParentCheckpoint {
             profile: Box::new(profile.clone()),
-            source: Box::new(source),
-        })
+            source: Box::new(source.into()),
+        })?;
+    release.accept(profile, native).map_err(|source| Error::ParentCheckpoint {
+        profile: Box::new(profile.clone()),
+        source: Box::new(source.into()),
+    })
+
 }
 
 /// Explicit administrative authorization, separate from config-free SNS attachment.
@@ -602,7 +594,7 @@ impl ManagedStore {
             let bootstrap =
                 authenticate_parent(&release_path(self, &request.name), profile, deadline, false)?;
             let spec = PrivateRootSpec {
-                parent_network_id: bootstrap.release().network_id,
+                parent_network_id: bootstrap.metadata().network_id,
                 dataspace_id: DataSpaceId::from_hash(&selector.name_hash()),
                 dataspace_alias: request.alias.clone(),
             };
@@ -645,7 +637,7 @@ impl ManagedStore {
         let spec = binding.spec.clone();
         let bootstrap =
             authenticate_parent(&release_path(self, &request.name), profile, deadline, false)?;
-        if bootstrap.release().network_id != spec.parent_network_id {
+        if bootstrap.metadata().network_id != spec.parent_network_id {
             return Err(Error::Invalid(
                 "parent reset cannot replace the selected AMX private root".into(),
             ));
@@ -683,7 +675,7 @@ impl ManagedStore {
         drop(gate);
         remaining(deadline)?;
         let network = self.directory(&request.name)?;
-        store::exchange_until(&network, "attachment_start", deadline)?;
+        store::exchange_until(&network, ControlAction::AttachmentStart, deadline)?;
         let mut last = connecting(binding.profile.name.clone());
         loop {
             remaining(deadline).map_err(|_| attachment_deadline(&last))?;
@@ -734,7 +726,7 @@ impl ManagedStore {
                 &network,
                 &ControlRequest {
                     token: worker.token,
-                    action: "attachment_status".into(),
+                    action: ControlAction::AttachmentStatus,
                 },
                 deadline,
             )?;
@@ -862,8 +854,8 @@ fn relay_loop(
             status,
             RelayControl { refresh, cancelled },
         );
-        // Failed current observations may mean signed peer mappings rotated. Fetch one new
-        // artifact next turn without clearing the monotonic release or child identity binding.
+        // Refresh native certificates after a failed observation without clearing the pinned
+        // network, original private identity or transaction journals.
         refresh = result.is_err();
         if let Err(failure) = result {
             // An uncertain publication poisons native stores until reopen. Reopen through their
@@ -937,7 +929,7 @@ fn relay_turn(
     }
     let bootstrap = authenticate_parent(release_path, profile, deadline, refresh)
         .map_err(|_| ManagedAttachmentFailure::ParentAuthenticationFailed)?;
-    if bootstrap.release().network_id != binding.spec.parent_network_id {
+    if bootstrap.metadata().network_id != binding.spec.parent_network_id {
         return Err(ManagedAttachmentFailure::ContextRejected);
     }
     if cancelled.load(Ordering::Acquire) {

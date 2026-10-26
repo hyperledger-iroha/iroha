@@ -90,6 +90,32 @@ pub(super) fn record_payment_lineage(
     record_lineage(output, label, payment.send.lineage.lineage().unwrap())
 }
 
+// A companion is its own bounded original, not another peer envelope. Retain the
+// exact bytes and failed size observation before decoding or checking its bound.
+pub(super) fn retain_companion(
+    output: &Path,
+    name: &str,
+    original: &[u8],
+) -> (norito::json::Value, KagemushaWalletPayerCompanionV1) {
+    let maximum = KAGEMUSHA_WALLET_PAYER_COMPANION_MAX_BYTES_V1;
+    let filename = format!("{name}.norito");
+    let measured = norito::json!({
+        "name": filename, "role": "PayerCompanion", "bytes": (original.len()),
+        "sha256": (sha(original)), "maximum_bytes": maximum,
+        "within_bound": (original.len() <= maximum),
+        "scope": "Exact payer companion original; not a peer envelope or proof verdict",
+    });
+    publish(&output.join(&filename), original);
+    publish(
+        &output.join(format!("{name}.measurement.json")),
+        &norito::json::to_vec(&measured).unwrap(),
+    );
+    assert!(original.len() <= maximum, "payer companion exceeds bound");
+    let companion = KagemushaWalletPayerCompanionV1::decode_canonical(original)
+        .expect("bounded canonical payer companion");
+    (measured, companion)
+}
+
 fn record_credit_status_model(
     output: &Path,
     name: &str,
@@ -206,9 +232,10 @@ pub(super) fn retain(
     sessions: [(&[u8], &[u8]); 2],
     payments: [&[u8]; 2],
     acknowledgements: [&[u8]; 2],
-) -> Vec<norito::json::Value> {
+) -> (Vec<norito::json::Value>, Vec<norito::json::Value>) {
     let verifier = sources.installed.verifier();
     let mut records = Vec::new();
+    let mut companions = Vec::new();
     let mut originals = Vec::new();
     for (((name, (request_original, companion_original)), original), acknowledgement) in
         ["a-b", "b-c"]
@@ -218,17 +245,14 @@ pub(super) fn retain(
             .zip(acknowledgements)
     {
         let request: KagemushaWalletRequestV1 = decode(request_original);
-        let companion = KagemushaWalletPayerCompanionV1::decode_canonical(companion_original)
-            .expect("bounded canonical payer companion");
+        let (measurement, companion) =
+            retain_companion(output, &format!("{name}-companion"), companion_original);
+        companions.push(measurement);
         // Preserve the receiver's exact open Request and the payer companion carried beside
         // the compact Payment; never reconstruct or sign a replacement.
         publish(
             &output.join(format!("{name}-request.norito")),
             request_original,
-        );
-        publish(
-            &output.join(format!("{name}-companion.norito")),
-            companion_original,
         );
         records.push(record(
             output,
@@ -298,7 +322,7 @@ pub(super) fn retain(
     for name in ["a-b", "b-c"] {
         complete_exchange_roles(&records, name);
     }
-    records
+    (records, companions)
 }
 
 fn verify_session(
@@ -408,7 +432,7 @@ fn remeasure_retained_genuine_exchange_envelopes_without_wallet_mutation() {
     let (original, bytes) = read_pinned_originals();
     let output = fresh_output("KAGEMUSHA_NATIVE_MESSAGE_CENSUS_OUTPUT");
     let sources = Sources::admit(&output.join("source-admission"));
-    let records = retain(
+    let (records, companions) = retain(
         &output,
         &sources,
         [(&bytes[4], &bytes[5]), (&bytes[6], &bytes[7])],
@@ -423,6 +447,7 @@ fn remeasure_retained_genuine_exchange_envelopes_without_wallet_mutation() {
         "observer_source_snapshot_sha256": (env_pin("KAGEMUSHA_NATIVE_SOURCE_SHA256")),
         "observer_source_scope": "Diagnostic source snapshot only; not a guarded compiler consumed-input attestation",
         "message_envelopes": records,
+        "payer_companions": companions,
         "complete_exchange_roles": (["a-b", "b-c"].into_iter().map(|name| complete_exchange_roles(&records, name)).collect::<Vec<_>>()),
         "new_wallet_operations": 0, "physical_device_qualified": false,
         "scope": "Exact retained canonical Request/Payment/Credited envelopes with the authenticated open Request and payer companion originals, canonical Credited model linkage and separate Sigma/Omega proof verification against admitted catalog. No new native message/operation admission, fresh lifecycle, all policy variants, carrier timings or current-producer qualification."
@@ -497,6 +522,57 @@ fn fixture_companion() -> KagemushaWalletPayerCompanionV1 {
     };
     companion.validate().unwrap();
     companion
+}
+
+#[test]
+fn message_census_companion_retains_exact_original_and_failed_measurements() {
+    let directory = tempfile::tempdir().unwrap();
+    let companion = fixture_companion();
+    let original = companion.to_canonical_bytes().unwrap();
+    let (measured, decoded) = retain_companion(directory.path(), "valid-companion", &original);
+    assert_eq!(decoded, companion);
+    assert_eq!(measured["role"].as_str(), Some("PayerCompanion"));
+    assert_eq!(
+        measured["maximum_bytes"].as_u64(),
+        Some(KAGEMUSHA_WALLET_PAYER_COMPANION_MAX_BYTES_V1 as u64)
+    );
+    assert_eq!(measured["within_bound"].as_bool(), Some(true));
+    assert_eq!(measured["bytes"].as_u64(), Some(original.len() as u64));
+    assert_eq!(measured["sha256"].as_str(), Some(sha(&original).as_str()));
+    assert_eq!(
+        fs::read(directory.path().join("valid-companion.norito")).unwrap(),
+        original
+    );
+
+    let mut trailing = original;
+    trailing.push(0);
+    for (name, bytes) in [
+        ("empty-companion", Vec::new()),
+        ("malformed-companion", vec![0; 32]),
+        ("trailing-companion", trailing),
+        (
+            "oversized-companion",
+            vec![0x5a; KAGEMUSHA_WALLET_PAYER_COMPANION_MAX_BYTES_V1 + 1],
+        ),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| retain_companion(directory.path(), name, &bytes)).is_err()
+        );
+        assert_eq!(
+            fs::read(directory.path().join(format!("{name}.norito"))).unwrap(),
+            bytes
+        );
+        let measured: norito::json::Value = norito::json::from_slice(
+            &fs::read(directory.path().join(format!("{name}.measurement.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(measured["bytes"].as_u64(), Some(bytes.len() as u64));
+        assert_eq!(measured["sha256"].as_str(), Some(sha(&bytes).as_str()));
+        assert_eq!(
+            measured["within_bound"].as_bool(),
+            Some(bytes.len() <= KAGEMUSHA_WALLET_PAYER_COMPANION_MAX_BYTES_V1)
+        );
+    }
 }
 
 // Re-sign a changed stand-in proof so the replacement remains model-valid. A
@@ -594,7 +670,7 @@ fn message_census_final_status_retains_exact_frame_and_rejects_valid_substitutio
     changed_request.body.nonce[0] ^= 1;
     let signature: p256::ecdsa::Signature =
         signing_key(0x52).sign(&changed_request.body.signing_message());
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     changed_request.signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     changed_request.verify_open(&scheme).unwrap();
@@ -689,7 +765,7 @@ fn message_census_credited_binds_both_forms_to_exact_request_and_payment() {
     replacement_request.body.nonce[0] ^= 1;
     let signature: p256::ecdsa::Signature =
         signing_key(0x52).sign(&replacement_request.body.signing_message());
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     replacement_request.signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     replacement_request.verify_open(&scheme).unwrap();
@@ -812,7 +888,7 @@ fn message_census_authenticates_session_originals_and_rejects_substitution() {
     );
     let signature: p256::ecdsa::Signature =
         signing_key(0x52).sign(&changed_request.body.signing_message());
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     changed_request.signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     changed_request.verify_open(&scheme).unwrap();
@@ -891,7 +967,7 @@ fn message_census_recovery_pins_reject_valid_request_and_manifest_substitution()
     );
     let signature: p256::ecdsa::Signature =
         signing_key(0x52).sign(&substitute.body.signing_message());
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     substitute.signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     substitute.verify_open(&scheme).unwrap();

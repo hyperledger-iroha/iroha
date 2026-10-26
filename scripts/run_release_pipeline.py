@@ -42,13 +42,13 @@ from urllib import request as urllib_request
 _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
-    "release_artifact_contract": "66945051159d644f9507c5e6c4c264e2ece83cbcd4a4c8c1d21ef4115d380a0e",
-    "release_manifest_signing": "4966d0b408f7d67d154b578875a1b0cb77584de77b4b1561e8704043b99b60fd",
+    "release_artifact_contract": "a0143a2face0572687547600736ed98a6b7d9d8c87b98b7da2f318390b1cecfe",
+    "release_manifest_signing": "528d7e145be55ac512d2a9bb9269347b7ab5326963e3abc255bed80b2ebc9fb4",
     "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with
     # this pipeline's bootstrap trust anchor.
-    "check_release_feature_graph": "a0a5e6d559f60026bbd62a15564b93a7b43c58145cd8d95fe04e01362d2876ec",
+    "check_release_feature_graph": "7b639b29e9597537d0656b425df3092ec76660d8ad8f34354e68be348be28ec1",
 }
 
 

@@ -1511,7 +1511,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "cell::aggregate_acquisition_tests::": 3,
             "storage::aggregate_acquisition_tests::": 2,
             "storage::detached_tests::": 10,
-            "storage::admitted_tests::": 24,
+            "storage::admitted_tests::": 25,
+            "storage::current_reader_tests::": 1,
             "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
@@ -1523,10 +1524,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 102)
+                self.assertEqual(len(library), 103)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("allocation", 39), ("allocation-shared", 1), ("mv", 102), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 131)):
+                for harness, count in (("allocation", 39), ("allocation-shared", 1), ("mv", 103), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 131)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)

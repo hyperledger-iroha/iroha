@@ -5,7 +5,7 @@ use clap::Subcommand;
 use eyre::{Context, Result};
 use hex::encode as hex_encode;
 use iroha_crypto::{ConfidentialKeyset, derive_keyset_from_slice};
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use std::{fs, path::PathBuf};
 use zeroize::Zeroizing;
 /// Confidential CLI subcommands.
@@ -40,7 +40,7 @@ pub struct CreateKeysArgs {
 }
 impl CreateKeysArgs {
     fn parse_seed(&self) -> Result<([u8; 32], bool)> {
-        self.parse_seed_with_rng(&mut OsRng)
+        self.parse_seed_with_rng(&mut SysRng)
     }
     fn parse_seed_with_rng<R: TryCryptoRng>(&self, rng: &mut R) -> Result<([u8; 32], bool)> {
         if let Some(seed_hex) = &self.seed_hex {
@@ -162,18 +162,19 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::metadata::Metadata;
     use norito::json::{self, JsonSerialize};
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     use std::fmt::{self, Display};
     use url::Url;
     struct FailingConfidentialSeedRng;
     #[derive(Debug)]
     struct FailingConfidentialSeedRngError;
+    impl std::error::Error for FailingConfidentialSeedRngError {}
     impl fmt::Display for FailingConfidentialSeedRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing confidential spend-key RNG")
         }
     }
-    impl TryRngCore for FailingConfidentialSeedRng {
+    impl TryRng for FailingConfidentialSeedRng {
         type Error = FailingConfidentialSeedRngError;
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingConfidentialSeedRngError)

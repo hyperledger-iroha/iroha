@@ -31,7 +31,7 @@ use iroha_data_model::{
     transaction::{Executable, SignedTransaction},
 };
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use sorafs_manifest::pop_credentials::{POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1};
 #[cfg(unix)]
 use std::os::unix::fs::{
@@ -10629,7 +10629,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorE
         ));
     }
     let mut random_nonce = [0_u8; 16];
-    OsRng.try_fill_bytes(&mut random_nonce).map_err(|error| {
+    SysRng.try_fill_bytes(&mut random_nonce).map_err(|error| {
         ModerationOrchestratorError::CheckpointIo(format!(
             "generate atomic checkpoint nonce: {error}"
         ))

@@ -2,6 +2,12 @@
 
 Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
+Keep `IrohaSwift` in the repository layout with `vendor/nearby` and
+`vendor/boringssl-swiftpm` as sibling source packages. Nearby's reviewed manifest
+binds the current BoringSSL provider directly, including when an application
+consumes `IrohaSwiftMobileTransports` through the SDK. The vendored packages retain
+their exact upstream source inventories and verification scripts.
+
 `TairaTestnetProfile` exposes the public Torii origin, address discriminant,
 Digital Shekel, and XOR metadata. Its client factory still requires the current
 deployment's genesis-derived `NetworkId`; the stable chain UUID is not used for
@@ -304,8 +310,8 @@ export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 unset RUSTC_BOOTSTRAP
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
 export MOBILE_SDK_PYTHON_BINARY=/absolute/path/to/python3.12
 export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 scripts/build_norito_xcframework.sh \
@@ -313,7 +319,7 @@ scripts/build_norito_xcframework.sh \
   --archive-output "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 ```
 
-The build requires Python 3.12, stock Rust 1.93.1, and an explicit
+The build requires Python 3.12, stock Rust 1.99.1, and an explicit
 `--lockfile-path`; `RUSTC_BOOTSTRAP` must be unset. Normal builds and release
 qualification require a separately materialized, read-only external snapshot of
 the same canonical reviewed graph. The root source lock and selected build lock
@@ -509,7 +515,7 @@ The canonical XCFramework contains `ios-arm64`, the universal
 `x86_64`; the artifact checker rejects single-architecture substitutions.
 
 Every bridge build includes mandatory privacy support using stock
-Rust 1.93.1. Building an artifact does not establish provider, proving, hardware,
+Rust 1.99.1. Building an artifact does not establish provider, proving, hardware,
 or release qualification. To build with the reviewed external graph:
 
 ```bash
@@ -524,8 +530,8 @@ export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 unset RUSTC_BOOTSTRAP
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
 scripts/build_norito_xcframework.sh \
   --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock
 ```
@@ -561,8 +567,8 @@ export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
 unset RUSTC_BOOTSTRAP MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT \
   IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH
-export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
-export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
+export RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+export RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
 scripts/build_norito_xcframework.sh \
   --lockfile-path "$PWD/Cargo.lock" --local-integration --allow-dirty-source
 export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
@@ -570,7 +576,7 @@ export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
 
 A separate `MOBILE_SDK_LOCAL_UNIT_ARTIFACT_DIR` input may select a producer-validated
 single-host macOS archive for debug unit tests. It requires genuine current-source
-static capture, normalization, complete-archive native consumer checks, and the
+static capture, strict archive auditing, complete-archive native consumer checks, and the
 explicit `local-unit` artifact schema. It retains every package test and exact
 ABI-33 admission. It cannot be selected together with the external/release input;
 iOS and Release compilation reject it. It is never accepted by the canonical

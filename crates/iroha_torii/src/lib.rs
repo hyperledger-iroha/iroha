@@ -16149,7 +16149,7 @@ where
 }
 #[cfg(feature = "connect")]
 fn try_new_torii_proxy_session_id() -> Result<Hash, ToriiBuildError> {
-    try_new_torii_proxy_session_id_with_rng(&mut rand::rngs::OsRng)
+    try_new_torii_proxy_session_id_with_rng(&mut rand::rngs::SysRng)
 }
 #[cfg(all(test, feature = "connect"))]
 fn new_torii_proxy_session_id() -> Hash {

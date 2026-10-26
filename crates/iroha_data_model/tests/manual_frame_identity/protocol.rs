@@ -251,11 +251,11 @@ fn kagemusha_values(rows: &mut Vec<Value>) {
     for seed in [0x39, 0x57] {
         // Public deterministic test seeds, never runtime device authority keys.
         let signer = SigningKey::from_bytes((&[seed; 32]).into()).unwrap();
-        let public = signer.verifying_key().to_encoded_point(false);
+        let public = signer.verifying_key().to_sec1_point(false);
         let key = KagemushaDevicePublicKeyV1::from_sec1_bytes(public.as_bytes()).unwrap();
         let message = b"public manual identity capture";
         let signature: Signature = signer.sign(message);
-        let low = signature.normalize_s().unwrap_or(signature);
+        let low = signature.normalize_s();
         let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&low.to_bytes()).unwrap();
         key.validate().unwrap();
         signature.validate().unwrap();
@@ -271,7 +271,7 @@ fn kagemusha_values(rows: &mut Vec<Value>) {
         decoded.verify(&key, message).unwrap();
         assert!(
             KagemushaDevicePublicKeyV1::from_sec1_bytes(
-                signer.verifying_key().to_encoded_point(true).as_bytes()
+                signer.verifying_key().to_sec1_point(true).as_bytes()
             )
             .is_err()
         );
@@ -302,7 +302,7 @@ fn kagemusha_values(rows: &mut Vec<Value>) {
         (-p256::Scalar::ONE).to_bytes(),
     )
     .unwrap();
-    assert!(high.normalize_s().is_some());
+    assert!(high.normalize_s() != high);
     assert!(KagemushaDeviceSignatureV1::from_raw_bytes(&high.to_bytes()).is_err());
     reject_payload::<KagemushaDeviceSignatureV1>(&high.to_bytes());
     family(rows, "kagemusha_device_public_key", &keys);

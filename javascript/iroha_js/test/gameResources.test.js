@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { AccountAddress } from "../src/address.js";
 import { computeHashLiteralCrc } from "../src/hashLiteralCrc.js";
 import { encodeGameResourceValueV1 as encode, decodeGameResourceValueV1 as decode,

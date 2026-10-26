@@ -17,7 +17,7 @@ use crate::secret::SecretPolynomial;
 use ff::Field;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
 
 use super::{ProverError, random_values, write_point};
 use crate::{
@@ -87,7 +87,7 @@ pub(super) fn commit_random<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let coeffs = SecretPolynomial::new(random_values::<C::ScalarExt, _>(rng, shape.n));
     let blind = C::ScalarExt::random(&mut *rng);
@@ -130,7 +130,7 @@ pub(super) fn commit_quotient<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let h = SecretPolynomial::new(h);
     let expected = shape

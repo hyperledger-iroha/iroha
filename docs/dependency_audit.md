@@ -1,227 +1,392 @@
 # Dependency audit
 
-Reviewed 2026-10-24 (Asia/Tokyo). This is a review of repository dependency
-manifests and resolved package graphs, not a release or cryptographic security
-certification. Public registries and advisory services were queried during the
-review. A clean advisory result means no matching published advisory was found;
-it does not establish that a package is free of vulnerabilities.
+Reviewed 2026-10-25 (Asia/Tokyo). This record covers dependency resolution,
+published advisories, implementation migrations and component validation. It is
+not a release qualification or a guarantee that dependencies have no undisclosed
+vulnerabilities.
 
-## Current result
+## Resolved dependencies
 
-- The Cargo lockfile refresh fixes eight RustSec vulnerability matches and one
-  Tokio soundness warning. The final scan has zero vulnerability, unsoundness or
-  yanked-package matches, with twelve unmaintained-package warnings below.
-- All four tracked npm projects have zero `npm audit` findings, down from five
-  vulnerable package entries across the SDK and editor extension. Unsupported
-  ESLint 8 was replaced by ESLint 10 and a tested flat configuration.
-- Both Poetry locks, script requirements, external Python SDK minimum versions,
-  the installed validation environment and a Python 3.10 resolution pass
-  `pip-audit`. Python 3.9 support was removed from Torii/Norito packaging because
-  patched Requests and setuptools releases require Python 3.10 or newer.
-- JVM and NuGet advisory checks are clean within their stated coverage. Swift
-  retains an upstream-constrained BoringSSL dependency; see below.
-- This is **not** a claim that every dependency uses its newest major release.
-  Crypto API migrations, reviewed local forks, native artifacts and platform
-  constraints remain explicit work.
+The root Cargo graph has **zero RustSec vulnerabilities and zero informational
+warnings**, including maintenance and soundness warnings. The scan uses
+`cargo-audit 0.22.2`, database commit
+`21d909e4c8bd4e14c7aea58bf980c881a0053ab1` (2026-10-24), no advisory ignores,
+and no architecture or OS filters. `deny.toml` has no advisory exceptions.
+All six standalone fuzz graphs also resolve and audit with zero vulnerabilities
+and zero maintenance warnings. All 23 fuzz binaries compile with their locked
+graphs and the host Xcode toolchain. The strict smoke campaign passes all 13
+selected targets with 50,084 total executions under the unchanged per-target
+4,000-run/30-second limits. This is bounded smoke coverage, not exhaustive fuzzing.
 
-## Rust
+The final root lock contains 1,123 packages and has SHA256
+`6c3773ce4ebc9c61cacb7a17e937e6f729dfa0318f40624ee0376bcf718d8fcc`.
+Its last adjustment adds only the `mochi-ui` dependency on the already-resolved
+egui package to enable upstream's opt-in emoji fonts. All package versions,
+sources, checksums and other dependency edges are unchanged by that adjustment;
+the matching OpenAPI lock pin and the final RustSec scan were refreshed.
 
-The scan used `cargo-audit 0.22.2` and RustSec database commit
-`84d943a6deeb8cc6c6f632531aaf4f1c62275239` (2026-10-23), without advisory ignores
-or architecture/OS filters. The compatible Cargo refresh updated more than
-250 package names, including additions/removals; `cargo update --dry-run --verbose` then
-reported zero further compatible updates before the reviewed SmallVec pin was
-restored. That pin is an intentional exception to the resolver's newest-compatible
-selection; certificate generation and epoch reclamation pins were separately
-advanced to rcgen 0.14.10 and crossbeam-epoch 0.9.21. The declared Rust 1.92
-floor and pinned compiler were retained; resolved metadata did not introduce a package
-with a declared Rust requirement above 1.92.
+The twelve previously reported unmaintained packages have left the root graph:
 
-| Dependency | Previous | Updated | Addressed advisories |
-| --- | --- | --- | --- |
-| `rustls` | 0.23.45 | 0.23.46 | RUSTSEC-2026-0346, -0347, -0348, -0349 |
-| `ctutils` | 0.4.2 | 0.4.5 | RUSTSEC-2026-0385 |
-| `rustls-webpki` | 0.103.15 | 0.103.16 | RUSTSEC-2026-0382 |
-| `webpki-root-certs` | 1.0.7 | 1.0.11 | RUSTSEC-2026-0383 |
-| `webpki-roots` | 1.0.7 | 1.0.11 | RUSTSEC-2026-0381 |
-| `tokio` | 1.52.3 | 1.54.1 | RUSTSEC-2026-0386 (soundness) |
+| Retired package family | Current implementation |
+| --- | --- |
+| `pqcrypto-internals`, `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` | RustCrypto `ml-dsa 0.1.1`, `ml-kem 0.3.3`; original deterministic SoraNet protocols retained |
+| `paste`, `derivative` | Maintained macro/provider stacks; reviewed Arkworks, Halo2 and Metal patches use `pastey 0.2.3` |
+| `atomic-polyfill` | Current upstream dependency graph |
+| `audiopus_sys` | `opus 0.4.0` and its current native binding |
+| `ttf-parser 0.25` | Current GUI/font stack |
+| `zbus_names 4`, `zvariant 5`, `zvariant_derive 5` | Native accessibility migrated to `zbus 6.1.0` |
 
-The workspace now requires patched Rustls/Tokio minima. P2P, SoraNet relay and
-DNS resolver inherit the workspace Rustls requirement, retaining their crypto
-provider features. `clipboard-win 5.4.1`, which was yanked, was replaced by 5.4.3.
+The earlier refresh also removed the reported Rustls/WebPKI/root-certificate,
+Tokio and ctutils advisories and the yanked `clipboard-win` version. Updating
+JWT to `jsonwebtoken 11.1` with its AWS-LC provider avoids introducing the
+optional RSA implementation with its outstanding advisory.
 
-The nine root `[patch.crates-io]` overrides remain resolved from local source.
-A separate synthetic registry-version scan of their upstream versions found no
-published advisory matches. That check does not review Iroha's modifications to
-those forks. In particular, `bytes`, `http-body-util`, `axum-core`, `concread`,
-`num-bigint` and `aes` carry allocation or acceleration behavior that must be
-preserved when rebasing them. The exact-pinned legitimate `arrayref 0.3.9` and
-revision-pinned Orchard source remain intact.
+## Rust migrations and retained boundaries
 
-Remaining unmaintained packages:
+The compiler and workspace Rust requirement are **1.99.1**. Active build and
+native-source checks use its actual compiler identity. Historical captured
+receipts retain the compiler under which they were produced.
 
-| Package | Resolved version | Advisory |
-| --- | --- | --- |
-| `atomic-polyfill` | 1.0.3 | [RUSTSEC-2023-0089](https://rustsec.org/advisories/RUSTSEC-2023-0089.html) |
-| `audiopus_sys` | 0.2.2 | [RUSTSEC-2026-0150](https://rustsec.org/advisories/RUSTSEC-2026-0150.html) |
-| `derivative` | 2.2.0 | [RUSTSEC-2024-0388](https://rustsec.org/advisories/RUSTSEC-2024-0388.html) |
-| `paste` | 1.0.15 | [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html) |
-| `pqcrypto-internals` | 0.2.11 | [RUSTSEC-2026-0163](https://rustsec.org/advisories/RUSTSEC-2026-0163.html) |
-| `pqcrypto-mldsa` | 0.1.2 | [RUSTSEC-2026-0166](https://rustsec.org/advisories/RUSTSEC-2026-0166.html) |
-| `pqcrypto-mlkem` | 0.1.1 | [RUSTSEC-2026-0161](https://rustsec.org/advisories/RUSTSEC-2026-0161.html) |
-| `pqcrypto-traits` | 0.3.5 | [RUSTSEC-2026-0162](https://rustsec.org/advisories/RUSTSEC-2026-0162.html) |
-| `ttf-parser` | 0.25.1 | [RUSTSEC-2026-0192](https://rustsec.org/advisories/RUSTSEC-2026-0192.html) |
-| `zbus_names` | 4.3.5 | [RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371.html) |
-| `zvariant` | 5.15.1 | [RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370.html) |
-| `zvariant_derive` | 5.15.1 | [RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html) |
+Current direct API families include Rand 0.10, RustCrypto digest 0.11,
+SHA-2 0.11, SHA-3 0.12 plus SHAKE 0.1, AES 0.9, ChaCha20Poly1305 0.11,
+HKDF/HMAC 0.13, P-256/K-256/SM2 0.14, Ed25519-dalek 3,
+Curve25519-dalek 5, crypto-bigint 0.7, Syn 3, parking_lot 0.13,
+reqwest 0.13, WebSocket 0.30, zstd 0.14, Arrow/Parquet 60,
+rodio 0.23, eframe 0.37, PyO3 0.30 and JNI 0.22.
 
-The post-quantum packages require a coordinated implementation migration with
-cross-SDK vectors and deterministic hardware validation. Proc-macro, GUI/font,
-audio and D-Bus warning removal requires updates in their owning dependency
-stacks. No new ignore entries were added to `deny.toml`.
+Orchard is pinned to the published `0.16.0` source, with Halo2 proofs 0.4,
+gadgets 0.6 and Pasta 0.6.1. The native Pasta/PLONK stack uses ff/group 0.14
+and fallible Rand 0.10 traits. Orchard's circuit-description digest remains
+unchanged; its source identity and dependency profile are updated explicitly.
 
-Current newer Rust releases outside the resolved constraints include the
-RustCrypto/dalek trait families, Arkworks/BLS, Arrow/Parquet, reqwest 0.13,
-WebSocket 0.30 and zstd 0.14. Some newest GUI/locking releases require Rust 1.95.
-Exact pins for BLST and Unicode data need owner-specific verification before
-changing their behavior. SmallVec 1.15.1 is retained because the NFC allocation
-proof and its checksum test explicitly depend on that implementation; updating
-only the checksum would not revalidate the memory bound. Standalone
-fuzz workspaces and captured validation sources are not covered by the root
-lockfile scan; externally owned fuzz locks need independent regeneration and
-advisory checks.
+ICU4X 2.4 uses Unicode 18/CLDR 49. Exhaustive scalar normalization comparison
+and the decomposition/allocation census were rerun before updating the profile
+fingerprint. SmallVec 1.16.4 has byte-identical source files to the reviewed
+1.16.3; its archive checksum is bound by the NFC source audit. Stable-sort
+allocation bounds were reviewed against Rust 1.99.1 sources.
 
-## JavaScript
+Local patches retain Iroha's actual allocation custody and portable/hardware
+behavior. `bytes 1.12.1`, `http-body-util 0.1.5`, `num-bigint 0.5.1` and
+AES 0.9.3 were rebased rather than replaced by unmodified registry sources.
+The Ark BLS subgroup check retains the same public-constant equation without
+introducing GLV heap allocation. Native accessibility patches use real D-Bus
+messages and the maintained upstream wire stack. New patches contain
+`IROHA-PATCH.md` provenance where applicable.
 
-Updated the SDK, OpenAPI tooling, Kotodama editor extension and EVM runtime with
-coherent npm locks. Notable versions are ESLint 10.13.0, esbuild 0.28.2,
-`@scure/bip39` 2.4.0, ethers 6.17.0 and `@noble/curves` 1.9.7. The BIP39 update
-removes `@scure/base`; exact dependency-count and bundle assertions now reflect
-that real removal. The ESLint migration retains the existing rules and includes
-negative lint-policy tests.
+The remaining older versions are imposed by maintained upstream APIs or exact
+upstream requirements, rather than advisory suppressions:
 
-Development ESLint requires Node 20.19+, 22.13+, or 24+; the published SDK runtime
-floor remains unchanged. Remaining explicit migrations are Noble v2,
-TypeScript 7, VS Code languageclient 11 / vsce 4 and EDR 0.24. EDR remains on
-0.12.1, which is enforced by the native execution adapter; changing it requires
-execution-fixture qualification. Ethers owns older nested Noble versions that
-currently audit clean. Node types remain on the intended Node 22 line.
+| Dependency | Reason retained |
+| --- | --- |
+| Ark serialization 0.5 | Required by the current `w3f-bls 0.2` provider |
+| ff/group 0.13 and pairing 0.23 | Required by current Halo2curves 0.10 and blstrs 0.7 boundaries; the native Pasta stack uses 0.14 |
+| Rand ChaCha 0.3 / Rand core 0.6 | Required at the W3F/BLS provider boundary |
+| generic-array 0.14.7 | Exact requirement of upstream crypto-common 0.1.7 |
+| matchit 0.8.4 | Exact requirement of current Axum 0.8.9 |
+| psm 0.1.24 | Optional exact requirement of pest 2.9.4; absent from the active all-features workspace build graph |
 
-## Python
+Maintained transitive consumers can also require older compatible hash traits.
+The dormant Vega manifest and historical fuzz campaign receipts are not active
+root dependencies. Standalone fuzz manifests now use current libfuzzer-sys and
+arbitrary versions and the applicable root source patches.
 
-Poetry locks and script pins were refreshed, with secure SDK lower bounds for
-Requests 2.34.2, cryptography 50.0.2, certifi 2026.10.19, urllib3 2.8.0,
-setuptools 84.2.1, wheel 0.48.0 and pytest 9.1.1. The lockfiles select the latest
-compatible certifi release. Script markers preserve Python 3.10-compatible
-BLAKE3 and pycparser versions. Both Python metadata formats and README
-prerequisites agree on the new Torii/Norito Python 3.10 minimum.
+## Other ecosystems
 
-Resolved advisories included Black 26.3.1, cryptography 48.0.1, certifi
-2025.10.5 and urllib3 2.7.0. These are package matches, not assertions that every
-affected feature executes here: for example, the Black advisory concerns its
-bundled GitHub Action. Wildcard Poetry test dependencies were replaced with
-current lower bounds and the deprecated dev-dependency table was consolidated.
+All four npm projects have zero `npm audit` findings after clean installs.
+Noble curves/hashes/ciphers are 2.4, BIP39 is 2.4, TypeScript is 7.0.2,
+ESLint is 10.13, esbuild is 0.28.2, VS Code languageclient is 11,
+vsce is 4 and EDR is 0.24. The EDR adapter preserves committed execution and
+gas fixtures. Node type definitions intentionally follow the supported Node 22
+API surface. SoraFS package custody checks retain exact original registry
+archive integrity, content, source projection and package recipe checks.
+Supported npm runtime floors now require Node 22.23.4; OpenAPI tooling retains
+its stricter Node 24 floor. The Node 22 floor and rejection cases were exercised
+on the actual minimum runtime as well as the host runtime.
 
-## JVM, Android, Swift and .NET
+The EVM compiler is now Solidity 0.8.38. The official compiler archives for
+Linux x86_64, Linux aarch64 and macOS were verified, and the macOS compiler
+reproduced the canonical artifact. The complete contract record, including
+creation/runtime bytecode, ABI and immutable references, is unchanged; only
+compiler/input provenance changed. All 140 compiler-corridor tests and all 568
+EDR checks pass without changing gas or behavior fixtures.
 
-Updated Kotlin to 2.4.21, Gradle to 9.8.2 with official distribution SHA256s,
-Bouncy Castle to 1.86, OkHttp/MockWebServer to 5.5.1, zstd-jni to 1.5.7-24,
-Netty to 4.1.139.Final, serialization to 1.12.0 and coroutines to 1.11.0.
-Bouncy Castle 1.78.1 matched four OSV advisories; the old Gradle 9.3.0 matched
-three official security advisories. OkHttp 5.5.1 also blocks compromised eMudhra
-intermediate certificates.
+Python Poetry locks, script requirements and SDK minimums were refreshed.
+Requests 2.34.2, cryptography 50.0.2, certifi 2026.10.23, urllib3 2.8,
+setuptools 84.2.1 and wheel 0.48 remove the reported matches. Torii/Norito
+packaging consistently requires Python 3.10 or newer. Both locked environments,
+script dependencies and the Python 3.10 resolution pass `pip-audit`;
+Python 3.10 resolution is not a runtime test. Mypy now passes all 46 SDK files.
+The certifi SDK requirement remains `>=2026.10.19`, above the advisory's patched
+version; current lockfiles select 2026.10.23.
+The separate native CI requirements lock was also regenerated with current
+versions and artifact hashes: all 17 packages audit clean, hash-required binary
+installation passes, and its two exact metadata/lock tests pass.
 
-OkHttp's Android AAR requires compileSdk 37. Android SDKs and examples therefore
-use AGP 9.4.1 / compileSdk 37, while retaining minSdk, targetSdk, JDK 8 API guards
-and the native build policy. Instrumentation JNI source registration now uses
-AGP's public LibraryExtension API; it retains the same generated native-library
-path. Android and test libraries were refreshed within that configuration.
-This build requires the Android 37 SDK to be installed.
+Kotlin 2.4.21, Gradle 9.8.2, AGP 9.4.1, compileSdk 37 and NDK r30 LTS
+are current. Bouncy Castle is 1.86, OkHttp is 5.5.1, Okio is 3.18.2,
+Netty is 4.2.19 and zstd-jni is 1.5.7-24. The JDK 8 API compile guard,
+minimum Android versions and native authentication remain enforced.
+The expanded advisory check covers 438 unique resolved Maven package versions
+across all four Gradle roots, including application, build-plugin, detached and
+Android Lint classpaths. The affected Jackson, Commons Lang, jose4j, BC, JDOM
+and HttpClient build-tool dependencies were upgraded; the final scan reports
+zero advisories and zero resolution failures. Real CycloneDX tasks, all 421
+managed Android tests and positive/negative Lint controls pass.
+JUnit 5.14.4 preserves JDK 8 compatibility because JUnit 6 requires Java 17.
 
-.NET remains on the supported 8.0 line, updated to SDK 8.0.426/runtime 8.0.32 and
-Microsoft.NET.Test.Sdk 18.11.0. All four NuGet solution projects pass the
-all-transitive vulnerability scan. OSV checks of 31 direct Maven coordinates and
-22 resolved core-runtime coordinates found no findings; this is not an audit of
-every Android plugin transitive dependency.
+Swift uses immutable current Nearby and BoringSSL source revisions. The latest
+Firebase wrapper still embeds April 2025 crypto sources, so a small local Swift
+package binds unmodified BoringSSL commit
+`90c6b370770adce64ff435789bfd1940067df415` (2026-10-22). It uses upstream's
+generated source list, assembly guards and runtime CPU dispatch. Per-file
+hashes, license files, refresh ownership and build commands are recorded in
+[`vendor/boringssl-swiftpm/IROHA-PATCH.md`](../vendor/boringssl-swiftpm/IROHA-PATCH.md).
+This is repository-owned packaging, not a new Firebase release. The real Nearby
+product links and its UKEY2 handshake, tamper and replay controls pass. Nearby's
+local package manifest points directly to this provider: a sibling override in
+the SDK did not propagate to nested Swift package consumers. The repaired graph
+resolves correctly through an ordinary three-level consumer. All 1,416 upstream
+Nearby files retain their pinned bytes, with identical target/source membership;
+only repository-owned packaging changes the dependency edge. Exact source and
+release guards retain missing, changed, extra and aliased-input rejection.
+Nearby's
+current Abseil wrapper pins the January 2026 LTS (20260107.1), which remains
+within upstream's critical-fix support period; the newest LTS is 20260817.0.
+The wrapper also retains older files removed upstream. Some emit linked hash
+and random-pool routines, although no callers were found in the current Nearby
+source or compiled objects. Official LTS support does not establish maintenance
+of those wrapper-only routines. This is a retained upstream dependency boundary,
+not a claim that every embedded file is the latest release. Embedded-source OSV
+coverage is incomplete.
 
-Swift remains constrained by Nearby's current upstream requirement
-`BoringSSL-SwiftPM >=0.7.1,<0.8.0`: the lock's 0.7.2 is the latest satisfying
-release, while upstream offers 0.41.0. Nearby and Abseil revisions remain
-immutable. OSV commit queries returned no findings for these three revisions,
-but coverage of embedded crypto code is incomplete. Updating BoringSSL needs a
-Nearby migration or a separately maintained and qualified fork. A fresh Swift
-native build remains required.
+.NET targets supported .NET 10, SDK 10.0.402/runtime 10.0.13,
+with xUnit v3 4.0.2. NuGet restore, compilation and all-transitive advisory
+checks pass. Native fixtures must come from the same current source candidate.
 
-JUnit 5.14.4 is retained because JUnit 6 requires Java 17; Netty 4.1 is a
-maintained security line. xUnit remains on its current 3.x release. Pinned Rust,
-cargo-ndk and NDK source-custody inputs were preserved.
+Nix/AppImage sources replace the unsupported NixOS 22.05/FUSE 2 graph with
+NixOS 26.05, maintained Type2 runtime, Squashfuse 0.6.5 and libfuse 3.18.2.
+Immutable source archives and NAR hashes were verified. The bundle now points
+at its actual `iroha3d` executable. Seven source-policy tests pass. A disposable
+ARM Linux guest also passes locked Nix evaluation, the static PIE runtime and
+Type 2 structure checks, and the real smoke-image extraction and FUSE launch
+paths. The runtime uses upstream-compatible Clang/compiler-rt; the GCC startup
+failure found during qualification was repaired. Ubuntu's user-namespace
+restriction remained enabled, with a guest-only AppArmor profile allowing the
+exact test image to create its required namespace. This qualifies the ARM
+bundler smoke, not the full daemon image or the x86_64 execution path. See
+[the Linux qualification commands](../nix-appimage/README.md).
+
+GitHub Actions use current immutable release commits. The fuzz toolchain is
+pinned to nightly 2026-10-23, which supports the workspace's current Rust
+requirement. CI container jobs now receive an immutable image reference only
+after a host-side preflight validates it. The builder recipe pins Rust 1.99.1,
+official grcov 0.10.8 archive hashes and a required-hash Poetry 2.5.1 environment;
+its 48 resolved Python packages have zero OSV matches. Both supported Linux
+architectures pass binary-only package resolution. Building, scanning and
+exercising the updated Linux image before promoting its digest remains required.
+The attempted image build in an ARM Linux guest reached Arch Linux's package
+manager, whose sandbox could not run under x86 user-mode emulation. The sandbox
+was not disabled, so this is not a qualified image build. A valid
+digest establishes identity, not freshness or absence of vulnerabilities. See
+[the CI image qualification procedure](../.github/CI_IMAGE.md).
 
 ## Validation
 
-- `cargo metadata --locked --format-version 1` and compatible-update dry run.
-- `cargo audit --deny unsound --json`: zero vulnerabilities/unsound/yanked;
-  twelve maintenance warnings, without ignored advisories.
-- `scripts/cargo_fast.sh --stable-local-metadata --incremental -- check
-  -p iroha_p2p -p sorafs_orchestrator -p soranet_pq --lib --locked`: passed.
-- `scripts/check_no_legacy_codec.sh`: passed.
-- Rust futures/PQ unit suites: 19 and 217 passed respectively, with two PQ
-  tests ignored. No protocol bypasses or ignore-list changes were introduced.
-- NFC source/checksum allocation test: passed with the reviewed SmallVec pin.
-- `cargo test -p mv --test ebr_allocation_custody --locked`: six passed with
-  crossbeam-epoch 0.9.21, preserving the actual reclamation/refund assertions.
-- OpenAPI: all 154 tests passed after canonical pin regeneration (including
-  the 19 lock-owner tests).
-- JVM dependency-focused transport/crypto/Norito/Java-consumer tests: 115 passed;
-  tools: 25 passed. Android managed compilation, sample AAR metadata checks
-  and CycloneDX SBOM generation pass with compileSdk 37.
-- .NET restore and solution compilation passed, with 2 integration tests passed.
-  Broader initial JVM tests reported 1,580 passed / 472 failed and .NET tests
-  reported 2,105 passed / 1,519 failed; native bridge and fixture prerequisites
-  dominate those failures. These suites are not reported as passing.
-- All four npm projects: clean install without lifecycle scripts, package-lock
-  audit and outdated-package review. SDK distribution build, bundle budgets and
-  ESLint pass. Browser/crypto/type/bundle tests: 108 passed; lint/engine-policy
-  tests: 62 passed; editor extension: 16 passed; EDR: 10 passed; EVM Python
-  assertions: 2 passed. BLS finality fixtures reproduce byte-for-byte.
-- Python: both `poetry check --lock` runs pass; `pip check` passes; five pure
-  Python wheels build. Focused Norito/Torii tests: 717 passed plus 260 subtests.
-  Python 3.10 binary-wheel resolution passes; it is not a Python 3.10 test run.
-- SDK native-dependent tests require fresh authenticated bridge/addon/wheel
-  artifacts. Existing artifacts have missing ABI or source-provenance errors.
-  No authentication or codec fallback was introduced to make tests pass.
-- The broad Python script suite was still running at report time; it is not
-  counted as passed. Mypy 2.4 and the prior 1.19.1 report the same two existing
-  assignment errors across 46 SDK files, with no new type-check regressions.
-- Full Rust workspace, real-network and device qualification have not passed as
-  part of this review. `cargo fmt --all -- --check` finds unrelated existing
-  source formatting differences; dependency changes do not reformat that work.
+Completed component checks include:
 
-The shared checkout was concurrently committed and merged by another actor.
-That merge introduced unrelated conflicts and a stale internal lock dependency,
-which Cargo metadata reconciled. Existing changes and unresolved conflicts were
-preserved. The OpenAPI lock pin was regenerated through its canonical owner;
-its release provisioner additionally requires matching committed HEAD,
-index and working files, so an uncommitted pin is not release-qualified. All
-154 OpenAPI tests pass after regeneration.
+- The complete locked Cargo workspace passes `cargo check --workspace
+  --all-targets --keep-going --locked` through the stable local metadata wrapper.
+  This includes test and benchmark compilation; existing warnings remain, so
+  it is not a strict Clippy result or a full workspace runtime test.
+- Crypto: 1,979 unit tests passed, five existing ignored; SoraNet PQ: 214 passed,
+  two existing ignored. Forced-software Keccak also passed all 214 tests and
+  four immutable ML-KEM/ML-DSA vector tests.
+- Orchard: all 18 current real-proof, immutable-vector and mutation tests pass.
+  P-256 AIR: all 16 arithmetic, differential, mutation and erasure tests pass.
+  Bootle/Jindo/Falcon sampler and RNG filters: all 42 tests pass.
+  Poseidon: all 28 current field-boundary and hash tests pass. FastPQ resource
+  preflight, fallible entropy and erasure checks pass all three focused tests.
+  Current PQ/SM2 integration tests pass 56 cases, borrowed ML-DSA passes six,
+  and wallet resource/faucet controls pass four.
+- Native Pasta: 149 tests passed, six existing ignored. PLONK: 441 unit tests
+  passed, 19 existing ignored; all six current golden-shape integration tests
+  passed. Native gadgets pass 243 tests with ten existing ignored tests.
+  Existing native proof-byte vectors remain unchanged. Recursive verification
+  passes 38 ordinary tests; the two remaining descriptor tests now pass after
+  aligning stale expectations with the committed norm-product layout. The
+  production Omega-cap test also passes and rejects the measured oversized
+  configurations; production bounds remain unchanged. Both full compact-proof
+  component tests pass with optimization, debug assertions and overflow checks
+  enabled, including every-cell tampering, changed public inputs and known/unknown
+  layout parity on Pallas and Vesta. Their source, binary and 97-dependency closure
+  hashes match the tested candidate; production bounds remain unchanged.
+- Account-name normalization and scratch-allocation controls: all 37 focused
+  tests passed with the final SmallVec source checksum. Procedural macros:
+  126 unit tests passed across model, schema, telemetry, Iroha and Norito derives.
+  Current data-model UI tests pass all 11 cases without changing expected
+  compiler diagnostics.
+- Ark BLS: 138 upstream tests passed, including fixed-multiplication subgroup
+  parity; crypto allocation controls pass. Bigint: 170 upstream tests passed;
+  existing Iroha primitive allocation tests also pass.
+- AES FIPS vectors pass on hardware and software; real D-Bus/AT-SPI and
+  accessibility tests pass. TLS loopback trust modes, zstd codec tests and
+  JNI exception/thread-attachment probes pass.
+  Torii's current authentication/JWT suite passes all 76 tests, including
+  actual signatures, Ed25519/P-256 validation, zero/high-S rejection and exact
+  JWT labels; all 5,883 Torii library tests compile.
+- The current VOLE dependency graph passes 396 tests with one existing ignored
+  test. All-target checks pass for SCCP RPC, SoraFS node/orchestrator and P2P.
+  Integer migrations preserve both samplers' tables and 7,202 decay inputs;
+  256 independent full-width arithmetic cases and the P-256 high-limb regression
+  pass. Restoring reversed modulus limbs fails the latter regression.
+- JavaScript: 237 focused SDK tests, TypeScript CLI/consumer checks, lint and
+  bundles, 16 extension tests and real VSIX packaging passed. The complete EDR
+  smoke has 568 passing checks. SoraFS custody: 839 passed; native tooling:
+  228 passed, with actual original package archives checked.
+  The final source-authenticated addon passed the complete 4,120-test unit
+  profile on the actual minimum Node 22 runtime, with no skips, plus all 18
+  native bond tests.
+- The complete current Rust client library suite passes 1,263 tests with three
+  existing ignored tests. The compiler resolver crash was removed by explicit
+  test imports; strict parameter decoding and its native error cause remain
+  tested. The affected CLI modules pass all 25 tests, and Mochi's exhaustive
+  private-query batch rejection control passes.
+- The upgraded optional Mochi GUI passes all 77 runtime tests, with one existing
+  ignored real-network preview. The migration preserves interaction and icon
+  assertions, explicitly consumes or releases headless texture updates, checks
+  the selected font face and enables the maintained bundled emoji-font feature.
+  Mochi, Kagami and the daemon also build together against the updated control
+  API. The macOS bundle manifest and staging assertions pass. After the
+  read-only executable handoff below, the actual packaged Mochi `--help` also
+  passes without observer intervention. The explicit-provider changes below
+  also remove the observed validator-startup panic. The final actual run passes
+  the entire ordinary developer flow: all three contract forms execute across
+  four peers, restart preserves them, context isolation succeeds, and reset
+  removes the executed old state before fresh deployment and execution.
+  Publication now uses a separate fresh network explicitly created with
+  `--with-storage`, after the ordinary network's authenticated cleanup succeeds.
+  Its nine focused fixture tests pass; provider/finality/cold-consumer assertions
+  remain unchanged. The complete matrix/smoke assertion still fails: native
+  storage-service bootstrap exceeds its unchanged 30-second startup deadline,
+  with custody readback returning HTTP 503 `stream_token_custody_unavailable`.
+  The publication network's cleanup also succeeds. No startup deadline,
+  authentication requirement or finality/custody check was relaxed.
+- Executable publication now replaces its writable creation anchor with a clone
+  of the already-authenticated read-only descriptor before closing the writer.
+  The same inode remains held continuously, and all snapshot, hash, permission,
+  alias and substitution checks remain enforced. This avoids the documented
+  [Linux `execve` rejection of executables open for writing](https://man7.org/linux/man-pages/man2/execve.2.html).
+  The new write-refusal regression fails on the old implementation; all 67
+  focused CLI, Mochi and namespace custody tests pass with the handoff.
+- P2P TLS and QUIC constructors explicitly select their existing Ring provider,
+  following Rustls' [explicit provider API](https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html#using-a-specific-cryptoprovider).
+  This removes the startup ambiguity introduced when Reqwest also enables
+  AWS-LC. All 69 focused transport, listener, streaming and datagram tests pass
+  with both providers enabled, including TLS 1.3/ALPN enforcement and wrong-key
+  rejection. Trust, certificate pinning and replay protections are unchanged.
+  The resolver, VPN helper, relay and optional SoraFS proxy likewise select their
+  existing providers explicitly. Four resolver, three VPN and four relay tests
+  pass under the combined provider graph. Optional-proxy validation also exposed
+  a non-special URL parsing mismatch, final QUIC replies dropped during shutdown
+  and noncanonical macOS test paths. The authority parser now accepts canonical
+  public hosts while rejecting alternate numeric/escaped addresses; DNS address
+  filtering remains enforced. Final replies retain connection custody until
+  acknowledged or the existing ten-second timeout expires. All seven focused
+  proxy regressions and then the complete 24-test proxy module pass, including
+  unchanged authentication and file-custody refusal assertions. These four
+  additional owners pass 35 unique tests. The daemon's matching test-only TLS
+  helper change is reviewed but was not separately runtime-tested in this suite.
+- The final daemon admission/SCCP fixture checks pass all 29 tests, and seven
+  deployment readiness, phase-storage and private-program fixture checks pass.
+  All six genesis-policy tests pass with the fixture bound to the authenticated
+  proposal's network identity; strict rejection causes and original manifest
+  inputs remain checked.
+  The full deployment run recorded 1,295 passes, 15 failures and five existing
+  ignored tests. Every failure now has a passing focused rerun: the authority,
+  generated-runtime, journal and native-bootstrap/history groups pass 118 tests;
+  the seven fixture checks above and the AMX path control cover the remainder.
+  The long history test exercises all 64 natural expirations and rejects oldest
+  material substitution. One earlier group's source check correctly refused a
+  concurrent Rustdoc-only edit; reversing exactly that sentence reproduces its
+  original source hash. The refusal and runtime results are both retained.
+- Kotlin: the complete current native core suite passes 2,053 tests, tooling
+  passes 25, and Android host JNI consumers pass 47, with no skips or failures.
+  Updated Netty/Okio checks and all 421 managed Android unit tests passed.
+  The complete .NET native SDK suite passes all 5,808 tests with no skips.
+  Core/JNI and .NET were repeated against the same newly authenticated bridge.
+  The final bridge also passed all 2,476 Swift tests with strict source checks
+  before and after execution. Its SHA256 was
+  `c3d13dc9cf3ec69efcf5f732d065431a378650c8898565463956cdf415867dcc`.
+- Swift dependency qualification: 1,936 upstream BoringSSL crypto tests with
+  assembly, 1,896 with the portable backend, and 484 SSL tests pass (two
+  existing platform/vector skips and four upstream disabled crypto cases).
+  All 23 source-integrity controls pass. The actual Nearby product link passes;
+  ten real UKEY2 handshakes, 80 binary roundtrips, 40 tamper rejections and
+  40 replay rejections passed.
+- Python: Poetry lock checks, dependency consistency, five pure wheel builds,
+  717 focused Norito/Torii tests plus 260 subtests and Mypy passed.
+  The four installed package owners pass 5,203 tests plus 284 subtests.
+  The final SDK run passes all 3,044 tests and strict installed-byte/source
+  checks before and after execution. Its isolated Requests worker explicitly
+  uses `-B` to preserve authenticated package contents; all 109 real-process
+  deadline and custody controls pass, without cleanup after testing.
+  The broad script run completed with 8,436 passing tests, 16,638 passing
+  subtests and three existing skips. Its 29 failures were in four files changed
+  during the dependency/CI migration; a fresh complete rerun of those four files
+  passes all 2,352 tests.
+- Source/signature validation prerequisites were repaired without bypasses:
+  GPG-backed source capture/retention tests passed (104 tests, 66 subtests),
+  native package/source guards passed (438 tests, five subtests), and reviewed
+  CI/compiler/source inventories were updated while retaining negative cases.
+  The full Sumeragi mutation-script suite passes 1,961 tests. Current target,
+  release/toolchain, Kotodama and Taira policy guards pass 584 tests and
+  9,252 subtests; the shipping-source inventory passes 11 tests and 26 subtests. The cryptographic operation inventory matches the source;
+  new instruction classifications retain injected-verifier rejection controls.
+  The actual Rust 1.99.1 data-model test build uses 36 compile units, below the
+  unchanged 41-unit baseline and 44-unit permitted limit.
+- Current CI image, release-profile, workspace gate and shipping-feature policy
+  tests pass all 428 cases; release-profile/prebuilt-provenance tests pass all
+  163 cases. Release bootstrap hashes were updated after reviewing their exact
+  source deltas, retaining source substitution, permission and signature
+  refusals. The broader clean-source release seal was not relaxed or refreshed
+  to admit unrelated working-tree changes.
+  After the Nix closure helper migration, all 312 release-profile,
+  prebuilt-provenance and feature-graph checks pass.
 
-## Continued maintenance and sources
+The optional privacy-feature integration target also compiles with its locked
+graph. The maximum Orchard fixture test and all 15 focused P-256 integration
+tests pass. The complete macOS developer smoke remains unqualified at native
+storage-service startup, despite its passing ordinary packaged workflow.
+The completed native SDK runs precede the final GUI-only lock edge described
+above and the later transport/proxy repairs. Their package versions and non-GUI
+dependency edges are unchanged, but their source records bind the original
+candidate and are not release attestations for newly rebuilt artifacts.
+External cleanup removed the previously qualified JavaScript addon and
+Swift/JVM/.NET bridge directories, some original generated inputs and JVM XML
+outputs. Successful saved test logs
+remain evidence of the completed runs; they do not establish a fresh source
+verification or the uncompleted whole-SDK external-consumer check after deletion.
+Interrupted or build-lock-waiting runs are not counted as passes. Shared source
+is concurrently edited, so component evidence does not qualify a different
+later candidate. Full Linux daemon AppImages, physical devices and whole-network
+release qualification require their own current-candidate runs.
 
-Dependabot now covers all four npm roots, JVM/Android roots, Swift packages,
-NuGet and Python SDK/CI manifests alongside existing Cargo, Docker and action
-coverage. Configuration does not establish successful server-side runs or
-provide Gradle advisory coverage by itself.
+Release source-custody tools require matching committed source. Local diagnostic
+builds may authenticate the current working tree through supported source seals;
+they do not replace a clean-source release attestation. No signing, native-load,
+codec or source-authentication gate is disabled for this migration.
 
-Registry version inventories: [crates.io](https://crates.io/),
-[npm](https://www.npmjs.com/), [PyPI](https://pypi.org/), Maven Central, Google Maven
-and NuGet. Advisory and compatibility references:
+## Maintenance and primary sources
+
+Dependabot covers Cargo (including all six fuzz roots), the four npm roots,
+Python, JVM/Android, Swift, NuGet, Docker and action dependencies. Configuration
+alone does not establish successful server-side update runs.
 
 - [RustSec advisory database](https://github.com/RustSec/advisory-db)
-- [Rustls secret-debugging advisory](https://rustsec.org/advisories/RUSTSEC-2026-0346.html)
-- [ESLint support policy](https://eslint.org/version-support/)
+- [Rust registry](https://crates.io/)
+- [Rust release channel](https://static.rust-lang.org/dist/channel-rust-stable.toml)
 - [ESLint 10 migration](https://eslint.org/docs/latest/use/migrate-to-10.0.0)
-- [Requests advisory](https://github.com/advisories/GHSA-gc5v-m9x4-r6x2)
-- [setuptools advisory](https://github.com/advisories/GHSA-h35f-9h28-mq5c)
-- [Gradle daemon advisory](https://github.com/gradle/gradle/security/advisories/GHSA-mvvg-497x-hmj8)
+- [Gradle security advisories](https://github.com/gradle/gradle/security/advisories)
 - [OkHttp changelog](https://square.github.io/okhttp/changelogs/changelog/)
-- [Nearby package manifest](https://github.com/google/nearby/blob/main/Package.swift)
-- [Dependabot ecosystem support](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories)
+- [Nearby pinned source](https://github.com/google/nearby/tree/c80c38efe4b8a5fa72586b58d381bb546702f062)
+- [BoringSSL pinned source](https://boringssl.googlesource.com/boringssl/+/90c6b370770adce64ff435789bfd1940067df415)

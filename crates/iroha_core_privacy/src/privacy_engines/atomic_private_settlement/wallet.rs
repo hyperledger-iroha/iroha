@@ -38,8 +38,8 @@ use iroha_data_model::privacy::{
     PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
 };
 use iroha_data_model::privacy::{PrivacyEncryptedOutputV1, PrivacyNullifierV1};
-use rand_core_06::CryptoRng;
-use rand_core_06::RngCore;
+use rand_core::TryCryptoRng;
+use rand_core::TryRng;
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -672,7 +672,7 @@ pub fn derive_atomic_private_settlement_input_nullifiers_v1(
 /// Rejects a substituted context, wrong fixed shape, malformed note/view key,
 /// or unavailable/unsafe encryption randomness.
 pub fn prepare_atomic_private_settlement_outputs_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     outputs: &mut [PrivateSettlementAuditOutputV1],
@@ -1250,7 +1250,8 @@ mod tests {
         PrivateSettlementLegCommitmentV1,
     };
     use iroha_data_model::privacy::{PrivacyNullifierV1, PrivacyRootV1};
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
 
     #[test]
     fn funding_note_survives_later_authority_context_and_virtual_dummy() {
@@ -1516,7 +1517,7 @@ mod tests {
             statement.audit_input_commitment,
         );
         let program_id = atomic_private_settlement_program_id_v1().expect("settlement program");
-        let mut output_rng = StdRng::seed_from_u64(0x4150_535f_5741_4c4c);
+        let mut output_rng = ChaCha12Rng::seed_from_u64(0x4150_535f_5741_4c4c);
         let mut encrypted_outputs = Vec::with_capacity(plaintext.outputs.len());
         for (index, (output, memo)) in plaintext.outputs.iter_mut().zip(output_memos).enumerate() {
             output.note.memo_digest = memo;
@@ -2077,7 +2078,7 @@ fn prepare_input_openings_from_bound_context_v1(
 }
 
 fn prepare_outputs_from_bound_context_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     statement: &PrivateSettlementProofStatementV1,
     outputs: &mut [PrivateSettlementAuditOutputV1],
 ) -> Result<Vec<PrivacyEncryptedOutputV1>, AtomicPrivateSettlementWalletErrorV1> {

@@ -17,7 +17,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     label: "toriiClient.js",
     entryPoint: join(ROOT, "src", "toriiClient.js"),
     platform: "node",
-    target: "node20.19",
+    target: "node22.23",
     // Keep optional validation behind its declared module boundary. Report
     // eager and deferred bytes independently without enforcing code-size caps.
     lazyChunks: Object.freeze([

@@ -1,13 +1,13 @@
 //! Each physical serving attempt receives a fresh identity; entropy failures remain closed.
 use super::*;
-use rand::rand_core::TryRngCore;
+use rand::rand_core::TryRng;
 
 struct EntropyProbe {
     byte: Option<u8>,
     calls: usize,
     bytes: usize,
 }
-impl TryRngCore for EntropyProbe {
+impl TryRng for EntropyProbe {
     type Error = std::io::Error;
 
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {

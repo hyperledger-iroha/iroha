@@ -1,4 +1,5 @@
-//! In-memory test accounts and canonical asset literals for desktop quick actions.
+//! In-memory test accounts, token drafts and canonical asset literals for desktop quick
+//! actions.
 //!
 //! Generated keys never leave process memory: the desktop shows them only after an explicit
 //! reveal, and every ledger change still goes through the reviewed transaction preview.
@@ -7,8 +8,12 @@ use crate::compose::{ComposeError, InstructionDraft, parse_account_id, parse_ass
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::{AccountId, address::ChainDiscriminantGuard},
-    asset::id::AssetId,
+    asset::{
+        definition::Mintable,
+        id::{AssetDefinitionId, AssetId},
+    },
 };
+use iroha_model_base::{domain::DomainId, error::ParseError, name::Name};
 use std::fmt;
 
 /// A freshly generated single-signature account whose private key exists only in memory.
@@ -70,6 +75,89 @@ impl fmt::Debug for GeneratedAccount {
             .field("account", &self.account)
             .field("private_key", &"<redacted>")
             .finish()
+    }
+}
+
+/// Longest domain label the name service prices.
+const MAX_DOMAIN_LABEL_CHARS: usize = 63;
+
+/// Domain label for a token name: lowercase ASCII letters and digits, with every other run of
+/// characters folded into one dash, e.g. `Coffee Beans!` becomes `coffee-beans`.
+///
+/// Empty when the name has no ASCII letter or digit.
+#[must_use]
+pub fn token_domain_label(name: &str) -> String {
+    let mut label = String::new();
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            label.push(character.to_ascii_lowercase());
+        } else if !label.is_empty() && !label.ends_with('-') {
+            label.push('-');
+        }
+    }
+    let label = label
+        .chars()
+        .take(MAX_DOMAIN_LABEL_CHARS)
+        .collect::<String>();
+    label.trim_end_matches('-').to_owned()
+}
+
+/// A token its creator registers and first mints in one transaction, validated from input.
+#[derive(Clone, Debug)]
+pub struct TokenDraft {
+    /// `<label>.universal`, which the creator must hold when the drafts apply.
+    pub domain: DomainId,
+    /// Definition derived from the token's label and domain: the same pair always names it.
+    pub definition: AssetDefinitionId,
+    /// The definition's registration in `domain`, then the first mint to the creator.
+    pub drafts: Vec<InstructionDraft>,
+}
+
+impl TokenDraft {
+    /// Validate a token named `name` in `<label>.universal` whose first `supply` goes to
+    /// `creator`.
+    ///
+    /// # Errors
+    /// A name without letters or digits or with reserved characters, an invalid domain label,
+    /// or a non-canonical supply.
+    pub fn new(
+        name: &str,
+        label: &str,
+        supply: &str,
+        creator: &AccountId,
+    ) -> Result<Self, ComposeError> {
+        let name = name.trim();
+        let seed: Name = token_domain_label(name)
+            .parse()
+            .map_err(
+                |error: ParseError| ComposeError::InvalidAssetDefinitionName {
+                    name: name.to_owned(),
+                    reason: format!("a token name needs at least one letter or digit ({error})"),
+                },
+            )?;
+        let label = label.trim();
+        let domain = DomainId::try_new(label, "universal").map_err(|error| {
+            ComposeError::InvalidDomainId {
+                domain: label.to_owned(),
+                reason: format!("use lowercase letters, digits and dashes ({error})"),
+            }
+        })?;
+        let definition = AssetDefinitionId::derive_from_components(domain.clone(), seed);
+        let register = InstructionDraft::register_asset_definition_from_input(
+            &definition.to_string(),
+            name,
+            Mintable::Infinitely,
+        )?
+        .in_domain(domain.clone());
+        let mint = InstructionDraft::mint_from_input(
+            &AssetId::new(definition.clone(), creator.clone()).to_string(),
+            supply.trim(),
+        )?;
+        Ok(Self {
+            domain,
+            definition,
+            drafts: vec![register, mint],
+        })
     }
 }
 
@@ -138,5 +226,71 @@ mod tests {
         ));
         assert!(asset_literal("not a definition", &account, DISCRIMINANT).is_err());
         assert!(asset_literal(definition, "not an account", DISCRIMINANT).is_err());
+    }
+
+    #[test]
+    fn token_names_fold_into_domain_labels() {
+        assert_eq!(token_domain_label("Coffee Beans!"), "coffee-beans");
+        assert_eq!(token_domain_label("  ☕ Mochi  Points "), "mochi-points");
+        assert_eq!(token_domain_label("ラーメン"), "");
+        let long = token_domain_label(&format!("{}!b", "a".repeat(62)));
+        assert_eq!(
+            long,
+            "a".repeat(62),
+            "63 characters, without a trailing dash"
+        );
+    }
+
+    #[test]
+    fn new_tokens_register_in_their_own_domain_then_mint_to_the_creator() {
+        let creator = GeneratedAccount::generate();
+        let token = TokenDraft::new(" Coffee ", "coffee", "1000", creator.account_id()).unwrap();
+        assert_eq!(token.domain.to_string(), "coffee.universal");
+        assert!(matches!(
+            &token.drafts[..],
+            [
+                InstructionDraft::RegisterAssetDefinition { definition, name, mintable: Mintable::Infinitely, domain: Some(domain) },
+                InstructionDraft::MintAsset { asset, quantity },
+            ] if *definition == token.definition
+                && name == "Coffee"
+                && *domain == token.domain
+                && asset.definition() == &token.definition
+                && asset.account() == creator.account_id()
+                && quantity.to_string() == "1000"
+        ));
+        let again = TokenDraft::new("Coffee", "coffee", "5", creator.account_id()).unwrap();
+        assert_eq!(
+            again.definition, token.definition,
+            "the same pair names the same token"
+        );
+        let elsewhere = TokenDraft::new("Coffee", "cafe", "5", creator.account_id()).unwrap();
+        assert_ne!(elsewhere.definition, token.definition);
+        // Registration drafts keep their domain through the composer's JSON form.
+        let json = token.drafts[0].to_json_value();
+        assert_eq!(
+            json.get("domain").and_then(norito::json::Value::as_str),
+            Some("coffee.universal")
+        );
+        assert!(matches!(
+            InstructionDraft::from_json_value(&json).unwrap(),
+            InstructionDraft::RegisterAssetDefinition { domain: Some(domain), .. } if domain == token.domain
+        ));
+        assert!(token.drafts[0].summary().contains("in coffee.universal"));
+
+        for (name, label, supply) in [
+            ("☕", "coffee", "1"),
+            ("Coffee", "Coffee Shop", "1"),
+            ("Coffee", "", "1"),
+            ("Coffee", "coffee", "lots"),
+        ] {
+            assert!(
+                TokenDraft::new(name, label, supply, creator.account_id()).is_err(),
+                "{name:?} {label:?} {supply:?}"
+            );
+        }
+        assert!(matches!(
+            TokenDraft::new("Coffee", "Coffee Shop", "1", creator.account_id()),
+            Err(ComposeError::InvalidDomainId { .. })
+        ));
     }
 }

@@ -8,10 +8,8 @@ fn test_key(value: u8) -> SigningKey {
 }
 
 fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-    KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
-    )
-    .unwrap()
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(key.verifying_key().to_sec1_point(false).as_bytes())
+        .unwrap()
 }
 
 fn request_bytes() -> Vec<u8> {

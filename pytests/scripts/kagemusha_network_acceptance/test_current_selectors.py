@@ -171,4 +171,83 @@ class CurrentSelectorTests(unittest.TestCase):
                     self.assertTrue((owner.parent / relative).is_file())
 
 
+class SwiftReviewLifecycleSourceTests(unittest.TestCase):
+    """Lexical cleanup wiring only; no Swift execution, Native or device qualification.
+
+    The actual actor depends on enrolled Native custody and iOS authentication. These
+    guards cover the production ordering around those dependencies without replacing
+    them with a fake monetary owner. Fault-injection behavior still needs the approved
+    rebuilt candidate; a passing source guard is not evidence of that behavior.
+    """
+    directory = 'examples/ios/NoritoDemoXcode/NoritoDemoXcodeTests'
+
+    def source(self, name):
+        return (SOURCE_ROOT / self.directory / name).read_text()
+
+    def ordered(self, text, *fragments):
+        cursor = 0
+        for fragment in fragments:
+            position = text.find(fragment, cursor)
+            self.assertGreaterEqual(position, 0, 'missing/late cleanup ordering: ' + fragment)
+            cursor = position + len(fragment)
+
+    def execution(self):
+        source = self.source('KagemushaWalletDeviceStages.swift')
+        return source.split('    func executePendingReview(', 1)[1].split('\n    }', 1)[0]
+
+    def test_swift_exchange_end_clears_and_discards_before_native_end(self):
+        stages = self.source('KagemushaWalletDeviceStages.swift')
+        ending = stages.split('case "end-exchange":', 1)[1].split('case "discard-review":', 1)[0]
+        self.ordered(ending, 'if let pending = pendingReview {', 'pendingReview = nil',
+                     'try pending.exchange.discardReview(pending.review)',
+                     'let ended = try await exchangeIngress.end()')
+        self.assertNotIn('try?', ending)
+        actor = self.source('KagemushaEnrollmentDeviceActor.swift')
+        admission = actor.split('nonisolated func admit(', 1)[1].split('func mutationOwner()', 1)[0]
+        self.assertIn('case "end-exchange": try exchangeIngress.requestEnd(); return nil', admission)
+        ingress = self.source('KagemushaProbeExchange.swift')
+        end_request = ingress.split('func requestEnd()', 1)[1].split('func end()', 1)[0]
+        self.assertIn('selected.requestEnd()', end_request)
+
+    def test_swift_review_failures_clear_only_same_retained_capability(self):
+        execution = self.execution()
+        opening = execution.index(' throws -> String {') + len(' throws -> String {')
+        self.assertTrue(execution[opening:].lstrip().startswith('do {'))
+        self.assertIn('} catch {', execution)
+        protected, cleanup = execution.split('} catch {', 1)
+        self.ordered(protected,
+                     'try config.files.read(original.fencePath',
+                     'try pending.approval.dispatch(retry: retry)',
+                     'try event("execute-reviewed-start"',
+                     'pendingReview = nil',
+                     'let result = try accepted.executeReviewed(pending.review)',
+                     'case .retainedReview(let wait):',
+                     'try pending.approval.retained(); pendingReview = pending',
+                     'try event("review-retained"')
+        self.ordered(cleanup,
+                     'if let retained = pendingReview, retained.review === original.review {',
+                     'pendingReview = nil',
+                     'try retained.exchange.discardReview(retained.review)',
+                     'KagemushaProbeReviewCleanupError(primary: primary, cleanup: error)',
+                     'throw primary')
+        self.assertIn('let primary = error', cleanup)
+        error_data = self.source('KagemushaWalletDeviceStages.swift').split(
+            'struct KagemushaProbeReviewCleanupError: Error {', 1)[1].split('}', 1)[0]
+        self.assertIn('let primary: Error', error_data)
+        self.assertIn('let cleanup: Error', error_data)
+        self.assertNotIn('try?', cleanup)
+        self.assertNotIn('pendingReview = pending', cleanup)
+
+    def test_swift_only_typed_retention_repopulates_pending_after_dispatch(self):
+        execution = self.execution()
+        self.assertIn('} catch {', execution)
+        protected = execution.split('} catch {', 1)[0]
+        dispatch, outcomes = protected.split('let result = try accepted.executeReviewed(pending.review)', 1)
+        self.assertIn('pendingReview = nil', dispatch)
+        retained = outcomes.split('case .retainedReview(let wait):', 1)[1].split('case .existing', 1)[0]
+        self.assertIn('pendingReview = pending', retained)
+        self.assertEqual(protected.count('pendingReview = pending'), 1)
+        self.assertNotIn('pendingReview =', outcomes.split('case .existing', 1)[1])
+
+
 if __name__ == '__main__':unittest.main()

@@ -19,7 +19,8 @@ use iroha_data_model::{
         PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     },
 };
-use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeSet,
@@ -1339,7 +1340,7 @@ fn fixture() -> &'static (ZkX509IoStarkStatementV1, Vec<u8>) {
     let _guard = proof_guard();
     FIXTURE.get_or_init(|| {
         let statement = fixture_statement();
-        let mut rng = StdRng::from_seed([0x5A; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0x5A; 32]);
         let proof = prove_zk_x509_io_segmented_stark_v1_with_rng(
             &statement,
             &fixture_witnesses(),
@@ -1384,7 +1385,7 @@ fn projection_fixture() -> &'static (
     FIXTURE.get_or_init(|| {
         let (statement, witness) =
             crate::privacy_engines::zk_x509::projection_air::tests::fixture();
-        let mut rng = StdRng::from_seed([0xA7; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xA7; 32]);
         let proof =
             prove_zk_x509_projection_segmented_stark_v1_with_rng(&statement, &witness, &mut rng)
                 .expect("deterministic projection proof");

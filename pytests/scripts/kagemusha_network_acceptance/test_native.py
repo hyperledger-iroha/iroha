@@ -3,6 +3,7 @@ from pathlib import Path
 import copy
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -135,14 +136,15 @@ class NativeMigrationTests(unittest.TestCase):
 
     def test_archive_length_is_plain_bounded_integer_and_actual_extent(self):
         output, value, check = self.exchange_data()
-        for length in (True, 1.0, '1', 0, -1, 10001):
+        for length in (True, 1.0, '1', 0, -1, 10035):
             rows = copy.deepcopy(value['archive_originals']); rows[0]['bytes'] = length
             with self.assertRaisesRegex(ValueError, 'original length bound'):
                 check(value | {'archive_originals': rows})
-        for row in value['archive_originals']:
-            path = output / row['name']; raw = b'x' * 10000; path.write_bytes(raw)
-            row.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
-        self.assertTrue(all(check(value)[name]['bytes'] == 10000 for name in r.component.ARCHIVE_NAMES))
+        for length in (10000, 10001, 10034):
+            for row in value['archive_originals']:
+                path = output / row['name']; raw = b'x' * length; path.write_bytes(raw)
+                row.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+            self.assertTrue(all(check(value)[name]['bytes'] == length for name in r.component.ARCHIVE_NAMES))
         path.write_bytes(raw + b'x')
         with self.assertRaisesRegex(ValueError, 'shape/size'): check(value)
 
@@ -150,11 +152,19 @@ class NativeMigrationTests(unittest.TestCase):
         output, value, check = self.exchange_data()
         for name in ('a-b-payment.norito', 'b-c-payment.norito', 'b-receive.norito', 'c-receive.norito'):
             path = output / name; raw = path.read_bytes()
-            path.write_bytes(b'x' * 10000)
-            self.assertEqual(check(value)[name]['bytes'], 10000)
-            path.write_bytes(b'x' * 10001)
+            for length in (10000, 10001, 10034):
+                path.write_bytes(b'x' * length)
+                self.assertEqual(check(value)[name]['bytes'], length)
+            path.write_bytes(b'x' * 10035)
             with self.assertRaisesRegex(ValueError, 'shape/size'): check(value)
             path.write_bytes(raw)
+
+    def test_exchange_message_limit_matches_current_native_model(self):
+        model = (r.ROOT / 'crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1.rs').read_text()
+        match = re.search(r'^pub const KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1: usize = ([0-9_]+);$',
+                          model, re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual(r.component.MESSAGE_LIMIT, int(match.group(1).replace('_', '')))
 
     def test_original_manifest_cap_must_be_finite_plain_integer(self):
         for cap in (0, -1, True, 1.0, '10000', r.component.CAP + 1):

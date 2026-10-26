@@ -105,6 +105,7 @@ fn required_attribute_is_parsed_and_duplicate_is_rejected() {
 fn type_ident_and_required_attr_recognize_transparent_type_wrappers() {
     let grouped = |ty| {
         syn::Type::Group(syn::TypeGroup {
+            attrs: Vec::new(),
             group_token: Default::default(),
             elem: Box::new(ty),
         })
@@ -222,6 +223,7 @@ fn malformed_enum_field_attribute_is_rejected_before_codegen() {
 fn required_option_accepts_transparent_group_and_parenthesis_types() {
     fn group(ty: syn::Type) -> syn::Type {
         syn::Type::Group(syn::TypeGroup {
+            attrs: Vec::new(),
             group_token: Default::default(),
             elem: Box::new(ty),
         })
@@ -263,6 +265,7 @@ fn transparent_wrappers_do_not_make_non_option_types_optional() {
     for ty in types {
         let paren: syn::Type = syn::parse_quote!((#ty));
         let group = syn::Type::Group(syn::TypeGroup {
+            attrs: Vec::new(),
             group_token: Default::default(),
             elem: Box::new(paren.clone()),
         });

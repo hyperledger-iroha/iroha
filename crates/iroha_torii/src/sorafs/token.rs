@@ -4,7 +4,7 @@ use ed25519_dalek::VerifyingKey;
 use iroha_config::parameters::actual;
 use iroha_core::state::{State as CoreState, StateReadOnly};
 use iroha_crypto::PublicKey;
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use sorafs_manifest::token::{
     STREAM_TOKEN_MAX_RATE_LIMIT_BYTES_V1, STREAM_TOKEN_MAX_REQUESTS_PER_MINUTE_V1,
     STREAM_TOKEN_MAX_STREAMS_V1, StreamTokenBodyError, validate_token_body,
@@ -44,7 +44,7 @@ mod signer_lifecycle;
 mod signer_pins;
 mod signer_transport;
 #[cfg(test)]
-use rand::rand_core::TryRngCore;
+use rand::rand_core::TryRng;
 use signer_finality::CoreFinalityV1;
 use signer_lifecycle::{SignerDriverV1, SystemSignerClockV1};
 pub use signer_pins::StreamTokenSignerPinsV1;
@@ -420,7 +420,7 @@ where
     Ok(value)
 }
 fn new_token_id() -> Result<String, StreamTokenIssuerError> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     new_token_id_with_rng(&mut rng)
 }
 fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamTokenIssuerError> {

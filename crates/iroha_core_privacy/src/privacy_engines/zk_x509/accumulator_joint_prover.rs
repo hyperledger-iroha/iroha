@@ -36,7 +36,7 @@ pub struct CaAwaitingJointOpeningsV1 {
 
 impl CaAwaitingMainAuxiliaryV1 {
     /// Commit the local1363 relation after both original auxiliary roots.
-    pub(crate) fn commit_joint_oracles_v1<R: TryRngCore>(
+    pub(crate) fn commit_joint_oracles_v1<R: TryRng>(
         self,
         auxiliary: JointAuxiliaryBindingV1,
         rng: &mut R,

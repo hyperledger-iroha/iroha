@@ -98,7 +98,10 @@ where
             .expect("captured original key");
         let proof = bytes(&case["proof"]);
         assert_eq!(
-            format!("{:x}", Sha256::digest(&proof)),
+            Sha256::digest(&proof)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
             case["proof_sha256"].as_str().expect("proof hash")
         );
         let instances: Vec<Vec<C::ScalarExt>> = case["instances"]
@@ -163,7 +166,10 @@ where
             tape.extend_from_slice(challenge.to_repr().as_ref());
         }
         assert_eq!(
-            format!("{:x}", Sha256::digest(&tape)),
+            Sha256::digest(&tape)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
             case["tape_sha256"].as_str().expect("tape hash")
         );
         claim

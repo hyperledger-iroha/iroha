@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{Error, KeyGenOption};
 #[cfg(feature = "rand")]
-use rand_core::{TryCryptoRng, TryRngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use w3f_bls::SerializableToBytes as _;
 const MESSAGE_1: &[u8; 22] = b"This is a test message";
 const MESSAGE_2: &[u8; 20] = b"Another test message";
@@ -27,7 +27,7 @@ struct FixedTryRng {
     byte: u8,
 }
 #[cfg(feature = "rand")]
-impl TryRngCore for FixedTryRng {
+impl TryRng for FixedTryRng {
     type Error = core::convert::Infallible;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         Ok(u32::from_le_bytes([self.byte; 4]))

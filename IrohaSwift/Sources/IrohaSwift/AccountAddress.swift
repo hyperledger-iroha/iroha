@@ -666,7 +666,7 @@ private func encodeMultisigPolicyCTAP2(
 }
 
 private func blake2bMac256(_ data: Data, personal: Data) -> Data {
-    // Blake2bMac with an empty key still emits a zero-padded key block.
+    // The canonical policy preimage starts with the 128-byte empty-key MAC block.
     var prefixed = Data(repeating: 0, count: blake2bBlockLength)
     prefixed.append(data)
     return Blake2b.hash256(prefixed, personal: personal)

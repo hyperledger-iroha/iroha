@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_core::query::provider_ingest_source::authorize_provider_source_v1;
 use iroha_crypto::Signature;
 use iroha_data_model::sorafs::publication::SorafsAssignedSourceRequestV1;
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use reqwest::Url;
 use sorafs_car::publisher::{
     PROVIDER_SOURCE_RESPONSE_MAX_BYTES_V1, ProviderSourceResponseV1, PublisherSourceHeaderV1,
@@ -250,7 +250,9 @@ fn fetch_response(
     let bytes = norito::to_bytes(request).map_err(|_| rejected())?;
     let timestamp = now()?;
     let mut entropy = [0; 32];
-    OsRng.try_fill_bytes(&mut entropy).map_err(|_| rejected())?;
+    SysRng
+        .try_fill_bytes(&mut entropy)
+        .map_err(|_| rejected())?;
     let nonce = hex::encode(entropy);
     let message = iroha_torii::canonical_network_request_signature_message(
         state.network_id_ref(),

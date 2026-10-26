@@ -1452,7 +1452,7 @@ pub fn frame_looks_like_token(frame: &[u8]) -> bool {
 mod tests {
     use super::*;
     use rand::{SeedableRng, rngs::StdRng};
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{TryCryptoRng, TryRng};
     use soranet_pq::{MlDsaKeyPair, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::{TempDir, tempdir};
     const RELAY_ID: [u8; 32] = [0xAB; 32];
@@ -1627,12 +1627,13 @@ mod tests {
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing admission token RNG")
         }
     }
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
@@ -1648,7 +1649,7 @@ mod tests {
     struct FixedTryRng {
         byte: u8,
     }
-    impl TryRngCore for FixedTryRng {
+    impl TryRng for FixedTryRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))

@@ -233,6 +233,7 @@ fn delayed_worker_refuses_the_original_expired_budget_and_closes_starting_withou
         phase: ManagedPhase::Starting,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     };
     publish(&directory, &initial).unwrap();
     let deadline = startup_deadline(Instant::now(), Duration::from_secs(1)).unwrap();
@@ -340,6 +341,7 @@ fn admitted_worker_closes_native_program_failure_without_creating_a_session_or_p
             phase: ManagedPhase::Starting,
             running_peers: 0,
             failure: None,
+            validators: Vec::new(),
         },
     )
     .unwrap();

@@ -112,7 +112,9 @@ pub enum Error {
     #[error(transparent)]
     Bootstrap(#[from] ManagedBootstrapFailure),
     /// This workspace has never selected a managed environment.
-    #[error("no developer environment is selected in this workspace")]
+    #[error(
+        "no developer environment is selected in this workspace; create one with `kagami localnet up` or pick one with `kagami context use <name>`"
+    )]
     NoSelection,
     /// A filesystem, socket or process operation failed.
     #[error(transparent)]
@@ -120,11 +122,11 @@ pub enum Error {
     /// Stored metadata or caller input is invalid.
     #[error("{0}")]
     Invalid(String),
-    /// The signed checkpoint at an independently installed parent location could not be read.
+    /// Native discovery or finality verification failed at the selected network endpoint.
     #[error(
-        "could not authenticate the signed checkpoint for network `{}` at {}: {source}{}",
+        "could not bootstrap network `{}` at {}: {source}{}",
         .profile.network_name(),
-        .profile.checkpoint_url(),
+        .profile.torii_root(),
         checkpoint_read_followup(.source)
     )]
     ParentCheckpoint {
@@ -185,7 +187,7 @@ fn checkpoint_read_followup(source: &crate::bootstrap::CheckpointReadError) -> &
         source,
         crate::bootstrap::CheckpointReadError::Http(iroha::http::PublicHttpError::Status(404))
     ) {
-        "\nCheck publication or routing of the signed checkpoint at this installed location, then retry the same command. Keep any existing context and journals."
+        "\nCheck native Torii API routing at this network endpoint, then retry the same command. Keep any existing context and journals."
     } else {
         ""
     }
@@ -273,13 +275,13 @@ pub struct LocalnetRequest {
 }
 
 impl LocalnetRequest {
-    /// Construct a global localnet with original service-authority prerequisites and a thirty-second budget.
+    /// Construct a standard global localnet with a thirty-second readiness budget.
     ///
-    /// The generated authorities do not enable services or establish provider admission.
+    /// Storage services require explicit selection of the service-authority profile.
     #[must_use]
     pub fn new(launcher: PathBuf, daemon: PathBuf) -> Self {
         Self {
-            service_profile: crate::localnet::LocalnetServiceProfile::StreamTokenAuthorities,
+            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
             name: "local".into(),
             launcher,
             daemon,
@@ -374,6 +376,65 @@ pub struct ManagedStatus {
     pub running_peers: usize,
     /// Public reason for a failed operation, without child output or credentials.
     pub failure: Option<String>,
+    /// Owned validator processes of the live worker session, in committee order.
+    ///
+    /// Empty when no worker owns the generation. A failed session retains only the validators
+    /// whose unrequested exit caused the failure; `running_peers` keeps its cleanup meaning.
+    pub validators: Vec<ManagedValidatorStatus>,
+}
+
+impl ManagedStatus {
+    /// Drop live process observations after the worker stopped its validators.
+    ///
+    /// Exit records survive because they explain a failure; nothing else is known to run.
+    fn retain_validator_exits(&mut self) {
+        self.validators
+            .retain(|validator| matches!(validator.state, ManagedValidatorState::Exited { .. }));
+    }
+}
+
+/// One owned validator process observed by the worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ManagedValidatorStatus {
+    /// Committee index, the same index as `localnet logs --peer` and `peer{index}.log`.
+    pub index: u8,
+    /// Process observation, never inferred from a stored PID.
+    pub state: ManagedValidatorState,
+}
+
+/// Closed process observation of one owned validator. It never contains child output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ManagedValidatorState {
+    /// The owned process is alive. Network readiness is reported by [`ManagedPhase`].
+    Running,
+    /// The owned process exited without a request.
+    Exited {
+        /// Exit code, when the process returned one.
+        code: Option<i32>,
+        /// Terminating signal on Unix, when the process was signalled.
+        signal: Option<i32>,
+    },
+}
+
+impl ManagedValidatorState {
+    /// Classify a native exit status without reading any child output.
+    fn exited(status: std::process::ExitStatus) -> Self {
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+        #[cfg(not(unix))]
+        let signal = None;
+        Self::Exited {
+            code: status.code(),
+            signal,
+        }
+    }
 }
 
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
@@ -419,7 +480,28 @@ struct WorkerRecord {
 #[norito(deny_unknown_fields)]
 struct ControlRequest {
     token: String,
-    action: String,
+    action: ControlAction,
+}
+
+/// Closed worker control actions. An unknown kind fails decoding and receives no reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum ControlAction {
+    /// Report the live worker status.
+    Status,
+    /// Stop every owned validator and end the worker.
+    Down,
+    /// Close a startup whose foreground deadline expired, retaining its last safe phase.
+    StartupExpired,
+    /// Start parent attachment work for a ready private root.
+    AttachmentStart,
+    /// Report parent attachment progress together with the local status.
+    AttachmentStatus,
 }
 
 const MANIFEST: &str = "localnet.json";
@@ -457,8 +539,8 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) fn native_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    // Resource tests intentionally share the preferred loopback ports. Serializing them also
-    // keeps parallel private-directory ancestor custody within macOS's default 256-FD budget.
+    // Serialize resource tests to keep parallel socket and private-directory ancestor custody
+    // within macOS's default 256-FD budget.
     static NATIVE_RESOURCES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     NATIVE_RESOURCES
         .lock()

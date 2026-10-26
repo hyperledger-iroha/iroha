@@ -26,9 +26,7 @@ use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
 use norito::codec::{Decode as _, Encode as _};
 
 use super::*;
-use crate::bootstrap::{
-    NetworkRelease, ReleaseCheckpointStore, ReleasePeer, ReleaseTrust, SignedNetworkCheckpoint,
-};
+use crate::bootstrap::{BootstrapPeer, FaucetPolicy, NetworkMetadata};
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -115,14 +113,10 @@ impl Fixture {
         ));
         let checkpoint = parent.checkpoint();
         let authority = KeyPair::from_seed(vec![132; 32], Algorithm::Ed25519);
-        let release = NetworkRelease {
+        let metadata = NetworkMetadata {
             network_name: "fixture".into(),
-            serial: 1,
-            generation: 1,
             network_id: parent.network_id(),
             chain_id: parent.chain_id().into(),
-            issued_at_ms: now - 1000,
-            expires_at_ms: now + 600_000,
             torii_roots: vec!["https://parent.example/".into()],
             account_chain_discriminant: 753,
             native_world_schema: lease_proof.world.schema_hash,
@@ -130,12 +124,12 @@ impl Fixture {
                 .tip()
                 .committee
                 .iter()
-                .map(|validator| ReleasePeer {
+                .map(|validator| BootstrapPeer {
                     node_id: PeerId::new(validator.public_key.clone()),
                     torii_root: "https://parent.example/".into(),
                 })
                 .collect(),
-            faucet: Some(ReleaseFaucet {
+            faucet: Some(FaucetPolicy {
                 torii_root: "https://parent.example/".into(),
                 issuer: AccountId::new(authority.public_key().clone()),
                 asset_definition_id: iroha_wallet::operations::XOR_ASSET_DEFINITION
@@ -146,22 +140,8 @@ impl Fixture {
                 max_namespace_rent: 100_u64.into(),
             }),
             build_registry: None,
-            checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
-            checkpoint_height: checkpoint.height(),
-            checkpoint_block_hash: checkpoint.block_hash().into(),
         };
-        let bytes = SignedNetworkCheckpoint::sign(release, &checkpoint, authority.private_key())
-            .unwrap()
-            .encode_canonical()
-            .unwrap();
-        let bootstrap = ReleaseCheckpointStore::open(&directory.path().join("release"))
-            .unwrap()
-            .authenticate(
-                &ReleaseTrust::new("fixture".into(), authority.public_key().clone(), 1).unwrap(),
-                &bytes,
-                now,
-            )
-            .unwrap();
+        let bootstrap = crate::bootstrap::tests::authenticated(metadata, &checkpoint);
         Self {
             directory,
             parent,
@@ -550,7 +530,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
     let mut changed = fixture.child.clone();
     changed.account = fixture
         .bootstrap
-        .release()
+        .metadata()
         .faucet
         .as_ref()
         .unwrap()
@@ -570,7 +550,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
     let mut changed = fixture.child.clone();
     changed.account = fixture
         .bootstrap
-        .release()
+        .metadata()
         .faucet
         .as_ref()
         .unwrap()
@@ -814,7 +794,7 @@ fn namespace_allowance_and_authenticated_lease_bind_exact_identity_and_rent() {
     let read = LeaseRead {
         alias: "acme",
         owner: &binding.owner,
-        native_schema: fixture.bootstrap.release().native_world_schema,
+        native_schema: fixture.bootstrap.metadata().native_world_schema,
         block: &tip,
         deadline: Instant::now() + Duration::from_secs(1),
     };

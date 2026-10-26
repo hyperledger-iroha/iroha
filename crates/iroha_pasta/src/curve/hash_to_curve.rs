@@ -1,4 +1,4 @@
-//! Hashing to Pallas and Vesta, identical to `pasta_curves` 0.5.2.
+//! Hashing to Pallas and Vesta, identical to `pasta_curves` 0.6.1.
 //!
 //! The construction follows the hash-to-curve draft (version 10) with
 //! `expand_message_xmd` over BLAKE2b-512, two field elements per message, the

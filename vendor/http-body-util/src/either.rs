@@ -138,9 +138,7 @@ pub(crate) mod proj {
         }
         impl<'__pin, L, R> Unpin for Either<L, R> where __Origin<'__pin, L, R>: Unpin {}
 
-        // Used only through impl coherence: adding Drop to Either must conflict
-        // with the blanket impl below, keeping its pinned projection sound.
-        #[allow(dead_code)]
+        #[allow(unused)]
         trait MustNotImplDrop {}
         #[allow(drop_bounds)]
         impl<T: Drop> MustNotImplDrop for T {}

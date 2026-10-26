@@ -247,7 +247,7 @@ fn expansion_declares_only_the_child_identity_and_preserves_builder_fields() {
             let Item::Impl(item) = item else {
                 return None;
             };
-            item.trait_.as_ref().and_then(|(_, path, _)| {
+            item.trait_.as_ref().and_then(|(path, _)| {
                 path.segments
                     .last()
                     .is_some_and(|segment| segment.ident == "JsonDeserialize")

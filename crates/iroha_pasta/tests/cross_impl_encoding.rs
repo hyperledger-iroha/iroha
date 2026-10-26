@@ -1,12 +1,12 @@
-//! Cross-implementation encoding KATs: `iroha_pasta`, `pasta_curves` 0.5.2
-//! and the `halo2curves` 0.9 Pasta implementation.
+//! Cross-implementation encoding KATs: `iroha_pasta`, `pasta_curves` 0.6.1
+//! and the `halo2curves` 0.10 Pasta implementation.
 //!
 //! Scalars and points must encode identically in all three, and every
 //! 32-byte string must be accepted or rejected identically, so that keys and
 //! commitments produced by one implementation are read the same way by the
 //! others. Any divergence is listed explicitly below.
 //!
-//! Known divergence (pinned so that any change is noticed): `halo2curves` 0.9
+//! Known divergence (pinned so that any change is noticed): `halo2curves` 0.10
 //! accepts `x = 0` with the sign bit set (`00..00 80`) as a second encoding of
 //! the identity, which `pasta_curves` and `iroha_pasta` reject. Callers that
 //! decode with `halo2curves` and must agree with the canonical encoding have to
@@ -14,11 +14,15 @@
 
 use ff::{Field, PrimeField};
 use group::{Curve, Group, GroupEncoding};
+use halo2curves::{
+    ff::PrimeField as HaloPrimeField,
+    group::{Curve as _, GroupEncoding as HaloGroupEncoding},
+};
 use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::rand_core::{Rng, SeedableRng};
 
 /// Converts 32 bytes into the scalar representation of `F`.
-fn repr_of<F: PrimeField>(bytes: [u8; 32]) -> F::Repr {
+fn repr_of<F: HaloPrimeField>(bytes: [u8; 32]) -> F::Repr {
     let mut repr = F::Repr::default();
     repr.as_mut().copy_from_slice(&bytes);
     repr
@@ -31,7 +35,7 @@ macro_rules! decode3 {
         let b: [u8; 32] = $bytes;
         let mine = Option::<$mine>::from(<$mine>::from_bytes(&b)).map(|p| p.to_bytes());
         let pasta = Option::<$pasta>::from(<$pasta>::from_bytes(&b)).map(|p| p.to_bytes());
-        let mut repr = <$h2c as GroupEncoding>::Repr::default();
+        let mut repr = <$h2c as HaloGroupEncoding>::Repr::default();
         repr.as_mut().copy_from_slice(&b);
         let h2c = Option::<$h2c>::from(<$h2c>::from_bytes(&repr)).map(|p| {
             let mut out = [0u8; 32];
@@ -102,7 +106,7 @@ macro_rules! suite {
     }};
 }
 
-/// The one string on which `halo2curves` 0.9 diverges: it decodes to the
+/// The one string on which `halo2curves` 0.10 diverges: it decodes to the
 /// identity there and is rejected by the canonical implementations.
 fn expected_divergence() -> Vec<([u8; 32], bool, bool)> {
     let mut b = [0u8; 32];

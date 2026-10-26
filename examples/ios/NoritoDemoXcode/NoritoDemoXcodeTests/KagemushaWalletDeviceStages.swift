@@ -7,6 +7,13 @@ import LocalAuthentication
 @testable import IrohaSwift
 
 #if os(iOS) && !targetEnvironment(macCatalyst)
+  /// Preserve the command failure and its exact capability-cleanup failure separately.
+  /// Native cleanup keeps its own close/quarantine ownership; this is diagnostic error DATA.
+  struct KagemushaProbeReviewCleanupError: Error {
+    let primary: Error
+    let cleanup: Error
+  }
+
   struct KagemushaProbePendingReview {
     let review: KagemushaWalletReviewV1
     let exchange: KagemushaWalletExchangeV1
@@ -333,6 +340,12 @@ import LocalAuthentication
       switch command.action {
       case "begin-exchange": return "native-exchange-requested"
       case "end-exchange":
+        // EndRequested already fences new executable children. Retire the actual retained
+        // capability through exact-origin cleanup before releasing this exchange.
+        if let pending = pendingReview {
+          pendingReview = nil
+          try pending.exchange.discardReview(pending.review)
+        }
         let ended = try await exchangeIngress.end()
         return "native-exchange-end-" + String(ended.rawValue)
       case "discard-review":
@@ -779,32 +792,45 @@ import LocalAuthentication
     }
 
     func executePendingReview(_ original: KagemushaProbePendingReview, retry: Bool, sequence: Int) throws -> String {
-      _ = try walletOwner()
-      let accepted = try mutationOwner()
-      guard accepted.exchange === original.exchange, original.review.requestID == original.requestID,
-        !retry || pendingReview?.review === original.review,
-        try config.files.read(original.fencePath, maximum: 4591) == original.review.projection.bytes else {
-        throw EnrollmentProbeFailure.lifecycle
-      }
-      var pending = original
-      try pending.approval.dispatch(retry: retry)
-      try event("execute-reviewed-start", values: ["ticks": mach_continuous_time(),
-        "requestID": pending.requestID, "reviewSequence": pending.sequence,
-        "sameLiveRetry": retry, "conditionalContinuation": pending.continuation,
-        "latencyQualified": !retry && !pending.continuation], sequence: sequence)
-      pendingReview = nil
-      let result = try accepted.executeReviewed(pending.review)
-      let returned = mach_continuous_time()
-      switch result {
-      case .retainedReview(let wait):
-        try pending.approval.retained(); pendingReview = pending
-        try event("review-retained", values: ["reason": wait.rawValue,
-          "dispatchFenceRetained": true, "nativeReturnedTicks": returned,
-          "approvalState": "approved-live-retained", "latencyQualified": false], sequence: sequence)
-        return "native-review-retained-" + String(wait.rawValue)
-      case .existing(let value): return try existingReviewed(value, sequence: sequence)
-      case .executed(let value):
-        return try completion(value, returned: returned, requestID: pending.requestID, sequence: sequence)
+      do {
+        _ = try walletOwner()
+        let accepted = try mutationOwner()
+        guard accepted.exchange === original.exchange, original.review.requestID == original.requestID,
+          !retry || pendingReview?.review === original.review,
+          try config.files.read(original.fencePath, maximum: 4591) == original.review.projection.bytes else {
+          throw EnrollmentProbeFailure.lifecycle
+        }
+        var pending = original
+        try pending.approval.dispatch(retry: retry)
+        try event("execute-reviewed-start", values: ["ticks": mach_continuous_time(),
+          "requestID": pending.requestID, "reviewSequence": pending.sequence,
+          "sameLiveRetry": retry, "conditionalContinuation": pending.continuation,
+          "latencyQualified": !retry && !pending.continuation], sequence: sequence)
+        pendingReview = nil
+        let result = try accepted.executeReviewed(pending.review)
+        let returned = mach_continuous_time()
+        switch result {
+        case .retainedReview(let wait):
+          try pending.approval.retained(); pendingReview = pending
+          try event("review-retained", values: ["reason": wait.rawValue,
+            "dispatchFenceRetained": true, "nativeReturnedTicks": returned,
+            "approvalState": "approved-live-retained", "latencyQualified": false], sequence: sequence)
+          return "native-review-retained-" + String(wait.rawValue)
+        case .existing(let value): return try existingReviewed(value, sequence: sequence)
+        case .executed(let value):
+          return try completion(value, returned: returned, requestID: pending.requestID, sequence: sequence)
+        }
+      } catch {
+        // A refusal before dispatch or a failed retained-result publication cannot
+        // leave approved-live permission behind. Native-call errors have already
+        // consumed/cleaned their token and leave pendingReview empty.
+        let primary = error
+        if let retained = pendingReview, retained.review === original.review {
+          pendingReview = nil
+          do { try retained.exchange.discardReview(retained.review) }
+          catch { throw KagemushaProbeReviewCleanupError(primary: primary, cleanup: error) }
+        }
+        throw primary
       }
 
     }

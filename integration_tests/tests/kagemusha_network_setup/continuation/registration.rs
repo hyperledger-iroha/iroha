@@ -200,7 +200,7 @@ fn funding_target_requires_same_owner_setup_scheme_manifest_and_asset() -> Resul
         version: 1,
         network_id: *Hash::new(b"registration stage join").as_ref(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
+            key.verifying_key().to_sec1_point(false).as_bytes(),
         )?,
         relation_id: [9; 32],
         provider_contract: kagemusha_wallet_provider_contract_v1(),

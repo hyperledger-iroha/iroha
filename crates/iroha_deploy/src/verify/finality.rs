@@ -153,6 +153,20 @@ pub trait FinalitySource {
         peer: &PeerId,
         challenge: &[u8; 32],
     ) -> Result<FinalityAttestation, Self::Error>;
+    /// Retrieve a candidate tip for certificate verification, without claiming current quorum.
+    /// The selected peer is a retrieval hint only. Callers must authenticate the returned
+    /// proof against their retained genesis and certified prefix before using its state.
+    ///
+    /// # Errors
+    /// Any transport failure.
+    fn latest_finality_proof(
+        &self,
+        peer: &PeerId,
+        challenge: &[u8; 32],
+    ) -> Result<SumeragiFinalityProof, Self::Error> {
+        self.latest_attestation(peer, challenge)
+            .map(|statement| statement.attestation().body.finality_proof.clone())
+    }
     /// Read a bounded batch in request order. HTTP transports can overlap independent peers.
     /// Each result still needs the caller's independent committee and chain verification.
     fn latest_attestations(

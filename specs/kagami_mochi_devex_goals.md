@@ -1,9 +1,11 @@
 # Kagami and Mochi developer experience
 
-Status: implementation in progress. This is the first-release acceptance contract;
-the commands and guarantees below are targets until their current-candidate
-end-to-end checks pass. No backward-compatible command aliases, old wire layouts,
-or parallel orchestration implementations are required.
+Status: localnet and contract deployment pass installed-runtime end-to-end checks
+on macOS. Live Taira attachment remains blocked by the unavailable signed checkpoint;
+the disposable remote fixture also requires TLS trust setup compatible with its host.
+The wider native-platform and release gates below remain open. This first release
+requires no backward-compatible command aliases, old wire layouts, or parallel
+orchestration implementations.
 
 ## User contract
 
@@ -19,7 +21,24 @@ in private managed storage outside projects. Kagami is the CLI frontend; Mochi
 is the desktop frontend to the same services.
 
 The default localnet has four validators and a funded deployment-capable account.
-Fresh managed global genesis retains three distinct providers on peers 0–2, each with its own
+It uses the existing `Standard` profile and completes the normal signed readiness
+check on all four validators. Storage-service provisioning is not part of ordinary startup.
+Fresh networks use OS-assigned loopback ports; retained networks keep their endpoints.
+An attached private dataspace has four local validators with owner-only application
+data, works behind NAT, and publishes only authenticated commitments and certificates
+to its parent. Restricted FullReplica lanes do not satisfy that privacy contract.
+Contract deployment accepts `.ko`, `.to`, and existing Musubi packages. Without a
+selected environment it starts the default localnet in the same invocation.
+
+## Optional managed storage services
+
+`kagami localnet up registry --with-storage` explicitly creates a local network
+with storage and package-registry services. These services support package
+publication and registry-backed dependencies; `.ko`, `.to`, and local package
+deployment do not require them. Existing generations retain their original
+profile; startup never adds these authorities to an already signed genesis.
+
+A storage-enabled localnet retains three distinct providers on peers 0–2, each with its own
 credentials, native attestation history and retained CA/leaf identity. One network inventory owns
 the reserve operations signer, reputation recorder, pricing and initial admission policy. Private
 roots use the minimal `Standard` profile. Each provider has an original HTTPS listener; the shared
@@ -77,12 +96,6 @@ because it reopens shared bootstrap and custody owners; its deadline-aware guard
 catalog HTTP calls. Every worker joins before aggregate publication or failure, and renewal
 retains serial execution. This combined path still needs native qualification. Reopen preserves each original finite interval, endpoint and profile;
 it never upgrades a retained generation in place.
-An attached private dataspace has four local validators with owner-only application
-data, works behind NAT, and publishes only authenticated commitments and certificates
-to its parent. Restricted FullReplica lanes do not satisfy that privacy contract.
-Contract deployment accepts `.ko`, `.to`, and existing Musubi packages. Without a
-selected environment it starts the default localnet in the same invocation.
-
 ## Implementation goals
 
 | ID | Owner | Required outcome | Completion evidence |

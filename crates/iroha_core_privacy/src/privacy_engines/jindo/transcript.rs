@@ -7,10 +7,8 @@ use super::{
     },
 };
 use crate::privacy_engines::p256::{P256EngineError, TranscriptBindingV1};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use thiserror::Error;
 const TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.transcript.v1";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.current.challenge.v1";

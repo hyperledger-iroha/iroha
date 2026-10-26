@@ -55,8 +55,8 @@ SELECTED_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
   || fail "the tracked root Cargo.lock does not match the canonical reviewed graph"
 
 RUSTC_VERSION="$("${RUSTC_BIN}" --version)"
-[[ "${RUSTC_VERSION}" == rustc\ 1.93.1\ * ]] \
-  || fail "privacy JVM native execution requires exact rustc 1.93.1"
+[[ "${RUSTC_VERSION}" == rustc\ 1.99.1\ * ]] \
+  || fail "privacy JVM native execution requires exact rustc 1.99.1"
 HOST_TRIPLE="$("${RUSTC_BIN}" -vV | sed -n 's/^host: //p')"
 [[ "${HOST_TRIPLE}" =~ ^[A-Za-z0-9_.-]+$ ]] \
   || fail "rustc returned a non-canonical host triple"

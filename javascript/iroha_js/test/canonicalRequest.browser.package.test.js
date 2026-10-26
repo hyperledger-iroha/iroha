@@ -125,6 +125,10 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       },
       () => import(bundleUrl),
     );
+    // Noble 2 probes the browser CSPRNG once before enabling scalar blinding.
+    assert.deepEqual(entropyCalls, [16]);
+    entropyCalls.length = 0;
+    const requestEntropy = [];
     const privateKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
     const timestampMs = 1_700_000_000_123;
     const method = "POST";
@@ -137,7 +141,9 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       {
         getRandomValues(view) {
           entropyCalls.push(view.byteLength);
-          return webcrypto.getRandomValues(view);
+          const filled = webcrypto.getRandomValues(view);
+          requestEntropy.push(Buffer.from(filled));
+          return filled;
         },
       },
       () =>
@@ -151,8 +157,11 @@ test("packed canonical-request subpath executes securely and has strict DOM type
           timestampMs,
         }),
     );
-    assert.deepEqual(entropyCalls, [16]);
+    // One nonce draw and two Ed25519 scalar-blinding draws retain the exact
+    // canonical nonce and deterministic signature over the signed message.
+    assert.deepEqual(entropyCalls, [16, 16, 16]);
     assert.match(headers["X-Iroha-Nonce"], /^[0-9a-f]{32}$/u);
+    assert.equal(headers["X-Iroha-Nonce"], requestEntropy[0].toString("hex"));
     assert.equal(headers["X-Iroha-Timestamp-Ms"], String(timestampMs));
     const message = canonicalRequest.canonicalRequestSignatureMessage({
       networkId,

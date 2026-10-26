@@ -689,7 +689,7 @@ def _check_cargo_workflow(
             '  HOME="${HOME}" \\',
             '  RUSTUP_DIST_SERVER="https://static.rust-lang.org" \\',
             '  "${HOME}/.cargo/bin/rustup" toolchain install \\',
-            '    "1.93.1-x86_64-unknown-linux-gnu" \\',
+            '    "1.99.1-x86_64-unknown-linux-gnu" \\',
             "    --profile minimal \\",
             "    --no-self-update",
         )
@@ -703,7 +703,7 @@ def _check_cargo_workflow(
             '  "${GITHUB_ENV}" \\',
             '  "${GITHUB_PATH}" \\',
             '  "${HOME}/.cargo/bin/rustup" \\',
-            '  "1.93.1-x86_64-unknown-linux-gnu"',
+            '  "1.99.1-x86_64-unknown-linux-gnu"',
         )
     )
     python_provision_run = native_provision_run + (
@@ -851,10 +851,10 @@ def _check_cargo_workflow(
     }
     swift_install_run = (
         install_run.replace(
-            "1.93.1-x86_64-unknown-linux-gnu",
-            "1.93.1-aarch64-apple-darwin",
+            "1.99.1-x86_64-unknown-linux-gnu",
+            "1.99.1-aarch64-apple-darwin",
         )
-        + '\necho "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" '
+        + '\necho "RUSTUP_TOOLCHAIN=1.99.1-aarch64-apple-darwin" '
         '>> "$GITHUB_ENV"'
     )
     jvm_provision_run = (
@@ -869,10 +869,10 @@ def _check_cargo_workflow(
     )
     swift_fetch_run = "\n".join(
         (
-            "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
+            "rustup target add --toolchain 1.99.1-aarch64-apple-darwin "
             "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
             "aarch64-apple-darwin x86_64-apple-darwin",
-            'cargo_path="$(rustup which --toolchain 1.93.1-aarch64-apple-darwin cargo)"',
+            'cargo_path="$(rustup which --toolchain 1.99.1-aarch64-apple-darwin cargo)"',
             'env -u RUSTC_BOOTSTRAP "$cargo_path" fetch --locked '
             '--manifest-path "$GITHUB_WORKSPACE/Cargo.toml"',
         )
@@ -911,7 +911,7 @@ def _check_cargo_workflow(
             {
                 "name": "Prime privacy N-API dependencies from the authenticated root lock",
                 "run": (
-                    'env -u RUSTC_BOOTSTRAP "$(rustup which --toolchain 1.93.1 cargo)" '
+                    'env -u RUSTC_BOOTSTRAP "$(rustup which --toolchain 1.99.1 cargo)" '
                     'fetch --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"'
                 ),
             },
@@ -1635,14 +1635,14 @@ def _check_jvm_confidential_owner_closure(root_dir, consumers, errors) -> None:
 
 
 def _check_javascript_node_floor_gate(source: str, errors: list[str]) -> None:
-    """Require the selected major20 process to pass the sole floor before build."""
+    """Require the selected major22 process to pass the sole floor before build."""
     boundary = r"""cd "${ROOT_DIR}/javascript/iroha_js"
 NODE_VERSION="$("${NODE_BIN}" --version)"
 printf '%s\n' "${NODE_VERSION}"
 case "${NODE_VERSION}" in
-  v20.*) ;;
+  v22.*) ;;
   *)
-    echo "error: privacy JavaScript SDK tests require Node 20; got ${NODE_VERSION}" >&2
+    echo "error: privacy JavaScript SDK tests require Node 22; got ${NODE_VERSION}" >&2
     exit 1
     ;;
 esac
@@ -1657,7 +1657,7 @@ export PYTHONDONTWRITEBYTECODE=1
     require(
         source.count(boundary) == 1
         and source.count('"${NODE_BIN}" scripts/check-node-engine.mjs') == 1,
-        "privacy JavaScript gate must check the selected Node floor exactly once after major20 and before native build",
+        "privacy JavaScript gate must check the selected Node floor exactly once after major22 and before native build",
         errors,
     )
 

@@ -14,8 +14,8 @@ use std::{
 
 /// Held loopback reservations for the four Torii and four P2P listeners.
 ///
-/// Keep this value alive until preparation finishes; the native worker acquires the actual
-/// listeners immediately after these reservations are released.
+/// Keep this value alive until preparation finishes. The reservations are released before
+/// spawning the native worker; another process can still acquire a port before its peer binds.
 pub struct LocalnetPorts {
     /// First of four consecutive Torii ports.
     pub base_api: u16,
@@ -25,13 +25,13 @@ pub struct LocalnetPorts {
 }
 
 impl LocalnetPorts {
-    /// Reserve two disjoint four-port blocks on IPv4 loopback.
+    /// Reserve two disjoint four-port blocks starting at OS-assigned IPv4 loopback ports.
     ///
     /// # Errors
     /// Returns an error when the operating system cannot allocate the listeners.
     pub fn reserve() -> Result<Self> {
-        let (base_api, mut reservations) = reserve_block(8080)?;
-        let (base_p2p, p2p) = reserve_block(1337)?;
+        let (base_api, mut reservations) = reserve_block()?;
+        let (base_p2p, p2p) = reserve_block()?;
         reservations.extend(p2p);
         Ok(Self {
             base_api,
@@ -67,19 +67,19 @@ impl LocalnetPorts {
     }
 }
 
-fn reserve_block(preferred: u16) -> Result<(u16, Vec<TcpListener>)> {
-    for attempt in 0..128 {
-        let base = if attempt == 0 {
-            preferred
-        } else {
-            let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-            probe.local_addr()?.port()
-        };
+fn reserve_block() -> Result<(u16, Vec<TcpListener>)> {
+    for _ in 0..128 {
+        // Fresh generations must not all reclaim the same well-known ports while another
+        // retained generation is stopped. Keep the OS-selected first socket throughout
+        // allocation so concurrent preparations cannot take it between probe and bind.
+        let first = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let base = first.local_addr()?.port();
         if base > u16::MAX - 3 {
             continue;
         }
         let mut listeners = Vec::with_capacity(4);
-        for offset in 0..4 {
+        listeners.push(first);
+        for offset in 1..4 {
             match TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)) {
                 Ok(listener) => listeners.push(listener),
                 Err(_) => break,
@@ -403,7 +403,10 @@ impl ManagedStore {
             if retained.launcher.blake3 != launcher.blake3
                 || retained.daemon.blake3 != daemon.blake3
             {
-                return Err(Error::Invalid("managed generation uses different binary contents; select its original matching installation".into()));
+                return Err(Error::Invalid(format!(
+                    "managed environment `{}` was created by different kagami and iroha3d binaries; start it with that original installation, or reset it to recreate it with these binaries (reset discards its ledger)",
+                    request.name
+                )));
             }
             retained
         } else {
@@ -500,6 +503,7 @@ impl ManagedStore {
                     phase: ManagedPhase::Starting,
                     running_peers: 0,
                     failure: None,
+                    validators: Vec::new(),
                 })?,
                 PublishMode::Replace,
             )?;
@@ -616,7 +620,7 @@ impl ManagedStore {
             &retained.prepared,
             &retained.root_kind,
         )?;
-        if let Ok(status) = exchange_until(&directory, "status", deadline) {
+        if let Ok(status) = exchange_until(&directory, ControlAction::Status, deadline) {
             if status.context != retained.prepared.context {
                 return Err(Error::Invalid(
                     "worker status belongs to another managed identity".into(),
@@ -704,7 +708,9 @@ impl ManagedStore {
                 Err(error) => return Err(error),
             }
             if stopped.is_none() {
-                if let Some(status) = exchange_optional(&directory, "down", &retained, deadline)? {
+                if let Some(status) =
+                    exchange_optional(&directory, ControlAction::Down, &retained, deadline)?
+                {
                     if status.context != context {
                         return Err(Error::Invalid(
                             "worker stop belongs to another managed identity".into(),
@@ -1063,13 +1069,16 @@ fn confined_path(root: &Path, path: &Path) -> Result<bool> {
     Ok(path.canonicalize()? == path && root.canonicalize()? == root)
 }
 
-pub(super) fn exchange(directory: &PrivateDirectory, action: &str) -> Result<ManagedStatus> {
+pub(super) fn exchange(
+    directory: &PrivateDirectory,
+    action: ControlAction,
+) -> Result<ManagedStatus> {
     let worker: WorkerRecord = decode(&directory.read(WORKER, MAX_METADATA)?)?;
     transport::request(
         directory,
         &ControlRequest {
             token: worker.token,
-            action: action.into(),
+            action,
         },
     )
 }
@@ -1077,7 +1086,7 @@ pub(super) fn exchange(directory: &PrivateDirectory, action: &str) -> Result<Man
 /// Retain the original worker session and bound its typed reply by the caller's deadline.
 pub(super) fn exchange_until(
     directory: &PrivateDirectory,
-    action: &str,
+    action: ControlAction,
     deadline: Instant,
 ) -> Result<ManagedStatus> {
     let worker: WorkerRecord = decode(&directory.read(WORKER, MAX_METADATA)?)?;
@@ -1085,7 +1094,7 @@ pub(super) fn exchange_until(
         directory,
         &ControlRequest {
             token: worker.token,
-            action: action.into(),
+            action,
         },
         deadline,
     )
@@ -1101,7 +1110,7 @@ pub(super) fn startup_exchange(
     // Sample before reading either remainder: conversion to an Instant can only shorten it.
     let observed_at = Instant::now();
     let remaining = runtime::startup_remaining_until(started, timeout, startup_deadline_ns)?;
-    exchange_until(directory, "status", observed_at + remaining)
+    exchange_until(directory, ControlAction::Status, observed_at + remaining)
 }
 
 // Only a public status observer may interpret a competing operation lock as a foreground
@@ -1126,6 +1135,7 @@ fn retained_status(
                 // The foreground operation publishes Starting before native spawn; its
                 // lock distinguishes that small handoff window from a crashed owner.
                 last.running_peers = 0;
+                last.retain_validator_exits();
                 return Ok(last);
             }
             if last.phase != ManagedPhase::Failed {
@@ -1136,6 +1146,8 @@ fn retained_status(
             }
             last.phase = ManagedPhase::Failed;
             last.running_peers = 0;
+            // Without a live owner no retained process observation is current; exits remain.
+            last.retain_validator_exits();
             return Ok(last);
         }
     }
@@ -1144,6 +1156,7 @@ fn retained_status(
         phase: ManagedPhase::Stopped,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     })
 }
 
@@ -1151,7 +1164,7 @@ fn retained_status(
 // Present metadata uses the same exact decoder and authenticated transport as exchange.
 fn exchange_optional(
     directory: &PrivateDirectory,
-    action: &str,
+    action: ControlAction,
     retained: &RetainedLocalnet,
     deadline: Instant,
 ) -> Result<Option<ManagedStatus>> {
@@ -1175,7 +1188,7 @@ fn exchange_optional(
         directory,
         &ControlRequest {
             token: worker.token,
-            action: action.into(),
+            action,
         },
         deadline,
     );
@@ -1260,7 +1273,7 @@ pub(super) fn expire_startup(
 ) -> Result<ManagedStatus> {
     // Readiness has already expired. This separate ordinary IPC budget observes the owner's
     // cancellation/cleanup result; a timeout still cannot establish that cleanup completed.
-    if let Ok(status) = exchange(directory, "startup_expired") {
+    if let Ok(status) = exchange(directory, ControlAction::StartupExpired) {
         if status.context != *context {
             return Err(Error::Invalid(
                 "startup cancellation belongs to another managed identity".into(),

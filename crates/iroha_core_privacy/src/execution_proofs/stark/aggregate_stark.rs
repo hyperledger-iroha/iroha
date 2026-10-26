@@ -26,7 +26,7 @@ use super::transparent_stark::{
 #[cfg(test)]
 use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
 use fastpq_isi::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
-use rand::TryRngCore;
+use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -1277,7 +1277,7 @@ fn fri_mask_tree_v1(
 /// the one FRI-enforced exclusive cap `D`. The resulting root must be
 /// transcript-bound before any challenge that batches the lane's trace and
 /// composition polynomials.
-pub fn build_fri_mask_oracles_v1<R: TryRngCore>(
+pub fn build_fri_mask_oracles_v1<R: TryRng>(
     parameters: AggregateStarkParametersV1,
     domains: &AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
@@ -1966,7 +1966,7 @@ pub fn commit_masked_trace_polynomial_columns_v1<R, S>(
     mut source: S,
 ) -> Result<(StreamingRowCommitmentResultV1, MaskedTracePolynomialSetV1), AggregateStarkErrorV1>
 where
-    R: TryRngCore,
+    R: TryRng,
     S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
 {
     let (native_rows, commitment_rows) = validate_masked_trace_commitment_shape_v1(

@@ -405,7 +405,8 @@ fn bootstrap_retains_original_before_unavailable_preflight_and_reopens_without_r
             "/v1/node/capabilities" | "/v1/bridge/finality/1"
         ));
     }
-    // The child may create an empty preflight directory. It cannot invent original proof or a wallet.
+    // Preflight retains only the canonical unselected metadata owner, never an
+    // original proof or a wallet.
     let reserve = ManagedInitialReservePolicy::open(&prepared).unwrap();
     drop(reserve);
     let generation =
@@ -421,7 +422,7 @@ fn bootstrap_retains_original_before_unavailable_preflight_and_reopens_without_r
         .unwrap()
         .open_child("set")
         .unwrap();
-    require_empty(&child).unwrap();
+    crate::managed::native_operation::attempts::metadata::require_unselected(&child).unwrap();
     drop(owner);
     let mut owner = ManagedServiceBootstrap::open(&prepared).unwrap();
     let recovered = owner

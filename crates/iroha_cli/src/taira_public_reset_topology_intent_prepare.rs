@@ -10,7 +10,7 @@ use super::*;
 #[cfg(any(target_os = "linux", test))]
 use crate::taira_public_reset as reset;
 #[cfg(target_os = "linux")]
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 #[cfg(any(target_os = "linux", test))]
 use reset::history::TerminalInventory;
 #[cfg(any(target_os = "linux", test))]
@@ -1010,7 +1010,7 @@ impl PrepareTopologyIntent {
             intent.hosts.validator_guest.guard_sha256 = sha256_hex(&guards[0]);
             intent.deployment_id = format!("taira-public-{}-", &revision.commit[..8]);
             let mut nonce = [0_u8; 16];
-            OsRng
+            SysRng
                 .try_fill_bytes(&mut nonce)
                 .map_err(|error| eyre!("topology nonce OS RNG failed: {error}"))?;
             intent.authorization_nonce = hex::encode(nonce);

@@ -21,8 +21,9 @@ use norito::{
         },
     },
 };
-use rand::rngs::OsRng;
-use rand_core::{OsError, TryRngCore};
+use rand::rngs::SysError;
+use rand::rngs::SysRng;
+use rand_core::TryRng;
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
     MlKemError, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem_from_os, validate_mlkem_key_pair,
@@ -178,7 +179,7 @@ pub enum HandshakeError {
     },
     /// Secure random generation failed while preparing local streaming material.
     #[error("secure random generation failed")]
-    Randomness(#[source] OsError),
+    Randomness(#[source] SysError),
     /// Local streaming material was inert all-zero bytes after generation or explicit setup.
     #[error("{operation} material must not be all zero")]
     InertRandomMaterial {
@@ -250,7 +251,7 @@ fn key_material_error_from_mlkem(err: &MlKemError) -> KeyMaterialError {
         | MlKemError::InertKeyMaterial { .. }
         | MlKemError::NonCanonicalEncoding { .. }
         | MlKemError::BackendFailure { .. }
-        | MlKemError::Rng(_) => KeyMaterialError::InvalidKyberSecretKey,
+        | MlKemError::RngExt(_) => KeyMaterialError::InvalidKyberSecretKey,
     }
 }
 fn handshake_error_from_mlkem(err: &MlKemError) -> HandshakeError {
@@ -262,7 +263,7 @@ fn handshake_error_from_mlkem(err: &MlKemError) -> HandshakeError {
         | MlKemError::InertKeyMaterial { .. }
         | MlKemError::NonCanonicalEncoding { .. }
         | MlKemError::BackendFailure { .. }
-        | MlKemError::Rng(_) => HandshakeError::InvalidKyberSecretKey,
+        | MlKemError::RngExt(_) => HandshakeError::InvalidKyberSecretKey,
     }
 }
 /// Runtime-owned key material used to drive the control-plane handshake.
@@ -516,7 +517,7 @@ fn fill_random_streaming<R>(
     dest: &mut [u8],
 ) -> Result<(), HandshakeError>
 where
-    R: TryRngCore<Error = OsError>,
+    R: TryRng<Error = SysError>,
 {
     rng.try_fill_bytes(dest)
         .map_err(HandshakeError::Randomness)?;
@@ -527,7 +528,7 @@ where
 }
 fn random_gck_nonce_from_rng<R>(rng: &mut R, nonce_len: usize) -> Result<Vec<u8>, HandshakeError>
 where
-    R: TryRngCore<Error = OsError>,
+    R: TryRng<Error = SysError>,
 {
     let mut nonce = vec![0u8; nonce_len];
     fill_random_streaming(rng, "GCK wrap nonce", &mut nonce)?;
@@ -535,11 +536,11 @@ where
 }
 impl X25519Ephemeral {
     fn new_random() -> Result<Self, HandshakeError> {
-        Self::new_random_from_rng(&mut OsRng)
+        Self::new_random_from_rng(&mut SysRng)
     }
     fn new_random_from_rng<R>(rng: &mut R) -> Result<Self, HandshakeError>
     where
-        R: TryRngCore<Error = OsError>,
+        R: TryRng<Error = SysError>,
     {
         let mut secret_bytes = Zeroizing::new([0u8; 32]);
         fill_random_streaming(rng, "X25519 ephemeral secret", secret_bytes.as_mut())?;
@@ -1750,7 +1751,7 @@ impl StreamingSession {
         Self::validate_group_content_key_len(gck_plaintext)?;
         self.validate_content_key_progression_values(content_key_id, valid_from_segment)?;
         let nonce_len = streaming_crypto::nonce_len_for_suite(&suite);
-        let nonce = random_gck_nonce_from_rng(&mut OsRng, nonce_len)?;
+        let nonce = random_gck_nonce_from_rng(&mut SysRng, nonce_len)?;
         let gck_wrapped = streaming_crypto::wrap_gck(
             &suite,
             &transport.send,
@@ -2034,8 +2035,8 @@ mod key_update_tests {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
     ];
-    impl TryRngCore for FixedTryRng {
-        type Error = OsError;
+    impl TryRng for FixedTryRng {
+        type Error = SysError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }

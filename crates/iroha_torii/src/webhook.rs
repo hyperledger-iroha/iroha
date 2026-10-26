@@ -736,9 +736,9 @@ fn read_private_webhook_file_bounded(
 fn create_private_webhook_temp_file(
     directory: &WebhookDirectory,
 ) -> io::Result<(fs::File, OsString)> {
-    use rand::TryRngCore as _;
+    use rand::TryRng as _;
 
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     for _ in 0..WEBHOOK_TEMP_FILE_RETRIES {
         let mut nonce = [0_u8; 16];
         rng.try_fill_bytes(&mut nonce).map_err(|error| {
@@ -1428,10 +1428,10 @@ fn webhook_generation_from_hex(value: &str) -> Option<[u8; WEBHOOK_GENERATION_BY
     (hex::encode(generation) == value).then_some(generation)
 }
 fn new_webhook_generation() -> io::Result<[u8; WEBHOOK_GENERATION_BYTES]> {
-    use rand::TryRngCore as _;
+    use rand::TryRng as _;
 
     let mut generation = [0_u8; WEBHOOK_GENERATION_BYTES];
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     rng.try_fill_bytes(&mut generation).map_err(|error| {
         io::Error::other(format!(
             "failed to generate webhook registration generation: {error}"
@@ -2020,10 +2020,10 @@ struct PendingDelivery {
     next_attempt_ms: u64,
 }
 fn new_delivery_id(webhook_id: u64, timestamp_ms: u64) -> io::Result<String> {
-    use rand::TryRngCore as _;
+    use rand::TryRng as _;
 
     let mut nonce = [0_u8; 16];
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     rng.try_fill_bytes(&mut nonce).map_err(|error| {
         io::Error::other(format!("failed to generate webhook delivery id: {error}"))
     })?;

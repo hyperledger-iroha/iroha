@@ -190,3 +190,27 @@ fn native_call_error_keeps_original_hash_cause_and_exact_recovery_journal() {
             .is_some()
     );
 }
+
+#[test]
+fn view_requests_parse_exact_selectors_named_arguments_and_positive_gas() {
+    let request =
+        ManagedContractViewRequest::parse("get".into(), r#"{"key": "cups"}"#, 1_000).unwrap();
+    assert_eq!(request.entrypoint, "get");
+    assert_eq!(request.gas_limit.get(), 1_000);
+    for (entrypoint, arguments, gas, reason) in [
+        ("", "{}", 1, "exact public selector"),
+        (" get", "{}", 1, "exact public selector"),
+        ("get", "{}", 0, "gas limit must be positive"),
+    ] {
+        let error = ManagedContractViewRequest::parse(entrypoint.into(), arguments, gas)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(reason), "{entrypoint:?}: {error}");
+    }
+    assert!(ManagedContractViewRequest::parse("get".into(), "{not json", 1).is_err());
+    let oversized = format!(r#"{{"blob": "{}"}}"#, "x".repeat(64 * 1024));
+    let error = ManagedContractViewRequest::parse("get".into(), &oversized, 1)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("64 KiB"), "{error}");
+}

@@ -318,18 +318,36 @@ impl PeerProcesses {
             .map_err(|_| invalid("owned gateway count differs"))
     }
 
+    #[cfg(test)]
     pub(super) fn any_exited(&mut self) -> Result<bool> {
-        for child in &self.children {
-            if child
+        Ok(self.first_exit()?.is_some())
+    }
+
+    /// The lowest-index owned validator that has exited, with its native exit status.
+    pub(super) fn first_exit(&mut self) -> Result<Option<(u8, std::process::ExitStatus)>> {
+        for (index, child) in self.children.iter().enumerate() {
+            if let Some(status) = child
                 .lock()
                 .map_err(|_| invalid("owned child lock failed"))?
                 .try_wait()?
-                .is_some()
             {
-                return Ok(true);
+                let index = u8::try_from(index)
+                    .map_err(|_| invalid("owned validator index exceeds the committee bound"))?;
+                return Ok(Some((index, status)));
             }
         }
-        Ok(false)
+        Ok(None)
+    }
+
+    /// One `Running` observation per owned child, in committee order.
+    pub(super) fn running_validators(&self) -> Vec<ManagedValidatorStatus> {
+        (0..self.children.len())
+            .filter_map(|index| u8::try_from(index).ok())
+            .map(|index| ManagedValidatorStatus {
+                index,
+                state: ManagedValidatorState::Running,
+            })
+            .collect()
     }
 
     pub(super) fn stop(&mut self) -> Result<()> {

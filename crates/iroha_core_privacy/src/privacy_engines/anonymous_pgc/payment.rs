@@ -30,7 +30,7 @@ use crate::privacy_engines::p256::{
     TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 /// Closed suite for the complete payment proof.
 pub const PGC_PAYMENT_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.payment.p256.sha256.v1";
@@ -763,7 +763,7 @@ fn prove_well_formed<R>(
     rng: &mut R,
 ) -> Result<PgcTransferWellFormedProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let key = statement.public_keys[index].point.to_projective()?;
@@ -845,7 +845,7 @@ fn prove_balance_conservation<R>(
     rng: &mut R,
 ) -> Result<PgcBalanceConservationProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     let aggregate = sum_points(
@@ -906,7 +906,7 @@ fn prove_unsigned_range<R>(
     rng: &mut R,
 ) -> Result<PgcUnsignedRangeProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     if commitment != parameters.h * Scalar::from(u64::from(value)) + parameters.g * blinding {
@@ -1112,7 +1112,7 @@ fn prove_committed_nonzero<R>(
     rng: &mut R,
 ) -> Result<PgcCommittedNonZeroProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if bool::from(value.is_zero()) {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
@@ -1211,7 +1211,7 @@ fn prove_positive_range<R>(
     rng: &mut R,
 ) -> Result<PgcPositiveRangeProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if value == 0 {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
@@ -1306,7 +1306,7 @@ fn prove_recipient_selection<R>(
     rng: &mut R,
 ) -> Result<(PgcRecipientSelectionProofV1, Scalar), AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if selected_index >= statement.anonymity_set_size() || value == 0 {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
@@ -1528,7 +1528,7 @@ fn prove_decoy_selection<R>(
     rng: &mut R,
 ) -> Result<(PgcDecoySelectionProofV1, Scalar), AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if selected_index >= statement.anonymity_set_size() {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
@@ -1659,7 +1659,7 @@ fn prove_distinct_indices<R>(
     rng: &mut R,
 ) -> Result<Vec<PgcCommittedNonZeroProofV1>, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if index_commitments.len() != indices.len() || indices.len() != blindings.len() {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
@@ -1819,7 +1819,7 @@ fn prove_sender_selection<R>(
     rng: &mut R,
 ) -> Result<PgcSenderSelectionProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if sender_index >= statement.anonymity_set_size() || transfer_magnitude == 0 {
         return Err(AnonymousPgcError::InvalidPaymentWitness);
@@ -2127,7 +2127,7 @@ pub fn prove_payment<R>(
     rng: &mut R,
 ) -> Result<AnonymousPgcPaymentProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     super::validate_binding(&statement.transcript_binding)?;
     let (recipient_indices, decoy_indices, post_balance) =
@@ -2314,7 +2314,7 @@ pub fn verify_payment_encoded(
 mod tests {
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     #[derive(norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_core::privacy_engines::anonymous_pgc::payment::tests::LegacyDynamicUnsignedRangeProofV1"
@@ -2446,58 +2446,62 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            let mut offset = 0;
-            while offset < destination.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.anonymous-pgc.payment.kat-rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (destination.len() - offset).min(block.len());
-                destination[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < destination.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.anonymous-pgc.payment.kat-rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (destination.len() - offset).min(block.len());
+                    destination[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     struct PartialFailureRng;
-    impl RngCore for PartialFailureRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PartialFailureRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("PGC payment must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("PGC payment must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("PGC payment must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for (index, byte) in destination.iter_mut().take(19).enumerate() {
                 *byte = index as u8;
             }
-            Err(RngError::new(
+            Err(RngError::other(
                 "injected partial Anonymous-PGC payment entropy failure",
             ))
         }
     }
-    impl CryptoRng for PartialFailureRng {}
+    impl rand::TryCryptoRng for PartialFailureRng {}
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());

@@ -33,6 +33,44 @@ rsvg-convert -w 512 -h 512 mochi/assets/mochi-stand.svg -o mochi/assets/mochi-st
 The desktop paints the face in `mochi-ui-egui/src/gui/brand.rs` using the same 512-unit
 coordinates as `mochi-mark.svg`; keep the two in step when the face changes.
 
+## Izanami marks
+
+The Izanami mark is a portrait of Izanami-no-Mikoto (伊邪那美命) in the manner of an
+*uchiwa-e*, the round ukiyo-e woodblock prints made for fans. Izanami is the load and drill
+engine planned for Mochi (`specs/izanami_managed_localnet.md`). She holds *Ame-no-nuboko*
+(天沼矛), the jeweled spear with which she and Izanagi stirred the primordial sea, and faces
+a beni sun. Behind her, her hair streams into the murasaki cloud bank of Yomi, the land of
+the dead she came to rule, and spills into *seigaiha* (青海波) waves.
+
+It is drawn as a woodblock print. Flat pigments sit under a sumi key block. A
+Prussian-blue *ichimonji bokashi* shades the top of the sky and a dawn gradation the sea
+line. Her vermilion robe carries the *asanoha* hemp-leaf pattern, her hair has carved
+strands and *kewari* at the brow, and the grain of the block and the fibers of the washi
+print through every color. Her face follows the *hikime-kagibana* convention of Yamato-e
+scrolls: slit eyes, a hooked nose and high *hikimayu* brows. She wears layered collars in
+white, green and vermilion, a magatama necklace and an ochre hairpin.
+
+| File | Use |
+| --- | --- |
+| `izanami-mark.svg` | Portrait crest on light or dark backgrounds. |
+| `izanami-logo.svg` | Horizontal lockup with the rounded `izanami` wordmark, drawn in the stroke grammar of the `mochi` wordmark; both i-dots are brine drops in SORA red, like the `mochi` i-dot. |
+| `izanami-mark-512.png` | Render of the crest for the desktop. Not embedded yet; intended for the planned Lab view. |
+
+The pigments are washi `#F2E6CC` with the face and hand in `#F8F0DE`, sumi `#231A1F`,
+Prussian blue `#2C4F80` deepening to `#1B3359`, vermilion `#C9402E` with asanoha lines in
+`#93281F`, the sun in `#D24A35`, yellow ochre `#D9A441` and pale ochre `#EBD39A`,
+verdigris `#4E8A6A`, and murasaki `#57406F` with cloud scales in `#3A2850`. The seigaiha
+scales have radius 24 in rows 12 units apart, with alternate rows offset by 24, flat
+Prussian blue with washi lines under a deepening bokashi. The grain and fibers are vector
+strokes and a tiled pattern, so the mark needs no raster texture or SVG filter. The motifs
+are traditional and the subject comes from the *Kojiki*; the artwork itself is original.
+
+The committed PNG was rendered on macOS with the stock `sips`:
+
+```sh
+sips -s format png -z 512 512 mochi/assets/izanami-mark.svg --out mochi/assets/izanami-mark-512.png
+```
+
 ## macOS application icon
 
 `mochi-icon.icns` is the macOS Finder icon. `cargo xtask mochi-bundle` copies it unchanged

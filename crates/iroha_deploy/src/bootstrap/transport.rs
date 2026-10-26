@@ -1,29 +1,18 @@
-//! Bounded native SDK retrieval followed by independently anchored release authentication.
+//! Bounded native retrieval of original parent frames for private-root AMX bootstrap.
 
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use iroha::http::{MAX_PUBLIC_READ_BYTES, PublicHttpClient, PublicHttpError};
 
-use super::{
-    AuthenticatedBootstrap, BootstrapError, MAX_RELEASE_CHECKPOINT_BYTES, ReleaseCheckpointStore,
-    profile::InstalledNetworkProfile,
-};
+use super::{AuthenticatedBootstrap, BootstrapError};
 
-/// Maximum downloaded checkpoint frame, also constrained by the canonical archive's native reader.
-pub const MAX_DOWNLOADED_CHECKPOINT_BYTES: usize =
-    if MAX_RELEASE_CHECKPOINT_BYTES < MAX_PUBLIC_READ_BYTES {
-        MAX_RELEASE_CHECKPOINT_BYTES
-    } else {
-        MAX_PUBLIC_READ_BYTES
-    };
-
-/// Failure to retrieve and authenticate one installed network's checkpoint.
+/// Failure to retrieve or authenticate native parent bootstrap material.
 #[derive(Debug, thiserror::Error)]
 pub enum CheckpointReadError {
     /// Credential-free bounded HTTP retrieval failed.
     #[error(transparent)]
     Http(#[from] PublicHttpError),
-    /// The independently signed artifact, local clock or durable watermark was invalid.
+    /// Native proof validation or retained bootstrap custody failed.
     #[error(transparent)]
     Bootstrap(#[from] BootstrapError),
 }
@@ -49,26 +38,6 @@ impl CheckpointTransport {
         Self { client }
     }
 
-    /// Fetch once from the exact installed URL, then authenticate and durably retain its release.
-    /// The local verification time is sampled after retrieval. This never reports fresh readiness.
-    ///
-    /// # Errors
-    /// URL/deadline/response bounds, signature, clock, network, native checkpoint or custody failure.
-    pub fn fetch_and_authenticate(
-        &self,
-        profile: &InstalledNetworkProfile,
-        store: &ReleaseCheckpointStore,
-        deadline: Instant,
-    ) -> Result<AuthenticatedBootstrap, CheckpointReadError> {
-        self.fetch_with_clock(profile, store, deadline, || {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .ok()
-                .and_then(|duration| u64::try_from(duration.as_millis()).ok())
-                .ok_or(BootstrapError::Invalid("local bootstrap clock is invalid"))
-        })
-    }
-
     /// Read the original result-bearing global G1 and genuine H2 from one approved root.
     /// Transport is credential-free; only the shared native prefix verifier establishes trust.
     pub(super) fn fetch_amx_pair(
@@ -77,7 +46,7 @@ impl CheckpointTransport {
         deadline: Instant,
     ) -> Result<(Vec<u8>, Vec<u8>), CheckpointReadError> {
         let root: url::Url = bootstrap
-            .release()
+            .metadata()
             .torii_roots
             .first()
             .ok_or(BootstrapError::Invalid(
@@ -122,24 +91,6 @@ impl CheckpointTransport {
         Ok((read(1)?, read(2)?))
     }
 
-    fn fetch_with_clock(
-        &self,
-        profile: &InstalledNetworkProfile,
-        store: &ReleaseCheckpointStore,
-        deadline: Instant,
-        now: impl FnOnce() -> Result<u64, BootstrapError>,
-    ) -> Result<AuthenticatedBootstrap, CheckpointReadError> {
-        let bytes = self.client.get_bytes_blocking(
-            profile.checkpoint_url(),
-            deadline,
-            MAX_DOWNLOADED_CHECKPOINT_BYTES,
-        )?;
-        let observed_at = now()?;
-        if Instant::now() >= deadline {
-            return Err(PublicHttpError::Deadline.into());
-        }
-        Ok(store.authenticate(profile.release_trust(), &bytes, observed_at)?)
-    }
 }
 
 #[cfg(test)]

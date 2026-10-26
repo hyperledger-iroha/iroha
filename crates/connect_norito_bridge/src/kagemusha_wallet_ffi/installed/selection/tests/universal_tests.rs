@@ -244,7 +244,7 @@ fn generic_release_refuses_missing_registration_wrong_key_or_reintroduced_asset_
 
 fn generic_session(f: &BaseFixture, android: bool, mutation: Option<&str>) -> [Vec<u8>; 3] {
     let proof_key = g1_key(31);
-    let point = proof_key.verifying_key().to_encoded_point(false);
+    let point = proof_key.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().unwrap());
     let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
     let jwk = format!("{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{x}\",\"y\":\"{y}\"}}");

@@ -617,20 +617,19 @@ fn submit_transaction_at(
         .wrap_err("rebuild quoted SCCP transaction")?
         .try_sign(key.private_key())
         .map_err(|error| eyre::eyre!("sign SCCP transaction: {error:?}"))?;
-    let (max_clock_drift, transaction_params) = {
-        let world = state.world_view();
-        let params = world.parameters();
-        (params.sumeragi().max_clock_drift(), params.transaction())
-    };
-    let crypto = state.crypto();
+    let parameters = state.transaction_admission_parameters();
+    let admission_policy = parameters.require_crypto_policy().map_err(|error| {
+        eyre::eyre!("SCCP transaction requires committed crypto admission policy: {error}")
+    })?;
     let accepted = AcceptedTransaction::accept(
         transaction,
         state.network_id_ref(),
-        max_clock_drift,
-        transaction_params,
-        crypto.as_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        admission_policy,
     )
     .wrap_err("accept SCCP transaction")?;
+    drop(parameters);
     queue
         .push_with_lane_with_state(accepted, state)
         .map(|_| ())
@@ -1699,9 +1698,12 @@ mod tests {
         let (state, queue) = node();
         let key = KeyPair::random();
         let advance = empty_advance(SccpNetworkV1::BscMainnet);
-        assert!(
-            submit_transaction(&state, &queue, &key, InstructionBox::from(advance)).is_err(),
-            "an advance on a node without SCCP is refused"
+        let error = submit_transaction(&state, &queue, &key, InstructionBox::from(advance))
+            .expect_err("an uninitialized node cannot admit a keeper transaction");
+        assert_eq!(
+            format!("{error:#}"),
+            "quote SCCP transaction: Rejected(ConfigInvalid(\"fee admission requires immutable root scope\"))",
+            "an uninitialized root must fail fee admission before SCCP verification"
         );
         let host = NodeHost {
             state,
@@ -1764,6 +1766,14 @@ mod tests {
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
+            block
+                .parameters
+                .set_parameter(
+                    crate::daemon_fixture_crypto_policy()
+                        .into_parameter()
+                        .expect("encode the explicit keeper fixture crypto policy"),
+                )
+                .expect("install the keeper fixture's committed crypto policy");
             block.commit();
         }
         let state = Arc::new(State::new_for_testing(

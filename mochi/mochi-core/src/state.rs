@@ -1,27 +1,29 @@
 //! Lightweight query helpers feeding the MOCHI state explorer views.
+//!
+//! Accounts, holdings, asset definitions and domains are Torii collection reads
+//! (`specs/torii/collection_queries.md`), as is each validator's newest Explorer block.
+//! Peers use the signed `FindPeers` query, the only listing that signed `POST /v1/query` admits.
 use crate::torii::{ToriiClient, ToriiError};
+use iroha::{
+    client::AccountClient,
+    collections::{Collection, ListQuery, Page},
+};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
-    HasMetadata, Identifiable,
-    account::{Account, AccountId},
-    asset::{AssetId, definition::AssetDefinition, id::AssetDefinitionId, value::Asset},
-    domain::Domain,
+    block::BlockHeader,
     query::{
         QueryItemKind, QueryOutput, QueryOutputBatchBox, QueryRequest, QueryWithParams,
-        account::prelude::FindAccounts,
-        asset::prelude::{FindAssetDefinitions, FindAssets},
-        domain::prelude::FindDomains,
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
         peer::prelude::FindPeers,
     },
 };
-use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use norito::json;
 use std::{
     num::NonZeroU64,
     panic::{AssertUnwindSafe, catch_unwind},
+    time::Duration,
 };
 /// Set of iterable queries currently supported by the state explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,60 +62,39 @@ impl StateQueryKind {
             StateQueryKind::Peers,
         ]
     }
-    fn build_request(self, fetch_size: Option<NonZeroU64>) -> QueryRequest {
-        let params = QueryParams::new(
+    /// The collection read behind this listing; peers have none and use `FindPeers`.
+    fn collection(self) -> Option<Collection> {
+        match self {
+            StateQueryKind::Accounts => Some(Collection::Accounts),
+            StateQueryKind::Assets => Some(Collection::ExplorerAssets),
+            StateQueryKind::AssetDefinitions => Some(Collection::AssetDefinitions),
+            StateQueryKind::Domains => Some(Collection::Domains),
+            StateQueryKind::Peers => None,
+        }
+    }
+    /// Largest page the read accepts, and whether it can count every match.
+    fn page_policy(self) -> (u32, bool) {
+        match self {
+            // Explorer feeds cap pages at 100 and never count.
+            StateQueryKind::Assets => (100, false),
+            _ => (500, true),
+        }
+    }
+}
+/// The signed `FindPeers` start: pass predicate, default selector, zero offset, no sorting.
+fn peers_request(fetch_size: Option<NonZeroU64>) -> QueryRequest {
+    QueryRequest::Start(QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindPeers),
+        item: QueryItemKind::PeerId,
+        predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<PeerId>::PASS),
+        selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<PeerId>::default()),
+        params: QueryParams::new(
             Pagination::default(),
             Sorting::default(),
             FetchSize::new(fetch_size),
-        );
-        let query = match self {
-            StateQueryKind::Accounts => QueryWithParams {
-                query: (),
-                query_payload: norito::codec::Encode::encode(&FindAccounts),
-                item: QueryItemKind::Account,
-                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Account>::PASS),
-                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Account>::default()),
-                params,
-            },
-            StateQueryKind::Assets => QueryWithParams {
-                query: (),
-                query_payload: norito::codec::Encode::encode(&FindAssets),
-                item: QueryItemKind::Asset,
-                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Asset>::PASS),
-                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Asset>::default()),
-                params,
-            },
-            StateQueryKind::AssetDefinitions => QueryWithParams {
-                query: (),
-                query_payload: norito::codec::Encode::encode(&FindAssetDefinitions),
-                item: QueryItemKind::AssetDefinition,
-                predicate_bytes: norito::codec::Encode::encode(
-                    &CompoundPredicate::<AssetDefinition>::PASS,
-                ),
-                selector_bytes: norito::codec::Encode::encode(
-                    &SelectorTuple::<AssetDefinition>::default(),
-                ),
-                params,
-            },
-            StateQueryKind::Domains => QueryWithParams {
-                query: (),
-                query_payload: norito::codec::Encode::encode(&FindDomains),
-                item: QueryItemKind::Domain,
-                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS),
-                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Domain>::default()),
-                params,
-            },
-            StateQueryKind::Peers => QueryWithParams {
-                query: (),
-                query_payload: norito::codec::Encode::encode(&FindPeers),
-                item: QueryItemKind::PeerId,
-                predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<PeerId>::PASS),
-                selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<PeerId>::default()),
-                params,
-            },
-        };
-        QueryRequest::Start(query)
-    }
+        ),
+    })
 }
 /// Resulting entries from a state explorer page.
 #[derive(Debug, Clone)]
@@ -146,301 +127,87 @@ pub struct StateEntry {
     pub search_blob: String,
 }
 impl StateEntry {
-    fn from_account(account: Account) -> Self {
-        let account_id = account.id().clone();
-        let title = account_id.to_string();
-        let (subtitle, owner) = match account.try_signatory() {
-            Some(signatory) => {
-                let signatory = signatory.to_string();
-                (format!("Signatory {signatory}"), signatory)
-            }
-            None => ("Multisig controller".to_owned(), account_id.to_string()),
+    /// One collection row; Torii's JSON row is the inspectable payload.
+    fn from_row(kind: StateQueryKind, row: &json::Value) -> Self {
+        let text = |field: &str| {
+            row.get(field).and_then(|value| match value.as_str() {
+                Some(value) => Some(value.to_owned()),
+                None if value.is_null() => None,
+                None => json::to_json(value).ok(),
+            })
         };
-        let detail = metadata_summary(account.metadata());
-        let summary_json = build_summary_json(&title, &subtitle, &detail, None, Some(&owner), None);
-        let (json, norito_bytes) = encode_payload(&account);
-        let json = Some(json.unwrap_or(summary_json));
-        let search_blob = build_search_blob(&[&title, &subtitle, &detail, &owner]);
-        let raw = format!("{account:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain: None,
-            domain_lower: None,
-            owner: Some(owner.clone()),
-            owner_lower: Some(owner.to_ascii_lowercase()),
-            asset_definition: None,
-            asset_definition_lower: None,
-            json,
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_account_id(id: AccountId) -> Self {
-        let subtitle = "Account identifier".to_owned();
-        let detail = "Identifier projection".to_owned();
-        let title = id.to_string();
-        let json_summary = build_summary_json(&title, &subtitle, &detail, None, None, None);
-        let (json, norito_bytes) = encode_payload(&id);
-        let search_blob = build_search_blob(&[&title, &subtitle, &detail]);
-        let raw = format!("{id:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain: None,
-            domain_lower: None,
-            owner: None,
-            owner_lower: None,
-            asset_definition: None,
-            asset_definition_lower: None,
-            json: Some(json.unwrap_or(json_summary)),
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_asset(asset: Asset) -> Self {
-        let asset_id = asset.id().clone();
-        let owner = asset_id.account().clone();
-        let owner_str = owner.to_string();
-        let owner_lower = owner_str.to_ascii_lowercase();
-        let domain: Option<String> = None;
-        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
-        let definition = asset_id.definition().to_string();
-        let definition_lower = definition.to_ascii_lowercase();
-        let title = asset_id.to_string();
-        let subtitle = format!("Owner {owner_str}");
-        let detail = format!("Value {}", asset.value());
-        let summary_json = build_summary_json(
-            &title,
-            &subtitle,
-            &detail,
-            domain.as_deref(),
-            Some(&owner_str),
-            Some(&definition),
-        );
-        let (json, norito_bytes) = encode_payload(&asset);
-        let json = Some(json.unwrap_or(summary_json));
-        let mut search_parts = vec![
-            title.as_str(),
-            subtitle.as_str(),
-            detail.as_str(),
-            owner_str.as_str(),
-            definition.as_str(),
-        ];
-        if let Some(domain) = domain.as_deref() {
-            search_parts.push(domain);
-        }
-        let search_blob = build_search_blob(&search_parts);
-        let raw = format!("{asset:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain,
-            domain_lower,
-            owner: Some(owner_str),
-            owner_lower: Some(owner_lower),
-            asset_definition: Some(definition),
-            asset_definition_lower: Some(definition_lower),
-            json,
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_asset_id(asset_id: AssetId) -> Self {
-        let owner = asset_id.account().clone();
-        let owner_str = owner.to_string();
-        let owner_lower = owner_str.to_ascii_lowercase();
-        let domain: Option<String> = None;
-        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
-        let definition = asset_id.definition().to_string();
-        let definition_lower = definition.to_ascii_lowercase();
-        let (json, norito_bytes) = encode_payload(&asset_id);
-        let title = asset_id.to_string();
-        let detail = "Identifier projection".to_owned();
-        let subtitle = format!("Owner {owner_str}");
-        let mut search_parts = vec![
-            title.as_str(),
-            subtitle.as_str(),
-            detail.as_str(),
-            owner_str.as_str(),
-            definition.as_str(),
-            json.as_deref().unwrap_or_default(),
-        ];
-        if let Some(domain) = domain.as_deref() {
-            search_parts.push(domain);
-        }
-        let search_blob = build_search_blob(&search_parts);
-        let raw = format!("{asset_id:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain,
-            domain_lower,
-            owner: Some(owner_str),
-            owner_lower: Some(owner_lower),
-            asset_definition: Some(definition),
-            asset_definition_lower: Some(definition_lower),
-            json,
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_asset_definition(definition: AssetDefinition) -> Self {
-        let definition_id = definition.id().clone();
-        let domain = asset_definition_domain_hint(definition.owning_domain().as_ref());
-        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
-        let owner = definition.owned_by().to_string();
-        let owner_lower = owner.to_ascii_lowercase();
-        let title = definition_id.to_string();
-        let title_lower = title.to_ascii_lowercase();
-        let definition_string = title.clone();
-        let subtitle = format!("Owner {owner}");
-        let detail = metadata_summary(definition.metadata());
-        let summary_json = build_summary_json(
-            &title,
-            &subtitle,
-            &detail,
-            domain.as_deref(),
-            Some(&owner),
-            Some(&definition_string),
-        );
-        let (json, norito_bytes) = encode_payload(&definition);
-        let json = Some(json.unwrap_or(summary_json));
-        let mut search_parts = vec![
-            title.as_str(),
-            subtitle.as_str(),
-            detail.as_str(),
-            owner.as_str(),
-        ];
-        if let Some(domain) = domain.as_deref() {
-            search_parts.push(domain);
-        }
-        let search_blob = build_search_blob(&search_parts);
-        let raw = format!("{definition:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain,
-            domain_lower,
-            owner: Some(owner),
-            owner_lower: Some(owner_lower),
-            asset_definition: Some(definition_string),
-            asset_definition_lower: Some(title_lower),
-            json,
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_asset_definition_id(id: AssetDefinitionId) -> Self {
-        let domain: Option<String> = None;
-        let domain_lower = domain.as_ref().map(|value| value.to_ascii_lowercase());
-        let definition = id.to_string();
-        let definition_lower = definition.to_ascii_lowercase();
-        let title = definition.clone();
-        let (json, norito_bytes) = encode_payload(&id);
-        let subtitle = "Asset definition identifier".to_owned();
-        let detail = "Identifier projection".to_owned();
-        let mut search_parts = vec![
-            title.as_str(),
-            subtitle.as_str(),
-            detail.as_str(),
-            json.as_deref().unwrap_or_default(),
-        ];
-        if let Some(domain) = domain.as_deref() {
-            search_parts.push(domain);
-        }
-        let search_blob = build_search_blob(&search_parts);
-        let raw = format!("{id:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain,
-            domain_lower,
-            owner: None,
-            owner_lower: None,
-            asset_definition: Some(definition),
-            asset_definition_lower: Some(definition_lower),
-            json,
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_domain(domain: Domain) -> Self {
-        let domain_id = domain.id().clone();
-        let title = domain_id.to_string();
-        let domain_lower = title.to_ascii_lowercase();
-        let domain_string = title.clone();
-        let owner = domain.owned_by().to_string();
-        let owner_lower = owner.to_ascii_lowercase();
-        let subtitle = format!("Owner {owner}");
-        let detail = metadata_summary(domain.metadata());
-        let summary_json = build_summary_json(
-            &title,
-            &subtitle,
-            &detail,
-            Some(&domain_string),
-            Some(&owner),
-            None,
-        );
-        let (json, norito_bytes) = encode_payload(&domain);
-        let json = Some(json.unwrap_or(summary_json));
-        let search_blob = build_search_blob(&[&title, &subtitle, &detail, &owner]);
-        let raw = format!("{domain:#?}");
-        Self {
-            title,
-            subtitle,
-            detail,
-            raw,
-            domain: Some(domain_string),
-            domain_lower: Some(domain_lower),
-            owner: Some(owner),
-            owner_lower: Some(owner_lower),
-            asset_definition: None,
-            asset_definition_lower: None,
-            json,
-            norito_bytes,
-            search_blob,
-        }
-    }
-    fn from_domain_id(id: DomainId) -> Self {
-        let title = id.to_string();
-        let domain_lower = title.to_ascii_lowercase();
-        let domain_string = title.clone();
-        let (json, norito_bytes) = encode_payload(&id);
-        let subtitle = "Domain identifier".to_owned();
-        let detail = "Identifier projection".to_owned();
+        let id = text("id").unwrap_or_default();
+        let (subtitle, detail, domain, owner, asset_definition) = match kind {
+            StateQueryKind::Accounts => (
+                text("label")
+                    .map_or_else(|| "Account".to_owned(), |label| format!("Label {label}")),
+                row_metadata_summary(row),
+                None,
+                None,
+                None,
+            ),
+            StateQueryKind::Assets => {
+                let owner = text("account_id").unwrap_or_default();
+                (
+                    format!("Owner {owner}"),
+                    format!("Value {}", text("value").unwrap_or_default()),
+                    None,
+                    Some(owner),
+                    text("definition_id"),
+                )
+            }
+            StateQueryKind::AssetDefinitions => {
+                let owner = text("owned_by").unwrap_or_default();
+                (
+                    format!("Owner {owner}"),
+                    text("name")
+                        .map_or_else(|| row_metadata_summary(row), |name| format!("Name {name}")),
+                    text("owning_domain"),
+                    Some(owner),
+                    Some(id.clone()),
+                )
+            }
+            StateQueryKind::Domains => {
+                let owner = text("owned_by").unwrap_or_default();
+                (
+                    format!("Owner {owner}"),
+                    row_metadata_summary(row),
+                    Some(id.clone()),
+                    Some(owner),
+                    None,
+                )
+            }
+            StateQueryKind::Peers => ("Peer".to_owned(), String::new(), None, None, None),
+        };
+        let pretty = catch_unwind(AssertUnwindSafe(|| json::to_json_pretty(row)))
+            .ok()
+            .and_then(Result::ok);
         let search_blob = build_search_blob(&[
-            &title,
+            &id,
             &subtitle,
             &detail,
-            json.as_deref().unwrap_or_default(),
+            owner.as_deref().unwrap_or_default(),
+            asset_definition.as_deref().unwrap_or_default(),
+            domain.as_deref().unwrap_or_default(),
         ]);
-        let raw = format!("{id:#?}");
         Self {
-            title,
+            title: id,
             subtitle,
             detail,
-            raw,
-            domain: Some(domain_string),
-            domain_lower: Some(domain_lower),
-            owner: None,
-            owner_lower: None,
-            asset_definition: None,
-            asset_definition_lower: None,
-            json,
-            norito_bytes,
+            raw: pretty
+                .clone()
+                .or_else(|| json::to_json(row).ok())
+                .unwrap_or_default(),
+            domain_lower: domain.as_ref().map(|value| value.to_ascii_lowercase()),
+            domain,
+            owner_lower: owner.as_ref().map(|value| value.to_ascii_lowercase()),
+            owner,
+            asset_definition_lower: asset_definition
+                .as_ref()
+                .map(|value| value.to_ascii_lowercase()),
+            asset_definition,
+            json: pretty,
+            norito_bytes: None,
             search_blob,
         }
     }
@@ -470,20 +237,18 @@ impl StateEntry {
         }
     }
 }
-fn metadata_summary(metadata: &Metadata) -> String {
-    if metadata.is_empty() {
+/// The metadata keys a collection row carries, as the explorer lists them.
+fn row_metadata_summary(row: &json::Value) -> String {
+    let keys = row
+        .get("metadata")
+        .and_then(json::Value::as_object)
+        .map(|metadata| metadata.keys().cloned().collect::<Vec<_>>().join(", "))
+        .unwrap_or_default();
+    if keys.is_empty() {
         "No metadata entries".to_owned()
     } else {
-        let keys = metadata
-            .iter()
-            .map(|(name, _)| name.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
         format!("Metadata keys: {keys}")
     }
-}
-fn asset_definition_domain_hint(owning_domain: Option<&DomainId>) -> Option<String> {
-    owning_domain.map(ToString::to_string)
 }
 fn encode_payload<T>(value: &T) -> (Option<String>, Option<Vec<u8>>)
 where
@@ -541,17 +306,14 @@ fn build_search_blob(parts: &[&str]) -> String {
 /// Cursor handle returned alongside paginated state responses.
 #[derive(Debug, Clone)]
 pub struct StateCursor {
-    inner: ForwardCursor,
+    inner: CursorKind,
 }
-impl StateCursor {
-    pub(crate) fn clone_inner(&self) -> ForwardCursor {
-        self.inner.clone()
-    }
-}
-impl From<ForwardCursor> for StateCursor {
-    fn from(inner: ForwardCursor) -> Self {
-        Self { inner }
-    }
+#[derive(Debug, Clone)]
+enum CursorKind {
+    /// A signed query's server-side continuation.
+    Query(ForwardCursor),
+    /// A collection read's `next_cursor`, with the number of rows already returned.
+    Listing { next: String, seen: u64 },
 }
 /// Materialised page of explorer entries.
 #[derive(Debug, Clone)]
@@ -571,6 +333,9 @@ pub enum StateQueryError {
     /// HTTP or decoding failure while talking to Torii.
     #[error(transparent)]
     Torii(#[from] ToriiError),
+    /// Torii refused or failed a collection read.
+    #[error(transparent)]
+    Collection(#[from] iroha::Error),
     /// The peer returned a batch variant that does not match the requested query.
     #[error("query {kind:?} returned unsupported batch `{actual}`")]
     UnexpectedBatch {
@@ -579,68 +344,140 @@ pub enum StateQueryError {
         /// Batch variant label.
         actual: &'static str,
     },
+    /// A cursor from one kind of read was passed to another.
+    #[error("the {kind:?} continuation belongs to a different read; query again from the start")]
+    CursorMismatch {
+        /// Requested query kind.
+        kind: StateQueryKind,
+    },
 }
 /// Execute one page of a state explorer query.
 ///
-/// Each invocation either starts a new query (`cursor == None`) or resumes an
-/// existing cursor. Successful responses provide a [`StatePage`] with optional
-/// cursor for further pagination.
+/// Each invocation either starts a new read (`cursor == None`) or continues one. Accounts,
+/// holdings, asset definitions and domains are collection reads signed by `reader`; peers use
+/// the signed `FindPeers` query sent through `client`.
+///
+/// # Errors
+/// Torii refusals, transport and decode failures, or a cursor from another read.
 pub async fn run_state_query(
     client: ToriiClient,
+    reader: &AccountClient,
     signer: &crate::SigningAuthority,
     address_discriminant: u16,
     kind: StateQueryKind,
     cursor: Option<StateCursor>,
     fetch_size: Option<NonZeroU64>,
 ) -> Result<StatePage, StateQueryError> {
-    let request = if let Some(cursor) = cursor {
-        QueryRequest::Continue(cursor.clone_inner())
-    } else {
-        kind.build_request(fetch_size)
+    let cursor = cursor.map(|cursor| cursor.inner);
+    let Some(collection) = kind.collection() else {
+        let request = match cursor {
+            None => peers_request(fetch_size),
+            Some(CursorKind::Query(cursor)) => QueryRequest::Continue(cursor),
+            Some(CursorKind::Listing { .. }) => {
+                return Err(StateQueryError::CursorMismatch { kind });
+            }
+        };
+        let signed = client.sign_query(request, signer.account_id().clone(), signer.key_pair())?;
+        let output = client.execute_query(&signed).await?;
+        // A thread-local display profile must never be held across an await.
+        let _profile =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(address_discriminant);
+        return parse_peer_output(output);
     };
-    let signed = client.sign_query(request, signer.account_id().clone(), signer.key_pair())?;
-    let output = client.execute_query(&signed).await?;
-    // A thread-local display profile must never be held across an await.
-    let _profile =
-        iroha_data_model::account::address::ChainDiscriminantGuard::enter(address_discriminant);
-    parse_iterable_output(kind, output)
+    let (next, seen) = match cursor {
+        None => (None, 0),
+        Some(CursorKind::Listing { next, seen }) => (Some(next), seen),
+        Some(CursorKind::Query(_)) => return Err(StateQueryError::CursorMismatch { kind }),
+    };
+    let (maximum, counts) = kind.page_policy();
+    let mut query = ListQuery::new();
+    if let Some(size) = fetch_size {
+        query = query.limit(u32::try_from(size.get()).map_or(maximum, |size| size.min(maximum)));
+    }
+    if counts {
+        query = query.include_total();
+    }
+    if let Some(next) = next {
+        query = query.cursor(next);
+    }
+    let page = reader.list_page(&collection, &query).await?;
+    Ok(collection_page(kind, page, seen))
 }
-fn parse_iterable_output(
-    kind: StateQueryKind,
-    output: QueryOutput,
-) -> Result<StatePage, StateQueryError> {
+/// A collection page as explorer entries, counting what remains when Torii reports a total.
+fn collection_page(kind: StateQueryKind, page: Page<json::Value>, seen: u64) -> StatePage {
+    let entries = page
+        .items
+        .iter()
+        .map(|row| StateEntry::from_row(kind, row))
+        .collect::<Vec<_>>();
+    let seen = seen.saturating_add(u64::try_from(entries.len()).unwrap_or(u64::MAX));
+    StatePage {
+        kind,
+        remaining: page.total.map_or(0, |total| total.saturating_sub(seen)),
+        cursor: page.next_cursor.map(|next| StateCursor {
+            inner: CursorKind::Listing { next, seen },
+        }),
+        entries,
+    }
+}
+/// A validator's newest block, as that validator's own Explorer reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockTip {
+    /// Height of the block; genesis is 1.
+    pub height: u64,
+    /// Hash of the block; it displays as lowercase hex, like streamed blocks.
+    pub hash: HashOf<BlockHeader>,
+}
+impl BlockTip {
+    /// The block of one Explorer row, which spells its hash as a checksummed `hash:` literal.
+    fn from_row(row: &json::Value) -> Result<Self, StateQueryError> {
+        let malformed = |reason: &str| ToriiError::Decode(format!("Explorer block row: {reason}"));
+        let height = row
+            .get("height")
+            .and_then(json::Value::as_u64)
+            .filter(|height| *height > 0)
+            .ok_or_else(|| malformed("height must be a positive integer"))?;
+        let hash = row.get("hash").ok_or_else(|| malformed("missing hash"))?;
+        let hash = json::from_value(hash.clone()).map_err(|error| malformed(&error.to_string()))?;
+        Ok(Self { height, hash })
+    }
+}
+/// The newest block `reader`'s validator has applied. Explorer lists blocks newest first, so
+/// a one-row page holds it; an empty page means the validator has no block yet.
+async fn newest_block(reader: &AccountClient) -> Result<Option<BlockTip>, StateQueryError> {
+    let page = reader
+        .list_page(&Collection::ExplorerBlocks, &ListQuery::new().limit(1))
+        .await?;
+    page.items.first().map(BlockTip::from_row).transpose()
+}
+/// Every reader's newest block, read concurrently. A validator that does not answer within
+/// `timeout` fails alone, so the others can still be compared.
+pub(crate) async fn newest_blocks(
+    readers: &[AccountClient],
+    timeout: Duration,
+) -> Vec<Result<Option<BlockTip>, StateQueryError>> {
+    futures::future::join_all(readers.iter().map(|reader| async move {
+        tokio::time::timeout(timeout, newest_block(reader))
+            .await
+            .unwrap_or_else(|_| {
+                Err(ToriiError::Timeout {
+                    context: format!("no newest block within {timeout:?}"),
+                }
+                .into())
+            })
+    }))
+    .await
+}
+fn parse_peer_output(output: QueryOutput) -> Result<StatePage, StateQueryError> {
+    let kind = StateQueryKind::Peers;
     let (batch_tuple, remaining, cursor) = output.into_parts();
     let mut entries = Vec::new();
     for batch in batch_tuple.into_iter() {
-        match (kind, batch) {
-            (StateQueryKind::Accounts, QueryOutputBatchBox::Account(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_account));
-            }
-            (StateQueryKind::Accounts, QueryOutputBatchBox::AccountId(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_account_id));
-            }
-            (StateQueryKind::Assets, QueryOutputBatchBox::Asset(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_asset));
-            }
-            (StateQueryKind::Assets, QueryOutputBatchBox::AssetId(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_asset_id));
-            }
-            (StateQueryKind::AssetDefinitions, QueryOutputBatchBox::AssetDefinition(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_asset_definition));
-            }
-            (StateQueryKind::AssetDefinitions, QueryOutputBatchBox::AssetDefinitionId(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_asset_definition_id));
-            }
-            (StateQueryKind::Domains, QueryOutputBatchBox::Domain(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_domain));
-            }
-            (StateQueryKind::Domains, QueryOutputBatchBox::DomainId(items)) => {
-                entries.extend(items.into_iter().map(StateEntry::from_domain_id));
-            }
-            (StateQueryKind::Peers, QueryOutputBatchBox::Peer(items)) => {
+        match batch {
+            QueryOutputBatchBox::Peer(items) => {
                 entries.extend(items.into_iter().map(StateEntry::from_peer_id));
             }
-            (_, other) => {
+            other => {
                 return Err(StateQueryError::UnexpectedBatch {
                     kind,
                     actual: batch_label(&other),
@@ -652,7 +489,9 @@ fn parse_iterable_output(
         kind,
         entries,
         remaining,
-        cursor: cursor.map(StateCursor::from),
+        cursor: cursor.map(|cursor| StateCursor {
+            inner: CursorKind::Query(cursor),
+        }),
     })
 }
 fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
@@ -704,25 +543,21 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::FeeSponsorProgram(_) => "FeeSponsorProgram",
         QueryOutputBatchBox::FeeSponsorProgramId(_) => "FeeSponsorProgramId",
         QueryOutputBatchBox::BondRecord(_) => "BondRecord",
+        QueryOutputBatchBox::AssetUidPolicyViewV1(_) => "AssetUidPolicyViewV1",
+        QueryOutputBatchBox::AssetFiRelationshipViewV1(_) => "AssetFiRelationshipViewV1",
+        QueryOutputBatchBox::AssetUidEnrollmentViewV1(_) => "AssetUidEnrollmentViewV1",
+        QueryOutputBatchBox::AssetEscrowScopeOriginalV1(_) => "AssetEscrowScopeOriginalV1",
+        QueryOutputBatchBox::AssetFiTransferReceiptV1(_) => "AssetFiTransferReceiptV1",
+        QueryOutputBatchBox::AssetFiContextSnapshotV1(_) => "AssetFiContextSnapshotV1",
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use httpmock::{Method::POST, MockServer};
-    use iroha_data_model::{
-        Registrable,
-        account::Account as AccountBuilder,
-        asset::{
-            definition::AssetDefinition,
-            id::{AssetDefinitionId, AssetId},
-            value::Asset,
-        },
-        domain::Domain,
-        query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest},
+    use iroha_data_model::query::{
+        QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest, QueryResponse,
     };
-    use iroha_model_base::domain::DomainId;
-    use iroha_primitives::numeric::{NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use norito::{json, to_bytes};
     fn try_start_mock_server() -> Option<MockServer> {
@@ -735,34 +570,56 @@ mod tests {
                 None
             })
     }
-    #[test]
-    fn build_request_uses_start_variant() {
-        for kind in StateQueryKind::all() {
-            let request = kind.build_request(None);
-            assert!(
-                matches!(request, QueryRequest::Start(_)),
-                "expected QueryRequest::Start for {kind:?}"
-            );
-        }
+    /// A reader for collection reads against `base_url`, signing as Alice.
+    fn reader(base_url: &str) -> AccountClient {
+        iroha::client::Client::builder(iroha::config::Config {
+            chain: "mochi-state-tests".into(),
+            network_id: crate::torii::test_network_id(),
+            account: ALICE_ID.clone(),
+            account_chain_discriminant:
+                iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT,
+            key_pair: ALICE_KEYPAIR.clone(),
+            basic_auth: None,
+            api_token: None,
+            http_transport_policy: iroha::config::HttpTransportPolicy::Ordinary,
+            torii_api_url: base_url.parse().expect("reader endpoint"),
+            torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+            transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
+            transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
+            sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
+            sorafs_anonymity_policy: Default::default(),
+            sorafs_rollout_phase: Default::default(),
+        })
+        .build()
+        .expect("valid reader context")
+        .account_client()
+        .expect("explicit Alice authority")
+    }
+    fn signer() -> crate::SigningAuthority {
+        crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone())
     }
     #[test]
-    fn build_request_encodes_canonical_domain_components() {
-        let QueryRequest::Start(query) = StateQueryKind::Domains.build_request(None) else {
-            panic!("domain state query must use the iterable start variant");
+    fn peers_request_is_the_admitted_find_peers_start() {
+        let QueryRequest::Start(query) = peers_request(None) else {
+            panic!("the peers listing must use the iterable start variant");
         };
-        assert_eq!(query.item, QueryItemKind::Domain);
+        assert_eq!(query.item, QueryItemKind::PeerId);
         assert_eq!(
             query.query_payload,
-            norito::codec::Encode::encode(&FindDomains)
+            norito::codec::Encode::encode(&FindPeers)
         );
         assert_eq!(
             query.predicate_bytes,
-            norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS)
+            norito::codec::Encode::encode(&CompoundPredicate::<PeerId>::PASS)
         );
-        assert_eq!(
-            query.selector_bytes,
-            norito::codec::Encode::encode(&SelectorTuple::<Domain>::default())
-        );
+        for kind in StateQueryKind::all() {
+            assert_eq!(
+                kind.collection().is_none(),
+                kind == StateQueryKind::Peers,
+                "only peers stay on signed /v1/query: {kind:?}"
+            );
+        }
     }
     #[test]
     fn summary_json_handles_optional_fields() {
@@ -807,41 +664,220 @@ mod tests {
         assert!(!map.contains_key("domain"));
         assert!(!map.contains_key("owner"));
     }
+    #[test]
+    fn collection_rows_become_entries_for_each_listing() {
+        let account = norito::json!({
+            "id": "sorau-alice", "label": "alice", "uaid": null, "metadata": {"tier": "gold"}
+        });
+        let entry = StateEntry::from_row(StateQueryKind::Accounts, &account);
+        assert_eq!(entry.title, "sorau-alice");
+        assert_eq!(entry.subtitle, "Label alice");
+        assert_eq!(entry.detail, "Metadata keys: tier");
+        assert!(
+            entry
+                .json
+                .as_deref()
+                .is_some_and(|json| json.contains("\"tier\""))
+        );
+        assert!(entry.norito_bytes.is_none());
+        let unlabeled = norito::json!({"id": "sorau-bob", "label": null, "metadata": {}});
+        let entry = StateEntry::from_row(StateQueryKind::Accounts, &unlabeled);
+        assert_eq!(
+            (entry.subtitle.as_str(), entry.detail.as_str()),
+            ("Account", "No metadata entries")
+        );
+
+        let definition = norito::json!({
+            "id": "62Fk4FPc", "name": "XOR", "owned_by": "sorau-alice",
+            "owning_domain": "wonderland.universal", "mintable": "Infinitely", "metadata": {}
+        });
+        let entry = StateEntry::from_row(StateQueryKind::AssetDefinitions, &definition);
+        assert_eq!(entry.detail, "Name XOR");
+        assert_eq!(entry.asset_definition.as_deref(), Some("62Fk4FPc"));
+        assert_eq!(entry.domain.as_deref(), Some("wonderland.universal"));
+        assert_eq!(entry.owner.as_deref(), Some("sorau-alice"));
+        // The ledger names assets from the row's own `name`.
+        let named: json::Value = json::from_str(entry.json.as_deref().unwrap()).unwrap();
+        assert_eq!(named.get("name").and_then(json::Value::as_str), Some("XOR"));
+
+        let domain = norito::json!({
+            "id": "wonderland.universal", "owned_by": "sorau-alice", "logo": null, "metadata": {}
+        });
+        let entry = StateEntry::from_row(StateQueryKind::Domains, &domain);
+        assert_eq!(entry.subtitle, "Owner sorau-alice");
+        assert_eq!(entry.domain_lower.as_deref(), Some("wonderland.universal"));
+        assert!(entry.search_blob.contains("wonderland.universal"));
+    }
+    #[test]
+    fn holdings_rows_keep_the_ledger_shape() {
+        let holding = norito::json!({
+            "id": "62Fk4FPc#sorau-alice", "definition_id": "62Fk4FPc",
+            "account_id": "sorau-alice", "value": "999750"
+        });
+        let entry = StateEntry::from_row(StateQueryKind::Assets, &holding);
+        assert_eq!(entry.title, "62Fk4FPc#sorau-alice");
+        assert_eq!(entry.owner.as_deref(), Some("sorau-alice"));
+        assert_eq!(entry.asset_definition.as_deref(), Some("62Fk4FPc"));
+        assert_eq!(entry.detail, "Value 999750");
+        let numeric = norito::json!({
+            "id": "62Fk4FPc#sorau-bob", "definition_id": "62Fk4FPc",
+            "account_id": "sorau-bob", "value": 5
+        });
+        assert_eq!(
+            StateEntry::from_row(StateQueryKind::Assets, &numeric).detail,
+            "Value 5"
+        );
+    }
+    #[test]
+    fn collection_pages_count_what_remains_and_carry_their_cursor() {
+        let row = |id: &str| norito::json!({"id": id, "metadata": {}});
+        let first = collection_page(
+            StateQueryKind::Accounts,
+            Page {
+                items: vec![row("a"), row("b")],
+                next_cursor: Some("next".into()),
+                total: Some(3),
+            },
+            0,
+        );
+        assert_eq!(first.remaining, 1);
+        let Some(StateCursor {
+            inner: CursorKind::Listing { next, seen },
+        }) = first.cursor.clone()
+        else {
+            panic!("a listing continuation");
+        };
+        assert_eq!((next.as_str(), seen), ("next", 2));
+        let last = collection_page(StateQueryKind::Accounts, Page::last(vec![row("c")]), seen);
+        assert_eq!(last.remaining, 0);
+        assert!(last.cursor.is_none());
+        // Explorer feeds never count; their continuation alone says more rows exist.
+        let feed = collection_page(
+            StateQueryKind::Assets,
+            Page {
+                items: vec![row("x")],
+                next_cursor: Some("more".into()),
+                total: None,
+            },
+            0,
+        );
+        assert_eq!(feed.remaining, 0);
+        assert!(feed.cursor.is_some());
+    }
     #[tokio::test(flavor = "current_thread")]
-    async fn accounts_query_decodes_entries() {
+    async fn accounts_page_through_the_signed_collection_read() {
         let Some(server) = try_start_mock_server() else {
             return;
         };
-        let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let output = QueryOutput::new(
-            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(vec![account])),
-            0,
-            None,
-        );
-        let encoded = to_bytes(&output).expect("encode query output");
-        let mock = server.mock(|when, then| {
-            when.method(POST).path("/v1/query");
-            then.status(200).body(encoded.clone());
+        let first = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/accounts/query")
+                .is_true(|request| {
+                    let body: json::Value =
+                        json::from_slice(request.body_ref()).unwrap_or(json::Value::Null);
+                    body.get("cursor").is_none()
+                        && body.get("include_total").and_then(json::Value::as_bool) == Some(true)
+                        && body.get("limit").and_then(json::Value::as_u64) == Some(2)
+                });
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"items": [{"id": "a", "metadata": {}}, {"id": "b", "metadata": {}}], "next_cursor": "c2", "total": 3}"#);
+        });
+        let second = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/accounts/query")
+                .is_true(|request| {
+                    let body: json::Value =
+                        json::from_slice(request.body_ref()).unwrap_or(json::Value::Null);
+                    body.get("cursor").and_then(json::Value::as_str) == Some("c2")
+                });
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(
+                    r#"{"items": [{"id": "c", "metadata": {}}], "next_cursor": null, "total": 3}"#,
+                );
         });
         let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
             .expect("client");
+        let reader = reader(&server.url("/"));
+        let discriminant = iroha_data_model::account::address::chain_discriminant();
+        let size = NonZeroU64::new(2);
         let page = run_state_query(
-            client,
-            &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
-            iroha_data_model::account::address::chain_discriminant(),
+            client.clone(),
+            &reader,
+            &signer(),
+            discriminant,
             StateQueryKind::Accounts,
+            None,
+            size,
+        )
+        .await
+        .expect("first page");
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.remaining, 1);
+        let next = run_state_query(
+            client.clone(),
+            &reader,
+            &signer(),
+            discriminant,
+            StateQueryKind::Accounts,
+            page.cursor.clone(),
+            size,
+        )
+        .await
+        .expect("second page");
+        assert_eq!(next.entries[0].title, "c");
+        assert_eq!((next.remaining, next.cursor.is_none()), (0, true));
+        first.assert();
+        second.assert();
+        // A listing continuation never reaches the signed peers query.
+        let crossed = run_state_query(
+            client,
+            &reader,
+            &signer(),
+            discriminant,
+            StateQueryKind::Peers,
+            page.cursor,
+            size,
+        )
+        .await
+        .expect_err("a crossed cursor is refused before any request");
+        assert!(matches!(
+            crossed,
+            StateQueryError::CursorMismatch {
+                kind: StateQueryKind::Peers
+            }
+        ));
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn collection_refusals_name_torii_code_and_message() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        server.mock(|when, then| {
+            when.method(POST).path("/v1/assets/definitions/query");
+            then.status(400)
+                .header("content-type", "application/json")
+                .body(r#"{"code": "invalid_limit", "message": "limit must be between 1 and 500", "details": {"field": "limit"}}"#);
+        });
+        let client = ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id())
+            .expect("client");
+        let error = run_state_query(
+            client,
+            &reader(&server.url("/")),
+            &signer(),
+            iroha_data_model::account::address::chain_discriminant(),
+            StateQueryKind::AssetDefinitions,
             None,
             None,
         )
         .await
-        .expect("state page");
-        mock.assert();
-        assert_eq!(page.entries.len(), 1);
-        assert!(page.cursor.is_none());
-        assert_eq!(page.entries[0].title, ALICE_ID.to_string());
+        .expect_err("refused read");
+        let message = error.to_string();
         assert!(
-            page.entries[0].subtitle.contains("Signatory"),
-            "subtitle should mention signatory"
+            message.contains("invalid_limit")
+                && message.contains("limit must be between 1 and 500"),
+            "{message}"
         );
     }
     #[tokio::test(flavor = "current_thread")]
@@ -855,7 +891,7 @@ mod tests {
             0,
             None,
         );
-        let encoded = to_bytes(&output).expect("encode query output");
+        let encoded = to_bytes(&QueryResponse::Iterable(output)).expect("encode query output");
         let mock = server.mock(|when, then| {
             when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
@@ -864,6 +900,7 @@ mod tests {
             .expect("client");
         let page = run_state_query(
             client,
+            &reader(&server.url("/")),
             &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
             iroha_data_model::account::address::chain_discriminant(),
             StateQueryKind::Peers,
@@ -877,7 +914,7 @@ mod tests {
         mock.assert();
     }
     #[tokio::test(flavor = "current_thread")]
-    async fn mismatched_batch_produces_error() {
+    async fn mismatched_peer_batch_produces_error() {
         let Some(server) = try_start_mock_server() else {
             return;
         };
@@ -886,7 +923,7 @@ mod tests {
             0,
             None,
         );
-        let encoded = to_bytes(&output).expect("encode query output");
+        let encoded = to_bytes(&QueryResponse::Iterable(output)).expect("encode query output");
         server.mock(|when, then| {
             when.method(POST).path("/v1/query");
             then.status(200).body(encoded.clone());
@@ -895,18 +932,25 @@ mod tests {
             .expect("client");
         let err = run_state_query(
             client,
-            &crate::SigningAuthority::new("fixture", ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
+            &reader(&server.url("/")),
+            &signer(),
             iroha_data_model::account::address::chain_discriminant(),
-            StateQueryKind::Accounts,
+            StateQueryKind::Peers,
             None,
             None,
         )
         .await
         .expect_err("unexpected batch kind should error");
-        assert!(matches!(err, StateQueryError::UnexpectedBatch { .. }));
+        assert!(matches!(
+            err,
+            StateQueryError::UnexpectedBatch {
+                kind: StateQueryKind::Peers,
+                actual: "Asset"
+            }
+        ));
     }
     #[tokio::test(flavor = "current_thread")]
-    async fn state_query_uses_explicit_selected_authority() {
+    async fn peers_query_uses_explicit_selected_authority() {
         use iroha_data_model::query::SignedQuery;
         use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
         use iroha_version::codec::DecodeVersioned as _;
@@ -914,7 +958,7 @@ mod tests {
             return;
         };
         let output = QueryOutput::new(
-            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Account(Vec::new())),
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::Peer(Vec::new())),
             0,
             None,
         );
@@ -926,16 +970,18 @@ mod tests {
                         && query.verify_signature().is_ok()
                 })
             });
-            then.status(200).body(to_bytes(&output).unwrap());
+            then.status(200)
+                .body(to_bytes(&QueryResponse::Iterable(output)).unwrap());
         });
         let client =
             ToriiClient::new_for_network(server.url("/"), crate::torii::test_network_id()).unwrap();
         let signer = crate::SigningAuthority::new("selected", BOB_ID.clone(), BOB_KEYPAIR.clone());
         run_state_query(
             client,
+            &reader(&server.url("/")),
             &signer,
             iroha_data_model::account::address::chain_discriminant(),
-            StateQueryKind::Accounts,
+            StateQueryKind::Peers,
             None,
             None,
         )
@@ -943,120 +989,60 @@ mod tests {
         .unwrap();
         mock.assert();
     }
+    #[test]
+    fn bond_batches_never_become_a_peers_page() {
+        let output = QueryOutput::new(
+            QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::BondRecord(Vec::new())),
+            0,
+            None,
+        );
+        let error =
+            parse_peer_output(output).expect_err("a bond batch cannot become an empty peers page");
+        assert!(matches!(
+            error,
+            StateQueryError::UnexpectedBatch {
+                kind: StateQueryKind::Peers,
+                actual: "BondRecord"
+            }
+        ));
+    }
 
     #[test]
-    fn state_entry_account_exposes_norito_payload() {
-        let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let entry = StateEntry::from_account(account);
-        let json = entry.json.expect("account json");
-        let account_label = ALICE_ID.to_string();
-        assert!(
-            json.contains(&account_label),
-            "json should contain account id"
-        );
-        let bytes = entry.norito_bytes.expect("account bytes");
-        assert!(!bytes.is_empty(), "norito bytes should not be empty");
-        let decoded: AccountBuilder =
-            norito::decode_from_bytes(&bytes).expect("decode framed account payload");
-        assert_eq!(decoded.id(), &*ALICE_ID);
-    }
-    #[test]
-    fn state_entry_asset_includes_json_encoding() {
-        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
-            .parse()
-            .expect("definition id");
-        let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
-        let asset = Asset::new(asset_id, Quantity::from(42_u32));
-        let entry = StateEntry::from_asset(asset);
-        assert!(
-            entry.domain.is_none(),
-            "opaque canonical definition ids should not force a synthetic domain"
-        );
-        let json = entry.json.expect("asset json");
-        assert!(
-            json.contains("\"value\""),
-            "asset json should include value field"
-        );
-        let bytes = entry.norito_bytes.expect("asset bytes");
-        assert!(!bytes.is_empty(), "asset norito should not be empty");
-    }
-    #[test]
-    fn state_entry_asset_definition_includes_metadata() {
-        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
-            .parse()
-            .expect("definition id");
-        let definition = AssetDefinition::new(
-            definition_id,
-            "asset".to_owned(),
-            NumericSpec::default(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(&ALICE_ID);
-        let entry = StateEntry::from_asset_definition(definition);
-        assert!(
-            entry.domain.is_none(),
-            "opaque canonical definition ids should not force a synthetic domain"
-        );
-        let json = entry.json.expect("asset definition json");
-        assert!(
-            json.contains("\"owned_by\""),
-            "definition json should include owner"
-        );
-        let bytes = entry.norito_bytes.expect("definition bytes");
-        assert!(
-            !bytes.is_empty(),
-            "definition norito encoding should not be empty"
-        );
-    }
-    #[test]
-    fn state_entry_asset_id_handles_opaque_definition_without_domain_projection() {
-        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
-            .parse()
-            .expect("definition id");
-        let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
-        let entry = StateEntry::from_asset_id(asset_id);
-        assert!(entry.domain.is_none());
-        assert!(entry.asset_definition.is_some());
-    }
-    #[test]
-    fn state_entry_asset_definition_id_handles_opaque_domainless_identifier() {
-        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
-            .parse()
-            .expect("definition id");
-        let entry = StateEntry::from_asset_definition_id(definition_id);
-        assert!(entry.domain.is_none());
-        assert!(entry.asset_definition.is_some());
-    }
-    #[test]
-    fn state_entry_domain_includes_owner() {
-        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let entry = StateEntry::from_domain(domain);
-        let json = entry.json.expect("domain json");
-        assert!(
-            json.contains("\"owned_by\""),
-            "domain json should include owner field"
-        );
-        let bytes = entry.norito_bytes.expect("domain bytes");
-        assert!(
-            !bytes.is_empty(),
-            "domain norito encoding should not be empty"
-        );
-    }
-    #[test]
-    fn bond_batches_preserve_requested_query_in_unsupported_response() {
-        for requested in StateQueryKind::all() {
-            let output = QueryOutput::new(
-                QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::BondRecord(Vec::new())),
-                0,
-                None,
-            );
-            let error = parse_iterable_output(requested, output)
-                .expect_err("a bond batch cannot become an empty page of another query kind");
+    fn private_asset_batches_keep_exact_labels_and_never_become_peers() {
+        let batches = [
+            (
+                QueryOutputBatchBox::AssetUidPolicyViewV1(Vec::new()),
+                "AssetUidPolicyViewV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetFiRelationshipViewV1(Vec::new()),
+                "AssetFiRelationshipViewV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetUidEnrollmentViewV1(Vec::new()),
+                "AssetUidEnrollmentViewV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetEscrowScopeOriginalV1(Vec::new()),
+                "AssetEscrowScopeOriginalV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetFiTransferReceiptV1(Vec::new()),
+                "AssetFiTransferReceiptV1",
+            ),
+            (
+                QueryOutputBatchBox::AssetFiContextSnapshotV1(Vec::new()),
+                "AssetFiContextSnapshotV1",
+            ),
+        ];
+        for (batch, expected_label) in batches {
+            let output = QueryOutput::new(QueryOutputBatchBoxTuple::from_batch(batch), 0, None);
+            let error = parse_peer_output(output)
+                .expect_err("a private asset batch cannot become an empty peers page");
             assert!(matches!(
                 error,
-                StateQueryError::UnexpectedBatch { kind, actual: "BondRecord" } if kind == requested
+                StateQueryError::UnexpectedBatch { kind: StateQueryKind::Peers, actual }
+                    if actual == expected_label
             ));
         }
     }
@@ -1108,5 +1094,99 @@ mod tests {
             batch_label(&QueryOutputBatchBox::FeeSponsorProgramId(Vec::new())),
             "FeeSponsorProgramId"
         );
+    }
+
+    /// The row a live localnet validator returned for its newest block.
+    const LIVE_BLOCK_ROW: &str = r##"{"created_at":"2026-10-26T04:37:58.946Z","hash":"hash:81D69FAA5B0DAD48D772869DD78C3A90C35C4EF2CA8AE7D55C623E079B525D8D#A46D","height":4,"prev_block_hash":"hash:FA9F53A24F23328824BBFF57F924BB38634B76222E2AE5C72075F4B426ADA91B#34CF","transactions_hash":"hash:FBD1ED23D5C37AC258CBFA9EB4981E1F7A353792E12006ED4146DFF6D5218ED9#50F3","transactions_rejected":1,"transactions_total":1}"##;
+
+    #[test]
+    fn block_rows_need_a_positive_height_and_a_canonical_hash() {
+        let tip = BlockTip::from_row(&json::from_str(LIVE_BLOCK_ROW).unwrap()).unwrap();
+        assert_eq!(tip.height, 4);
+        // Shown like streamed block hashes: lowercase hex, without the literal's checksum.
+        assert_eq!(
+            tip.hash.to_string(),
+            "81d69faa5b0dad48d772869dd78c3a90c35c4ef2ca8ae7d55c623e079b525d8d"
+        );
+        let literal = "hash:81D69FAA5B0DAD48D772869DD78C3A90C35C4EF2CA8AE7D55C623E079B525D8D#A46D";
+        for (original, replacement) in [
+            (r#""height":4"#, r#""height":0"#),
+            (r#""height":4"#, r#""height":"4""#),
+            (r#""hash":"#, r#""block_hash":"#),
+            ("hash:81D69FAA", "hash:81d69faa"),
+            ("#A46D", "#A46E"),
+            (literal, &literal[5..69]),
+        ] {
+            let row = LIVE_BLOCK_ROW.replacen(original, replacement, 1);
+            assert_ne!(row, LIVE_BLOCK_ROW);
+            let error = BlockTip::from_row(&json::from_str(&row).unwrap())
+                .expect_err("a malformed newest-block row is refused");
+            assert!(
+                matches!(error, StateQueryError::Torii(ToriiError::Decode(_))),
+                "{replacement}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn newest_blocks_are_read_from_every_validator_without_waiting_on_a_silent_one() {
+        let (Some(answering), Some(fresh), Some(silent)) = (
+            try_start_mock_server(),
+            try_start_mock_server(),
+            try_start_mock_server(),
+        ) else {
+            return;
+        };
+        let newest = answering.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/explorer/blocks/query")
+                .is_true(|request| {
+                    let body: json::Value =
+                        json::from_slice(request.body_ref()).unwrap_or(json::Value::Null);
+                    body.get("limit").and_then(json::Value::as_u64) == Some(1)
+                });
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(format!(
+                    r#"{{"items": [{LIVE_BLOCK_ROW}], "next_cursor": "older"}}"#
+                ));
+        });
+        fresh.mock(|when, then| {
+            when.method(POST).path("/v1/explorer/blocks/query");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"items": [], "next_cursor": null}"#);
+        });
+        silent.mock(|when, then| {
+            when.method(POST).path("/v1/explorer/blocks/query");
+            then.status(200)
+                .delay(Duration::from_secs(3))
+                .header("content-type", "application/json")
+                .body(r#"{"items": [], "next_cursor": null}"#);
+        });
+        let stopped = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}/", listener.local_addr().unwrap())
+        };
+        let readers = [
+            reader(&answering.url("/")),
+            reader(&fresh.url("/")),
+            reader(&silent.url("/")),
+            reader(&stopped),
+        ];
+        let started = std::time::Instant::now();
+        let tips = newest_blocks(&readers, Duration::from_millis(300)).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "validators are read concurrently and a silent one is cut off"
+        );
+        assert!(matches!(&tips[0], Ok(Some(tip)) if tip.height == 4));
+        assert!(matches!(&tips[1], Ok(None)), "no block yet");
+        assert!(matches!(
+            &tips[2],
+            Err(StateQueryError::Torii(ToriiError::Timeout { .. }))
+        ));
+        assert!(matches!(&tips[3], Err(StateQueryError::Collection(_))));
+        newest.assert();
     }
 }

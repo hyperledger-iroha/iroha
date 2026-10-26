@@ -8,7 +8,8 @@ use crate::privacy_engines::zk_x509::{
     accumulator_stark::joint_verifier::CaJointVerifierOraclesV1,
     credential_joint::JointOracleCheckpointsV1,
 };
-use rand::{SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 fn main_component_transcript_v1(auxiliary: JointAuxiliaryBindingV1) -> TransparentTranscriptV1 {
     let mut main = TransparentTranscriptV1::new(
@@ -91,7 +92,7 @@ pub fn fixture_v1() -> &'static CaJointComponentFixtureV1 {
     FIXTURE.get_or_init(|| {
         let (trace, schedule, _, _) = fixture();
         let public = ca_accumulator_stark_public_v1(&trace, &schedule).unwrap();
-        let mut rng = StdRng::seed_from_u64(0xCA10_0101);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xCA10_0101);
         let original = commit_ca_through_auxiliary_v1(
             &trace,
             &schedule,

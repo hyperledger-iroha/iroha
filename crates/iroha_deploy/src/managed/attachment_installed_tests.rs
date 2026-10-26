@@ -472,9 +472,9 @@ impl Harness {
         )?;
         let profiles = InstalledNetworkProfiles::new(vec![InstalledNetworkProfile::new(
             "fixture".into(),
-            release_key.public_key().clone(),
-            1,
-            &format!("{}fixture/checkpoint.nrt", ingress_roots[0]),
+            &ingress_roots[0],
+            anchor.chain_id.clone(),
+            parent_config.account_chain_discriminant,
         )?])?;
         let profile_path = &self.profiles;
         PrivateDirectory::open(profile_path.parent().unwrap())?.write_atomic(
@@ -1109,7 +1109,7 @@ impl PrivateProgram {
 
     fn source(&self) -> String {
         format!(
-            "seiyaku {} {{ state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(\"CanInvokeContractEntrypoint\") {{ value = next; }} view fn current() -> int {{ return value; }} view fn secret() -> string {{ return \"{}\"; }} }}",
+            "seiyaku {} {{ permission CanInvokeContractEntrypoint; state int value; hajimari() {{ value = 0; }} kotoage fn set(int next) authorize(CanInvokeContractEntrypoint) {{ value = next; }} view fn current() authorize(anyone) -> int {{ return value; }} view fn secret() authorize(anyone) -> string {{ return \"{}\"; }} }}",
             self.name,
             self.result()
         )
@@ -1833,6 +1833,12 @@ fn parent_cli_status_requires_exact_ready_global_context() {
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: (0..4)
+            .map(|index| ManagedValidatorStatus {
+                index,
+                state: ManagedValidatorState::Running,
+            })
+            .collect(),
     };
     let value = json::to_value(&status).unwrap();
     assert_eq!(parse_parent_ready(value.clone()).unwrap(), status);

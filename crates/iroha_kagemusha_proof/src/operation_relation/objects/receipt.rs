@@ -15,17 +15,19 @@ use crate::operation_relation::{
     statement::StatementCells,
 };
 
-/// Inputs already bound by the operation's state and proof verifiers.
-/// `proof_digest` must come from the exact verified proof tape; Receive's
-/// `payment_digest` must come from the full canonical Payment, not its Request.
+/// Inputs bound by the operation's transition or proof verifiers.
+/// A caller that consumes a linked proof derives `proof_digest` from its exact
+/// verified tape. A lean own receipt instead supplies its authenticated nonzero
+/// signed field while the operation proves the transition directly. Receive's
+/// `payment_digest` comes from the full canonical Payment, not its Request.
 pub struct ReceiptContext<'a, S = StatementCells> {
     /// Wallet incarnation whose payment key signs this receipt.
     pub wallet: &'a [Word<Fp>; 2],
     /// Scheme's pinned Advance contract identity.
     pub provider: &'a [Word<Fp>; 2],
-    /// Validated operation statement, tied to its Q sigma input.
+    /// Validated statement, constrained directly or tied to its verified sigma input.
     pub statement: &'a S,
-    /// Digest of the linked sigma-only or Omega/sigma proof bytes.
+    /// Linked proof-byte digest, or authenticated own-receipt field for a direct transition.
     pub proof_digest: &'a Word<Fp>,
     /// Full Payment digest for Receive; zero for every other operation.
     pub payment_digest: &'a Word<Fp>,

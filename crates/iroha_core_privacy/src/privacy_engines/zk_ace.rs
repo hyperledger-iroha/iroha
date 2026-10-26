@@ -38,7 +38,7 @@ use rand::TryCryptoRng;
 pub use rand::TryCryptoRng as ZkAceTryCryptoRngV1;
 /// Fallible RNG core contract re-exported for deterministic/adversarial tests
 /// without forcing transaction-builder crates to depend on `rand`.
-pub use rand::TryRngCore as ZkAceTryRngCoreV1;
+pub use rand::TryRng as ZkAceTryRngCoreV1;
 #[cfg(test)]
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -302,7 +302,7 @@ pub fn prove_zk_ace_privacy_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
 ) -> Result<Vec<u8>, ZkAceNativeErrorV1> {
-    prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::OsRng)
+    prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::SysRng)
 }
 /// Fail closed at the production ZK-ACE verification boundary.
 ///
@@ -431,17 +431,18 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     use std::str::FromStr as _;
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected ZK-ACE entropy failure")
         }
     }
     struct PanicEntropyRng;
-    impl TryRngCore for PanicEntropyRng {
+    impl TryRng for PanicEntropyRng {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("deterministically invalid ZK-ACE input reached entropy")

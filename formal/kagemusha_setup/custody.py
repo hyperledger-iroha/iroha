@@ -15,7 +15,7 @@ REFERENCE = ROOT/'fixtures/native_prover/reference_verifier'
 GENERATED_DATA = 'crates/iroha_plonk/src/keys/keygen/builtin/generated.rs'
 MODULES = ('__init__.py', 'codec.py', 'curve.py', 'descriptor.py',
            'parameters.py', 'transcript.py', 'verify.py')
-FILES = frozenset(('README.md', 'CURRENT_SOURCE.md', '__init__.py', 'bounded.py', 'case.py', 'check.py', 'compact_source.py', 'control_goldens.json', 'custody.py', 'finite.py', 'load_a1_case.py', 'load_a1_descriptor.norito', 'parameters.py', 'preimage.py', 'produce_parameters.py', 'public_setup.py', 'raw_setup.py', 'rebind.py', 'requests.py', 'simulator.py', 'test_bounded.py', 'test_compact_source.py', 'test_custody.py', 'test_finite.py', 'test_generic.py', 'test_load_a1_case.py', 'test_preimage.py', 'test_proof.py', 'test_raw.py', 'test_requests.py', 'test_seam.py'))
+FILES = frozenset(('README.md', 'CURRENT_SOURCE.md', '__init__.py', 'bounded.py', 'case.py', 'check.py', 'compact_source.py', 'control_goldens.json', 'custody.py', 'finite.py', 'file_custody.py', 'load_a1_descriptor.norito', 'parameters.py', 'preimage.py', 'produce_parameters.py', 'public_setup.py', 'raw_setup.py', 'rebind.py', 'requests.py', 'simulator.py', 'test_bounded.py', 'test_compact_source.py', 'test_custody.py', 'test_finite.py', 'test_generic.py', 'test_file_custody.py', 'test_reference_custody.py', 'test_preimage.py', 'test_proof.py', 'test_raw.py', 'test_requests.py', 'test_seam.py'))
 # Exact delegated owners introduced since the prior source review. These pins
 # are consistency inputs, not a claim to qualify the compiled registry or SDKs.
 DELEGATED_SOURCES = frozenset((

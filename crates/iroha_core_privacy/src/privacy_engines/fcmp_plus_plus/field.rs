@@ -11,8 +11,8 @@ use curve25519_dalek::{
     traits::Identity,
 };
 use p256::elliptic_curve::bigint::{
-    CtChoice, Encoding, Limb, U256, Word, impl_modulus,
-    modular::constant_mod::{Residue, ResidueParams},
+    Choice as BigIntChoice, Encoding, Limb, U256, Word, const_monty_params,
+    modular::{ConstMontyForm, ConstMontyParams},
 };
 use p256::elliptic_curve::subtle::{
     Choice, ConditionallySelectable, ConstantTimeEq, ConstantTimeLess as _,
@@ -148,11 +148,20 @@ impl SecretU256V1 {
         let mut integer = Self(U256::ZERO);
         let mut index = 0;
         while index < bytes.len() {
-            integer.0.as_words_mut()[index / Limb::BYTES] |=
+            integer.0.as_mut_words()[index / Limb::BYTES] |=
                 Word::from(bytes[index]) << ((index % Limb::BYTES) * 8);
             index += 1;
         }
         integer
+    }
+    fn encode_le_v1(&self) -> SecretEncodedScalarV1 {
+        // Write directly into the erasing byte owner; no extra Copy encoded-integer
+        // temporary retains the private scalar after the conversion.
+        let mut encoded = SecretEncodedScalarV1(SecretCopyValueV1::new([0; 32]));
+        for (index, byte) in encoded.as_mut().iter_mut().enumerate() {
+            *byte = (self.0.as_words()[index / Limb::BYTES] >> ((index % Limb::BYTES) * 8)) as u8;
+        }
+        encoded
     }
 }
 impl Drop for SecretU256V1 {
@@ -278,18 +287,18 @@ pub(super) fn secret_cycle_scalar_decoder_owner_drops_v1() -> (usize, usize, usi
         SECRET_COPY_VALUE_DROPS_V1.with(std::cell::Cell::get),
     )
 }
-impl_modulus!(
+const_monty_params!(
     Field25519Modulus,
     U256,
     "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed"
 );
-impl_modulus!(
+const_monty_params!(
     HelioseleneModulus,
     U256,
     "7fffffffffffffffffffffffffffffffbf7f782cb7656b586eb6d2727927c79f"
 );
-type Field25519Residue = Residue<Field25519Modulus, { Field25519Modulus::LIMBS }>;
-type HelioseleneResidue = Residue<HelioseleneModulus, { HelioseleneModulus::LIMBS }>;
+type Field25519Residue = ConstMontyForm<Field25519Modulus, { Field25519Modulus::LIMBS }>;
+type HelioseleneResidue = ConstMontyForm<HelioseleneModulus, { HelioseleneModulus::LIMBS }>;
 macro_rules! define_local_field {
     ($name:ident, $residue:ty) => {
         /// Local transparent field boundary used by the reusable proof backend.
@@ -348,9 +357,11 @@ macro_rules! define_local_field {
             pub(super) const fn pow(&self, exponent: &U256) -> Self {
                 Self(self.0.pow(exponent))
             }
-            pub(super) const fn invert(&self) -> (Self, CtChoice) {
-                let (inverse, is_some) = self.0.invert();
-                (Self(inverse), is_some)
+            pub(super) const fn invert(&self) -> (Self, BigIntChoice) {
+                let inverse = self.0.invert();
+                // Keep the validity flag with the candidate; every caller checks it
+                // before using the value, including the zero-denominator case.
+                (Self(inverse.to_inner_unchecked()), inverse.is_some())
             }
             pub(super) fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
                 Self(<$residue>::conditional_select(&a.0, &b.0, choice))
@@ -445,32 +456,32 @@ pub(super) fn helioselene_is_odd(value: HelioseleneField) -> bool {
     value.retrieve().to_le_bytes()[0] & 1 == 1
 }
 pub(super) fn decode_field25519(bytes: [u8; 32]) -> Option<Field25519> {
-    let integer = U256::from_le_bytes(bytes);
+    let integer = U256::from_le_bytes(bytes.into());
     (integer < FIELD25519_MODULUS).then(|| Field25519::new(&integer))
 }
 pub(super) fn decode_helioselene(bytes: [u8; 32]) -> Option<HelioseleneField> {
-    let integer = U256::from_le_bytes(bytes);
+    let integer = U256::from_le_bytes(bytes.into());
     (integer < HELIOSELENE_MODULUS).then(|| HelioseleneField::new(&integer))
 }
 pub(super) fn encode_field25519(value: Field25519) -> [u8; 32] {
-    value.retrieve().to_le_bytes()
+    value.retrieve().to_le_bytes().into()
 }
 pub(super) fn encode_helioselene(value: HelioseleneField) -> [u8; 32] {
-    value.retrieve().to_le_bytes()
+    value.retrieve().to_le_bytes().into()
 }
 /// Encode a private field element while keeping the retrieved integer and
 /// encoded bytes in erasing owners. The returned bytes remain private until
 /// the caller deliberately installs them in its final witness owner.
 pub(super) fn encode_secret_field25519_scalar_v1(value: &Field25519) -> SecretEncodedScalarV1 {
     let integer = SecretU256V1(value.retrieve());
-    SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()))
+    integer.encode_le_v1()
 }
 /// Secret-owned counterpart of [`encode_helioselene`].
 pub(super) fn encode_secret_helioselene_scalar_v1(
     value: &HelioseleneField,
 ) -> SecretEncodedScalarV1 {
     let integer = SecretU256V1(value.retrieve());
-    SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()))
+    integer.encode_le_v1()
 }
 /// Lend one owned private Field25519 encoding to an explicit publication
 /// boundary and erase its retained bytes after success, error, or unwind.
@@ -687,10 +698,9 @@ macro_rules! define_cycle_point {
                 let x = SecretCopyValueV1::new(point.as_ref().x.mul_ref(inverse.as_ref()));
                 let y = SecretCopyValueV1::new(point.as_ref().y.mul_ref(inverse.as_ref()));
                 let integer = SecretU256V1(x.as_ref().retrieve());
-                let mut encoded =
-                    SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()));
+                let mut encoded = integer.encode_le_v1();
                 let y_integer = SecretU256V1(y.as_ref().retrieve());
-                let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes());
+                let y_bytes = y_integer.encode_le_v1();
                 encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7;
                 drop(inverse);
                 drop(point);
@@ -708,10 +718,9 @@ macro_rules! define_cycle_point {
                 let x = SecretCopyValueV1::new(self.x.mul_ref(inverse.as_ref()));
                 let y = SecretCopyValueV1::new(self.y.mul_ref(inverse.as_ref()));
                 let integer = SecretU256V1(x.as_ref().retrieve());
-                let mut encoded =
-                    SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()));
+                let mut encoded = integer.encode_le_v1();
                 let y_integer = SecretU256V1(y.as_ref().retrieve());
-                let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes());
+                let y_bytes = y_integer.encode_le_v1();
                 encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7;
                 drop(inverse);
                 Some(encoded)
@@ -1161,6 +1170,45 @@ mod tests {
         fn zeroize(&mut self) {
             self.0 = 0;
             TRACKING_CLEARS.with(|calls| calls.set(calls.get() + 1));
+        }
+    }
+    #[test]
+    fn field_inversion_rejects_zero_and_preserves_modulus_boundaries() {
+        assert!(invert_field25519(Field25519::ZERO).is_none());
+        assert!(invert_helioselene(HelioseleneField::ZERO).is_none());
+        for integer in [
+            U256::ONE,
+            U256::from(2_u64),
+            FIELD25519_MODULUS.wrapping_sub(&U256::ONE),
+        ] {
+            let value = Field25519::new(&integer);
+            assert_eq!(
+                value * invert_field25519(value).expect("nonzero field value"),
+                Field25519::ONE
+            );
+        }
+        for integer in [
+            U256::ONE,
+            U256::from(2_u64),
+            HELIOSELENE_MODULUS.wrapping_sub(&U256::ONE),
+        ] {
+            let value = HelioseleneField::new(&integer);
+            assert_eq!(
+                value * invert_helioselene(value).expect("nonzero field value"),
+                HelioseleneField::ONE
+            );
+        }
+    }
+    #[test]
+    fn borrowed_integer_encoder_preserves_every_byte_without_copy_encoding_scratch() {
+        for bytes in [
+            [0; 32],
+            [0xff; 32],
+            core::array::from_fn(|index| (index * 7 + 3) as u8),
+        ] {
+            let integer = SecretU256V1::from_borrowed_le_bytes_v1(&bytes);
+            let encoding = integer.encode_le_v1();
+            assert_eq!(encoding.as_ref(), &bytes);
         }
     }
     #[test]
@@ -1628,7 +1676,7 @@ mod tests {
             .split_once("static FIELD25519_MODULUS_LE_V1: [u8; 32] = [")
             .expect("cycle scalar decoder support")
             .1
-            .split_once("impl_modulus!(")
+            .split_once("const_monty_params!(")
             .expect("cycle scalar decoder support boundary")
             .0;
         let support_steps = [
@@ -1675,8 +1723,14 @@ mod tests {
         ] {
             assert!(!support.contains(forbidden), "retained support {forbidden}");
         }
-        assert_eq!(FIELD25519_MODULUS_LE_V1, FIELD25519_MODULUS.to_le_bytes());
-        assert_eq!(HELIOSELENE_MODULUS_LE_V1, HELIOSELENE_MODULUS.to_le_bytes());
+        assert_eq!(
+            FIELD25519_MODULUS_LE_V1,
+            FIELD25519_MODULUS.to_le_bytes().as_slice()
+        );
+        assert_eq!(
+            HELIOSELENE_MODULUS_LE_V1,
+            HELIOSELENE_MODULUS.to_le_bytes().as_slice()
+        );
 
         let integer_parser = production
             .split_once("impl SecretU256V1 {")
@@ -1686,13 +1740,13 @@ mod tests {
             .expect("owned integer parser boundary")
             .0;
         assert!(integer_parser.contains("let mut integer = Self(U256::ZERO)"));
-        assert!(integer_parser.contains("integer.0.as_words_mut()[index / Limb::BYTES] |="));
+        assert!(integer_parser.contains("integer.0.as_mut_words()[index / Limb::BYTES] |="));
         assert!(integer_parser.contains("Word::from(bytes[index])"));
         let integer_steps = [
             "let mut integer = Self(U256::ZERO)",
             "let mut index = 0",
             "while index < bytes.len()",
-            "integer.0.as_words_mut()[index / Limb::BYTES] |=",
+            "integer.0.as_mut_words()[index / Limb::BYTES] |=",
             "Word::from(bytes[index])",
             "index += 1",
             "\n        integer\n",
@@ -1788,12 +1842,15 @@ mod tests {
             }
         }
 
-        let field_accepted = [
-            ("zero", U256::ZERO.to_le_bytes()),
-            ("one", U256::ONE.to_le_bytes()),
+        let field_accepted: [(&str, [u8; 32]); 3] = [
+            ("zero", U256::ZERO.to_le_bytes().into()),
+            ("one", U256::ONE.to_le_bytes().into()),
             (
                 "p-1",
-                FIELD25519_MODULUS.wrapping_sub(&U256::ONE).to_le_bytes(),
+                FIELD25519_MODULUS
+                    .wrapping_sub(&U256::ONE)
+                    .to_le_bytes()
+                    .into(),
             ),
         ];
         for (label, bytes) in field_accepted {
@@ -1807,12 +1864,15 @@ mod tests {
             assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 1));
         }
         for (label, bytes) in [
-            ("p", FIELD25519_MODULUS.to_le_bytes()),
+            ("p", FIELD25519_MODULUS.to_le_bytes().into()),
             (
                 "p+1",
-                FIELD25519_MODULUS.wrapping_add(&U256::ONE).to_le_bytes(),
+                FIELD25519_MODULUS
+                    .wrapping_add(&U256::ONE)
+                    .to_le_bytes()
+                    .into(),
             ),
-            ("maximum", U256::MAX.to_le_bytes()),
+            ("maximum", U256::MAX.to_le_bytes().into()),
         ] {
             reset_secret_cycle_scalar_decoder_owner_drops_v1();
             assert!(
@@ -1825,12 +1885,15 @@ mod tests {
             assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 0, 0));
         }
 
-        let helios_accepted = [
-            ("zero", U256::ZERO.to_le_bytes()),
-            ("one", U256::ONE.to_le_bytes()),
+        let helios_accepted: [(&str, [u8; 32]); 3] = [
+            ("zero", U256::ZERO.to_le_bytes().into()),
+            ("one", U256::ONE.to_le_bytes().into()),
             (
                 "p-1",
-                HELIOSELENE_MODULUS.wrapping_sub(&U256::ONE).to_le_bytes(),
+                HELIOSELENE_MODULUS
+                    .wrapping_sub(&U256::ONE)
+                    .to_le_bytes()
+                    .into(),
             ),
         ];
         for (label, bytes) in helios_accepted {
@@ -1844,12 +1907,15 @@ mod tests {
             assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 1));
         }
         for (label, bytes) in [
-            ("p", HELIOSELENE_MODULUS.to_le_bytes()),
+            ("p", HELIOSELENE_MODULUS.to_le_bytes().into()),
             (
                 "p+1",
-                HELIOSELENE_MODULUS.wrapping_add(&U256::ONE).to_le_bytes(),
+                HELIOSELENE_MODULUS
+                    .wrapping_add(&U256::ONE)
+                    .to_le_bytes()
+                    .into(),
             ),
-            ("maximum", U256::MAX.to_le_bytes()),
+            ("maximum", U256::MAX.to_le_bytes().into()),
         ] {
             reset_secret_cycle_scalar_decoder_owner_drops_v1();
             assert!(
@@ -1863,7 +1929,7 @@ mod tests {
         }
 
         reset_secret_cycle_scalar_decoder_owner_drops_v1();
-        let scalar = decode_secret_field25519_scalar_v1(&U256::ONE.to_le_bytes())
+        let scalar = decode_secret_field25519_scalar_v1(&U256::ONE.to_le_bytes().into())
             .expect("owned Field25519 transfer");
         let mut destination = Field25519::ZERO;
         scalar.move_into(&mut destination);
@@ -1873,7 +1939,7 @@ mod tests {
 
         reset_secret_cycle_scalar_decoder_owner_drops_v1();
         let unwind = std::panic::catch_unwind(|| {
-            let scalar = decode_secret_helioselene_scalar_v1(&U256::ONE.to_le_bytes())
+            let scalar = decode_secret_helioselene_scalar_v1(&U256::ONE.to_le_bytes().into())
                 .expect("owned Helioselene before unwind");
             assert_eq!(secret_cycle_scalar_decoder_owner_drops_v1(), (1, 1, 0));
             let _ = core::hint::black_box(scalar.expose_ref());
@@ -1893,7 +1959,7 @@ mod tests {
 
         reset_secret_cycle_scalar_decoder_owner_drops_v1();
         let integer_unwind = std::panic::catch_unwind(|| {
-            let integer = SecretU256V1::from_borrowed_le_bytes_v1(&U256::ONE.to_le_bytes());
+            let integer = SecretU256V1::from_borrowed_le_bytes_v1(&U256::ONE.to_le_bytes().into());
             let _ = core::hint::black_box(&integer.0);
             panic!("exercise active cycle scalar integer unwind");
         });
@@ -1972,11 +2038,11 @@ mod tests {
             Err(FcmpNativeErrorV1::CyclePointIdentity)
         );
         assert_eq!(
-            HeliosPoint::decode(FIELD25519_MODULUS.to_le_bytes(), false),
+            HeliosPoint::decode(FIELD25519_MODULUS.to_le_bytes().into(), false),
             Err(FcmpNativeErrorV1::CyclePointEncoding)
         );
         assert_eq!(
-            SelenePoint::decode(HELIOSELENE_MODULUS.to_le_bytes(), false),
+            SelenePoint::decode(HELIOSELENE_MODULUS.to_le_bytes().into(), false),
             Err(FcmpNativeErrorV1::CyclePointEncoding)
         );
     }

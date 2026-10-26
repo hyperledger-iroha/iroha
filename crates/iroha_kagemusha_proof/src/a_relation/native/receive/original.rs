@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::tree::IndexedLeaf;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_plonk::{Protocol, frontend::Circuit, keys::pk::artifact::ReadConfig};
 
 fn original_bounds(original: &[u8], rows: usize, config: ReadConfig) -> Result<(), Error> {

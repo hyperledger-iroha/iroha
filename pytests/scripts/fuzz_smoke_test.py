@@ -15,7 +15,7 @@ SCRIPT = ROOT / "scripts" / "fuzz_smoke.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "numeric_v1_fuzz.yml"
 NUMERIC_TARGET = ROOT / "crates" / "ivm" / "fuzz" / "fuzz_targets" / "numeric_v1.rs"
 NUMERIC_CORPUS = ROOT / "crates" / "ivm" / "fuzz" / "corpus" / "numeric_v1"
-PINNED_NIGHTLY = "nightly-2025-05-08"
+PINNED_NIGHTLY = "nightly-2026-10-23"
 PINNED_CARGO_FUZZ = "0.13.2"
 
 

@@ -76,7 +76,7 @@ fn fixture() -> Fixture {
         version: 1,
         network_id: *native.network_id().as_bytes(),
         scheme_root_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            p256.verifying_key().to_encoded_point(false).as_bytes(),
+            p256.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap(),
         relation_id: [9; 32],

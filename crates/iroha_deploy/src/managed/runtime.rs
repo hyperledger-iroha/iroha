@@ -74,6 +74,7 @@ pub fn run_worker(
         phase: ManagedPhase::Starting,
         running_peers: 0,
         failure: None,
+        validators: Vec::new(),
     };
     let cancelled = Arc::new(AtomicBool::new(false));
     let progress = Arc::new(progress::Progress::default());
@@ -154,6 +155,7 @@ pub fn run_worker(
         );
     }
     status.running_peers = processes.children.len();
+    status.validators = processes.running_validators();
     let generated = match processes.generated() {
         Ok(generated) => generated,
         Err(_) => {
@@ -229,11 +231,11 @@ pub fn run_worker(
             && let Ok(request) = connection.receive()
             && same_token(&request.token, &worker.token)
         {
-            match request.action.as_str() {
-                "status" => {
+            match request.action {
+                ControlAction::Status => {
                     let _ = connection.reply(&status);
                 }
-                "attachment_start" => {
+                ControlAction::AttachmentStart => {
                     if status.phase == ManagedPhase::Ready
                         && processes
                             .attachment()
@@ -244,7 +246,7 @@ pub fn run_worker(
                     }
                     let _ = connection.reply(&status);
                 }
-                "attachment_status" => {
+                ControlAction::AttachmentStatus => {
                     let observation = processes
                         .attachment()
                         .map(remote::AttachmentWorker::status)
@@ -260,7 +262,7 @@ pub fn run_worker(
                         });
                     }
                 }
-                "down" => {
+                ControlAction::Down => {
                     stop_worker(
                         &directory,
                         &mut status,
@@ -271,7 +273,7 @@ pub fn run_worker(
                     let _ = connection.reply(&status);
                     return Ok(());
                 }
-                "startup_expired" => {
+                ControlAction::StartupExpired => {
                     // The foreground budget starts before this worker is spawned. Its
                     // authenticated expiry must retain the last safe phase rather than
                     // converting an unproved attempt into an ordinary user-requested stop.
@@ -281,7 +283,6 @@ pub fn run_worker(
                     let _ = connection.reply(&status);
                     return result;
                 }
-                _ => {}
             }
         }
         check_owned_validator_exit(
@@ -335,6 +336,7 @@ pub fn run_worker(
                         budget.check()?;
                         let live = processes.gateways().map_err(|_| progress.unconfirmed())?;
                         status.running_peers = processes.children.len();
+                        status.validators = processes.running_validators();
                         let selected = prepared.clone();
                         let background_budget = Arc::clone(&budget);
                         let (sender, receiver) = mpsc::sync_channel(1);
@@ -559,6 +561,7 @@ fn expire_startup_status(status: &mut ManagedStatus, failure: progress::Failure)
     status.phase = ManagedPhase::Failed;
     status.running_peers = 0;
     status.failure = Some(failure.message());
+    status.retain_validator_exits();
 }
 
 fn observe_readiness<T>(
@@ -672,7 +675,7 @@ fn check_owned_validator_exit(
     cancelled: &AtomicBool,
     progress: &progress::Progress,
 ) -> Result<()> {
-    if processes.any_exited().map_err(|error| {
+    let exited = processes.first_exit().map_err(|error| {
         close_worker_error(
             directory,
             status,
@@ -681,13 +684,27 @@ fn check_owned_validator_exit(
             progress.unconfirmed(),
             error,
         )
-    })? {
+    })?;
+    if let Some((index, exit)) = exited {
+        // Record the cause before cleanup stops the remaining validators; the record survives
+        // the terminal status so frontends can name the validator whose log explains it.
+        let state = ManagedValidatorState::exited(exit);
+        match status
+            .validators
+            .iter_mut()
+            .find(|validator| validator.index == index)
+        {
+            Some(validator) => validator.state = state,
+            None => status
+                .validators
+                .push(ManagedValidatorStatus { index, state }),
+        }
         return fail_worker(
             directory,
             status,
             processes,
             cancelled,
-            progress::Failure::ValidatorExited,
+            progress::Failure::ValidatorExited { index },
         );
     }
     Ok(())
@@ -708,6 +725,7 @@ fn stop_worker(
     })?;
     status.phase = ManagedPhase::Stopped;
     status.running_peers = 0;
+    status.validators.clear();
     publish(directory, status).map_err(|error| {
         close_worker_error(directory, status, processes, cancelled, failure, error)
     })?;
@@ -1002,6 +1020,12 @@ mod tests {
                 phase,
                 running_peers: 4,
                 failure: None,
+                validators: (0..4)
+                    .map(|index| ManagedValidatorStatus {
+                        index,
+                        state: ManagedValidatorState::Running,
+                    })
+                    .collect(),
             };
             expire_startup_status(&mut status, failure);
             publish(&directory, &status).unwrap();
@@ -1010,6 +1034,8 @@ mod tests {
             assert_eq!(retained.phase, ManagedPhase::Failed);
             assert_eq!(retained.running_peers, 0);
             assert_eq!(retained.failure, Some(progress.deadline().message()));
+            // An expired startup stopped every validator; no stale live observation remains.
+            assert_eq!(retained.validators, Vec::<ManagedValidatorStatus>::new());
         }
     }
 
@@ -1036,6 +1062,7 @@ mod tests {
                 phase: ManagedPhase::Starting,
                 running_peers: 0,
                 failure: None,
+                validators: Vec::new(),
             };
             publish(&directory, &status).unwrap();
             status.running_peers = processes.children.len();
@@ -1151,6 +1178,7 @@ mod tests {
                     phase,
                     running_peers: 2,
                     failure: None,
+                    validators: Vec::new(),
                 };
                 let progress = progress::Progress::default();
                 progress.enter(progress::Phase::Discovery);
@@ -1277,6 +1305,7 @@ mod tests {
             phase: ManagedPhase::Ready,
             running_peers: 1,
             failure: None,
+            validators: processes.running_validators(),
         };
         let failure = progress::Failure::ObservationExpired;
         let cancelled = AtomicBool::new(false);
@@ -1296,6 +1325,8 @@ mod tests {
         assert_eq!(status.phase, ManagedPhase::Failed);
         assert_eq!(status.running_peers, 0);
         assert_eq!(status.failure, Some(failure.message()));
+        // No validator exited; the stopped live observation does not survive the failure.
+        assert_eq!(status.validators, Vec::<ManagedValidatorStatus>::new());
         assert!(directory.path().join(STATUS).is_dir());
         store::acquire(&directory, "runtime.lock", "local").unwrap();
         assert!(!sentinel.any_exited().unwrap());
@@ -1366,8 +1397,19 @@ mod tests {
                         phase,
                         running_peers: 2,
                         failure: None,
+                        validators: processes.running_validators(),
                     };
-                    let original = "a supervised validator exited; inspect its retained log";
+                    assert_eq!(status.validators.len(), 2);
+                    let original =
+                        "a supervised validator exited; inspect its retained log peer0.log";
+                    // Only the cause survives the terminal status; the live sibling was stopped.
+                    let exit_record = vec![ManagedValidatorStatus {
+                        index: 0,
+                        state: ManagedValidatorState::Exited {
+                            code: Some(0),
+                            signal: None,
+                        },
+                    }];
                     let cancelled = AtomicBool::new(false);
                     // This is the same exit observation+failure helper called by run_worker.
                     let error = check_owned_validator_exit(
@@ -1406,6 +1448,7 @@ mod tests {
                     assert_eq!(status.phase, ManagedPhase::Failed);
                     assert_eq!(status.context, prepared.context);
                     assert!(status.failure.as_deref().unwrap().starts_with(original));
+                    assert_eq!(status.validators, exit_record);
                     if poison_cleanup {
                         assert_eq!(status.running_peers, 2);
                         assert_eq!(processes.children.len(), 2);
@@ -1472,6 +1515,7 @@ mod tests {
                         assert_eq!(status.running_peers, 0);
                         assert!(processes.children.is_empty());
                         assert_eq!(status.failure.as_deref(), Some(original));
+                        assert_eq!(status.validators, exit_record);
                         let retained: ManagedStatus =
                             decode(&directory.read(STATUS, MAX_METADATA).unwrap()).unwrap();
                         assert_eq!(retained, status);
@@ -1504,7 +1548,15 @@ mod tests {
             phase: ManagedPhase::Starting,
             running_peers: 1,
             failure: None,
+            validators: processes.running_validators(),
         };
+        assert_eq!(
+            status.validators,
+            [ManagedValidatorStatus {
+                index: 0,
+                state: ManagedValidatorState::Running,
+            }]
+        );
         let original = status.clone();
         publish(&directory, &status).unwrap();
         let bytes = directory.read(STATUS, MAX_METADATA).unwrap();

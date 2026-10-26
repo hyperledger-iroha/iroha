@@ -2,7 +2,7 @@
 
 use super::*;
 use halo2curves::ff::Field;
-use iroha_pasta::{Fp as CoreFp, Fq as CoreFq};
+use iroha_pasta::{Fp as CoreFp, Fq as CoreFq, PastaField};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 
@@ -31,7 +31,7 @@ fn fields<const N: usize>(bytes: &[u8]) -> [[u8; 32]; N] {
     std::array::from_fn(|i| bytes[32 * i..32 * (i + 1)].try_into().unwrap())
 }
 
-fn reference_permutation<F: PrimeField<Repr = [u8; 32]>>(
+fn reference_permutation<F: PastaField>(
     input: &[[u8; 32]; 3],
     encoded: &[u8; PARAMETER_LENGTH],
 ) -> [[u8; 32]; 3] {
@@ -57,10 +57,7 @@ fn reference_permutation<F: PrimeField<Repr = [u8; 32]>>(
     state.map(|value| value.to_repr())
 }
 
-fn reference_hash<F: PrimeField<Repr = [u8; 32]>>(
-    input: &[[u8; 32]],
-    encoded: &[u8; PARAMETER_LENGTH],
-) -> [u8; 32] {
+fn reference_hash<F: PastaField>(input: &[[u8; 32]], encoded: &[u8; PARAMETER_LENGTH]) -> [u8; 32] {
     assert!(!input.is_empty());
     let mut state = [F::ZERO, F::ZERO, F::from_u128((input.len() as u128) << 64)];
     for chunk in input.chunks(2) {
@@ -101,7 +98,13 @@ fn canonical_parameter_and_vector_fingerprints_are_pinned() {
             "29338f2785060486e3619345c7b9b08b58b4c932a4d0f0c0bf971e816c48202e",
         ),
     ] {
-        assert_eq!(format!("{:x}", Sha256::digest(bytes)), expected);
+        assert_eq!(
+            Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            expected
+        );
     }
 }
 
@@ -161,7 +164,14 @@ fn all_upstream_hash_vectors_match_both_native_field_libraries() {
 }
 
 fn boundary<F: PrimeField>() -> ([u8; 32], [u8; 32], [u8; 32]) {
-    let last = encode(&(-F::ONE));
+    boundary_from_last(encode(&(-F::ONE)))
+}
+
+fn core_boundary<F: PastaField>() -> ([u8; 32], [u8; 32], [u8; 32]) {
+    boundary_from_last((-F::ONE).to_repr())
+}
+
+fn boundary_from_last(last: [u8; 32]) -> ([u8; 32], [u8; 32], [u8; 32]) {
     let mut modulus = last;
     add_one(&mut modulus);
     let mut past = modulus;
@@ -182,8 +192,8 @@ fn add_one(bytes: &mut [u8; 32]) {
 
 #[test]
 fn canonical_decode_boundaries_reject_modular_aliases_and_preserve_error_input() {
-    assert_eq!(boundary::<Fp>(), boundary::<CoreFp>());
-    assert_eq!(boundary::<Fq>(), boundary::<CoreFq>());
+    assert_eq!(boundary::<Fp>(), core_boundary::<CoreFp>());
+    assert_eq!(boundary::<Fq>(), core_boundary::<CoreFq>());
     for ((last, modulus, past), native, hashing) in [
         (
             boundary::<Fp>(),

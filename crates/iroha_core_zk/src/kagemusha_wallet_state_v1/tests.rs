@@ -90,7 +90,7 @@ pub(super) fn signer(credential: &KagemushaWalletCredentialV1) -> SigningKey {
         )
         .expect("key");
         let public = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            signing.verifying_key().to_encoded_point(false).as_bytes(),
+            signing.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .expect("public");
         if public == credential.body.payment_key {
@@ -830,7 +830,7 @@ impl Custody for TestCustody {
         let message =
             kagemusha_wallet_signing_message_v1(KagemushaWalletSigningDomainV1::Receipt, &body);
         let signature: Signature = signing.sign(&message);
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let signature =
             KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).expect("signature");
         self.signatures += 1;
@@ -1820,7 +1820,7 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
         KagemushaWalletSigningDomainV1::Receipt,
         &body,
     ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).expect("signature");
     let record = owner.assemble(c, &digest, &signature).expect("Payment");
@@ -1843,7 +1843,7 @@ fn send_requires_recorded_predecessor_and_owner_assembles_canonical_payment() {
             2 => changed.output.push(0),
             _ => {
                 let other: Signature = signer(&send.credential).sign(b"wrong receipt message");
-                let other = other.normalize_s().unwrap_or(other);
+                let other = other.normalize_s();
                 changed.receipt.signature =
                     KagemushaDeviceSignatureV1::from_raw_bytes(&other.to_bytes()).unwrap();
             }
@@ -2926,7 +2926,7 @@ fn snapshot_a_fold_cannot_substitute_another_key_head_or_credential() {
                 let key = SigningKey::from_slice(&[77; 32]).unwrap();
                 fold.record.lineage.public.payment_key =
                     KagemushaDevicePublicKeyV1::from_sec1_bytes(
-                        key.verifying_key().to_encoded_point(false).as_bytes(),
+                        key.verifying_key().to_sec1_point(false).as_bytes(),
                     )
                     .unwrap();
             }
@@ -3236,9 +3236,10 @@ pub(super) fn alternate_retained_completion(
         .unwrap();
     let message =
         kagemusha_wallet_signing_message_v1(KagemushaWalletSigningDomainV1::Receipt, &body);
-    let signature: Signature =
-        signer(&frozen.credential).sign_with_rng(&mut rand_core_06::OsRng, &message);
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature: Signature = signer(&frozen.credential)
+        .try_sign_with_rng(&mut rand::rngs::SysRng, &message)
+        .expect("test signing entropy available");
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     assert_ne!(signature, original.record.receipt.signature);
     let mut alternate = original.clone();
