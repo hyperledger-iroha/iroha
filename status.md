@@ -141,19 +141,13 @@ fault, leakage, performance and release campaigns remain open. Earlier source or
 component observations do not qualify the final combined candidate.
 See the [protocol](specs/private_settlement.md).
 
-`iroha_core` tests selected by `state::`, `query::`, `telemetry::`,
-`alias_setup::` and `torii::zk::proofs::` pass for the flattened-index
-candidate, as do `iroha_torii` explorer and collection-source tests. Repeated
-concurrent allocation and custody checks also pass. Full library and
-workspace gates have not been requalified; the older failures below remain
-unverified outside those focused modules. On 2026-10-06, a complete
-`iroha_core` lib run had 16 failing tests, each failing the same way on a
-binary built before the ZK-plan wave: two block-sequence rejections, two
-FASTPQ finalized-source and lane counters, a signer-check query, three MUSUBI
-pin-outbox and publication-admission tests, the trigger contract-capture work
-limits, an IVM host state-read gas test, two State authorization-reader tests,
-a State capacity refusal, a state-certificate pairing refusal, the autoscale
-elastic-lane liveness test and an autoscale-route validation test. `iroha_config`
+The flattened derived indexes store one row per key/member, with separate
+count rows where needed. The complete default Core and Torii library suites
+pass on the unchanged 2026-10-25 candidate, including the fixture and
+signed-history repairs. Repeated carrier/refund checks pass. Broader workspace,
+SDK, network and release gates remain open.
+
+`iroha_config`
 `musubi_private_tls_listener_rejects_retired_mount_configuration` fails; 30 tests of
 the `zk_verify`, `zk_ledger_scaffold`, `zk_proof_retention` and
 `overlay_bounds` integration modules are stale and marked `TODO:`; and
@@ -162,8 +156,7 @@ it although the CLI builds one. On `d651d51715`: four `fastpq_prover` lib
 tests fail (1,218 pass), in `axt_binding`, `compact_execution_effect_batch`,
 the compact quantity artifact and the public-transfer execution effect, and
 the four-quadrant tree capacity test fails (124 retained nodes against 127).
-On 2026-10-05 before the upstream merges: Torii lib tests, 106 of 5,437 fail
-repeatably and at least three more intermittently in a full parallel run; all
+On 2026-10-05 before the upstream merges, all
 five `address_parsing::explorer` tests of `torii_core_routes` and 15 of 54
 `agent_alias` tests of `torii_protocols` fail; `irohad_lib` aborts on a stack
 overflow in `beacon_bootstrap::seat_attempt::aggregate_tests` after five

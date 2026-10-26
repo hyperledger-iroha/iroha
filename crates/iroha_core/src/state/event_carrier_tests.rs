@@ -140,6 +140,9 @@ fn event_carrier_refuses_unanchored_and_changed_original_execution_source() {
 
 #[test]
 fn event_carrier_refusal_preserves_original_pool_and_cumulative_metadata_owner() {
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = event_chain();
     let state = Arc::clone(chain.state());
     let kura = Arc::clone(chain.kura());
@@ -503,6 +506,9 @@ fn event_carrier_busy_capture_retains_exact_physical_writer_release_and_no_decod
         future::Future,
         task::{Context, Waker},
     };
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = event_chain();
     let state = Arc::clone(chain.state());
     let kura = Arc::clone(chain.kura());
@@ -595,6 +601,9 @@ fn event_carrier_changed_capture_returns_original_release_without_retrying_new_g
 
 #[test]
 fn event_carrier_post_read_writer_refusal_retires_carrier_and_preserves_original_cause() {
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = event_chain();
     let state = Arc::clone(chain.state());
     let kura = Arc::clone(chain.kura());

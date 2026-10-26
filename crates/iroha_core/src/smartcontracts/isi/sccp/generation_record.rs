@@ -126,8 +126,7 @@ fn shared_error(error: PrepaidSharedError) -> GenerationRecordError {
     }
 }
 
-#[derive(Default)]
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 struct Demand {
     bytes: usize,
     charges: usize,

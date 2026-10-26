@@ -1841,7 +1841,7 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
     },
     ConstructionUse {
         path: "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-        uses: &[("ConfidentialTree", 2)],
+        uses: &[("ConfidentialTree", 1)],
         owner: UseOwner::Accumulator("confidential_note_tree"),
     },
     ConstructionUse {
@@ -1866,6 +1866,11 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
             Use::BlockContent,
             "Recomputes a committed block's Network input and output Merkle roots from authenticated frame windows and checks them against the header and certified result: block content, not a State-content root",
         ),
+    },
+    ConstructionUse {
+        path: "crates/iroha_core/src/state/ivm_zk_roots.rs",
+        uses: &[("ConfidentialTree", 1)],
+        owner: UseOwner::Accumulator("confidential_note_tree"),
     },
     ConstructionUse {
         path: "crates/iroha_core/src/state/output_capacity.rs",

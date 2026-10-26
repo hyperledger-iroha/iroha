@@ -1018,6 +1018,9 @@ fn durable_certificate_read_rejects_checksum_valid_corruption_after_cache_warm()
 
 #[test]
 fn signed_genesis_initialization_does_not_repeat_completed_scope_decode() {
+    // Keep retired genesis fixture cells fixed while checking the decoder's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     let budget = chain.state().ivm_execution_budget();
     let original = frame(&chain, 1);
