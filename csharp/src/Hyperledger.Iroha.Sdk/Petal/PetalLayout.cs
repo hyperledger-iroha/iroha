@@ -26,16 +26,39 @@ public enum PetalSlotKind
 /// <param name="DataBit">Lane <c>D</c> bit index for <see cref="PetalSlotKind.Data"/>; otherwise <c>-1</c>.</param>
 public readonly record struct PetalSlotRole(PetalSlotKind Kind, int DataBit);
 
+/// <summary>One katakana tile of the card's bands (see <see cref="PetalLayout.KanaTiles"/>).</summary>
+/// <param name="Band">Band: 0 above the square, 1 below it.</param>
+/// <param name="Row">Row within its band, top first.</param>
+/// <param name="Column">Column, left first.</param>
+/// <param name="X">Left edge of the tile square in square coordinates.</param>
+/// <param name="Y">Top edge of the tile square in square coordinates (negative above the square).</param>
+/// <param name="Pilot">Index among the pilots of its band, or <see langword="null"/> for a data tile.</param>
+public readonly record struct PetalKanaTile(int Band, int Row, int Column, double X, double Y, int? Pilot)
+{
+    /// <summary>Centre of the tile in square coordinates.</summary>
+    public PetalPoint Center => new(X + PetalLayout.KanaTile / 2.0, Y + PetalLayout.KanaTile / 2.0);
+
+    /// <summary>Whether the tile is a pilot with a fixed symbol.</summary>
+    public bool IsPilot => Pilot is not null;
+}
+
 /// <summary>
-/// Normative Petal frame geometry (format 3).
+/// Normative Petal frame geometry (format 5).
 /// </summary>
 /// <remarks>
-/// All coordinates are design units on a square canvas of <see cref="Canvas"/>
-/// units with the origin at the top-left and <c>y</c> growing downward. A
-/// renderer scales the canvas to any pixel size; a decoder maps camera pixels
-/// back to design units. Nothing depends on floating-point rounding for bit
-/// placement: cell order is defined by integer indices only, and the slot count
-/// of every band is a fixed table.
+/// <para>
+/// All coordinates are design units in the square's coordinates: the square code spans
+/// <see cref="Canvas"/> units on both axes with the origin at its top-left and <c>y</c> growing
+/// downward. A frame is a <em>card</em> of <see cref="Canvas"/> × <see cref="CardHeight"/> units:
+/// the square with a band of katakana tiles above it (<c>y</c> from −322 to 0) and below it
+/// (<c>y</c> from 1024 to 1346), so card coordinates are square coordinates plus
+/// <see cref="SquareTop"/> in <c>y</c>. A renderer scales the card to any pixel width; a decoder maps
+/// camera pixels back to design units.
+/// </para>
+/// <para>
+/// Nothing depends on floating-point rounding for bit placement: cell and tile order are defined by
+/// integer indices only, and the slot count of every band of the petal field is a fixed table.
+/// </para>
 /// </remarks>
 public static class PetalLayout
 {
@@ -132,6 +155,107 @@ public static class PetalLayout
 
     /// <summary>Outer radius of a finder blossom (tip of a petal).</summary>
     public const double FinderOuter = 60.0;
+
+    /// <summary>Side of a katakana tile (see <see cref="PetalKana"/>).</summary>
+    public const double KanaTile = 25.0;
+
+    /// <summary>Pitch of the katakana tile lattice.</summary>
+    public const double KanaPitch = 29.0;
+
+    /// <summary>Side of a tile's glyph box, centred in the tile.</summary>
+    public const double KanaGlyphBox = 23.0;
+
+    /// <summary>Corner radius of a tile.</summary>
+    public const double KanaCorner = 3.0;
+
+    /// <summary>Tile rows of each band.</summary>
+    public const int KanaRows = 10;
+
+    /// <summary>Tile columns of each band.</summary>
+    public const int KanaColumns = 35;
+
+    /// <summary>Gap between a band's lattice and the square.</summary>
+    public const double KanaGap = 24.0;
+
+    /// <summary>Margin outside a band's lattice.</summary>
+    public const double KanaMargin = 8.0;
+
+    /// <summary>Height of a band with its gap and margin (322 units).</summary>
+    public const double KanaBandHeight = KanaMargin + KanaRows * KanaPitch + KanaGap;
+
+    /// <summary>Height of the card: the square with a band above and below it (1668 units).</summary>
+    public const double CardHeight = Canvas + 2.0 * KanaBandHeight;
+
+    /// <summary>Card <c>y</c> of the square's top edge: card coordinates are square coordinates plus this in <c>y</c>.</summary>
+    public const double SquareTop = KanaBandHeight;
+
+    /// <summary>
+    /// Tile centres keep at least this distance from every finder centre: the blossom's radius, a
+    /// blossom diameter of clearance, and a tile's half-diagonal, so no tile looks like part of a
+    /// finder.
+    /// </summary>
+    public const double KanaFinderClearance = 198.0;
+
+    /// <summary>Bands: above the square and below it.</summary>
+    public const int KanaBands = 2;
+
+    /// <summary>Pilot tiles of each band.</summary>
+    public const int KanaPilots = 8;
+
+    /// <summary>Tiles of each band: the lattice cells clear of the finders.</summary>
+    public const int KanaBandTiles = 306;
+
+    /// <summary>Tiles of both bands.</summary>
+    public const int KanaTileCount = KanaBands * KanaBandTiles;
+
+    /// <summary>Data tiles of each band (its tiles that are not pilots).</summary>
+    internal const int KanaBandDataTiles = KanaBandTiles - KanaPilots;
+
+    /// <summary>
+    /// The pilot tiles of each band as <c>row, column</c> pairs in pilot order (band 1 mirrors band
+    /// 0's rows, so the pilots sit at the same distances from the square).
+    /// </summary>
+    private static readonly int[][] KanaPilotCellValues =
+    [
+        [0, 0, 0, 17, 0, 34, 4, 0, 4, 34, 9, 8, 9, 17, 9, 26],
+        [9, 0, 9, 17, 9, 34, 5, 0, 5, 34, 0, 8, 0, 17, 0, 26],
+    ];
+
+    /// <summary>What every pilot shows, in pilot order (ロ ケ ヒ ム ス ワ ア カ).</summary>
+    private static readonly PetalKanaSymbol[] KanaPilotSymbolValues =
+    [
+        new(1, true),
+        new(11, false),
+        new(13, true),
+        new(9, false),
+        new(14, false),
+        new(6, true),
+        new(12, false),
+        new(7, true),
+    ];
+
+    /// <summary>Every tile of both bands, band 0 first, each in reading order.</summary>
+    private static readonly PetalKanaTile[] KanaTileValues = new PetalKanaTile[KanaTileCount];
+
+    /// <summary>Left edge, top edge and pilot index (−1 for a data tile) of every tile (renderer and reader hot paths).</summary>
+    private static readonly double[] TileXs = new double[KanaTileCount];
+
+    private static readonly double[] TileYs = new double[KanaTileCount];
+
+    private static readonly int[] TilePilots = new int[KanaTileCount];
+
+    /// <summary>The data tiles of band <c>b</c> from <c>b · 298</c>, as tile indices.</summary>
+    private static readonly int[] KanaDataTileValues = new int[KanaBands * KanaBandDataTiles];
+
+    /// <summary>The pilot tiles of band <c>b</c> from <c>b · 8</c>, in pilot order, as tile indices.</summary>
+    private static readonly int[] KanaPilotTileValues = new int[KanaBands * KanaPilots];
+
+    private static readonly IReadOnlyList<int>[] KanaDataTileViews = new IReadOnlyList<int>[KanaBands];
+
+    private static readonly IReadOnlyList<int>[] KanaPilotTileViews = new IReadOnlyList<int>[KanaBands];
+
+    /// <summary>The tile of every lattice cell, <c>(band · 10 + row) · 35 + column</c>, or −1.</summary>
+    private static readonly int[] KanaLattice = new int[KanaBands * KanaRows * KanaColumns];
 
     /// <summary>
     /// Cells on each band, inner band first: <c>4 · round(2π r / 50)</c> for the band radius
@@ -272,6 +396,8 @@ public static class PetalLayout
             var (ring, slot) = SplitSlot(flat);
             SlotCenters[flat] = ComputeSlotCenter(ring, slot);
         }
+
+        BuildKanaTiles();
     }
 
     /// <summary>
@@ -499,6 +625,233 @@ public static class PetalLayout
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Every katakana tile of both bands: band 0 first, each in reading order (rows top first,
+    /// columns left first).
+    /// </summary>
+    /// <remarks>
+    /// Each band is a lattice of <see cref="KanaRows"/> × <see cref="KanaColumns"/> cells of pitch
+    /// <see cref="KanaPitch"/>, centred on the card; a cell's tile is a <see cref="KanaTile"/>-unit
+    /// square inset 2 units into the cell, at <c>(6.5 + 29c, −312 + 29r)</c> in band 0 and
+    /// <c>(6.5 + 29c, 1050 + 29r)</c> in band 1. A cell whose tile centre lies within
+    /// <see cref="KanaFinderClearance"/> of a finder centre has no tile, which leaves
+    /// <see cref="KanaBandTiles"/> tiles in each band.
+    /// </remarks>
+    public static IReadOnlyList<PetalKanaTile> KanaTiles { get; } = Array.AsReadOnly(KanaTileValues);
+
+    /// <summary>What every pilot shows, in pilot order (ロ ケ ヒ ム ス ワ ア カ): its glyph and polarity.</summary>
+    public static IReadOnlyList<PetalKanaSymbol> KanaPilotSymbols { get; } = Array.AsReadOnly(KanaPilotSymbolValues);
+
+    /// <summary>The lattice cell of pilot <paramref name="pilot"/> of band <paramref name="band"/>.</summary>
+    /// <remarks>Band 1's pilots mirror band 0's rows, so the pilots sit at the same distances from the square.</remarks>
+    /// <param name="band">Band, 0 or 1.</param>
+    /// <param name="pilot">Pilot, 0 to 7.</param>
+    /// <returns>The pilot's row and column.</returns>
+    public static (int Row, int Column) KanaPilotCell(int band, int pilot)
+    {
+        CheckKanaBand(band);
+        if ((uint)pilot >= KanaPilots)
+            throw new ArgumentOutOfRangeException(nameof(pilot));
+        return (KanaPilotCellValues[band][2 * pilot], KanaPilotCellValues[band][2 * pilot + 1]);
+    }
+
+    /// <summary>
+    /// The data tiles of <paramref name="band"/> (its tiles that are not pilots) in reading order, as
+    /// indices into <see cref="KanaTiles"/>: data tile <c>i</c> shows bit <c>i</c> of the band's
+    /// polarity lane and nibble <c>i</c> of its glyph lane.
+    /// </summary>
+    /// <param name="band">Band, 0 or 1.</param>
+    /// <returns>The 298 tile indices.</returns>
+    public static IReadOnlyList<int> KanaDataTiles(int band)
+    {
+        CheckKanaBand(band);
+        return KanaDataTileViews[band];
+    }
+
+    /// <summary>The pilot tiles of <paramref name="band"/> in pilot order, as indices into <see cref="KanaTiles"/>.</summary>
+    /// <param name="band">Band, 0 or 1.</param>
+    /// <returns>The eight tile indices.</returns>
+    public static IReadOnlyList<int> KanaPilotTiles(int band)
+    {
+        CheckKanaBand(band);
+        return KanaPilotTileViews[band];
+    }
+
+    /// <summary>
+    /// The tile under the square-coordinate point <c>(x, y)</c> and the point's position inside the
+    /// tile's square (0 to <see cref="KanaTile"/> on both axes from its top-left corner).
+    /// </summary>
+    /// <param name="x">Square x.</param>
+    /// <param name="y">Square y (negative above the square, 1024 or more below it).</param>
+    /// <returns>The tile index and the tile-local point, or <see langword="null"/> outside every tile square.</returns>
+    public static (int Tile, double U, double V)? KanaTileAt(double x, double y) =>
+        TryKanaTileAt(x, y, out var tile, out var u, out var v) ? (tile, u, v) : null;
+
+    /// <summary>Whether the tile-local point <c>(u, v)</c> lies inside the rounded tile square (corner radius <see cref="KanaCorner"/>).</summary>
+    /// <param name="u">Tile-local x, from the tile's left edge.</param>
+    /// <param name="v">Tile-local y, from the tile's top edge.</param>
+    /// <returns><see langword="true"/> inside the tile.</returns>
+    public static bool KanaInside(double u, double v)
+    {
+        const double side = KanaTile;
+        const double corner = KanaCorner;
+        if (!(u >= 0.0 && u <= side) || !(v >= 0.0 && v <= side))
+            return false;
+        var cx = Math.Clamp(u, corner, side - corner);
+        var cy = Math.Clamp(v, corner, side - corner);
+        return (u - cx) * (u - cx) + (v - cy) * (v - cy) <= corner * corner;
+    }
+
+    /// <summary>
+    /// Whether the tile-local point <c>(u, v)</c> lies on <paramref name="glyph"/>'s strokes: inside
+    /// the tile square and inked in the glyph box (inset by half the difference of tile and box), so
+    /// the design point <c>((u − 1)·32/23, (v − 1)·32/23)</c> is inked (<see cref="PetalGlyphs.IsInked"/>).
+    /// </summary>
+    /// <param name="glyph">Glyph, 0 to 15.</param>
+    /// <param name="u">Tile-local x.</param>
+    /// <param name="v">Tile-local y.</param>
+    /// <returns><see langword="true"/> on the glyph's ink.</returns>
+    public static bool KanaInked(int glyph, double u, double v)
+    {
+        if ((uint)glyph >= PetalGlyphs.GlyphCount)
+            throw new ArgumentOutOfRangeException(nameof(glyph), "A glyph is 0 to 15.");
+        return KanaInkedUnchecked(glyph, u, v);
+    }
+
+    /// <summary><see cref="KanaInked"/> without the range check.</summary>
+    internal static bool KanaInkedUnchecked(int glyph, double u, double v)
+    {
+        const double inset = (KanaTile - KanaGlyphBox) / 2.0;
+        const double scale = PetalGlyphs.GlyphGrid / KanaGlyphBox;
+        return KanaInside(u, v) && PetalGlyphs.Inked(glyph, (u - inset) * scale, (v - inset) * scale);
+    }
+
+    /// <summary>
+    /// <see cref="KanaTileAt"/> without allocating: <see langword="false"/> outside every tile square.
+    /// A NaN coordinate is outside (the reference reaches the same verdict through a NaN offset).
+    /// </summary>
+    internal static bool TryKanaTileAt(double x, double y, out int tile, out double u, out double v)
+    {
+        (tile, u, v) = (-1, 0.0, 0.0);
+        int band;
+        if (y < 0.0)
+            band = 0;
+        else if (y >= Canvas)
+            band = 1;
+        else
+            return false;
+        var gx = (x - KanaLatticeLeft) / KanaPitch;
+        var gy = (y - KanaLatticeTop(band)) / KanaPitch;
+        if (!(gx >= 0.0) || !(gy >= 0.0))
+            return false;
+        var column = Math.Floor(gx);
+        var row = Math.Floor(gy);
+        if (column >= KanaColumns || row >= KanaRows)
+            return false;
+        var index = KanaLattice[(band * KanaRows + (int)row) * KanaColumns + (int)column];
+        if (index < 0)
+            return false;
+        const double inset = (KanaPitch - KanaTile) / 2.0;
+        var tu = (gx - column) * KanaPitch - inset;
+        var tv = (gy - row) * KanaPitch - inset;
+        if (!(tu >= 0.0 && tu <= KanaTile && tv >= 0.0 && tv <= KanaTile))
+            return false;
+        (tile, u, v) = (index, tu, tv);
+        return true;
+    }
+
+    /// <summary>Left edge of every tile (square coordinates).</summary>
+    internal static ReadOnlySpan<double> TileXTable => TileXs;
+
+    /// <summary>Top edge of every tile (square coordinates).</summary>
+    internal static ReadOnlySpan<double> TileYTable => TileYs;
+
+    /// <summary>Pilot index of every tile, −1 for a data tile.</summary>
+    internal static ReadOnlySpan<int> TilePilotTable => TilePilots;
+
+    /// <summary>The data tiles of band <c>b</c> at <c>[b · 298, (b + 1) · 298)</c>.</summary>
+    internal static ReadOnlySpan<int> KanaDataTileTable => KanaDataTileValues;
+
+    /// <summary>The pilot tiles of band <c>b</c> at <c>[b · 8, (b + 1) · 8)</c>, in pilot order.</summary>
+    internal static ReadOnlySpan<int> KanaPilotTileTable => KanaPilotTileValues;
+
+    /// <summary>What every pilot shows (no copy).</summary>
+    internal static ReadOnlySpan<PetalKanaSymbol> KanaPilotSymbolTable => KanaPilotSymbolValues;
+
+    /// <summary>Left edge of the tile lattice: the columns are centred on the card (4.5 units).</summary>
+    private const double KanaLatticeLeft = (Canvas - KanaColumns * KanaPitch) / 2.0;
+
+    /// <summary>Top of band <paramref name="band"/>'s lattice in square coordinates.</summary>
+    private static double KanaLatticeTop(int band) => band == 0 ? -KanaBandHeight + KanaMargin : Canvas + KanaGap;
+
+    /// <summary>Lays out the tiles of both bands, exactly as the reference's <c>kana_tiles</c>.</summary>
+    private static void BuildKanaTiles()
+    {
+        const double inset = (KanaPitch - KanaTile) / 2.0;
+        const double half = KanaTile / 2.0;
+        const double clearance = KanaFinderClearance;
+        Array.Fill(KanaLattice, -1);
+        var count = 0;
+        for (var band = 0; band < KanaBands; band++)
+        {
+            var (data, pilots) = (0, 0);
+            for (var row = 0; row < KanaRows; row++)
+            {
+                for (var column = 0; column < KanaColumns; column++)
+                {
+                    var x = KanaLatticeLeft + KanaPitch * column + inset;
+                    var y = KanaLatticeTop(band) + KanaPitch * row + inset;
+                    var (cx, cy) = (x + half, y + half);
+                    var clear = true;
+                    foreach (var finder in FinderCenterValues)
+                    {
+                        var (dx, dy) = (cx - finder.X, cy - finder.Y);
+                        clear &= dx * dx + dy * dy >= clearance * clearance;
+                    }
+
+                    if (!clear)
+                        continue;
+                    int? pilot = null;
+                    var cells = KanaPilotCellValues[band];
+                    for (var p = 0; p < KanaPilots && pilot is null; p++)
+                    {
+                        if (cells[2 * p] == row && cells[2 * p + 1] == column)
+                            pilot = p;
+                    }
+
+                    KanaTileValues[count] = new PetalKanaTile(band, row, column, x, y, pilot);
+                    TileXs[count] = x;
+                    TileYs[count] = y;
+                    TilePilots[count] = pilot ?? -1;
+                    KanaLattice[(band * KanaRows + row) * KanaColumns + column] = count;
+                    if (pilot is { } index)
+                    {
+                        KanaPilotTileValues[band * KanaPilots + index] = count;
+                        pilots++;
+                    }
+                    else
+                    {
+                        KanaDataTileValues[band * KanaBandDataTiles + data] = count;
+                        data++;
+                    }
+
+                    count++;
+                }
+            }
+
+            if (count != (band + 1) * KanaBandTiles || data != KanaBandDataTiles || pilots != KanaPilots)
+                throw new InvalidOperationException("A band holds 306 tiles, eight of them pilots.");
+            KanaDataTileViews[band] = Array.AsReadOnly(KanaDataTileValues[(band * KanaBandDataTiles)..((band + 1) * KanaBandDataTiles)]);
+            KanaPilotTileViews[band] = Array.AsReadOnly(KanaPilotTileValues[(band * KanaPilots)..((band + 1) * KanaPilots)]);
+        }
+    }
+
+    private static void CheckKanaBand(int band)
+    {
+        if ((uint)band >= KanaBands)
+            throw new ArgumentOutOfRangeException(nameof(band), "A band is 0 (above the square) or 1 (below it).");
     }
 
     /// <summary>Shared finder centre table (no copy, no enumerator allocation).</summary>

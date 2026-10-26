@@ -160,25 +160,32 @@ public sealed class PetalDLane
     }
 }
 
-/// <summary>The bytes of every lane of one frame, turn lanes included: lane data, or transmitted codewords.</summary>
+/// <summary>
+/// The bytes of every lane of one frame, turn and kana lanes included: lane data, or transmitted
+/// codewords.
+/// </summary>
 public sealed class PetalLaneData : IEquatable<PetalLaneData>
 {
     private readonly byte[][] fields;
     private readonly byte[][] turns;
+    private readonly byte[][] kana;
 
     /// <summary>Creates the bytes of one frame.</summary>
     /// <param name="d">Lane <c>D</c>.</param>
     /// <param name="fields">The four field lanes, sector 0 first.</param>
     /// <param name="turns">The four turn lanes, sector 0 first.</param>
-    /// <exception cref="ArgumentException">There are not exactly four field lanes and four turn lanes.</exception>
-    public PetalLaneData(byte[] d, IReadOnlyList<byte[]> fields, IReadOnlyList<byte[]> turns)
+    /// <param name="kana">The four kana lanes in <see cref="PetalKana.Lanes"/> order: <c>P0</c>, <c>K0</c>, <c>P1</c>, <c>K1</c>.</param>
+    /// <exception cref="ArgumentException">There are not exactly four lanes of each kind.</exception>
+    public PetalLaneData(byte[] d, IReadOnlyList<byte[]> fields, IReadOnlyList<byte[]> turns, IReadOnlyList<byte[]> kana)
     {
         ArgumentNullException.ThrowIfNull(d);
         D = d;
         this.fields = Sectors(fields, nameof(fields));
         this.turns = Sectors(turns, nameof(turns));
+        this.kana = Sectors(kana, nameof(kana));
         Fields = Array.AsReadOnly(this.fields);
         Turns = Array.AsReadOnly(this.turns);
+        Kana = Array.AsReadOnly(this.kana);
     }
 
     /// <summary>Lane <c>D</c>.</summary>
@@ -190,10 +197,26 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
     /// <summary>The turn lanes, sector 0 first (see <see cref="PetalTurns"/>).</summary>
     public IReadOnlyList<byte[]> Turns { get; }
 
+    /// <summary>
+    /// The kana lanes in <see cref="PetalKana.Lanes"/> order: <c>P0</c>, <c>K0</c> (the band above the
+    /// square), <c>P1</c>, <c>K1</c> (the band below it); see <see cref="PetalKana"/>.
+    /// </summary>
+    public IReadOnlyList<byte[]> Kana { get; }
+
     /// <summary>The bytes of <paramref name="lane"/>.</summary>
     /// <param name="lane">The lane.</param>
     /// <returns>The lane's bytes.</returns>
     public byte[] Lane(PetalLane lane) => PetalLanes.IsField(lane) ? fields[PetalLanes.Sector(lane)] : D;
+
+    /// <summary>The bytes of kana lane <paramref name="lane"/>.</summary>
+    /// <param name="lane">The kana lane.</param>
+    /// <returns>The lane's bytes.</returns>
+    public byte[] Lane(PetalKanaLane lane)
+    {
+        if ((uint)lane >= (uint)kana.Length)
+            throw new ArgumentOutOfRangeException(nameof(lane));
+        return kana[(int)lane];
+    }
 
     /// <inheritdoc />
     public bool Equals(PetalLaneData? other)
@@ -203,6 +226,12 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
         for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
             if (!fields[sector].AsSpan().SequenceEqual(other.fields[sector]) || !turns[sector].AsSpan().SequenceEqual(other.turns[sector]))
+                return false;
+        }
+
+        for (var lane = 0; lane < kana.Length; lane++)
+        {
+            if (!kana[lane].AsSpan().SequenceEqual(other.kana[lane]))
                 return false;
         }
 
@@ -221,14 +250,17 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
             hash.AddBytes(field);
         foreach (var turn in turns)
             hash.AddBytes(turn);
+        foreach (var lane in kana)
+            hash.AddBytes(lane);
         return hash.ToHashCode();
     }
 
+    /// <summary>Copies the four lanes of one kind (one per sector, or the four kana lanes).</summary>
     private static byte[][] Sectors(IReadOnlyList<byte[]> lanes, string name)
     {
         ArgumentNullException.ThrowIfNull(lanes, name);
         if (lanes.Count != PetalLayout.Sectors)
-            throw new ArgumentException("A frame has four lanes of each kind, one per sector.", name);
+            throw new ArgumentException("A frame has four lanes of each kind.", name);
         var copies = new byte[PetalLayout.Sectors][];
         for (var sector = 0; sector < copies.Length; sector++)
             copies[sector] = lanes[sector] ?? throw new ArgumentNullException(name);
@@ -250,26 +282,29 @@ public sealed class PetalLaneData : IEquatable<PetalLaneData>
 /// <see cref="FirstAtomId"/>). Any single readable lane is useful on its own.
 /// On top of every field lane, the turns of its lit petals carry four more
 /// atoms from the repair range (see <see cref="PetalTurns"/>), so a sharp
-/// camera reads up to 37 atoms (592 bytes) a frame.
+/// camera reads up to 37 atoms (592 bytes) from the square. The katakana bands
+/// above and below the square add eight atoms each (see <see cref="PetalKana"/>):
+/// up to 53 atoms (848 bytes) a frame.
 /// </para>
 /// <para>
-/// Lane data layouts (all big-endian): every lane but the turn lanes starts
-/// with <c>tag:u8, frame:u16</c> where <c>tag</c> is the low byte of the
+/// Lane data layouts (all big-endian): every lane but the turn and kana lanes
+/// starts with <c>tag:u8, frame:u16</c> where <c>tag</c> is the low byte of the
 /// payload CRC-32C; the field lanes and non-beacon <c>D</c> continue with
 /// 16-byte atoms; the beacon continues with
 /// <c>version:u8, kind:u8, len:u24, crc:u32</c>, zero padded. A turn lane is
 /// <c>atoms… check:u32</c>, where the check binds the atoms to the header of
-/// the field lane they ride on.
+/// the field lane they ride on; a kana lane is <c>atoms… check:u32</c>, where
+/// the check binds the atoms to the stream tag, the frame and the lane.
 /// </para>
 /// </remarks>
 public static class PetalStream
 {
-    /// <summary>Version/profile byte of the beacon: format version 3, layout profile 0.</summary>
+    /// <summary>Version/profile byte of the beacon: format version 5, layout profile 0.</summary>
     /// <remarks>
-    /// Any other version is refused, the retired formats 2 (<c>0x20</c>, unturned petals) and
-    /// 1 (<c>0x10</c>, katakana tiles) included.
+    /// Any other version is refused, the retired formats 3 (<c>0x30</c>, no katakana bands),
+    /// 2 (<c>0x20</c>, unturned petals) and 1 (<c>0x10</c>, katakana tiles only) included.
     /// </remarks>
-    public const byte FormatVersion = 0x30;
+    public const byte FormatVersion = 0x50;
 
     /// <summary>Largest payload a beacon can describe (<c>u24</c>).</summary>
     public const int MaxPayloadLength = (1 << 24) - 1;

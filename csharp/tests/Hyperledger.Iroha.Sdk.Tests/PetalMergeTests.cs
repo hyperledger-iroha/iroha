@@ -14,9 +14,10 @@ public sealed class PetalMergeTests
     /// <summary>The <c>one-pass</c> stream of the golden captures.</summary>
     private static readonly PetalStreamEncoder OnePass = new(PetalTestSupport.Payload(3000, 2), 2);
 
-    private static PetalLuma Setup(ushort frame) => PetalTestSupport.RenderLuma(SetupEncoder, frame, 768, 2);
+    /// <summary>A 768-pixel render of the square of frame <paramref name="frame"/> (the decoder tests' bare squares).</summary>
+    private static PetalLuma Setup(ushort frame) => PetalTestSupport.SquareLuma(SetupEncoder, frame, 768, 2);
 
-    /// <summary>The 512-pixel render the session tests film.</summary>
+    /// <summary>The 512-pixel card the session tests film.</summary>
     private static PetalRgbImage Source(PetalStreamEncoder encoder, ushort frame) =>
         PetalRenderer.Render(encoder.Cells(frame), new PetalRenderOptions { Size = 512, Supersample = 2 });
 

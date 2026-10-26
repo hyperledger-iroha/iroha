@@ -12,10 +12,10 @@ public sealed class PetalDecoderTests
 
     private static readonly PetalStreamEncoder SetupEncoder = new(SetupPayload, 2);
 
-    /// <summary>A 768-pixel render of frame <paramref name="frame"/> of the reference test stream (2× supersampling).</summary>
-    private static PetalLuma Setup(ushort frame) => PetalTestSupport.RenderLuma(SetupEncoder, frame, 768, 2);
+    /// <summary>A 768-pixel render of the square of frame <paramref name="frame"/> of the reference test stream (2× supersampling).</summary>
+    private static PetalLuma Setup(ushort frame) => PetalTestSupport.SquareLuma(SetupEncoder, frame, 768, 2);
 
-    /// <summary>A 768-pixel render of frame <paramref name="frame"/> with the blossom of canonical corner <paramref name="corner"/> painted over.</summary>
+    /// <summary>A 768-pixel square of frame <paramref name="frame"/> with the blossom of canonical corner <paramref name="corner"/> painted over.</summary>
     private static PetalLuma HiddenBlossom(ushort frame, int corner) => PetalTestSupport.HideBlossom(Setup(frame), corner);
 
     /// <summary>The exact canvas-to-pixel pose of the 768-pixel test renders.</summary>
@@ -67,7 +67,7 @@ public sealed class PetalDecoderTests
     [Fact]
     public void BeaconFramesExposeTheBeacon()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 8, 600, 2);
+        var luma = PetalTestSupport.SquareLuma(SetupEncoder, 8, 600, 2);
         var decoded = PetalDecoder.Decode(luma);
         Assert.True(decoded.Success, decoded.Error.ToString());
         var beacon = decoded.Frame.Beacon();
@@ -163,7 +163,7 @@ public sealed class PetalDecoderTests
                 cells.Dots[slot] = rng.NextUInt32() % 2 == 0;
         }
 
-        var luma = PetalRenderer.Render(cells, new PetalRenderOptions { Size = 768, Supersample = 2 }).ToLuma();
+        var luma = PetalTestSupport.Square(cells, 768, 2).ToLuma();
         var result = PetalDecoder.Decode(luma);
         Assert.True(result.Success, result.Error.ToString());
         Assert.Equal("0", result.Frame.Lanes);
@@ -505,7 +505,7 @@ public sealed class PetalDecoderTests
     [Fact]
     public void DecodeAtSurvivesHostilePoses()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 3, 300, 1);
+        var luma = PetalTestSupport.SquareLuma(SetupEncoder, 3, 300, 1);
         var hostile = new[]
         {
             PetalPose.Plain(new PetalHomography(new double[9])),
@@ -527,12 +527,20 @@ public sealed class PetalDecoderTests
     [Fact]
     public void DecodeAtWithTheTruePoseReadsEveryLane()
     {
-        var luma = PetalTestSupport.RenderLuma(SetupEncoder, 6, 512, 2);
+        var luma = PetalTestSupport.SquareLuma(SetupEncoder, 6, 512, 2);
         var pose = PetalPose.Plain(new PetalHomography(0.5, 0, 0, 0, 0.5, 0, 0, 0, 1));
         var frame = PetalDecoder.DecodeAt(luma, pose);
         Assert.NotNull(frame);
         PetalTestSupport.AssertAllLanes(frame, SetupEncoder.LaneData(6), "true pose");
         Assert.Equal(pose, frame.Pose);
+        // on the card the square starts 161 pixels down: its pose places the bands' tiles too
+        var card = PetalTestSupport.RenderLuma(SetupEncoder, 6, 512, 2);
+        var cardPose = PetalPose.Plain(new PetalHomography(0.5, 0, 0, 0, 0.5, 161, 0, 0, 1));
+        var onCard = PetalDecoder.DecodeAt(card, cardPose);
+        Assert.NotNull(onCard);
+        PetalTestSupport.AssertAllLanes(onCard, SetupEncoder.LaneData(6), "true card pose");
+        var kana = PetalKana.ReadKana(card, onCard, new PetalLaneHeader(SetupEncoder.Meta.Tag, 6));
+        Assert.All(kana, static lane => Assert.NotNull(lane));
     }
 
     [Fact]
@@ -952,7 +960,7 @@ public sealed class PetalDecoderTests
         var session = new PetalScanSession();
         PetalLuma Frame(int frame, bool covered)
         {
-            var render = PetalTestSupport.RenderLuma(SetupEncoder, (ushort)frame, 600, 2);
+            var render = PetalTestSupport.SquareLuma(SetupEncoder, (ushort)frame, 600, 2);
             return covered ? PetalTestSupport.HideBlossom(render, 1) : render;
         }
 
@@ -1004,7 +1012,7 @@ public sealed class PetalDecoderTests
     public void LocatedCountsCodesThatWereSeenButCouldNotBeRead()
     {
         var encoder = new PetalStreamEncoder(PetalTestSupport.Payload(100, 3), 1);
-        var frame = Source(encoder, 1);
+        var frame = PetalTestSupport.Square(encoder.Cells(1), 512, 2);
         // keep only the four blossoms: finders are located, no lane can be read
         const double scale = 512.0 / 1024.0;
         for (var y = 0; y < 512; y++)
@@ -1057,7 +1065,7 @@ public sealed class PetalDecoderTests
         Assert.Same(first, player.DrawListAt(TimeSpan.FromMilliseconds(100)));
         Assert.NotSame(first, player.DrawListAt(TimeSpan.FromMilliseconds(130)));
         var image = player.RenderAt(TimeSpan.Zero, new PetalRenderOptions { Size = 128, Supersample = 1 });
-        Assert.Equal(128, image.Width);
+        Assert.Equal((128, 209), (image.Width, image.Height));
         var canvas = new CountingCanvas();
         player.Draw(canvas, TimeSpan.Zero, 512.0);
         var list = player.DrawListAt(TimeSpan.Zero);
@@ -1066,6 +1074,10 @@ public sealed class PetalDecoderTests
         Assert.Equal(4 * 11 + list.Dots.Count, canvas.Circles);
         Assert.Equal(1, canvas.Clips);
         Assert.Equal(0, canvas.OpenClips);
+        // the card's bands: light tiles are filled, every tile's glyph is stroked
+        Assert.Equal(list.Tiles.Count(static tile => tile.Light), canvas.RoundedRectangles);
+        Assert.Equal(list.Tiles.Sum(static tile => PetalDrawList.KanaGlyphStrokes(tile.Glyph).Count), canvas.Strokes);
+        Assert.Equal(PetalLayout.KanaTileCount, list.Tiles.Count);
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFramePlayer(encoder, 0.0));
     }
 
@@ -1080,7 +1092,8 @@ public sealed class PetalDecoderTests
         analyzer.PayloadCompleted += (_, payload) => completed = payload;
         const int side = 512;
         const int stride = side + 40;
-        var plane = new byte[stride * side];
+        var height = PetalRenderer.CardHeightPx(side);
+        var plane = new byte[stride * height];
         var cache = new Dictionary<ushort, PetalLuma>();
         for (var tick = 0; tick < 200 && completed is null; tick++)
         {
@@ -1089,9 +1102,9 @@ public sealed class PetalDecoderTests
             var frame = player.FrameAt(elapsed);
             if (!cache.TryGetValue(frame, out var luma))
                 cache[frame] = luma = PetalTestSupport.RenderLuma(encoder, frame, side, 1);
-            for (var row = 0; row < side; row++)
+            for (var row = 0; row < height; row++)
                 luma.Data.AsSpan(row * side, side).CopyTo(plane.AsSpan(row * stride));
-            var outcome = analyzer.AnalyzeYPlane(plane, side, side, stride, 1, (long)elapsed.TotalMilliseconds);
+            var outcome = analyzer.AnalyzeYPlane(plane, side, height, stride, 1, (long)elapsed.TotalMilliseconds);
             Assert.NotNull(outcome);
         }
 
@@ -1124,6 +1137,10 @@ public sealed class PetalDecoderTests
 
         public int Petals { get; private set; }
 
+        public int RoundedRectangles { get; private set; }
+
+        public int Strokes { get; private set; }
+
         public int Clips { get; private set; }
 
         public int OpenClips { get; private set; }
@@ -1131,6 +1148,23 @@ public sealed class PetalDecoderTests
         public void FillRectangle(double x, double y, double width, double height, PetalColor color) => Rectangles++;
 
         public void FillCircle(double centerX, double centerY, double radius, PetalColor color) => Circles++;
+
+        public void FillRoundedRectangle(double x, double y, double width, double height, double radius, PetalColor color)
+        {
+            // a 512-pixel width is half the canvas; the tiles are drawn last
+            Assert.Equal((12.5, 12.5, 1.5), (width, height, radius));
+            Assert.Equal(PetalPalette.Default.Light, color);
+            Assert.Equal(0, OpenClips);
+            RoundedRectangles++;
+        }
+
+        public void StrokePolyline(ReadOnlySpan<PetalPoint> points, double width, PetalColor color)
+        {
+            Assert.True(points.Length >= 2);
+            Assert.True(Math.Abs(width - 0.5 * PetalDrawList.KanaStrokeWidth) < 1e-12);
+            Assert.True(color == PetalPalette.Default.Ink || color == PetalPalette.Default.Pink);
+            Strokes++;
+        }
 
         public void FillPetal(
             double centerX,
@@ -1154,7 +1188,8 @@ public sealed class PetalDecoderTests
 
         public void PushCircleClip(double centerX, double centerY, double radius)
         {
-            Assert.Equal((256.0, 256.0, 195.0), (centerX, centerY, radius));
+            // the square starts 161 pixels (322 units) below the card's top edge
+            Assert.Equal((256.0, 256.0 + 161.0, 195.0), (centerX, centerY, radius));
             Clips++;
             OpenClips++;
         }

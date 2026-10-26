@@ -7,13 +7,13 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 /// <summary>Shared helpers of the Petal Stream tests.</summary>
 internal static class PetalTestSupport
 {
-    private static readonly Lazy<JsonDocument> StreamFixture = new(() => Load("petal_stream_v3.json"));
-    private static readonly Lazy<JsonDocument> CaptureFixture = new(() => Load("petal_captures_v3.json"));
+    private static readonly Lazy<JsonDocument> StreamFixture = new(() => Load("petal_stream_v5.json"));
+    private static readonly Lazy<JsonDocument> CaptureFixture = new(() => Load("petal_captures_v5.json"));
 
-    /// <summary><c>fixtures/petal/petal_stream_v3.json</c>.</summary>
+    /// <summary><c>fixtures/petal/petal_stream_v5.json</c>.</summary>
     public static JsonElement Stream => StreamFixture.Value.RootElement;
 
-    /// <summary><c>fixtures/petal/petal_captures_v3.json</c>.</summary>
+    /// <summary><c>fixtures/petal/petal_captures_v5.json</c>.</summary>
     public static JsonElement Captures => CaptureFixture.Value.RootElement;
 
     /// <summary>Deterministic payload from xorshift32, as the Rust tests build it.</summary>
@@ -50,9 +50,12 @@ internal static class PetalTestSupport
         return [(PetalLane.D, Hex(entry, "d_data")), .. fields.Select(static (data, sector) => (PetalLanes.Field(sector), data))];
     }
 
-    /// <summary>The recorded data of every frame of an entry, turn lanes included (<c>d_data</c>, <c>field_data</c>, <c>turn_data</c>).</summary>
+    /// <summary>
+    /// The recorded data of every lane of an entry, turn and kana lanes included (<c>d_data</c>,
+    /// <c>field_data</c>, <c>turn_data</c>, <c>kana_data</c>).
+    /// </summary>
     public static PetalLaneData LaneData(JsonElement entry) =>
-        new(Hex(entry, "d_data"), HexList(entry, "field_data"), HexList(entry, "turn_data"));
+        new(Hex(entry, "d_data"), HexList(entry, "field_data"), HexList(entry, "turn_data"), HexList(entry, "kana_data"));
 
     /// <summary>Checks every decoded lane against the recorded data and returns the lane letters.</summary>
     public static string ReadLanes(string name, PetalDecodedFrame frame, (PetalLane Lane, byte[] Data)[] truth)
@@ -107,9 +110,21 @@ internal static class PetalTestSupport
         }
     }
 
-    /// <summary>Renders a frame of <paramref name="encoder"/> to luma.</summary>
+    /// <summary>Renders the card of a frame of <paramref name="encoder"/> to luma.</summary>
     public static PetalLuma RenderLuma(PetalStreamEncoder encoder, ushort frame, int size, int supersample) =>
         PetalRenderer.Render(encoder.Cells(frame), new PetalRenderOptions { Size = size, Supersample = supersample }).ToLuma();
+
+    /// <summary>
+    /// Renders only the square of a frame of <paramref name="encoder"/> to luma, <paramref name="size"/>
+    /// pixels on a side: the decoder's own tests (pixel positions, painting over a blossom) work on
+    /// bare squares, as the reference's do.
+    /// </summary>
+    public static PetalLuma SquareLuma(PetalStreamEncoder encoder, ushort frame, int size, int supersample) =>
+        Square(encoder.Cells(frame), size, supersample).ToLuma();
+
+    /// <summary>Renders only the square of <paramref name="cells"/>, <paramref name="size"/> pixels on a side.</summary>
+    public static PetalRgbImage Square(PetalFrameCells cells, int size, int supersample) =>
+        PetalRenderer.RenderSquare(cells, new PetalRenderOptions { Size = size, Supersample = supersample });
 
     /// <summary>Applies a pixel remapping <c>target(x, y) = source(f(x, y))</c> to a square image.</summary>
     public static PetalLuma Transform(PetalLuma source, Func<int, int, (int X, int Y)> map)
@@ -237,8 +252,24 @@ internal static class PetalTestSupport
         }
     }
 
-    private static JsonDocument Load(string name) =>
-        JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "petal", name)));
+    /// <summary>
+    /// Loads <c>fixtures/petal/<paramref name="name"/></c>: the copy next to the test assembly when
+    /// the project links it, otherwise the repository's file found by walking up from the assembly.
+    /// </summary>
+    private static JsonDocument Load(string name)
+    {
+        var copy = Path.Combine(AppContext.BaseDirectory, "Fixtures", "petal", name);
+        if (File.Exists(copy))
+            return JsonDocument.Parse(File.ReadAllText(copy));
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "fixtures", "petal", name);
+            if (File.Exists(candidate))
+                return JsonDocument.Parse(File.ReadAllText(candidate));
+        }
+
+        throw new FileNotFoundException($"fixtures/petal/{name} was not found above the test assembly", name);
+    }
 }
 
 /// <summary>The 64-bit LCG of the Rust Reed–Solomon tests.</summary>
@@ -390,7 +421,11 @@ internal static class PetalCaptureSimulator
         return fitted;
     }
 
-    /// <summary>Captures a rendered frame with the simulated camera.</summary>
+    /// <summary>
+    /// Captures a rendered frame (a card, see <see cref="PetalRenderer.Render"/>, or a bare square)
+    /// with the simulated camera. The camera's geometry is in square coordinates (the square's
+    /// top-left corner is the origin); a card's bands lie above and below it.
+    /// </summary>
     public static PetalLuma Capture(PetalRgbImage source, PetalCaptureConfig config)
     {
         var (w, h) = (config.Width, config.Height);
@@ -408,9 +443,10 @@ internal static class PetalCaptureSimulator
         }
 
         var scale = sourceWidth / 1024.0;
+        var top = source.Height > source.Width ? PetalLayout.SquareTop : 0.0;
         double SampleSource(double x, double y)
         {
-            var (sx, sy) = (x * scale, y * scale);
+            var (sx, sy) = (x * scale, (y + top) * scale);
             if (sx < 0.0 || sy < 0.0 || sx >= sourceWidth || sy >= source.Height)
                 return 0.0;
             var fx = Math.Clamp(sx - 0.5, 0.0, sourceWidth - 1);

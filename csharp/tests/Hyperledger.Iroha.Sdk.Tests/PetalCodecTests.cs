@@ -458,12 +458,16 @@ public sealed class PetalCodecTests
         var turns = Enumerable.Range(0, PetalLayout.Sectors)
             .Select(static s => PetalTurns.EncodeTurnLane(s, new byte[PetalTurns.TurnDataLength]))
             .ToArray();
-        var turned = PetalFrameCells.FromWords(new PetalLaneData(d, fields, turns));
+        var kana = PetalKana.Lanes.Select(static lane => PetalKana.EncodeKanaLane(lane, new byte[PetalKana.DataLength(lane)])).ToArray();
+        var turned = PetalFrameCells.FromWords(new PetalLaneData(d, fields, turns, kana));
         Assert.Equal(cells.Petals, turned.Petals);
         Assert.NotEqual(cells, turned);
         for (var sector = 0; sector < PetalLayout.Sectors; sector++)
             Assert.Equal(turns[sector], turned.TurnWord(sector));
         cells.SetTurns(turns);
+        // the bands still show only their pilots until the kana codewords are set
+        Assert.NotEqual(turned, cells);
+        cells.SetKana(kana);
         Assert.Equal(turned, cells);
         Assert.Equal(cells, cells.Clone());
         Assert.Equal(cells.GetHashCode(), cells.Clone().GetHashCode());
@@ -542,9 +546,12 @@ public sealed class PetalCodecTests
         Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[31], [field, field, field, field]));
         Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[30], [field, field, field]));
         Assert.Throws<ArgumentException>(() => PetalFrameCells.FromWords(new byte[30], [field, field, field, new byte[104]]));
-        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field], [field, field, field, field]));
-        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field, field, field, field], [field]));
+        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field], [field, field, field, field], [field, field, field, field]));
+        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field, field, field, field], [field], [field, field, field, field]));
+        Assert.Throws<ArgumentException>(() => new PetalLaneData(new byte[19], [field, field, field, field], [field, field, field, field], [field]));
         Assert.Throws<ArgumentException>(() => new PetalFrameCells().SetTurns([field, field, field, field]));
+        Assert.Throws<ArgumentException>(() => new PetalFrameCells().SetKana([field, field, field, field]));
+        Assert.Throws<ArgumentException>(() => new PetalFrameCells().SetKana([new byte[37], new byte[149], new byte[37]]));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFrameCells().TurnWord(4));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalFrameCells().FieldWord(4));
     }

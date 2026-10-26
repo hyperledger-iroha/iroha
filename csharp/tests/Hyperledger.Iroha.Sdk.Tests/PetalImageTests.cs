@@ -176,7 +176,7 @@ public sealed class PetalImageTests
     [Fact]
     public void FindersAreSolidBlossomsAndCornersAreOtherwiseBlack()
     {
-        var image = PetalRenderer.Render(Cells(1), new PetalRenderOptions { Size = 256, Supersample = 2 });
+        var image = PetalTestSupport.Square(Cells(1), 256, 2);
         byte At(int x, int y) => image.Data[(y * 256 + x) * 3];
         const double scale = 256.0 / 1024.0;
         var (fx, fy) = (72.0 * scale, 72.0 * scale);
@@ -190,7 +190,7 @@ public sealed class PetalImageTests
     public void LitPetalsAreDrawnInTheirColourAndDarkCellsShowTheBackdrop()
     {
         var frame = Cells(2);
-        var image = PetalRenderer.Render(frame, new PetalRenderOptions { Size = 1024, Supersample = 1 });
+        var image = PetalTestSupport.Square(frame, 1024, 1);
         var palette = PetalPalette.Default;
         var counts = new int[4];
         for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
@@ -217,7 +217,7 @@ public sealed class PetalImageTests
     public void LitDotsAreDrawnAndUnlitSlotsAreBlack()
     {
         var frame = Cells(3);
-        var image = PetalRenderer.Render(frame, new PetalRenderOptions { Size = 1024, Supersample = 1 });
+        var image = PetalTestSupport.Square(frame, 1024, 1);
         var checkedSlots = 0;
         for (var ring = 0; ring < PetalLayout.RingCount; ring++)
         {
@@ -243,8 +243,16 @@ public sealed class PetalImageTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new PetalRenderOptions { Supersample = 5 });
         Assert.Equal(new PetalColor(245, 175, 208), PetalPalette.Default.Pink);
         Assert.Equal(new PetalColor(25, 24, 24), PetalPalette.Default.Backdrop);
+        Assert.Equal(new PetalColor(20, 4, 14), PetalPalette.Default.Ink);
         Assert.Equal(PetalPalette.Default.Light, PetalRenderer.Shade(Cells(1), 72.0, 72.0));
         Assert.Equal(PetalPalette.Default.Background, PetalRenderer.Shade(Cells(1), 2.0, 1000.0));
+        // outside the square the bands: a light pilot's fill (ロ is hollow in the middle), a gutter
+        Assert.Equal(PetalPalette.Default.Light, PetalRenderer.Shade(Cells(1), 6.5 + 12.5, -312.0 + 12.5));
+        Assert.Equal(PetalPalette.Default.Background, PetalRenderer.Shade(Cells(1), 5.0, -312.0 + 12.5));
+        Assert.Equal(PetalPalette.Default.Background, PetalRenderer.Shade(Cells(1), 512.0, 1500.0));
+        Assert.Equal(1668, PetalRenderer.CardHeightPx(1024));
+        Assert.Equal(209, PetalRenderer.CardHeightPx(128));
+        Assert.Equal(834, PetalRenderer.CardHeightPx(512));
         // a dark frame shows the faint 天 inside the rings and black elsewhere
         Assert.Equal(PetalPalette.Default.Backdrop, PetalRenderer.Shade(new PetalFrameCells(), 512.0, 190.0));
         Assert.Equal(PetalPalette.Default.Background, PetalRenderer.Shade(new PetalFrameCells(), 512.0, 350.0));
@@ -297,6 +305,24 @@ public sealed class PetalImageTests
         // the finder and backdrop shapes are shared between frames
         Assert.Same(list.Finders, PetalDrawList.Create(Cells(5)).Finders);
         Assert.Same(list.BackdropCells, PetalDrawList.Create(Cells(5)).BackdropCells);
+        // the katakana tiles: every tile in order, with the cells' symbols, as the card shows them
+        Assert.Equal((1024.0, 1668.0, 322.0), (PetalDrawList.CanvasSize, PetalDrawList.CardHeight, PetalDrawList.SquareTop));
+        Assert.Equal(PetalLayout.KanaTileCount, list.Tiles.Count);
+        var card = PetalRenderer.Render(cells, new PetalRenderOptions { Size = 1024, Supersample = 1 });
+        for (var index = 0; index < list.Tiles.Count; index++)
+        {
+            var tile = list.Tiles[index];
+            Assert.Equal((index, PetalLayout.KanaTiles[index].X, PetalLayout.KanaTiles[index].Y), (tile.Tile, tile.X, tile.Y));
+            Assert.Equal(cells.Kana[index], new PetalKanaSymbol(tile.Glyph, tile.Light));
+            // the pixel at the tile centre is the tile's fill or its glyph
+            var (px, py) = ((int)Math.Floor(tile.X + 12.5), (int)Math.Floor(tile.Y + 12.5));
+            var (u, v) = (px + 0.5 - tile.X, py + 0.5 - tile.Y);
+            var expected = PetalLayout.KanaInked(tile.Glyph, u, v)
+                ? list.GlyphColor(tile)
+                : tile.Light ? PetalPalette.Default.Light : PetalPalette.Default.Background;
+            var at = ((py + 322) * 1024 + px) * 3;
+            Assert.Equal(expected, new PetalColor(card.Data[at], card.Data[at + 1], card.Data[at + 2]));
+        }
     }
 
     [Fact]
@@ -306,13 +332,15 @@ public sealed class PetalImageTests
         var encoder = new PetalStreamEncoder(payload, 2);
         const ushort frame = 9;
         const int size = 640;
+        var height = PetalRenderer.CardHeightPx(size);
         var cells = encoder.Cells(frame);
-        var canvas = new RasterCanvas(size, size, 2);
+        var canvas = new RasterCanvas(size, height, 2);
         PetalDrawList.Create(cells).Draw(canvas, size / 1024.0);
         var vector = canvas.Resolve();
         var reference = PetalRenderer.Render(cells, new PetalRenderOptions { Size = size, Supersample = 2 });
+        Assert.Equal((size, height), (reference.Width, reference.Height));
         var close = 0;
-        for (var i = 0; i < size * size; i++)
+        for (var i = 0; i < size * height; i++)
         {
             var same = true;
             for (var channel = 0; channel < 3; channel++)
@@ -321,20 +349,26 @@ public sealed class PetalImageTests
                 close++;
         }
 
-        Assert.True(close >= size * size * 99 / 100, $"only {close} of {size * size} pixels agree");
+        Assert.True(close >= size * height * 99 / 100, $"only {close} of {size * height} pixels agree");
         var luma = vector.ToLuma();
         var decoded = PetalDecoder.Decode(luma);
         Assert.True(decoded.Success, decoded.Error.ToString());
-        PetalTestSupport.AssertAllLanes(decoded.Frame, encoder.LaneData(frame), "draw list");
+        var truth = encoder.LaneData(frame);
+        PetalTestSupport.AssertAllLanes(decoded.Frame, truth, "draw list");
         // the petals are turned and notched as the renderer draws them: the turn lanes read
         Assert.Contains(cells.Turns, static turn => turn != 0);
-        PetalTestSupport.AssertAllTurnLanes(luma, decoded.Frame, encoder.LaneData(frame), "draw list");
-        // scale and offset place the frame anywhere on a larger surface
-        var offset = new RasterCanvas(300, 200, 1);
-        PetalDrawList.Create(cells).Draw(offset, 0.125, 100.0, 50.0);
+        PetalTestSupport.AssertAllTurnLanes(luma, decoded.Frame, truth, "draw list");
+        // the tiles show their polarity and glyphs as the renderer draws them: the kana lanes read
+        var kana = PetalKana.ReadKana(luma, decoded.Frame, new PetalLaneHeader(encoder.Meta.Tag, frame));
+        foreach (var lane in PetalKana.Lanes)
+            Assert.True(kana[(int)lane] is { } read && truth.Lane(lane).AsSpan().SequenceEqual(read.Result.Data), $"draw list: kana lane {PetalKana.Name(lane)}");
+        // scale and offset place the card anywhere on a larger surface: the offset is its top-left corner
+        var offset = new RasterCanvas(300, 220, 1);
+        PetalDrawList.Create(cells).Draw(offset, 0.125, 100.0, 5.0);
         var shifted = offset.Resolve();
-        Assert.True(shifted.Data[(50 * 300 + 100) * 3] < 10, "the canvas corner is background");
-        Assert.True(shifted.Data[(59 * 300 + 109) * 3] > 200, "the top-left finder core is lit");
+        Assert.True(shifted.Data[(5 * 300 + 100) * 3] < 10, "the card's corner is background");
+        Assert.True(shifted.Data[(54 * 300 + 109) * 3] > 200, "the top-left finder core is lit");
+        Assert.True(shifted.Data[(4 * 300 + 109) * 3] < 10, "nothing is drawn above the card");
         Assert.Throws<ArgumentOutOfRangeException>(() => PetalDrawList.Create(cells).Draw(offset, 0.0));
     }
 
@@ -342,7 +376,7 @@ public sealed class PetalImageTests
     public void FindsTheFourCornerBlossomsInACleanRender()
     {
         var encoder = new PetalStreamEncoder(Enumerable.Repeat((byte)9, 200).ToArray(), 1);
-        var luma = PetalTestSupport.RenderLuma(encoder, 1, 512, 2);
+        var luma = PetalTestSupport.SquareLuma(encoder, 1, 512, 2);
         var quad = PetalLocator.Locate(luma);
         Assert.NotNull(quad);
         (double X, double Y)[] expected = [(36.0, 36.0), (476.0, 36.0), (476.0, 476.0), (36.0, 476.0)];
@@ -467,7 +501,7 @@ public sealed class PetalImageTests
     public void AHiddenBlossomYieldsAnInferredCandidate()
     {
         var encoder = new PetalStreamEncoder(Enumerable.Repeat((byte)9, 200).ToArray(), 1);
-        var luma = PetalTestSupport.RenderLuma(encoder, 1, 512, 2);
+        var luma = PetalTestSupport.SquareLuma(encoder, 1, 512, 2);
         // a clean frame: the first candidate is the quad of four seen blossoms
         var clean = PetalLocator.Candidates(luma).First();
         Assert.Null(clean.Inferred);
@@ -488,7 +522,7 @@ public sealed class PetalImageTests
     public void FollowingFindsAMovedBlossomAndRefusesALostOne()
     {
         var encoder = new PetalStreamEncoder(Enumerable.Repeat((byte)9, 200).ToArray(), 1);
-        var luma = PetalTestSupport.RenderLuma(encoder, 1, 512, 2);
+        var luma = PetalTestSupport.SquareLuma(encoder, 1, 512, 2);
         var found = PetalLocator.Follow(luma, new PetalFinder(48.0, 27.0, 60.0));
         Assert.NotNull(found);
         Assert.True(Math.Abs(found.Value.X - 36.0) < 1.5 && Math.Abs(found.Value.Y - 36.0) < 1.5, $"{found}");
@@ -602,6 +636,38 @@ public sealed class PetalImageTests
         public void FillCircle(double centerX, double centerY, double radius, PetalColor color) =>
             Paint(centerX - radius, centerY - radius, centerX + radius, centerY + radius, color,
                 (px, py) => (px - centerX) * (px - centerX) + (py - centerY) * (py - centerY) <= radius * radius);
+
+        public void FillRoundedRectangle(double x, double y, double w, double h, double radius, PetalColor color) =>
+            Paint(x, y, x + w, y + h, color, (px, py) =>
+            {
+                if (!(px >= x && px <= x + w && py >= y && py <= y + h))
+                    return false;
+                var (cx, cy) = (Math.Clamp(px, x + radius, x + w - radius), Math.Clamp(py, y + radius, y + h - radius));
+                return (px - cx) * (px - cx) + (py - cy) * (py - cy) <= radius * radius;
+            });
+
+        public void StrokePolyline(ReadOnlySpan<PetalPoint> points, double width, PetalColor color)
+        {
+            var line = points.ToArray();
+            var half = width / 2.0;
+            var (x0, y0) = (line.Min(static p => p.X) - half, line.Min(static p => p.Y) - half);
+            var (x1, y1) = (line.Max(static p => p.X) + half, line.Max(static p => p.Y) + half);
+            Paint(x0, y0, x1, y1, color, (px, py) =>
+            {
+                for (var i = 0; i + 1 < line.Length; i++)
+                {
+                    var (a, b) = (line[i], line[i + 1]);
+                    var (dx, dy) = (b.X - a.X, b.Y - a.Y);
+                    var length = dx * dx + dy * dy;
+                    var t = length == 0.0 ? 0.0 : Math.Clamp(((px - a.X) * dx + (py - a.Y) * dy) / length, 0.0, 1.0);
+                    var (ex, ey) = (px - (a.X + t * dx), py - (a.Y + t * dy));
+                    if (ex * ex + ey * ey <= half * half)
+                        return true;
+                }
+
+                return false;
+            });
+        }
 
         public void FillPetal(
             double centerX,

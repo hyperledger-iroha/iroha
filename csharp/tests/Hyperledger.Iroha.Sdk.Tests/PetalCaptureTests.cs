@@ -5,17 +5,22 @@ using Hyperledger.Iroha.Petal;
 namespace Hyperledger.Iroha.Sdk.Tests;
 
 /// <summary>
-/// Decodes the golden camera captures in <c>fixtures/petal/petal_captures_v3.json</c>:
-/// every conforming decoder must read the lanes named in <c>must_decode</c> and the turn
-/// lanes named in <c>must_turn</c>, must never report wrong data for any lane, must report
-/// the recorded inferred corner, must follow each tracking pair from its first frame into
-/// its second, must recover the <c>must_merge</c> field lanes of every merge set from the
-/// merge of its captures, must never let a session offer a lane of a mixed set, and must
-/// reject the negatives. A bit-exact port reproduces every recorded reference result.
+/// Decodes the golden camera captures in <c>fixtures/petal/petal_captures_v5.json</c>:
+/// every conforming decoder must read the lanes named in <c>must_decode</c>, the turn
+/// lanes named in <c>must_turn</c> and the kana lanes named in <c>must_kana</c>, must never
+/// report wrong data for any lane, must report the recorded inferred corner, must follow
+/// each tracking pair from its first frame into its second, must recover the
+/// <c>must_merge</c> field lanes of every merge set from the merge of its captures, must
+/// never let a session offer a lane of a mixed set, and must reject the negatives. A
+/// bit-exact port reproduces every recorded reference result.
 /// </summary>
 public sealed class PetalCaptureTests(ITestOutputHelper output)
 {
-    /// <summary>The twelve captures of the fixture; the shadow band needs the local read, two need an inferred corner and the last a distortion search.</summary>
+    /// <summary>
+    /// The sixteen captures of the fixture; the shadow band needs the local read, two need an
+    /// inferred corner, one a distortion search, and the last four hold the phone upright so that
+    /// both katakana bands are in view.
+    /// </summary>
     private static readonly string[] CaptureNames =
     [
         "clean-512",
@@ -30,6 +35,10 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
         "hidden-corner-540p",
         "cut-corner-720p",
         "barrel-480p",
+        "upright-720p",
+        "upright-legacy-720p",
+        "upright-soft-720p",
+        "upright-480p",
     ];
 
     /// <summary>The two tracking pairs of the fixture.</summary>
@@ -40,8 +49,8 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
     [Fact]
     public void GoldenCapturesDecodeAsRecorded()
     {
-        Assert.Equal(3, PetalTestSupport.Number(Doc, "fixture_version"));
-        Assert.Equal("petal-captures-v3", Doc.GetProperty("format").GetString());
+        Assert.Equal(5, PetalTestSupport.Number(Doc, "fixture_version"));
+        Assert.Equal("petal-captures-v5", Doc.GetProperty("format").GetString());
         var captures = Doc.GetProperty("captures").EnumerateArray().ToArray();
         Assert.Equal(CaptureNames, captures.Select(static capture => capture.GetProperty("name").GetString()));
         var assembler = new PetalStreamAssembler();
@@ -65,11 +74,16 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
             watch.Restart();
             var turned = ReadTurnLanes(name, image, decoded, capture, assembler);
             watch.Stop();
+            var turnTime = watch.Elapsed.TotalMilliseconds;
+            watch.Restart();
+            var kana = ReadKanaLanes(name, image, decoded, capture, assembler);
+            watch.Stop();
             output.WriteLine(
                 $"{name,-24} {image.Width}x{image.Height} lanes {read,-5} (reference {capture.GetProperty("reference_decoded").GetString()}) " +
                 $"turned {turned,-4} (reference {capture.GetProperty("reference_turned").GetString()}) " +
+                $"kana {kana,-8} (reference {capture.GetProperty("reference_kana").GetString()}) " +
                 $"rotation {decoded.Rotation} mirrored {decoded.Mirrored} inferred {decoded.InferredCorner?.ToString() ?? "-"} " +
-                $"distortion {decoded.Pose.Distortion} first turn read {watch.Elapsed.TotalMilliseconds:F1} ms");
+                $"distortion {decoded.Pose.Distortion} first turn read {turnTime:F1} ms, first band read {watch.Elapsed.TotalMilliseconds:F1} ms");
         }
 
         // captures of different frames of the same stream accumulate in one assembler
@@ -100,9 +114,11 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
             // the orientation is kept from the first frame
             Assert.Equal((first.Frame.Rotation, first.Frame.Mirrored), (followed.Rotation, followed.Mirrored));
             var turned = ReadTurnLanes(name, to, followed, track, null);
+            var kana = ReadKanaLanes(name, to, followed, track, null);
             output.WriteLine(
                 $"{name,-24} tracked lanes {read,-5} (reference {track.GetProperty("reference_tracked").GetString()}) " +
                 $"turned {turned,-4} (reference {track.GetProperty("reference_turned").GetString()}) " +
+                $"kana {kana,-8} (reference {track.GetProperty("reference_kana").GetString()}) " +
                 $"inferred {followed.InferredCorner?.ToString() ?? "-"} track {watch.Elapsed.TotalMilliseconds:F1} ms");
         }
     }
@@ -216,12 +232,66 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
                 Assert.Equal(data, decoded);
             }
 
-            // the captures film the `one-pass` stream of the payload, turn lanes included
+            // the captures film the `one-pass` stream of the payload, turn and kana lanes included
             var truth = PetalTestSupport.Truth(capture);
             var lanes = encoder.LaneData((ushort)PetalTestSupport.Number(capture, "frame"));
             foreach (var (lane, data) in truth)
                 Assert.Equal(lanes.Lane(lane), data);
             Assert.Equal(lanes.Turns, PetalTestSupport.HexList(capture, "turn_data"));
+            Assert.Equal(lanes.Kana, PetalTestSupport.HexList(capture, "kana_data"));
+        }
+    }
+
+    [Fact]
+    public void ConcurrentBandReadsAgreeWithSequentialOnes()
+    {
+        // the band reader leases its working memory: reads on several threads at once must decide
+        // exactly what one thread decides
+        var captures = Doc.GetProperty("captures").EnumerateArray().Select(static capture => PetalTestSupport.LumaOf(capture)).ToArray();
+        var frames = captures.Select(static image => PetalDecoder.Decode(image).Frame!).ToArray();
+        var expected = captures.Select((image, i) => Summary(image, frames[i])).ToArray();
+        var actual = new string[3 * captures.Length];
+        Parallel.For(0, actual.Length, new ParallelOptions { MaxDegreeOfParallelism = 4 }, i =>
+            actual[i] = Summary(captures[i % captures.Length], frames[i % captures.Length]));
+        for (var i = 0; i < actual.Length; i++)
+            Assert.Equal(expected[i % captures.Length], actual[i]);
+
+        static string Summary(PetalLuma image, PetalDecodedFrame frame)
+        {
+            var header = frame.AtomPackets().FirstOrDefault()?.Header ?? frame.Beacon()!.Value.Header;
+            var lanes = PetalKana.ReadKana(image, frame, header);
+            var bands = Enumerable.Range(0, PetalLayout.KanaBands).Select(band => PetalKana.ObserveBand(image, frame, band)).Select(static reading =>
+                reading is null
+                    ? "-"
+                    : $"{reading.Blur} {reading.Pilots} {string.Join(",", reading.Tiles.Select(static t => t is not { } tile ? "-" : $"{tile.Glyph}:{tile.Light}:{BitConverter.DoubleToInt64Bits(tile.GlyphLead):x16}:{BitConverter.DoubleToInt64Bits(tile.LightMargin):x16}"))}");
+            return $"{string.Join(",", lanes.Select(static l => l is null ? "-" : $"{l.Header.Frame}:{Convert.ToHexString(l.Result.Data)}"))} {string.Join(" ", bands)}";
+        }
+    }
+
+    [Fact]
+    public void GoldenBandReadTiming()
+    {
+        const int runs = 7;
+        foreach (var capture in Doc.GetProperty("captures").EnumerateArray())
+        {
+            var name = capture.GetProperty("name").GetString()!;
+            var image = PetalTestSupport.LumaOf(capture);
+            var frame = PetalDecoder.Decode(image).Frame!;
+            var header = frame.AtomPackets().FirstOrDefault()?.Header ?? frame.Beacon()!.Value.Header;
+            PetalKana.ReadKana(image, frame, header); // warm-up (JIT, templates)
+            var times = new double[runs];
+            for (var run = 0; run < runs; run++)
+            {
+                var watch = Stopwatch.StartNew();
+                PetalKana.ReadKana(image, frame, header);
+                times[run] = watch.Elapsed.TotalMilliseconds;
+            }
+
+            Array.Sort(times);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            PetalKana.ReadKana(image, frame, header);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            output.WriteLine($"band timing {name,-24} {image.Width}x{image.Height} median {times[runs / 2]:F2} ms min {times[0]:F2} ms, {allocated} bytes allocated");
         }
     }
 
@@ -380,6 +450,46 @@ public sealed class PetalCaptureTests(ITestOutputHelper output)
         Assert.True(must.All(letters.Contains), $"{name}: turned {letters}, must turn {must}");
         Assert.Equal(entry.GetProperty("reference_turned").GetString(), letters);
         return letters;
+    }
+
+    /// <summary>
+    /// Reads the kana lanes of a decoded capture under the header its lanes name (both bands), checks
+    /// them against the recorded data and the requirements, and returns their names; their atoms go
+    /// to <paramref name="assembler"/> when given.
+    /// </summary>
+    private static string ReadKanaLanes(string name, PetalLuma image, PetalDecodedFrame frame, JsonElement entry, PetalStreamAssembler? assembler)
+    {
+        var expected = PetalTestSupport.HexList(entry, "kana_data");
+        var header = frame.AtomPackets().FirstOrDefault()?.Header
+            ?? frame.Beacon()?.Header
+            ?? throw new InvalidOperationException($"{name}: a decoded capture names its frame");
+        var names = string.Empty;
+        var packets = new List<PetalAtomPacket>();
+        var results = PetalKana.ReadKana(image, frame, header, [false, false]);
+        foreach (var lane in PetalKana.Lanes)
+        {
+            if (results[(int)lane] is not { } result)
+                continue;
+            Assert.True(expected[(int)lane].AsSpan().SequenceEqual(result.Result.Data), $"{name}: kana lane {PetalKana.Name(lane)}");
+            packets.Add(PetalKana.KanaPacket(result.Header, lane, result.Result.Data) ?? throw new InvalidOperationException($"{name}: kana check {PetalKana.Name(lane)}"));
+            names += PetalKana.Name(lane);
+        }
+
+        if (assembler is not null)
+        {
+            foreach (var packet in packets)
+                assembler.PushAtoms(packet);
+        }
+
+        var must = entry.TryGetProperty("must_kana", out var required) ? required.GetString()! : string.Empty;
+        for (var at = 0; at + 1 < must.Length; at += 2)
+        {
+            var lane = must.Substring(at, 2);
+            Assert.True(Enumerable.Range(0, names.Length / 2).Any(i => names.Substring(2 * i, 2) == lane), $"{name}: kana {names}, must read {must}");
+        }
+
+        Assert.Equal(entry.GetProperty("reference_kana").GetString(), names);
+        return names;
     }
 
     /// <summary>Checks merged field lanes against the recorded data and returns their sector digits.</summary>

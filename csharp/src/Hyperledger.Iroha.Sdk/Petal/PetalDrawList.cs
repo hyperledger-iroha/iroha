@@ -3,12 +3,12 @@ namespace Hyperledger.Iroha.Petal;
 /// <summary>
 /// A vector 2D surface that can replay a <see cref="PetalDrawList"/>: SkiaSharp,
 /// .NET MAUI <c>ICanvas</c>, WPF/Avalonia <c>DrawingContext</c>, Win2D, Core
-/// Graphics or an Android <c>Canvas</c> adapter implements these five calls.
+/// Graphics or an Android <c>Canvas</c> adapter implements these seven calls.
 /// </summary>
 /// <remarks>
 /// Coordinates arrive already scaled to the caller's target size. Shapes are
-/// filled without stroke and should be antialiased; petals must be (the turn
-/// reader reads their shapes).
+/// filled without stroke and should be antialiased; petals and glyph strokes must
+/// be (the turn reader reads the petals' shapes and the band reader the glyphs').
 /// </remarks>
 public interface IPetalCanvas
 {
@@ -26,6 +26,30 @@ public interface IPetalCanvas
     /// <param name="radius">Radius.</param>
     /// <param name="color">Fill colour.</param>
     void FillCircle(double centerX, double centerY, double radius, PetalColor color);
+
+    /// <summary>Fills an axis-aligned rectangle whose corners are rounded to <paramref name="radius"/> (a light katakana tile), antialiased.</summary>
+    /// <param name="x">Left edge.</param>
+    /// <param name="y">Top edge.</param>
+    /// <param name="width">Width.</param>
+    /// <param name="height">Height.</param>
+    /// <param name="radius">Corner radius.</param>
+    /// <param name="color">Fill colour.</param>
+    void FillRoundedRectangle(double x, double y, double width, double height, double radius, PetalColor color);
+
+    /// <summary>
+    /// Strokes an open polyline (one stroke of a katakana glyph), antialiased, with round caps and
+    /// round joins: every point within <paramref name="width"/> / 2 of one of its segments is painted.
+    /// </summary>
+    /// <remarks>
+    /// For example SkiaSharp <c>SKPaint</c> with <c>SKPaintStyle.Stroke</c>,
+    /// <c>SKStrokeCap.Round</c> and <c>SKStrokeJoin.Round</c>, or a WPF <c>Pen</c> with
+    /// <c>PenLineCap.Round</c> and <c>PenLineJoin.Round</c>. A glyph's strokes stay inside their
+    /// tile, so no clip is needed.
+    /// </remarks>
+    /// <param name="points">The polyline's points, at least two.</param>
+    /// <param name="width">Stroke width.</param>
+    /// <param name="color">Stroke colour.</param>
+    void StrokePolyline(ReadOnlySpan<PetalPoint> points, double width, PetalColor color);
 
     /// <summary>
     /// Fills a petal, antialiased: the ellipse of half-length <paramref name="radiusAlong"/> along
@@ -128,27 +152,44 @@ public readonly record struct PetalCellShape(int Cell, PetalPoint Center, double
 /// <param name="Slot">Slot within the ring.</param>
 public readonly record struct PetalDotShape(PetalPoint Center, double Radius, int Ring, int Slot);
 
+/// <summary>A katakana tile of the card's bands.</summary>
+/// <param name="Tile">Tile index (<see cref="PetalLayout.KanaTiles"/> order).</param>
+/// <param name="X">Left edge of the tile square in square coordinates.</param>
+/// <param name="Y">Top edge of the tile square in square coordinates (negative above the square).</param>
+/// <param name="Glyph">The glyph it shows, 0 to 15 (see <see cref="PetalGlyphs"/>).</param>
+/// <param name="Light">Whether the tile is light (filled, glyph in ink) rather than dark (glyph in pink).</param>
+public readonly record struct PetalTileShape(int Tile, double X, double Y, byte Glyph, bool Light);
+
 /// <summary>
-/// A platform-neutral description of one frame for vector backends, in canvas
-/// design units (a 1024 × 1024 square).
+/// A platform-neutral description of one frame for vector backends: the portrait card, in square
+/// design units (the square spans 0 to 1024 on both axes; the bands lie above and below it, so the
+/// card spans <c>y</c> from −<see cref="SquareTop"/> to 1024 + <see cref="SquareTop"/>).
 /// </summary>
 /// <remarks>
 /// <para>
-/// Painting order: background; finders (core and petals in the light colour, then
-/// notches in the background colour); the <see cref="BackdropCells"/> in the backdrop
-/// colour, clipped to the disc of radius <see cref="PetalLayout.BackdropRadius"/> around
-/// the canvas centre; every lit petal in its colour (light inside the <c>天</c>, pink
-/// outside), antialiased: an ellipse of half-length <see cref="PetalHalfLength"/> along
-/// its <see cref="PetalCellShape.Angle"/> (its outward direction plus its turn) and
-/// half-width <see cref="PetalHalfWidth"/>, minus its notch, a disc of radius
-/// <see cref="PetalNotchRadius"/> centred <see cref="PetalNotchDistance"/> along that
-/// angle (<see cref="IPetalCanvas.FillPetal"/>); lit dots in pink. The notch must be
-/// drawn: it tells a petal from one turned by half a turn, and the turn reader's
-/// templates include it.
+/// Painting order: background over the whole card; finders (core and petals in the light colour,
+/// then notches in the background colour); the <see cref="BackdropCells"/> in the backdrop colour,
+/// clipped to the disc of radius <see cref="PetalLayout.BackdropRadius"/> around the canvas
+/// centre; every lit petal in its colour (light inside the <c>天</c>, pink outside), antialiased:
+/// an ellipse of half-length <see cref="PetalHalfLength"/> along its
+/// <see cref="PetalCellShape.Angle"/> (its outward direction plus its turn) and half-width
+/// <see cref="PetalHalfWidth"/>, minus its notch, a disc of radius <see cref="PetalNotchRadius"/>
+/// centred <see cref="PetalNotchDistance"/> along that angle (<see cref="IPetalCanvas.FillPetal"/>);
+/// lit dots in pink. The notch must be drawn: it tells a petal from one turned by half a turn, and
+/// the turn reader's templates include it.
 /// </para>
 /// <para>
-/// The result matches <see cref="PetalRenderer"/> up to anti-aliasing. The finder and
-/// backdrop shapes are shared by every list.
+/// Then every one of the <see cref="Tiles"/>: a light tile is a square of side
+/// <see cref="KanaTileSize"/> with corners rounded to <see cref="KanaCornerRadius"/>, filled with the
+/// light colour (<see cref="IPetalCanvas.FillRoundedRectangle"/>); a dark tile is not filled. Its
+/// glyph is stroked along <see cref="KanaGlyphStrokes"/> (polylines in tile-local units from the
+/// tile's top-left corner, round caps and joins, width <see cref="KanaStrokeWidth"/>,
+/// <see cref="IPetalCanvas.StrokePolyline"/>) in ink on a light tile and pink on a dark one
+/// (<see cref="GlyphColor"/>). Every stroke lies inside its rounded tile, so no clip is needed.
+/// </para>
+/// <para>
+/// The result matches <see cref="PetalRenderer"/> up to anti-aliasing. The finder and backdrop
+/// shapes and the glyph strokes are shared by every list.
 /// </para>
 /// </remarks>
 public sealed class PetalDrawList
@@ -160,20 +201,42 @@ public sealed class PetalDrawList
     private static readonly IReadOnlyList<PetalFinderShape> FinderView = Array.AsReadOnly(FinderShapes);
     private static readonly IReadOnlyList<PetalBackdropCell> BackdropView = Array.AsReadOnly(BackdropShapes);
 
+    /// <summary>The strokes of every glyph in tile-local units: the glyph box is inset by 1 unit and scaled by 23/32.</summary>
+    private static readonly IReadOnlyList<IReadOnlyList<PetalPoint>>[] TileStrokes =
+        PetalGlyphs.BuildViews((PetalLayout.KanaTile - PetalLayout.KanaGlyphBox) / 2.0, PetalLayout.KanaGlyphBox / PetalGlyphs.GlyphGrid);
+
     private readonly PetalCellShape[] petals;
     private readonly PetalDotShape[] dots;
+    private readonly PetalTileShape[] tiles;
 
-    private PetalDrawList(PetalPalette palette, PetalCellShape[] petals, PetalDotShape[] dots)
+    private PetalDrawList(PetalPalette palette, PetalCellShape[] petals, PetalDotShape[] dots, PetalTileShape[] tiles)
     {
         Palette = palette;
         this.petals = petals;
         this.dots = dots;
+        this.tiles = tiles;
         Petals = Array.AsReadOnly(petals);
         Dots = Array.AsReadOnly(dots);
+        Tiles = Array.AsReadOnly(tiles);
     }
 
-    /// <summary>Canvas side in design units.</summary>
+    /// <summary>Canvas side in design units: the width of the card and the side of its square.</summary>
     public static double CanvasSize => PetalLayout.Canvas;
+
+    /// <summary>Height of the card in design units: the square with a band above and below it (1668).</summary>
+    public static double CardHeight => PetalLayout.CardHeight;
+
+    /// <summary>Distance from the card's top edge to the square's, in design units (322).</summary>
+    public static double SquareTop => PetalLayout.SquareTop;
+
+    /// <summary>Side of a katakana tile in design units.</summary>
+    public static double KanaTileSize => PetalLayout.KanaTile;
+
+    /// <summary>Corner radius of a katakana tile in design units.</summary>
+    public static double KanaCornerRadius => PetalLayout.KanaCorner;
+
+    /// <summary>Width of a glyph's strokes in design units: the design grid's stroke width scaled into the glyph box (<c>6.5 · 23 / 32</c>).</summary>
+    public static double KanaStrokeWidth => PetalGlyphs.StrokeWidth * PetalLayout.KanaGlyphBox / PetalGlyphs.GlyphGrid;
 
     /// <summary>Half the length of a petal along its axis (the reference's single-precision value, widened).</summary>
     public static double PetalHalfLength => PetalLayout.PetalHalfLength;
@@ -202,13 +265,37 @@ public sealed class PetalDrawList
     /// <summary>Every lit ring dot (gates and set data bits), in flat slot order.</summary>
     public IReadOnlyList<PetalDotShape> Dots { get; }
 
+    /// <summary>Every katakana tile of both bands, in tile order, with the glyph and polarity it shows.</summary>
+    public IReadOnlyList<PetalTileShape> Tiles { get; }
+
+    /// <summary>
+    /// The strokes of <paramref name="glyph"/> in tile-local design units, measured from a tile's
+    /// top-left corner (the glyph box is inset by 1 unit): polylines drawn with round caps and joins
+    /// of width <see cref="KanaStrokeWidth"/>.
+    /// </summary>
+    /// <param name="glyph">Glyph, 0 to 15.</param>
+    /// <returns>The strokes.</returns>
+    public static IReadOnlyList<IReadOnlyList<PetalPoint>> KanaGlyphStrokes(int glyph)
+    {
+        if ((uint)glyph >= PetalGlyphs.GlyphCount)
+            throw new ArgumentOutOfRangeException(nameof(glyph), "A glyph is 0 to 15.");
+        return TileStrokes[glyph];
+    }
+
+    /// <summary>The colour of <paramref name="tile"/>'s glyph: ink on a light tile, pink on a dark one.</summary>
+    /// <param name="tile">A tile of this list.</param>
+    /// <returns>The glyph colour.</returns>
+    public PetalColor GlyphColor(PetalTileShape tile) => tile.Light ? Palette.Ink : Palette.Pink;
+
     /// <summary>Builds the draw list of a frame.</summary>
     /// <param name="cells">The frame cells.</param>
     /// <param name="palette">Colours; <see cref="PetalPalette.Default"/> when omitted.</param>
     /// <returns>The draw list.</returns>
+    /// <exception cref="ArgumentException">A katakana tile's glyph is not 0 to 15.</exception>
     public static PetalDrawList Create(PetalFrameCells cells, PetalPalette? palette = null)
     {
         ArgumentNullException.ThrowIfNull(cells);
+        PetalRenderer.CheckGlyphs(cells);
         var lit = 0;
         foreach (var petal in cells.Petals)
             lit += petal ? 1 : 0;
@@ -231,17 +318,24 @@ public sealed class PetalDrawList
                 dots.Add(SlotShapes[flat]);
         }
 
-        return new PetalDrawList(palette ?? PetalPalette.Default, petals, dots.ToArray());
+        var tiles = new PetalTileShape[PetalLayout.KanaTileCount];
+        var tileX = PetalLayout.TileXTable;
+        var tileY = PetalLayout.TileYTable;
+        for (var tile = 0; tile < tiles.Length; tile++)
+            tiles[tile] = new PetalTileShape(tile, tileX[tile], tileY[tile], cells.Kana[tile].Glyph, cells.Kana[tile].Light);
+        return new PetalDrawList(palette ?? PetalPalette.Default, petals, dots.ToArray(), tiles);
     }
 
     /// <summary>
-    /// Replays the frame onto <paramref name="canvas"/>, mapping canvas point
-    /// <c>(x, y)</c> to <c>(offsetX + x * scale, offsetY + y * scale)</c>.
+    /// Replays the card onto <paramref name="canvas"/>, mapping square point <c>(x, y)</c> to
+    /// <c>(offsetX + x * scale, offsetY + (y + SquareTop) * scale)</c>: <c>(offsetX, offsetY)</c> is
+    /// the card's top-left corner, and the card is <c>1024 · scale</c> wide and
+    /// <c>1668 · scale</c> tall.
     /// </summary>
     /// <param name="canvas">The vector backend.</param>
-    /// <param name="scale">Target pixels per design unit (side / 1024).</param>
-    /// <param name="offsetX">Target x of the canvas origin.</param>
-    /// <param name="offsetY">Target y of the canvas origin.</param>
+    /// <param name="scale">Target pixels per design unit (card width / 1024).</param>
+    /// <param name="offsetX">Target x of the card's left edge.</param>
+    /// <param name="offsetY">Target y of the card's top edge.</param>
     public void Draw(IPetalCanvas canvas, double scale = 1.0, double offsetX = 0.0, double offsetY = 0.0)
     {
         ArgumentNullException.ThrowIfNull(canvas);
@@ -249,8 +343,8 @@ public sealed class PetalDrawList
             throw new ArgumentOutOfRangeException(nameof(scale));
         var palette = Palette;
         double X(double x) => offsetX + x * scale;
-        double Y(double y) => offsetY + y * scale;
-        canvas.FillRectangle(X(0.0), Y(0.0), PetalLayout.Canvas * scale, PetalLayout.Canvas * scale, palette.Background);
+        double Y(double y) => offsetY + (y + PetalLayout.SquareTop) * scale;
+        canvas.FillRectangle(X(0.0), offsetY, PetalLayout.Canvas * scale, PetalLayout.CardHeight * scale, palette.Background);
         foreach (var finder in FinderShapes)
         {
             canvas.FillCircle(X(finder.Center.X), Y(finder.Center.Y), finder.CoreRadius * scale, palette.Light);
@@ -279,6 +373,28 @@ public sealed class PetalDrawList
 
         foreach (var dot in dots)
             canvas.FillCircle(X(dot.Center.X), Y(dot.Center.Y), dot.Radius * scale, palette.Pink);
+        Span<PetalPoint> points = stackalloc PetalPoint[8];
+        foreach (var tile in tiles)
+        {
+            if (tile.Light)
+            {
+                canvas.FillRoundedRectangle(
+                    X(tile.X),
+                    Y(tile.Y),
+                    PetalLayout.KanaTile * scale,
+                    PetalLayout.KanaTile * scale,
+                    PetalLayout.KanaCorner * scale,
+                    palette.Light);
+            }
+
+            var colour = GlyphColor(tile);
+            foreach (var stroke in TileStrokes[tile.Glyph])
+            {
+                for (var i = 0; i < stroke.Count; i++)
+                    points[i] = new PetalPoint(X(tile.X + stroke[i].X), Y(tile.Y + stroke[i].Y));
+                canvas.StrokePolyline(points[..stroke.Count], KanaStrokeWidth * scale, colour);
+            }
+        }
     }
 
     private static PetalFinderShape[] BuildFinders()

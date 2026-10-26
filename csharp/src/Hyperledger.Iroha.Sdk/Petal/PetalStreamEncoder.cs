@@ -8,8 +8,8 @@ namespace Hyperledger.Iroha.Petal;
 /// </summary>
 /// <remarks>
 /// Frame output is bit-identical to the Rust reference encoder (pinned by
-/// <c>fixtures/petal/petal_stream_v3.json</c>), turn lanes included. The frame
-/// counter wraps at 65536 on a beacon frame, so atom ids repeat cleanly.
+/// <c>fixtures/petal/petal_stream_v5.json</c>), turn and kana lanes included. The
+/// frame counter wraps at 65536 on a beacon frame, so atom ids repeat cleanly.
 /// </remarks>
 public sealed class PetalStreamEncoder
 {
@@ -49,11 +49,11 @@ public sealed class PetalStreamEncoder
     /// <summary>Frames needed to send every source atom once (no losses, no repair).</summary>
     public int SystematicFrames { get; }
 
-    /// <summary>The data bytes of every lane of <paramref name="frame"/>, turn lanes included.</summary>
+    /// <summary>The data bytes of every lane of <paramref name="frame"/>, turn and kana lanes included.</summary>
     /// <param name="frame">Frame counter.</param>
     /// <returns>
-    /// Lane data for <c>D</c> (19 B), the four field lanes (83 B each) and the four turn lanes
-    /// (68 B each).
+    /// Lane data for <c>D</c> (19 B), the four field lanes (83 B each), the four turn lanes
+    /// (68 B each) and the kana lanes <c>P0</c>, <c>K0</c>, <c>P1</c>, <c>K1</c> (20 B and 116 B).
     /// </returns>
     public PetalLaneData LaneData(ushort frame)
     {
@@ -90,14 +90,23 @@ public sealed class PetalStreamEncoder
             turns[sector] = PetalTurns.TurnData(header, sector, atoms);
         }
 
-        return new PetalLaneData(d, fields, turns);
+        var kana = new byte[PetalKana.Lanes.Count][];
+        Span<byte> kanaAtoms = stackalloc byte[PetalKana.KanaGlyphAtoms * PetalLanes.AtomLength];
+        foreach (var lane in PetalKana.Lanes)
+        {
+            var laneAtoms = kanaAtoms[..(PetalKana.Atoms(lane) * PetalLanes.AtomLength)];
+            WriteAtoms(laneAtoms, PetalKana.KanaFirstId(frame, lane), PetalKana.Atoms(lane));
+            kana[(int)lane] = PetalKana.KanaData(header, lane, laneAtoms);
+        }
+
+        return new PetalLaneData(d, fields, turns, kana);
     }
 
     /// <summary>The transmitted (whitened Reed–Solomon) codewords of <paramref name="frame"/>.</summary>
     /// <param name="frame">Frame counter.</param>
     /// <returns>
-    /// Codewords for <c>D</c> (30 B), the four field lanes (105 B each) and the four turn lanes
-    /// (90 B each).
+    /// Codewords for <c>D</c> (30 B), the four field lanes (105 B each), the four turn lanes
+    /// (90 B each) and the kana lanes <c>P0</c>, <c>K0</c>, <c>P1</c>, <c>K1</c> (37 B and 149 B).
     /// </returns>
     public PetalLaneData Words(ushort frame)
     {
@@ -110,10 +119,13 @@ public sealed class PetalStreamEncoder
             turns[sector] = PetalTurns.EncodeTurnLane(sector, data.Turns[sector]);
         }
 
-        return new PetalLaneData(PetalLanes.EncodeLane(PetalLane.D, data.D), fields, turns);
+        var kana = new byte[PetalKana.Lanes.Count][];
+        foreach (var lane in PetalKana.Lanes)
+            kana[(int)lane] = PetalKana.EncodeKanaLane(lane, data.Lane(lane));
+        return new PetalLaneData(PetalLanes.EncodeLane(PetalLane.D, data.D), fields, turns, kana);
     }
 
-    /// <summary>Every cell of <paramref name="frame"/>, lit and turned, ready to render.</summary>
+    /// <summary>Every cell of <paramref name="frame"/>, lit, turned and with its katakana tiles, ready to render.</summary>
     /// <param name="frame">Frame counter.</param>
     /// <returns>The frame cells.</returns>
     public PetalFrameCells Cells(ushort frame) => PetalFrameCells.FromWords(Words(frame));

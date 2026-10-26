@@ -5,7 +5,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 /// <summary>
 /// Conformance against the shared golden vectors in
-/// <c>fixtures/petal/petal_stream_v3.json</c> (every section).
+/// <c>fixtures/petal/petal_stream_v5.json</c> (every section).
 /// </summary>
 public sealed class PetalFixtureTests
 {
@@ -14,8 +14,8 @@ public sealed class PetalFixtureTests
     [Fact]
     public void ConstantsMatch()
     {
-        Assert.Equal(3, PetalTestSupport.Number(Doc, "fixture_version"));
-        Assert.Equal("petal-stream-v3", Doc.GetProperty("format").GetString());
+        Assert.Equal(5, PetalTestSupport.Number(Doc, "fixture_version"));
+        Assert.Equal("petal-stream-v5", Doc.GetProperty("format").GetString());
         var constants = Doc.GetProperty("constants");
         Assert.Equal(PetalLayout.Canvas, constants.GetProperty("canvas").GetDouble());
         Assert.Equal(PetalLanes.AtomLength, PetalTestSupport.Number(constants, "atom_len"));
@@ -35,6 +35,41 @@ public sealed class PetalFixtureTests
         Assert.Equal(PetalTurns.TurnParityLength, PetalTestSupport.Number(constants, "turn_parity"));
         Assert.Equal(PetalTurns.TurnAtoms, PetalTestSupport.Number(constants, "turn_atoms"));
         Assert.Equal(PetalTurns.TurnIdBase, PetalTestSupport.Number(constants, "turn_id_base"));
+        foreach (var (key, value) in new[]
+        {
+            ("card_height", PetalLayout.CardHeight),
+            ("square_top", PetalLayout.SquareTop),
+            ("kana_tile", PetalLayout.KanaTile),
+            ("kana_pitch", PetalLayout.KanaPitch),
+            ("kana_glyph_box", PetalLayout.KanaGlyphBox),
+            ("kana_corner", PetalLayout.KanaCorner),
+            ("kana_gap", PetalLayout.KanaGap),
+            ("kana_margin", PetalLayout.KanaMargin),
+            ("kana_finder_clearance", PetalLayout.KanaFinderClearance),
+        })
+        {
+            Assert.True(Math.Abs(constants.GetProperty(key).GetDouble() - value) < 1e-9, key);
+        }
+
+        foreach (var (key, value) in new[]
+        {
+            ("kana_rows", PetalLayout.KanaRows),
+            ("kana_columns", PetalLayout.KanaColumns),
+            ("kana_bands", PetalLayout.KanaBands),
+            ("kana_pilots", PetalLayout.KanaPilots),
+            ("kana_data_tiles", PetalKana.KanaDataTiles),
+            ("kana_glyph_word", PetalKana.KanaGlyphWordLength),
+            ("kana_glyph_parity", PetalKana.KanaGlyphParityLength),
+            ("kana_glyph_atoms", PetalKana.KanaGlyphAtoms),
+            ("kana_polarity_word", PetalKana.KanaPolarityWordLength),
+            ("kana_polarity_parity", PetalKana.KanaPolarityParityLength),
+            ("kana_polarity_atoms", PetalKana.KanaPolarityAtoms),
+        })
+        {
+            Assert.True(value == PetalTestSupport.Number(constants, key), key);
+        }
+
+        Assert.Equal(PetalKana.KanaIdBase, PetalTestSupport.Number(constants, "kana_id_base"));
     }
 
     [Fact]
@@ -86,6 +121,45 @@ public sealed class PetalFixtureTests
         Assert.Equal(PetalLayout.DataSlots().Select(static s => (long)s), PetalTestSupport.Numbers(layout, "data_slots"));
         Assert.Equal(PetalLayout.GateSlots.Select(static s => (long)s), PetalTestSupport.Numbers(layout, "gate_slots"));
         Assert.Equal(PetalLayout.GuardSlots.Select(static s => (long)s), PetalTestSupport.Numbers(layout, "guard_slots"));
+        // every katakana tile as [band, row, column, x, y, pilot], −1 for a data tile
+        var tiles = layout.GetProperty("kana_tiles").EnumerateArray().ToArray();
+        Assert.Equal(PetalLayout.KanaTiles.Count, tiles.Length);
+        for (var index = 0; index < tiles.Length; index++)
+        {
+            var row = tiles[index].EnumerateArray().ToArray();
+            var tile = PetalLayout.KanaTiles[index];
+            Assert.Equal((tile.Band, tile.Row, tile.Column), (row[0].GetInt32(), row[1].GetInt32(), row[2].GetInt32()));
+            Assert.True(tile.X == row[3].GetDouble() && tile.Y == row[4].GetDouble(), $"tile {index}: ({tile.X}, {tile.Y})");
+            Assert.Equal(tile.Pilot ?? -1, row[5].GetInt32());
+        }
+
+        var pilots = layout.GetProperty("kana_pilot_symbols").EnumerateArray().ToArray();
+        Assert.Equal(PetalLayout.KanaPilots, pilots.Length);
+        for (var pilot = 0; pilot < pilots.Length; pilot++)
+        {
+            var row = pilots[pilot].EnumerateArray().Select(static v => v.GetInt32()).ToArray();
+            Assert.Equal(new PetalKanaSymbol((byte)row[0], row[1] == 1), PetalLayout.KanaPilotSymbols[pilot]);
+        }
+
+        var glyphs = Doc.GetProperty("glyphs");
+        Assert.Equal(PetalGlyphs.GlyphChars, glyphs.GetProperty("chars").GetString());
+        Assert.Equal(PetalGlyphs.GlyphGrid, glyphs.GetProperty("grid").GetDouble());
+        Assert.Equal(PetalGlyphs.StrokeWidth, glyphs.GetProperty("stroke_width").GetDouble());
+        var strokes = glyphs.GetProperty("strokes").EnumerateArray().ToArray();
+        Assert.Equal(PetalGlyphs.GlyphCount, strokes.Length);
+        for (var glyph = 0; glyph < strokes.Length; glyph++)
+        {
+            var expected = PetalGlyphs.Strokes(glyph);
+            var lines = strokes[glyph].EnumerateArray().ToArray();
+            Assert.Equal(expected.Count, lines.Length);
+            for (var stroke = 0; stroke < lines.Length; stroke++)
+            {
+                var points = lines[stroke].EnumerateArray()
+                    .Select(static point => new PetalPoint(point[0].GetDouble(), point[1].GetDouble()))
+                    .ToArray();
+                Assert.Equal(expected[stroke], points);
+            }
+        }
     }
 
     [Fact]
@@ -98,7 +172,7 @@ public sealed class PetalFixtureTests
             return new PetalColor((byte)rgb[0], (byte)rgb[1], (byte)rgb[2]);
         }
 
-        Assert.Equal(PetalPalette.Default, new PetalPalette(Colour("background"), Colour("light"), Colour("pink"), Colour("backdrop")));
+        Assert.Equal(PetalPalette.Default, new PetalPalette(Colour("background"), Colour("light"), Colour("pink"), Colour("backdrop"), Colour("ink")));
     }
 
     [Fact]
@@ -130,6 +204,58 @@ public sealed class PetalFixtureTests
         {
             Assert.Equal(PetalTestSupport.Hex(whitening, $"F{sector}"), PetalLanes.Whitening(PetalLanes.Field(sector)));
             Assert.Equal(PetalTestSupport.Hex(whitening, $"T{sector}"), PetalTurns.TurnWhitening(sector));
+        }
+
+        foreach (var lane in PetalKana.Lanes)
+            Assert.Equal(PetalTestSupport.Hex(whitening, PetalKana.Name(lane)), PetalKana.Whitening(lane));
+    }
+
+    [Fact]
+    public void KanaIdsAndReaderTemplatesMatch()
+    {
+        var ids = Doc.GetProperty("kana_first_ids");
+        Assert.Equal(PetalKana.Lanes.Select(PetalKana.Name), ids.GetProperty("lanes").EnumerateArray().Select(static v => v.GetString()));
+        var frames = PetalTestSupport.Numbers(ids, "frames");
+        var rows = ids.GetProperty("ids").EnumerateArray().ToArray();
+        Assert.Equal(frames.Length, rows.Length);
+        for (var i = 0; i < frames.Length; i++)
+        {
+            Assert.Equal(
+                rows[i].EnumerateArray().Select(static v => v.GetInt64()),
+                PetalKana.Lanes.Select(lane => (long)PetalKana.KanaFirstId((ushort)frames[i], lane)));
+        }
+
+        var reader = Doc.GetProperty("kana_reader");
+        Assert.Equal(PetalKana.KanaBlurs, reader.GetProperty("blurs").EnumerateArray().Select(static v => v.GetDouble()));
+        Assert.Equal(PetalKana.KanaGrid, PetalTestSupport.Number(reader, "grid"));
+        var probes = reader.GetProperty("template_probes").EnumerateArray().ToArray();
+        Assert.True(probes.Length >= PetalKana.KanaBlurs.Count, $"{probes.Length} probes");
+        foreach (var probe in probes)
+        {
+            var blur = PetalKana.KanaBlurs.ToList().FindIndex(b => Math.Abs(b - probe.GetProperty("blur").GetDouble()) < 1e-12);
+            Assert.True(blur >= 0, $"unknown blur {probe.GetProperty("blur").GetDouble()}");
+            var got = PetalKana.TemplateProbe(
+                blur,
+                (int)PetalTestSupport.Number(probe, "glyph"),
+                PetalTestSupport.Number(probe, "light") == 1,
+                (int)PetalTestSupport.Number(probe, "i"),
+                (int)PetalTestSupport.Number(probe, "j"));
+            var expected = probe.GetProperty("value").GetDouble();
+            Assert.True(Math.Abs(got - expected) < 1e-12, $"probe {probe}: {got:R}, expected {expected:R}");
+        }
+
+        Assert.Equal(PetalKana.KanaCoarseGrid, PetalTestSupport.Number(reader, "coarse_grid"));
+        var coarse = reader.GetProperty("coarse_probes").EnumerateArray().ToArray();
+        Assert.NotEmpty(coarse);
+        foreach (var probe in coarse)
+        {
+            var got = PetalKana.CoarseTemplateProbe(
+                (int)PetalTestSupport.Number(probe, "glyph"),
+                PetalTestSupport.Number(probe, "light") == 1,
+                (int)PetalTestSupport.Number(probe, "i"),
+                (int)PetalTestSupport.Number(probe, "j"));
+            var expected = probe.GetProperty("value").GetDouble();
+            Assert.True(Math.Abs(got - expected) < 1e-12, $"coarse probe {probe}: {got:R}, expected {expected:R}");
         }
     }
 
@@ -228,6 +354,21 @@ public sealed class PetalFixtureTests
                 Assert.Equal(PetalLayout.Sectors, turnData.Length);
                 for (var sector = 0; sector < PetalLayout.Sectors; sector++)
                     Assert.True(turnData[sector].AsSpan().SequenceEqual(lanes.Turns[sector]), $"{name} frame {number} turn {sector}");
+                var kanaData = PetalTestSupport.HexList(frame, "kana_data");
+                var kanaWords = PetalTestSupport.HexList(frame, "kana_words");
+                Assert.Equal(PetalKana.Lanes.Count, kanaData.Length);
+                var kanaHeader = new PetalLaneHeader(meta.Tag, number);
+                foreach (var lane in PetalKana.Lanes)
+                {
+                    var laneName = $"{name} frame {number} {PetalKana.Name(lane)}";
+                    Assert.True(kanaData[(int)lane].AsSpan().SequenceEqual(lanes.Lane(lane)), laneName);
+                    Assert.Equal(kanaWords[(int)lane], PetalKana.EncodeKanaLane(lane, kanaData[(int)lane]));
+                    var packet = PetalKana.KanaPacket(kanaHeader, lane, kanaData[(int)lane]);
+                    Assert.True(packet is not null, $"{laneName} check");
+                    Assert.Equal(PetalKana.KanaFirstId(number, lane), packet.FirstId);
+                    Assert.Equal(PetalKana.Atoms(lane), packet.Atoms.Count);
+                }
+
                 Assert.Equal(PetalTestSupport.LaneData(frame), lanes);
                 var dWord = PetalTestSupport.Hex(frame, "d_word");
                 var fieldWords = PetalTestSupport.HexList(frame, "field_words");
@@ -243,17 +384,29 @@ public sealed class PetalFixtureTests
                 Assert.Equal(dWord, PetalLanes.EncodeLane(PetalLane.D, lanes.D));
                 for (var sector = 0; sector < PetalLayout.Sectors; sector++)
                     Assert.Equal(fieldWords[sector], PetalLanes.EncodeLane(PetalLanes.Field(sector), lanes.Fields[sector]));
-                Assert.Equal(new PetalLaneData(dWord, fieldWords, turnWords), encoder.Words(number));
+                Assert.Equal(new PetalLaneData(dWord, fieldWords, turnWords, kanaWords), encoder.Words(number));
                 var cells = PetalFrameCells.FromWords(dWord, fieldWords);
                 Assert.All(cells.Turns, static turn => Assert.Equal(0, turn));
+                Assert.Equal(PetalKana.PilotSymbols(), cells.Kana);
                 cells.SetTurns(turnWords);
                 Assert.Equal(PetalTestSupport.Text(frame, "turns"), string.Concat(cells.Turns.Select(static t => (char)('0' + t))));
+                cells.SetKana(kanaWords);
+                Assert.Equal(PetalTestSupport.Text(frame, "kana_glyphs"), string.Concat(cells.Kana.Select(static k => "0123456789abcdef"[k.Glyph])));
+                var lightBits = PetalTestSupport.Hex(frame, "kana_light_hex");
+                Assert.Equal(
+                    Enumerable.Range(0, PetalLayout.KanaTileCount).Select(i => ((lightBits[i / 8] >> (7 - i % 8)) & 1) == 1),
+                    cells.Kana.Select(static k => k.Light));
+                for (var band = 0; band < PetalLayout.KanaBands; band++)
+                {
+                    Assert.Equal(kanaWords[(int)PetalKana.Lane(band, false)], cells.KanaPolarityWord(band));
+                    Assert.Equal(kanaWords[(int)PetalKana.Lane(band, true)], cells.KanaGlyphWord(band));
+                }
                 Assert.Equal(
                     PetalTestSupport.Numbers(frame, "lit_dots"),
                     Enumerable.Range(0, cells.Dots.Length).Where(i => cells.Dots[i]).Select(static i => (long)i));
                 Assert.Equal(PetalTestSupport.Flags(PetalTestSupport.Hex(frame, "lit_petals_hex")), cells.Petals);
                 Assert.Equal(cells, encoder.Cells(number));
-                Assert.Equal(cells, PetalFrameCells.FromWords(new PetalLaneData(dWord, fieldWords, turnWords)));
+                Assert.Equal(cells, PetalFrameCells.FromWords(new PetalLaneData(dWord, fieldWords, turnWords, kanaWords)));
                 Assert.Equal(dWord, cells.DWord());
                 for (var sector = 0; sector < PetalLayout.Sectors; sector++)
                 {
@@ -262,17 +415,19 @@ public sealed class PetalFixtureTests
                 }
             }
 
-            // push every fixture frame through lane decoding and the assembler, with and without
-            // the turn lanes: the turn lanes finish the one-pass stream in fewer frames
+            // push every fixture frame through lane decoding and the assembler, without the turn and
+            // kana lanes, with the turn lanes, and with both: each layer finishes the one-pass stream
+            // in fewer frames
             if (name == "one-pass")
             {
-                var needed = new int[2];
-                foreach (var withTurns in new[] { false, true })
+                var needed = new int[3];
+                for (var layers = 0; layers < 3; layers++)
                 {
+                    var (withTurns, withKana) = (layers >= 1, layers >= 2);
                     var assembler = new PetalStreamAssembler();
                     foreach (var frame in stream.GetProperty("frames").EnumerateArray())
                     {
-                        needed[withTurns ? 1 : 0]++;
+                        needed[layers]++;
                         Assert.True(PetalLanes.TryDecodeLane(PetalLane.D, PetalTestSupport.Hex(frame, "d_word"), [], out var d));
                         assembler.PushDLane(PetalStream.ParseDLane(d)!);
                         var fieldWords = PetalTestSupport.HexList(frame, "field_words");
@@ -294,6 +449,17 @@ public sealed class PetalFixtureTests
                             }
                         }
 
+                        if (withKana)
+                        {
+                            var header = new PetalLaneHeader(meta.Tag, (ushort)PetalTestSupport.Number(frame, "frame"));
+                            var kanaWords = PetalTestSupport.HexList(frame, "kana_words");
+                            foreach (var lane in PetalKana.Lanes)
+                            {
+                                Assert.True(PetalKana.TryDecodeKanaLane(lane, kanaWords[(int)lane], [], out var data, out _));
+                                assembler.PushAtoms(PetalKana.KanaPacket(header, lane, data)!);
+                            }
+                        }
+
                         if (assembler.Progress.Complete)
                             break;
                     }
@@ -301,7 +467,9 @@ public sealed class PetalFixtureTests
                     Assert.Equal(payload, assembler.TakeCompleted()!.ToArray());
                 }
 
-                Assert.True(needed[1] < needed[0], $"frames needed without and with turn lanes: {needed[0]}, {needed[1]}");
+                Assert.True(
+                    needed[2] < needed[1] && needed[1] < needed[0],
+                    $"frames needed without the turn and kana lanes, with the turn lanes and with both: {string.Join(", ", needed)}");
             }
         }
     }
@@ -319,12 +487,20 @@ public sealed class PetalFixtureTests
             var result = PetalDecoder.Decode(PetalTestSupport.RenderLuma(encoder, number, 512, 2));
             Assert.True(result.Success, result.Error.ToString());
             PetalTestSupport.AssertAllLanes(result.Frame, PetalTestSupport.LaneData(frame), name);
-            // at 768 px the render resolves the petals' shapes, and the turn lanes read too
+            // at 768 px the render resolves the petals' shapes and the glyphs: the turn and kana lanes read too
             var image = PetalTestSupport.RenderLuma(encoder, number, 768, 2);
             result = PetalDecoder.Decode(image);
             Assert.True(result.Success, result.Error.ToString());
             PetalTestSupport.AssertAllLanes(result.Frame, PetalTestSupport.LaneData(frame), name);
             PetalTestSupport.AssertAllTurnLanes(image, result.Frame, PetalTestSupport.LaneData(frame), name);
+            var kana = PetalKana.ReadKana(image, result.Frame, new PetalLaneHeader(encoder.Meta.Tag, number));
+            var truth = PetalTestSupport.LaneData(frame);
+            foreach (var lane in PetalKana.Lanes)
+            {
+                var read = kana[(int)lane];
+                Assert.True(read is not null && truth.Lane(lane).AsSpan().SequenceEqual(read.Result.Data), $"{name}: kana lane {PetalKana.Name(lane)}");
+                Assert.Equal(number, read.Header.Frame);
+            }
         }
     }
 }

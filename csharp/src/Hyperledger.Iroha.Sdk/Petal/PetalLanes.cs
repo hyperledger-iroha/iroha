@@ -41,7 +41,11 @@ public enum PetalLane
 /// <item><term>F0–F3</term><description>840 field cells of one sector × 1 bit / 105 B / 83 B / 22 B</description></item>
 /// <item><term>T0–T3</term><description>360 lit petals of one sector × 2 bits / 90 B / 68 B / 22 B</description></item>
 /// </list>
-/// <para>Bit order is most-significant-bit first.</para>
+/// <para>
+/// The katakana tiles of the bands above and below the square carry four more lanes (<c>P0</c>,
+/// <c>K0</c>, <c>P1</c>, <c>K1</c>, see <see cref="PetalKana"/>). Bit order is most-significant-bit
+/// first.
+/// </para>
 /// </remarks>
 public static class PetalLanes
 {
@@ -259,16 +263,22 @@ public static class PetalLanes
 }
 
 /// <summary>
-/// Every cell of one frame: what a renderer draws and a decoder samples.
+/// Every cell of one frame: what a renderer draws and a decoder samples: which ring slots and petals
+/// are lit, how every petal is turned (see <see cref="PetalTurns"/>), and what every katakana tile of
+/// the card's bands shows (see <see cref="PetalKana"/>).
 /// </summary>
 public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
 {
-    /// <summary>Creates an all-dark frame: unlit dots and petals, every petal unturned.</summary>
+    /// <summary>
+    /// Creates an all-dark frame: unlit dots and petals, every petal unturned, and only the pilots
+    /// set among the katakana tiles (every data tile light with glyph 0, see <see cref="SetKana"/>).
+    /// </summary>
     public PetalFrameCells()
     {
         Dots = new bool[PetalLayout.TotalSlots];
         Petals = new bool[PetalLayout.FieldCells];
         Turns = new byte[PetalLayout.FieldCells];
+        Kana = PetalKana.PilotSymbols();
     }
 
     /// <summary>Lit state of every ring slot in flat order, gate dots included.</summary>
@@ -283,8 +293,14 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
     /// </summary>
     public byte[] Turns { get; }
 
-    /// <summary>Builds the cells from the transmitted codewords of a frame, lit and turned.</summary>
-    /// <param name="words">The codewords (see <see cref="PetalStreamEncoder.Words"/>), turn lanes included.</param>
+    /// <summary>
+    /// What every katakana tile shows, in <see cref="PetalLayout.KanaTiles"/> order: its glyph
+    /// (0 to 15) and polarity.
+    /// </summary>
+    public PetalKanaSymbol[] Kana { get; }
+
+    /// <summary>Builds the cells from the transmitted codewords of a frame, lit, turned and with its katakana tiles.</summary>
+    /// <param name="words">The codewords (see <see cref="PetalStreamEncoder.Words"/>), turn and kana lanes included.</param>
     /// <returns>The frame cells.</returns>
     /// <exception cref="ArgumentException">A codeword has the wrong length.</exception>
     public static PetalFrameCells FromWords(PetalLaneData words)
@@ -292,12 +308,14 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
         ArgumentNullException.ThrowIfNull(words);
         var cells = FromWords(words.D, words.Fields);
         cells.SetTurns(words.Turns);
+        cells.SetKana(words.Kana);
         return cells;
     }
 
     /// <summary>
     /// Builds the cells from the transmitted codewords of lane <c>D</c> and the four field lanes,
-    /// with every petal unturned (see <see cref="SetTurns"/>).
+    /// with every petal unturned (see <see cref="SetTurns"/>) and only the pilots set among the
+    /// katakana tiles (see <see cref="SetKana"/>).
     /// </summary>
     /// <param name="d">Lane <c>D</c> codeword (30 bytes).</param>
     /// <param name="fields">The four field codewords (105 bytes each), sector 0 first.</param>
@@ -368,6 +386,38 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
         }
     }
 
+    /// <summary>
+    /// Shows the transmitted kana codewords on the bands' data tiles: data tile <c>i</c> of a band
+    /// shows bit <c>i</c> of its polarity codeword (the last two tiles, beyond it, are light) and
+    /// nibble <c>i</c> of its glyph codeword; the pilots keep their fixed symbols.
+    /// </summary>
+    /// <param name="words">The four kana codewords in <see cref="PetalKana.Lanes"/> order: <c>P0</c> (37 bytes), <c>K0</c> (149), <c>P1</c>, <c>K1</c>.</param>
+    /// <exception cref="ArgumentException">A codeword has the wrong length or there are not four kana words.</exception>
+    public void SetKana(IReadOnlyList<byte[]> words)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+        if (words.Count != PetalKana.Lanes.Count)
+            throw new ArgumentException("A frame has four kana codewords: P0, K0, P1, K1.", nameof(words));
+        foreach (var lane in PetalKana.Lanes)
+        {
+            if (words[(int)lane] is null || words[(int)lane].Length != PetalKana.WordLength(lane))
+                throw new ArgumentException("A kana codeword is 37 bytes (polarity) or 149 bytes (glyphs).", nameof(words));
+        }
+
+        for (var band = 0; band < PetalLayout.KanaBands; band++)
+            PetalKana.SetKanaSymbols(Kana, band, words[(int)PetalKana.Lane(band, false)], words[(int)PetalKana.Lane(band, true)]);
+    }
+
+    /// <summary>Packs the polarity codeword the data tiles of band <paramref name="band"/> show.</summary>
+    /// <param name="band">Band, 0 or 1.</param>
+    /// <returns>37 bytes.</returns>
+    public byte[] KanaPolarityWord(int band) => PetalKana.PolarityWord(Kana, band);
+
+    /// <summary>Packs the glyph codeword the data tiles of band <paramref name="band"/> show.</summary>
+    /// <param name="band">Band, 0 or 1.</param>
+    /// <returns>149 bytes.</returns>
+    public byte[] KanaGlyphWord(int band) => PetalKana.GlyphWord(Kana, band);
+
     /// <summary>Packs the turns of the carriers of sector <paramref name="sector"/> into its turn codeword.</summary>
     /// <param name="sector">Sector, 0 to 3.</param>
     /// <returns>90 bytes, or <see langword="null"/> when the sector has too few lit petals to carry one.</returns>
@@ -425,6 +475,7 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
         Dots.CopyTo(copy.Dots, 0);
         Petals.CopyTo(copy.Petals, 0);
         Turns.CopyTo(copy.Turns, 0);
+        Kana.CopyTo(copy.Kana, 0);
         return copy;
     }
 
@@ -432,7 +483,8 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
     public bool Equals(PetalFrameCells? other) => other is not null
         && Dots.AsSpan().SequenceEqual(other.Dots)
         && Petals.AsSpan().SequenceEqual(other.Petals)
-        && Turns.AsSpan().SequenceEqual(other.Turns);
+        && Turns.AsSpan().SequenceEqual(other.Turns)
+        && Kana.AsSpan().SequenceEqual(other.Kana);
 
     /// <inheritdoc />
     public override bool Equals(object? obj) => Equals(obj as PetalFrameCells);
@@ -446,6 +498,8 @@ public sealed class PetalFrameCells : IEquatable<PetalFrameCells>
         foreach (var petal in Petals)
             hash.Add(petal);
         hash.AddBytes(Turns);
+        foreach (var symbol in Kana)
+            hash.Add(symbol);
         return hash.ToHashCode();
     }
 }

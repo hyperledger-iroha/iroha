@@ -366,8 +366,9 @@ public sealed class PetalStreamTests
         Assert.Equal(512, beacon.Header.Frame);
         Assert.Null(PetalStream.ParseDLane(d.AsSpan(0, 11)));
         Assert.Equal(PetalStream.FormatVersion, d[3]);
-        // the retired formats 1 (katakana tiles) and 2 (unturned petals) are refused
-        foreach (var retired in new byte[] { 0x10, 0x20 })
+        Assert.Equal(0x50, d[3]);
+        // the retired formats 1 (katakana tiles), 2 (unturned petals) and 3 (no bands) are refused
+        foreach (var retired in new byte[] { 0x10, 0x20, 0x30 })
         {
             var bad = (byte[])d.Clone();
             bad[3] = retired;

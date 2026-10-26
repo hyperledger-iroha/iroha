@@ -7,21 +7,24 @@ namespace Hyperledger.Iroha.Petal;
 public readonly record struct PetalColor(byte R, byte G, byte B);
 
 /// <summary>Colours of a Petal picture.</summary>
-/// <param name="Background">Background (black by default).</param>
-/// <param name="Light">Finders and the petals inside the <c>天</c>.</param>
-/// <param name="Pink">Sakura pink of the ring dots and of the petals outside the <c>天</c>.</param>
+/// <param name="Background">Background (black by default), also the gutters between katakana tiles and the fill of dark tiles.</param>
+/// <param name="Light">Finders, the petals inside the <c>天</c> and the fill of light katakana tiles.</param>
+/// <param name="Pink">Sakura pink of the ring dots, of the petals outside the <c>天</c> and of the glyphs on dark tiles.</param>
 /// <param name="Backdrop">The faint <c>天</c> drawn under the petals (a tenth of the light colour).</param>
-public sealed record PetalPalette(PetalColor Background, PetalColor Light, PetalColor Pink, PetalColor Backdrop)
+/// <param name="Ink">The glyphs on light katakana tiles.</param>
+public sealed record PetalPalette(PetalColor Background, PetalColor Light, PetalColor Pink, PetalColor Backdrop, PetalColor Ink)
 {
     /// <summary>
     /// The reference palette: background <c>(0, 0, 0)</c>, light
-    /// <c>(250, 235, 244)</c>, pink <c>(245, 175, 208)</c>, backdrop <c>(25, 24, 24)</c>.
+    /// <c>(250, 235, 244)</c>, pink <c>(245, 175, 208)</c>, backdrop <c>(25, 24, 24)</c>,
+    /// ink <c>(20, 4, 14)</c>.
     /// </summary>
     public static PetalPalette Default { get; } = new(
         new PetalColor(0, 0, 0),
         new PetalColor(250, 235, 244),
         new PetalColor(245, 175, 208),
-        new PetalColor(25, 24, 24));
+        new PetalColor(25, 24, 24),
+        new PetalColor(20, 4, 14));
 }
 
 /// <summary>Software rendering options.</summary>
@@ -34,7 +37,7 @@ public sealed record PetalRenderOptions
     /// <summary>The reference defaults: 1024 px, 3×3 supersampling, default palette.</summary>
     public static PetalRenderOptions Default { get; } = new();
 
-    /// <summary>Output side in pixels.</summary>
+    /// <summary>Output width in pixels; the card is <see cref="PetalRenderer.CardHeightPx"/> pixels tall.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The size is not positive.</exception>
     public int Size
     {
@@ -75,34 +78,92 @@ public sealed record PetalRenderOptions
 /// Reference software renderer.
 /// </summary>
 /// <remarks>
-/// The picture is black, with four sakura-blossom finders in the canvas corners,
-/// three dotted rings, and inside them a field of petals on concentric bands, each
-/// lit petal turned about its centre by its turn (<see cref="PetalFrameCells.Turns"/>).
-/// A lit petal whose centre lies inside the <c>天</c> is drawn in the light colour,
-/// the others in sakura pink, over a faint backdrop of the <c>天</c> itself, so the
-/// character shows through the storm of petals. Each sample is shaded in this
-/// order: finders, ring dots, petals, the backdrop, background. The output matches
-/// the Rust reference renderer pixel for pixel. Platform code may instead draw a
-/// <see cref="PetalDrawList"/> with native 2D APIs, as long as geometry, turns and
-/// polarity match.
+/// <para>
+/// The picture is a portrait card (<see cref="PetalLayout.CardHeight"/>): a black square with four
+/// sakura-blossom finders in its corners, three dotted rings, and inside them a field of petals on
+/// concentric bands, each lit petal turned about its centre by its turn
+/// (<see cref="PetalFrameCells.Turns"/>). A lit petal whose centre lies inside the <c>天</c> is
+/// drawn in the light colour, the others in sakura pink, over a faint backdrop of the <c>天</c>
+/// itself, so the character shows through the storm of petals. Above and below that square, the
+/// card's two bands show rows of katakana tiles (see <see cref="PetalKana"/>): a light tile filled
+/// light with its glyph in ink, a dark tile black with its glyph in pink, black gutters between them.
+/// </para>
+/// <para>
+/// In the square each sample is shaded in this order: finders, ring dots, petals, the backdrop,
+/// background; in the bands it takes its tile's colour or black. The output matches the Rust
+/// reference renderer pixel for pixel. Platform code may instead draw a <see cref="PetalDrawList"/>
+/// with native 2D APIs, as long as geometry, turns, glyphs and polarity match.
+/// </para>
 /// </remarks>
 public static class PetalRenderer
 {
-    /// <summary>Renders one frame.</summary>
+    /// <summary>Height in pixels of a card rendered <paramref name="size"/> pixels wide: <c>size · 1668 / 1024</c>, rounded.</summary>
+    /// <param name="size">Card width in pixels.</param>
+    /// <returns>The card height in pixels.</returns>
+    public static int CardHeightPx(int size)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(size);
+        var height = size * PetalLayout.CardHeight / PetalLayout.Canvas;
+        return (int)Math.Floor(height + 0.5);
+    }
+
+    /// <summary>
+    /// Renders one frame: the card, <see cref="PetalRenderOptions.Size"/> pixels wide and
+    /// <see cref="CardHeightPx"/> tall, whose square starts <see cref="PetalLayout.SquareTop"/> units
+    /// below the top edge.
+    /// </summary>
     /// <param name="cells">The frame cells.</param>
     /// <param name="options">Options; <see cref="PetalRenderOptions.Default"/> when omitted.</param>
-    /// <returns>An RGB image of <see cref="PetalRenderOptions.Size"/> pixels square.</returns>
+    /// <returns>An RGB image of the card.</returns>
+    /// <exception cref="ArgumentException">A katakana tile's glyph is not 0 to 15.</exception>
     public static PetalRgbImage Render(PetalFrameCells cells, PetalRenderOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(cells);
+        CheckGlyphs(cells);
         options ??= PetalRenderOptions.Default;
+        return RenderRows(cells, options, CardHeightPx(options.Size), PetalLayout.SquareTop);
+    }
+
+    /// <summary>
+    /// The colour of square-coordinate point <c>(x, y)</c> of the card without anti-aliasing: in the
+    /// square (<c>0 ≤ y &lt; 1024</c>) its petals, dots and finders, outside it the bands' tiles.
+    /// </summary>
+    /// <param name="cells">The frame cells.</param>
+    /// <param name="x">Square x.</param>
+    /// <param name="y">Square y (negative above the square).</param>
+    /// <param name="palette">Colours; <see cref="PetalPalette.Default"/> when omitted.</param>
+    /// <returns>The shaded colour.</returns>
+    /// <exception cref="ArgumentException">A katakana tile's glyph is not 0 to 15.</exception>
+    public static PetalColor Shade(PetalFrameCells cells, double x, double y, PetalPalette? palette = null)
+    {
+        ArgumentNullException.ThrowIfNull(cells);
+        CheckGlyphs(cells);
+        var shader = new Shader(cells, palette ?? PetalPalette.Default);
+        return y >= 0.0 && y < PetalLayout.Canvas ? shader.Shade(x, y) : shader.Kana(x, y);
+    }
+
+    /// <summary>
+    /// Renders only the square of the card, <see cref="PetalRenderOptions.Size"/> pixels on a side
+    /// (the reference's test-only <c>render_square</c>): tests of the decoder that work on bare
+    /// squares use it.
+    /// </summary>
+    internal static PetalRgbImage RenderSquare(PetalFrameCells cells, PetalRenderOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(cells);
+        options ??= PetalRenderOptions.Default;
+        return RenderRows(cells, options, options.Size, 0.0);
+    }
+
+    /// <summary>Renders <paramref name="height"/> pixel rows of the card, the first <paramref name="top"/> canvas units above the square's top edge.</summary>
+    private static PetalRgbImage RenderRows(PetalFrameCells cells, PetalRenderOptions options, int height, double top)
+    {
         var size = options.Size;
         var s = options.Supersample;
         var shader = new Shader(cells, options.Palette);
         var unit = PetalLayout.Canvas / size;
-        var data = new byte[checked(size * size * 3)];
+        var data = new byte[checked(size * height * 3)];
         var n = (uint)(s * s);
-        for (var py = 0; py < size; py++)
+        for (var py = 0; py < height; py++)
         {
             for (var px = 0; px < size; px++)
             {
@@ -114,8 +175,8 @@ public static class PetalRenderer
                     for (var sx = 0; sx < s; sx++)
                     {
                         var x = (px + (sx + 0.5) / s) * unit;
-                        var y = (py + (sy + 0.5) / s) * unit;
-                        var c = shader.Shade(x, y);
+                        var y = (py + (sy + 0.5) / s) * unit - top;
+                        var c = y >= 0.0 && y < PetalLayout.Canvas ? shader.Shade(x, y) : shader.Kana(x, y);
                         r += c.R;
                         g += c.G;
                         b += c.B;
@@ -129,23 +190,40 @@ public static class PetalRenderer
             }
         }
 
-        return new PetalRgbImage(size, size, data);
+        return new PetalRgbImage(size, height, data);
     }
 
-    /// <summary>The colour of canvas point <c>(x, y)</c> without anti-aliasing.</summary>
-    /// <param name="cells">The frame cells.</param>
-    /// <param name="x">Canvas x.</param>
-    /// <param name="y">Canvas y.</param>
-    /// <param name="palette">Colours; <see cref="PetalPalette.Default"/> when omitted.</param>
-    /// <returns>The shaded colour.</returns>
-    public static PetalColor Shade(PetalFrameCells cells, double x, double y, PetalPalette? palette = null)
+    /// <summary>Refuses tiles whose glyph lies outside the alphabet before any of them is drawn.</summary>
+    internal static void CheckGlyphs(PetalFrameCells cells)
     {
-        ArgumentNullException.ThrowIfNull(cells);
-        return new Shader(cells, palette ?? PetalPalette.Default).Shade(x, y);
+        foreach (var symbol in cells.Kana)
+        {
+            if (symbol.Glyph >= PetalGlyphs.GlyphCount)
+                throw new ArgumentException("A katakana tile's glyph is 0 to 15.", nameof(cells));
+        }
     }
 
     private readonly struct Shader(PetalFrameCells cells, PetalPalette palette)
     {
+        /// <summary>
+        /// The colour of a katakana tile at the square-coordinate point <c>(x, y)</c> outside the
+        /// square, or the background between tiles.
+        /// </summary>
+        public PetalColor Kana(double x, double y)
+        {
+            if (!PetalLayout.TryKanaTileAt(x, y, out var tile, out var u, out var v) || !PetalLayout.KanaInside(u, v))
+                return palette.Background;
+            var symbol = cells.Kana[tile];
+            var inked = PetalLayout.KanaInkedUnchecked(symbol.Glyph, u, v);
+            return (inked, symbol.Light) switch
+            {
+                (true, true) => palette.Ink,
+                (false, true) => palette.Light,
+                (true, false) => palette.Pink,
+                _ => palette.Background,
+            };
+        }
+
         public PetalColor Shade(double x, double y)
         {
             // finders
