@@ -824,21 +824,30 @@ katakana whose template correlates best, and a lane passes when its check
 matches the square's frame or the frame before or after it (a rolling shutter
 can show a band of a neighbouring frame). The session reads each band once per
 shown frame, with its own back-off, and the bands go first: a capture whose
-bands read a kana lane tries no turn lane, and that shown frame's turn lanes
-wait for its next capture. `outcome.kana` names the kana lanes of a capture
-(`P0K0P1K1` for all four), `stats().kanaTries` and `stats().kanaLanes` count
-the tries and the lanes read, and `PetalKana.observeBand` reports every tile's
-decision. `PetalFrameCells.kanaGlyph`, `isKanaLight` and `withKana` expose the
-tiles of a frame.
+bands read a kana lane tries the turn lanes too only when its work and the
+session's last turn try fit a 30 fps camera's frame time
+(`PetalScanSession.CAPTURE_BUDGET_MILLIS`); otherwise that shown frame's turn
+lanes wait for its next capture. The session times its work on the monotonic
+clock, and a `PetalWorkCost` given to its constructor puts a model's costs in
+place of the measured times (tests do). `outcome.kana` names the kana lanes of
+a capture (`P0K0P1K1` for all four), `stats().kanaTries` and
+`stats().kanaLanes` count the tries and the lanes read, `stats().spareTurns`
+the captures that had time for the turn lanes too, and `PetalKana.observeBand`
+reports every tile's decision. `PetalFrameCells.kanaGlyph`, `isKanaLight` and
+`withKana` expose the tiles of a frame.
 On a Pixel 6 held to its four Cortex-A55 cores, decoding simulated 720p
 captures, a tracked capture costs about 14 ms, the turn lanes about 75 ms and
 both bands about 36 ms. Read on one capture, turns and bands together took
 longer than a frame is shown at 12 fps, and the session decoded only six camera
-frames a second; with the bands first it decodes 14–19, and a 12 KB Payment
+frames a second; with the bands first (no capture there has time to spare
+for the turns as well) it decodes 14–19, and a 12 KB Payment
 shown upright at 12 fps arrives in 1.7–1.9 s on a sharp camera (format 3:
 1.8 s), 1.9–2.1 s on an older one (2.5 s) and 1.8–1.9 s on one too soft for the
 turns (3.1 s). In the reference simulation it takes 1.2, 1.3 and 1.75 s where
-the decoder keeps up with every camera frame; see `specs/petal_stream.md` §8.
+the decoder keeps up with every camera frame, and a fast decoder whose camera
+gives it only 15 frames a second still reads both on one capture (1.2 s on the
+sharp camera, against 1.6 s with the turns always left to a later capture); see
+`specs/petal_stream.md` §8.
 `PetalStreamAssembler` and `PetalScanSession` bound pending atoms, payload
 size (64 KiB by default) and stream lifetime (30 s idle, 180 s absolute), and
 deliver a payload only after its CRC-32C matches the beacon. `client-android`

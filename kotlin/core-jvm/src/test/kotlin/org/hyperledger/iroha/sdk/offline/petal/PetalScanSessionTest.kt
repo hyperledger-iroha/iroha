@@ -127,22 +127,76 @@ class PetalScanSessionTest {
         assertEquals("0123", session.push(PetalCameraSimulator.capture(render(encoder, 32), config.copy(seed = 32)), 32 * 83L).turned)
     }
 
+    /** A phone held upright: landscape frames with the card turned a quarter. */
+    private val upright = PetalCameraSimulator.fitToFrame(PetalCaptureConfig.modern().copy(rotationDeg = 92.0), 4.0)
+
+    /** Card [frame] of [encoder] with its bands, 768 wide. */
+    private fun card(encoder: PetalStreamEncoder, frame: Int): PetalRgb =
+        PetalRenderer.render(encoder.cells(frame), PetalRenderOptions(768, 2))
+
+    /** A session whose work costs what [costs] says, however long it took. */
+    private fun costed(costs: (PetalWork) -> Double) = PetalScanSession(PetalScanLimits.DEFAULT) { work, _ -> costs(work) }
+
     @Test
     fun anUprightCameraReadsBothBandsOncePerShownFrame() {
         val encoder = PetalStreamEncoder(payload(3000), 2)
-        // a phone held upright delivers landscape frames with the card turned a quarter
-        val config = PetalCameraSimulator.fitToFrame(PetalCaptureConfig.modern().copy(rotationDeg = 92.0), 4.0)
-        fun card(frame: Int): PetalRgb = PetalRenderer.render(encoder.cells(frame), PetalRenderOptions(768, 2))
-        val session = PetalScanSession()
-        val first = session.push(PetalCameraSimulator.capture(card(1), config), 0)
-        assertEquals("P0K0P1K1", first.kana)
-        // a second capture of the same shown frame tries no band again
-        val again = session.push(PetalCameraSimulator.capture(card(1), config), 33)
-        assertEquals("", again.kana)
-        val next = session.push(PetalCameraSimulator.capture(card(2), config), 83)
-        assertEquals("P0K0P1K1", next.kana)
+        // a fast decoder: every capture has time to spare for the turn lanes too
+        val session = costed { 0.0 }
+        val first = session.push(PetalCameraSimulator.capture(card(encoder, 1), upright), 0)
+        assertEquals("P0K0P1K1" to "0123", first.kana to first.turned)
+        // a second capture of the same shown frame tries no band and no turn lane again
+        val again = session.push(PetalCameraSimulator.capture(card(encoder, 1), upright), 33)
+        assertEquals("" to "", again.kana to again.turned)
+        val next = session.push(PetalCameraSimulator.capture(card(encoder, 2), upright), 83)
+        assertEquals("P0K0P1K1" to "0123", next.kana to next.turned)
         val stats = session.stats()
         assertEquals(4L to 8L, stats.kanaTries to stats.kanaLanes)
+        assertEquals(8L to 2L, stats.turnLanes to stats.spareTurns)
+    }
+
+    @Test
+    fun aSlowDecoderLeavesTheTurnLanesToTheNextCapture() {
+        val encoder = PetalStreamEncoder(payload(3000), 2)
+        // a Pixel 6 held to its Cortex-A55 cores (the reference simulator's model): the bands take
+        // the first capture's spare time
+        val session = costed { work ->
+            when (work) {
+                PetalWork.Search -> 105.0
+                PetalWork.Track -> 14.5
+                PetalWork.Merge -> 10.0
+                is PetalWork.Bands -> 15.0 * work.count
+                PetalWork.Turns -> 75.0
+            }
+        }
+        val first = session.push(PetalCameraSimulator.capture(card(encoder, 1), upright), 0)
+        assertEquals("P0K0P1K1" to "", first.kana to first.turned)
+        val again = session.push(PetalCameraSimulator.capture(card(encoder, 1), upright), 33)
+        assertEquals("" to "0123", again.kana to again.turned)
+        val next = session.push(PetalCameraSimulator.capture(card(encoder, 2), upright), 83)
+        assertEquals("P0K0P1K1" to "", next.kana to next.turned)
+        assertEquals(0L, session.stats().spareTurns)
+    }
+
+    @Test
+    fun theLastTurnTryTellsWhetherACaptureHasTimeToSpare() {
+        val encoder = PetalStreamEncoder(payload(3000), 2)
+        val session = costed { work ->
+            when (work) {
+                PetalWork.Search, PetalWork.Track -> 4.0
+                is PetalWork.Bands -> 3.0 * work.count
+                PetalWork.Merge -> 0.0
+                PetalWork.Turns -> 30.0
+            }
+        }
+        // 10 ms of work, and twice that for the turn lanes before any try: they fit
+        val first = session.push(PetalCameraSimulator.capture(card(encoder, 1), upright), 0)
+        assertEquals("P0K0P1K1" to "0123", first.kana to first.turned)
+        // the try took 30 ms, which with the next capture's 10 ms does not fit
+        val next = session.push(PetalCameraSimulator.capture(card(encoder, 2), upright), 83)
+        assertEquals("P0K0P1K1" to "", next.kana to next.turned)
+        val again = session.push(PetalCameraSimulator.capture(card(encoder, 2), upright), 116)
+        assertEquals("" to "0123", again.kana to again.turned)
+        assertEquals(1L, session.stats().spareTurns)
     }
 
     @Test

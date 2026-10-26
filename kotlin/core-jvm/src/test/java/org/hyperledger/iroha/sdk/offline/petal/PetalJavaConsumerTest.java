@@ -141,15 +141,22 @@ final class PetalJavaConsumerTest {
     assertEquals(4 * PetalTurns.TURN_CARRIERS, observed.getCarriers().size());
     assertEquals(Integer.MIN_VALUE, PetalTurns.TURN_ID_BASE);
     assertEquals(90, PetalTurns.TURN_WORD);
-    // a session reads a shown frame's bands on its first capture, its turn lanes on the next, each once
-    final PetalScanSession session = new PetalScanSession();
+    // a session with time to spare reads a shown frame's bands and turn lanes on its first capture,
+    // each once
+    final PetalScanSession session = new PetalScanSession(PetalScanLimits.DEFAULT, (work, measuredMillis) -> 0.0);
     final PetalScanOutcome first = session.push(luma, 0L);
     assertEquals("P0K0P1K1", first.getKana());
-    assertEquals("", first.getTurned());
-    assertEquals("0123", session.push(luma, 33L).getTurned());
-    assertEquals("", session.push(luma, 66L).getTurned());
+    assertEquals("0123", first.getTurned());
+    assertEquals("", session.push(luma, 33L).getTurned());
     assertEquals(4L, session.stats().getTurnLanes());
     assertEquals(4L, session.stats().getKanaLanes());
+    assertEquals(1L, session.stats().getSpareTurns());
+    // one whose bands take that time reads the turn lanes on the next capture
+    final PetalScanSession slow =
+        new PetalScanSession(PetalScanLimits.DEFAULT, (work, measuredMillis) -> work instanceof PetalWork.Bands ? 40.0 : 0.0);
+    assertEquals("", slow.push(luma, 0L).getTurned());
+    assertEquals("0123", slow.push(luma, 33L).getTurned());
+    assertEquals(0L, slow.stats().getSpareTurns());
   }
 
   @Test

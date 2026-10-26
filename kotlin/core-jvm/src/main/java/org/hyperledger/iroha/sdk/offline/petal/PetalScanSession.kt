@@ -55,21 +55,59 @@ class PetalScanStats internal constructor(
     val kanaTries: Long,
     /** Kana lanes read (up to four per shown frame). */
     val kanaLanes: Long,
+    /** Captures whose bands read a lane that also tried the turn lanes, having time to spare. */
+    val spareTurns: Long,
 ) {
     override fun equals(other: Any?): Boolean = other is PetalScanStats && frames == other.frames &&
         located == other.located && readable == other.readable && laneD == other.laneD &&
         fieldLanes == other.fieldLanes && tracked == other.tracked && inferred == other.inferred &&
         merges == other.merges && mergedLanes == other.mergedLanes && turnTries == other.turnTries &&
-        turnLanes == other.turnLanes && kanaTries == other.kanaTries && kanaLanes == other.kanaLanes
+        turnLanes == other.turnLanes && kanaTries == other.kanaTries && kanaLanes == other.kanaLanes &&
+        spareTurns == other.spareTurns
 
     override fun hashCode(): Int =
         (31 * frames + located + 7 * readable + 11 * laneD + 13 * fieldLanes + 17 * tracked + 19 * inferred +
-            23 * merges + 29 * mergedLanes + 41 * turnTries + 37 * turnLanes + 43 * kanaTries + 47 * kanaLanes).hashCode()
+            23 * merges + 29 * mergedLanes + 41 * turnTries + 37 * turnLanes + 43 * kanaTries + 47 * kanaLanes +
+            53 * spareTurns).hashCode()
 
     override fun toString(): String =
         "PetalScanStats(frames=$frames, located=$located, readable=$readable, laneD=$laneD, fieldLanes=$fieldLanes, " +
             "tracked=$tracked, inferred=$inferred, merges=$merges, mergedLanes=$mergedLanes, " +
-            "turnTries=$turnTries, turnLanes=$turnLanes, kanaTries=$kanaTries, kanaLanes=$kanaLanes)"
+            "turnTries=$turnTries, turnLanes=$turnLanes, kanaTries=$kanaTries, kanaLanes=$kanaLanes, " +
+            "spareTurns=$spareTurns)"
+}
+
+/**
+ * A part of a capture's work, as a [PetalScanSession] times it to tell whether a capture has time to
+ * spare for the turn lanes (see the session's docs).
+ */
+sealed interface PetalWork {
+    /** Finding the code by a full search and taking in the lanes read. */
+    data object Search : PetalWork
+
+    /** Following the code from the previous capture's pose and taking in the lanes read. */
+    data object Track : PetalWork
+
+    /** Merging the held captures of a shown frame. */
+    data object Merge : PetalWork
+
+    /** Reading the kana lanes of [count] bands. */
+    data class Bands(val count: Int) : PetalWork
+
+    /** Reading the turn lanes. */
+    data object Turns : PetalWork
+}
+
+/** What a part of a capture costs a [PetalScanSession], in milliseconds. */
+fun interface PetalWorkCost {
+    /** What [work] cost, given the milliseconds it took. */
+    fun cost(work: PetalWork, measuredMillis: Double): Double
+
+    companion object {
+        /** The measured time, as a session on a camera judges its spare time. */
+        @JvmField
+        val MEASURED = PetalWorkCost { _, measuredMillis -> measuredMillis }
+    }
 }
 
 /** The result of offering one camera frame. */
@@ -125,19 +163,26 @@ class PetalScanOutcome internal constructor(
  * back-off of at most [KANA_BACKOFF] captures after tries that read no kana lane (a camera that does
  * not see the bands, or too blurred for their glyphs and polarity).
  *
- * The bands go first, and a capture whose bands read a kana lane tries no turn lane: the turn lanes
- * of that shown frame wait for its next capture. On a slow phone core a turn try costs five tracked
- * decodes and a band try one, so reading both on one capture overran the time a frame is shown at
- * 12 fps and the session missed the next shown frames. A decoder that sees each shown frame two or
- * three times still reads both; one that sees it once reads the cheaper bands and every frame's
- * field lanes. A band try that reads nothing (bands out of view, too blurred, or a torn capture)
- * leaves the turn lanes to the same capture.
+ * The bands go first. A capture whose bands read a kana lane tries the turn lanes too only when it
+ * has time to spare: when the work it has done (finding or following the code, a merge, the bands)
+ * and what the session's last turn try took fit together in [CAPTURE_BUDGET_MILLIS], a 30 fps
+ * camera's frame time (before the first turn try, twice the work done stands in for it). Otherwise
+ * the turn lanes of that shown frame wait for its next capture. On a slow phone core a turn try costs
+ * five tracked decodes and a band try one, so reading both on one capture overran the time a frame is
+ * shown at 12 fps and the session missed the next shown frames; a fast decoder reads both at once,
+ * which matters when its camera gives it few frames a second. A band try that reads nothing (bands
+ * out of view, too blurred, or a torn capture) leaves the turn lanes to the same capture.
+ *
+ * The session times its work on the monotonic clock; a [PetalWorkCost] given to the constructor puts
+ * a model's costs in place of the measured times, as tests do.
  *
  * Thread-safe: calls are serialised, so a camera analyzer thread may push while a UI thread reads.
  */
 class PetalScanSession @JvmOverloads constructor(
     /** Session limits. */
     val limits: PetalScanLimits = PetalScanLimits.DEFAULT,
+    /** What a part of a capture costs, given the milliseconds it took. */
+    private val workCost: PetalWorkCost = PetalWorkCost.MEASURED,
 ) {
     private val assembler = PetalStreamAssembler(limits.assembler)
     private val workspace = PetalWorkspace()
@@ -159,6 +204,10 @@ class PetalScanSession @JvmOverloads constructor(
     private var turnLanes = 0L
     private var kanaTries = 0L
     private var kanaLanes = 0L
+    private var spareTurns = 0L
+
+    /** What the last turn try cost, in milliseconds. */
+    private var turnCostMillis: Double? = null
 
     /** Captures of one shown frame; bounded by [MERGE_CAPTURES]. */
     internal class Held(val shown: PetalLaneHeader) {
@@ -209,7 +258,7 @@ class PetalScanSession @JvmOverloads constructor(
     @Synchronized
     fun stats(): PetalScanStats = PetalScanStats(
         frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnTries, turnLanes,
-        kanaTries, kanaLanes,
+        kanaTries, kanaLanes, spareTurns,
     )
 
     /** Current progress. */
@@ -249,6 +298,7 @@ class PetalScanSession @JvmOverloads constructor(
             reset()
         }
         frames += 1
+        val pushStarted = System.nanoTime()
         val previous = lastPose
         val followed = if (previous != null && saturatingElapsed(nowMillis, lastPoseMillis) <= TRACK_WINDOW_MILLIS) {
             PetalDecoder.track(image, previous, limits.decode, workspace)
@@ -258,16 +308,35 @@ class PetalScanSession @JvmOverloads constructor(
         if (followed != null) tracked += 1
         val result = if (followed != null) PetalDecodeResult(followed, null) else PetalDecoder.decode(image, limits.decode, workspace)
         val frame = result.frame
+        var lanes = ""
+        var merged = ""
+        var kanaRead = ""
+        var turnedLanes = ""
         if (frame != null) {
             if (frame.inferredCorner != null) inferred += 1
             lastPose = frame
             lastPoseMillis = nowMillis
+            lanes = absorb(frame)
+            var spent = cost(if (followed != null) PetalWork.Track else PetalWork.Search, pushStarted)
+            val mergesBefore = merges
+            var partStarted = System.nanoTime()
+            merged = merge(image, frame)
+            if (merges > mergesBefore) spent += cost(PetalWork.Merge, partStarted)
+            val bandsBefore = kanaTries
+            partStarted = System.nanoTime()
+            kanaRead = kana(image, frame)
+            val bands = (kanaTries - bandsBefore).toInt()
+            if (bands > 0) spent += cost(PetalWork.Bands(bands), partStarted)
+            // a capture whose bands read a lane tries the turn lanes only with time to spare (see the class docs)
+            turnedLanes = when {
+                kanaRead.isEmpty() -> turn(image, frame)
+                spent + (turnCostMillis ?: (2 * spent)) <= CAPTURE_BUDGET_MILLIS -> {
+                    val triesBefore = turnTries
+                    turn(image, frame).also { if (turnTries > triesBefore) spareTurns += 1 }
+                }
+                else -> ""
+            }
         }
-        val lanes = if (frame != null) absorb(frame) else ""
-        val merged = if (frame != null) merge(image, frame) else ""
-        // a capture whose bands read a lane tries no turn lane (see the class docs)
-        val kanaRead = if (frame != null) kana(image, frame) else ""
-        val turnedLanes = if (frame != null && kanaRead.isEmpty()) turn(image, frame) else ""
         if (result.error != PetalDecodeError.NO_FINDERS && result.error != PetalDecodeError.UNSUPPORTED_IMAGE) {
             located += 1
         }
@@ -364,7 +433,9 @@ class PetalScanSession @JvmOverloads constructor(
             tried.addLast(Tried(header, sector))
             turnTries += 1
         }
+        val readStarted = System.nanoTime()
         workspace.turnReader.read(image, frame, turnSkip, turnResults)
+        turnCostMillis = cost(PetalWork.Turns, readStarted)
         val letters = StringBuilder(PetalLayout.SECTORS)
         for (sector in 0 until PetalLayout.SECTORS) {
             val result = turnResults[sector] ?: continue
@@ -443,6 +514,10 @@ class PetalScanSession @JvmOverloads constructor(
 
     private fun saturatingElapsed(now: Long, since: Long): Long = if (now > since) now - since else 0L
 
+    /** What [work] cost, given that it started at [startedNanos] on the monotonic clock. */
+    private fun cost(work: PetalWork, startedNanos: Long): Double =
+        workCost.cost(work, (System.nanoTime() - startedNanos) / 1e6)
+
     companion object {
         /** How long a decoded pose stays usable for tracking the next frames. */
         const val TRACK_WINDOW_MILLIS = 500L
@@ -464,5 +539,12 @@ class PetalScanSession @JvmOverloads constructor(
 
         /** Most captures passed over after tries that read no kana lane. */
         const val KANA_BACKOFF = 8
+
+        /**
+         * The time a capture's work may take, turn lanes included, for a capture whose bands read a
+         * lane to try the turn lanes too: a 30 fps camera's frame time, so a decoder that keeps to it
+         * misses no camera frame.
+         */
+        const val CAPTURE_BUDGET_MILLIS = 1000.0 / 30.0
     }
 }
