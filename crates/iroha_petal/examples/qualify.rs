@@ -6,8 +6,10 @@
 //! many trials at once (default: every core).
 //!
 //! Columns: frames with any lane, frames with lane `D`, field lanes read (of four per frame), turn
-//! lanes read (of four per frame), payload bytes per frame, decode time (turn lanes included), and
-//! pixels per petal pitch (12.5 canvas units).
+//! lanes read (of four per frame), kana lanes read (of four per frame), payload bytes per frame,
+//! decode time (turn and kana lanes included), and pixels per petal pitch (12.5 canvas units).
+//! Rows marked `upright` hold the phone upright (the card turned 90° or 270°, ± 15°, in the
+//! landscape frame), so the katakana bands above and below the square are in view.
 #[path = "support/count.rs"]
 mod count;
 #[path = "support/floor.rs"]
@@ -24,14 +26,17 @@ use std::time::Instant;
 use trial::next_trial;
 
 use iroha_petal::decode::{DecodeOptions, decode};
+use iroha_petal::kana::{KanaLane, read_kana};
 use iroha_petal::locate::locate;
+use iroha_petal::qualify::CameraModel;
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame, pixels_per_unit};
 use iroha_petal::stream::StreamEncoder;
 use iroha_petal::turns::read_turns;
 
-/// Lane `D` decoded, field lanes decoded, decode milliseconds, finders located.
-type TrialResult = (bool, usize, f64, bool, usize);
+/// Lane `D` decoded, field lanes decoded, decode milliseconds, finders located, turn lanes read,
+/// kana lanes read and their payload bytes.
+type TrialResult = (bool, usize, f64, bool, usize, usize, usize);
 
 #[derive(Clone)]
 struct Scenario {
@@ -39,6 +44,7 @@ struct Scenario {
     base: CaptureConfig,
     rotate_any: bool,
     tilt_max: f64,
+    upright: bool,
 }
 
 struct Rng(u64);
@@ -71,6 +77,7 @@ fn scenarios() -> Vec<Scenario> {
             base,
             rotate_any,
             tilt_max,
+            upright: false,
         });
     };
     let flat = |w: usize, h: usize, fill: f64, blur: f64, noise: f64| CaptureConfig {
@@ -132,6 +139,16 @@ fn scenarios() -> Vec<Scenario> {
             tilt,
         );
     }
+    for name in CameraModel::NAMES {
+        let model = CameraModel::named(name).expect("camera");
+        out.push(Scenario {
+            name: format!("{name} upright"),
+            base: model.config,
+            rotate_any: false,
+            tilt_max: model.tilt_max_deg,
+            upright: true,
+        });
+    }
     out
 }
 
@@ -159,8 +176,8 @@ fn main() {
         .collect();
     let encoder = StreamEncoder::new(&payload, 2).expect("payload");
     println!(
-        "{:<34} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
-        "scenario", "any%", "D%", "F%", "T%", "B/frm", "ms/dec", "px/petal"
+        "{:<34} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7} {:>8}",
+        "scenario", "any%", "D%", "F%", "T%", "K%", "B/frm", "ms/dec", "px/petal"
     );
     for scenario in scenarios() {
         if filter
@@ -195,7 +212,10 @@ fn main() {
                             .expect("trial fits u64")
                             .checked_add(1)
                             .expect("camera seed fits u64");
-                        if scenario.rotate_any {
+                        if scenario.upright {
+                            let quarter = if rng.next() < 0.5 { 90.0 } else { 270.0 };
+                            config.rotation_deg = quarter + rng.range(-15.0, 15.0);
+                        } else if scenario.rotate_any {
                             config.rotation_deg = rng.range(0.0, 360.0);
                         }
                         config.tilt_x_deg = rng.range(-scenario.tilt_max, scenario.tilt_max);
@@ -213,6 +233,28 @@ fn main() {
                                 .iter()
                                 .filter(|t| t.is_some())
                                 .count()
+                        });
+                        let (kana, kana_bytes) = outcome.as_ref().map_or((0, 0), |frame| {
+                            let Some(header) = frame
+                                .atom_packets()
+                                .first()
+                                .map(|p| p.header)
+                                .or_else(|| frame.beacon().map(|b| b.header))
+                            else {
+                                return (0, 0);
+                            };
+                            let read = read_kana(&image, frame, header, [false; 2]);
+                            let mut lanes = 0;
+                            let mut bytes = 0;
+                            for (lane, result) in
+                                KanaLane::ALL.into_iter().zip(read.iter().flatten())
+                            {
+                                if result.is_some() {
+                                    lanes += 1;
+                                    bytes += lane.atoms() * 16;
+                                }
+                            }
+                            (lanes, bytes)
                         });
                         let ms = t0.elapsed().as_secs_f64() * 1000.0;
                         let (d, fields) = outcome.as_ref().map_or((false, 0), |frame| {
@@ -235,7 +277,7 @@ fn main() {
                         results
                             .lock()
                             .unwrap()
-                            .push((d, fields, ms, located, turns));
+                            .push((d, fields, ms, located, turns, kana, kana_bytes));
                     }
                 });
             }
@@ -249,18 +291,21 @@ fn main() {
         };
         let field_lanes: usize = results.iter().map(|r| r.1).sum();
         let turn_lanes: usize = results.iter().map(|r| r.4).sum();
+        let kana_lanes: usize = results.iter().map(|r| r.5).sum();
+        let kana_bytes: usize = results.iter().map(|r| r.6).sum();
         // payload bytes per capture: 80 per field lane, 64 per turn lane, 16 for lane D on three
-        // frames in four
-        let field_bytes = count_as_f64(80 * field_lanes + 64 * turn_lanes);
+        // frames in four, 112 per kana glyph lane and 16 per kana polarity lane
+        let field_bytes = count_as_f64(80 * field_lanes + 64 * turn_lanes + kana_bytes);
         let dot_bytes = 12.0 * count_as_f64(results.iter().filter(|r| r.0).count());
         let bytes = (field_bytes + dot_bytes) / n;
         println!(
-            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
+            "{:<34} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>7.1} {:>6.1}px  loc {:>3.0}%  ({:.0}s)",
             scenario.name,
             pct(&|r| r.0 || r.1 > 0),
             pct(&|r| r.0),
             25.0 * count_as_f64(field_lanes) / n,
             25.0 * count_as_f64(turn_lanes) / n,
+            25.0 * count_as_f64(kana_lanes) / n,
             bytes,
             results.iter().map(|r| r.2).sum::<f64>() / n,
             mean_scale * 12.5,

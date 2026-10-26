@@ -1,6 +1,7 @@
 //! Single-threaded decode cost of the reference decoder: a full search, a tracked read of the
-//! next frame, the turn lanes of a decoded frame, and a merge of three captures of one shown frame,
-//! for 720p (a modern and a legacy camera), 1080p and 480p captures and for a frame whose corner
+//! next frame, the turn lanes of a decoded frame, the kana lanes of both bands (the phone held
+//! upright, so the bands are in view), and a merge of three captures of one shown frame, for
+//! 720p (a modern and a legacy camera), 1080p and 480p captures and for a frame whose corner
 //! blossom a thumb covers.
 //!
 //! `cargo run --release -p iroha_petal --example decode_cost`
@@ -17,7 +18,8 @@ use std::time::Instant;
 
 use iroha_petal::decode::{DecodeOptions, decode, field_evidence, merge_fields, track};
 use iroha_petal::image::{Luma, Rgb};
-use iroha_petal::layout::{FINDER_CENTERS, SECTORS};
+use iroha_petal::kana::read_kana;
+use iroha_petal::layout::{FINDER_CENTERS, SECTORS, SQUARE_TOP};
 use iroha_petal::render::{RenderOptions, render};
 use iroha_petal::sim::{CaptureConfig, capture, fit_to_frame};
 use iroha_petal::stream::StreamEncoder;
@@ -49,8 +51,11 @@ fn timed<T>(samples: &mut Vec<f64>, f: impl FnOnce() -> T) -> T {
 fn thumb(mut source: Rgb) -> Rgb {
     let scale = count_as_f64(SIZE) / 1024.0;
     let (cx, cy) = FINDER_CENTERS[0];
-    let (cx, cy) = (f64::from(cx) * scale, f64::from(cy) * scale);
-    for y in 0..SIZE {
+    let (cx, cy) = (
+        f64::from(cx) * scale,
+        (f64::from(cy) + f64::from(SQUARE_TOP)) * scale,
+    );
+    for y in 0..source.height {
         for x in 0..SIZE {
             let (dx, dy) = (count_as_f64(x) + 0.5 - cx, count_as_f64(y) + 0.5 - cy);
             if dx.hypot(dy) <= 80.0 * scale {
@@ -111,12 +116,12 @@ fn main() {
         ("modern 720p, thumb over a blossom", modern_720p, true),
     ];
     println!(
-        "{:<34} {:>24} {:>24} {:>24} {:>24}",
-        "capture", "full search", "tracked", "turn lanes", "merge of 3 captures"
+        "{:<34} {:>24} {:>24} {:>24} {:>24} {:>24}",
+        "capture", "full search", "tracked", "turn lanes", "kana lanes", "merge of 3 captures"
     );
     for (name, base, covered) in cases {
-        let (mut full, mut tracked, mut turned, mut merged) =
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut full, mut tracked, mut turned, mut kana, mut merged) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         let (now, next) = (shown(5, covered), shown(6, covered));
         for pose in 0..6u32 {
             let config = fit_to_frame(
@@ -145,6 +150,24 @@ fn main() {
                 .iter()
                 .map(|image| decode(image, &options).expect("decodes"))
                 .collect();
+            // the same camera held upright, for the kana lanes
+            let upright = capture(
+                &now,
+                &fit_to_frame(
+                    &CaptureConfig {
+                        rotation_deg: f64::from(80 + 4 * pose),
+                        ..config
+                    },
+                    4.0,
+                ),
+            );
+            let upright_frame = decode(&upright, &options).expect("decodes upright");
+            let header = upright_frame
+                .atom_packets()
+                .first()
+                .map(|p| p.header)
+                .or_else(|| upright_frame.beacon().map(|b| b.header))
+                .expect("the frame names itself");
             for _ in 0..3 {
                 let first = timed(&mut full, || {
                     decode(&this_frame, &options).expect("decodes")
@@ -160,6 +183,9 @@ fn main() {
                 timed(&mut turned, || {
                     read_turns(&this_frame, &first, [false; SECTORS])
                 });
+                timed(&mut kana, || {
+                    read_kana(&upright, &upright_frame, header, [false; 2])
+                });
                 timed(&mut merged, || {
                     let evidence: Vec<_> = repeats
                         .iter()
@@ -173,10 +199,11 @@ fn main() {
             }
         }
         println!(
-            "{name:<34} {:>24} {:>24} {:>24} {:>24}",
+            "{name:<34} {:>24} {:>24} {:>24} {:>24} {:>24}",
             summary(full),
             summary(tracked),
             summary(turned),
+            summary(kana),
             summary(merged)
         );
     }
