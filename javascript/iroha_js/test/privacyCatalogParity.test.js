@@ -138,6 +138,7 @@ test("Exact12 capability admission is available only from the optional subpath",
     "compiledProfileCatalogV1",
     "decodePrivacyExact12CapabilityManifestV1",
     "getPrivacyExact12CapabilityManifestV1",
+    "privacyExact12AuthenticatedConstructionArchiveV1",
     "requirePrivacyExact12CapabilityAdmissionV1",
     "requirePrivacyExact12CapabilityTupleV1",
   ];
