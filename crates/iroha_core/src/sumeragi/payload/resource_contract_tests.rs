@@ -14,7 +14,7 @@ use crate::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{Account, AccountId},
-    isi::{InstructionBox, Log, Register, privacy::SchedulePrivacyConsensusPolicyTighteningV1},
+    isi::{InstructionBox, Log, Register, privacy::SchedulePrivacyConsensusPolicyUpdateV1},
     level::Level,
     parameter::{
         Parameter,
@@ -57,7 +57,7 @@ fn bounded_config(cap: u32) -> TestChainConfig {
         )),
     ]);
     config.genesis_instructions.push(
-        SchedulePrivacyConsensusPolicyTighteningV1::new(
+        SchedulePrivacyConsensusPolicyUpdateV1::new(
             2,
             PrivacyConsensusLimitsV1 {
                 max_proof_bytes_per_action: action,

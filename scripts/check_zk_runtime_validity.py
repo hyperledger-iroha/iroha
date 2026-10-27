@@ -1061,9 +1061,22 @@ class CensusChecker:
 
     # -- small helpers -----------------------------------------------------
 
-    def _occurrences(self, path: str, needle: str) -> Optional[int]:
+    def _occurrences(
+        self, path: str, needle: str, function: Optional[str] = None,
+    ) -> Optional[int]:
         text = self.scan.text(path) if path in self.scan.file_set else None
-        return None if text is None else text.count(needle)
+        if text is None or function is None:
+            return None if text is None else text.count(needle)
+        # Ownership anchors must occur inside the unique actual Rust function.
+        # A comment, unused lookalike, or duplicate declaration cannot provide custody.
+        code, _ = mask_rust(text)
+        matches = list(re.finditer(r"\bfn\s+" + re.escape(function) + r"\b", code))
+        if len(matches) != 1:
+            return 0
+        opening = code.find("{", matches[0].end())
+        if opening < 0 or ";" in code[matches[0].end():opening]:
+            return 0
+        return code[opening + 1:_matching_brace(code, opening)].count(needle)
 
     def _task_ids(self) -> set[str]:
         tasks = self.graph.get("tasks", []) if isinstance(self.graph, dict) else []
@@ -1160,7 +1173,9 @@ class CensusChecker:
             elif not self._occurrences(path, symbol):
                 self.error(f"{where}: symbol {symbol!r} does not occur in {path}")
             for anchor in entry.get("anchors", []):
-                found = self._occurrences(anchor.get("path", ""), anchor.get("contains", "\0"))
+                found = self._occurrences(
+                    anchor.get("path", ""), anchor.get("contains", "\0"), anchor.get("function"),
+                )
                 wanted = anchor.get("count", 1)
                 if found is None:
                     self.error(f"{where}: anchor path {anchor.get('path')!r} does not exist")

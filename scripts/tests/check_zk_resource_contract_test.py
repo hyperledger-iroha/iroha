@@ -2357,6 +2357,126 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
     ]
 
 
+def test_catalog_root_lifetimes_preserve_nested_bounds_and_borrowed_fee_leaf() -> None:
+    """Borrowed exact monetary custody must not hide sibling resource fields."""
+    source = """
+    struct PreimageV1<'a> {
+        version: u8,
+        fees: Option<norito::core::PayloadRef<'a, RootFeePolicy>>,
+        settlement: SettlementV1,
+    }
+    struct SettlementV1 { max_participants: u16, max_carrier_bytes: u64 }
+    fn preimage(config: &Config) -> Vec<u8> {
+        PreimageV1 { version: 1, fees: None, settlement: config.settlement }.encode()
+    }
+    """
+    catalog = {"struct": "PreimageV1", "function": "preimage", "field_form": "struct_tree", "path": "a.rs"}
+    expected = ["version", "fees", "settlement.max_participants", "settlement.max_carrier_bytes"]
+    assert CHECKER["catalog_fields"](source, catalog, "t") == expected
+    assert CHECKER["struct_field_tree"](source, "PreimageV1", "t") == expected
+    for declaration in ("<'left, 'right>", "< 'left , 'right , >"):
+        assert CHECKER["catalog_fields"](
+            source.replace("PreimageV1<'a>", "PreimageV1" + declaration), catalog, "t"
+        ) == expected
+    nested = source.replace("settlement: SettlementV1,", "settlement: Option<Vec<SettlementV1<'a>>>,").replace(
+        "struct SettlementV1 {", "struct SettlementV1<'a> {"
+    )
+    assert CHECKER["catalog_fields"](nested, catalog, "t") == expected
+    assert CHECKER["catalog_fields"](
+        nested.replace("max_participants: u16,", "max_participants: u16, max_records: u32,"), catalog, "t"
+    ) == ["version", "fees", "settlement.max_participants", "settlement.max_records", "settlement.max_carrier_bytes"]
+
+
+def test_catalog_root_lifetime_parser_retains_structural_refusals() -> None:
+    """The lifetime extension cannot accept unreadable or unrelated struct shapes."""
+    source = "struct PreimageV1<'a> { fees: PayloadRef<'a, FeePolicy>, max_bytes: u64 }"
+    error = CHECKER["ContractError"]
+    for declaration in ("<T>", "<const N: usize>", "<'a, T>", "<'a: 'static>", "<'a", "<'a> where Fee: Bound"):
+        with pytest.raises(error, match="struct `PreimageV1` is not defined"):
+            CHECKER["struct_field_tree"](
+                source.replace("<'a>", declaration, 1), "PreimageV1", "t"
+            )
+    with pytest.raises(error, match="struct `PreimageV1` is not closed"):
+        CHECKER["struct_field_tree"](source[:-1], "PreimageV1", "t")
+    with pytest.raises(error, match="cannot read a field"):
+        CHECKER["struct_field_tree"](source.replace("max_bytes: u64", "opaque!()"), "PreimageV1", "t")
+    for field_type, declaration in (
+        ("Local<T>", "struct Local<T> { max_items: u32 }"),
+        ("Option<Vec<Local<'a, T>>>", "struct Local<'a, T> { max_items: u32 }"),
+    ):
+        with pytest.raises(error, match="cannot read local struct field type"):
+            CHECKER["struct_field_tree"](
+                source.replace("max_bytes: u64", "nested: " + field_type) + declaration, "PreimageV1", "t"
+            )
+    with pytest.raises(error, match="struct `Local` is not defined"):
+        CHECKER["struct_field_tree"](
+            source.replace("max_bytes: u64", "nested: Local<'a>")
+            + "struct Local<'a> where Fee: Bound { max_items: u32 }", "PreimageV1", "t"
+        )
+    catalog = {"struct": "PreimageV1", "function": "preimage", "field_form": "struct_tree", "path": "a.rs"}
+    with pytest.raises(error, match="no longer builds `PreimageV1`"):
+        CHECKER["catalog_fields"](source + "fn preimage() { OtherV1 {} }", catalog, "t")
+
+
+def test_catalog_lifetime_preimage_detects_added_and_removed_bound_fields(tmp_path: Path) -> None:
+    """Recognizing a lifetime does not exempt new leaves or stale bound mappings."""
+    source = """
+    struct PreimageV1<'a> { fees: PayloadRef<'a, FeePolicy>, settlement: SettlementV1 }
+    struct SettlementV1 { max_bytes: u64 }
+    fn preimage(config: &Config) -> Vec<u8> { PreimageV1 { fees: config.fees, settlement: config.settlement }.encode() }
+    """
+    catalog = {
+        "id": "borrowed_policy", "path": "a.rs", "struct": "PreimageV1",
+        "function": "preimage", "field_form": "struct_tree", "source": "node_local",
+        "what": "A bounded synthetic borrowed preimage",
+        "fields": {"settlement.max_bytes": "transaction.bytes"},
+        "excluded": [{"reason": "Exact monetary identity", "fields": ["fees"]}],
+    }
+    contract = {"catalogs": [catalog], "bounds": [{
+        "id": "transaction.bytes", "source": "node_local", "class": "consensus",
+        "catalog": {"id": "borrowed_policy", "field": "settlement.max_bytes"},
+    }]}
+
+    def own_problems(text: str) -> list:
+        (tmp_path / "a.rs").write_text(text, encoding="utf-8")
+        found: list = []
+        CHECKER["check_catalogs"](tmp_path, contract, {}, found)
+        return [problem for problem in found if not problem.startswith("catalogs:")]
+
+    assert own_problems(source) == []
+    assert own_problems(source.replace("max_bytes: u64", "max_bytes: u64, max_records: u32")) == [
+        "catalog borrowed_policy: field `settlement.max_records` of `preimage` is neither "
+        "listed as a bound nor excluded with a reason"
+    ]
+    assert own_problems(source.replace("max_bytes: u64", "")) == [
+        "catalog borrowed_policy: `settlement.max_bytes` is not a field of `preimage`"
+    ]
+
+
+def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
+    """The actual borrowed Nexus preimage still exposes each of its ten resource leaves."""
+    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    observed = CHECKER["catalog_fields"]((ROOT / catalog["path"]).read_text(), catalog, "t")
+    expected = {
+        "atomic_private_settlement.max_participants",
+        "atomic_private_settlement.max_carrier_bytes",
+        "atomic_private_settlement.max_proof_bytes",
+        "atomic_private_settlement.max_capsule_bytes",
+        "atomic_private_settlement.sidecar_max_records",
+        "atomic_private_settlement.sidecar_max_total_bytes",
+        "uploaded_models.max_plaintext_bytes_per_model",
+        "uploaded_models.max_chunk_count_per_model",
+        "da.ingest_quota_max_count_per_account",
+        "da.ingest_quota_max_bytes_per_account",
+    }
+    assert set(catalog["fields"]) == expected
+    assert expected.issubset(observed)
+    assert "fees" in observed
+    assert {field for field in observed if field.startswith("staking.")} == {
+        "staking.public_validator_mode", "staking.restricted_validator_mode", "staking.max_validators"
+    }
+
+
 def test_derived_bounds_are_recomputed_and_join_the_relations() -> None:
     derived = {item["id"]: item for item in CONTRACT["derived"]}
     effective = derived["block.effective_max_own_transactions"]
@@ -2818,7 +2938,11 @@ def test_committed_coherence_and_global_packing_guards_cannot_disappear() -> Non
         for site in proposer["enforcement"]
         if site["path"] == "crates/iroha_core/src/sumeragi/payload.rs"
     )
-    assert len(cases) == 13
+    # Thirteen committed-policy sites and one global-packing site are mutated below.
+    assert len(cases) == 14
+    assert len(
+        {(owner, site["path"], CHECKER["normalize"](site["contains"])) for owner, site in cases}
+    ) == len(cases)
     for owner, site in cases:
         path = site["path"]
         source = CHECKER["_read"](ROOT, path, "test")
@@ -4598,9 +4722,32 @@ def test_every_term_of_the_path_crates_is_pinned_with_the_limits_it_is_part_of()
         "crates/iroha_data_model/src/nexus/runtime_catalog.rs: MAX_NEXUS_RUNTIME_CATALOG_BYTES",
     ]
     assert bound(CONTRACT, "transaction.json_document_max_bytes")["owner"]["symbol"] == "MAX_JSON_BYTES"
-    # The reason of a term's group says what a term is; no other group holds one.
+    # This imported term has a dedicated fixed-geometry classification. Pin its
+    # exact owner, expressions, consumer and reason instead of relabelling it.
+    geometry_term = ("crates/iroha_model_base/src/topology.rs", "MAX_FAULTS_PER_HEIGHT")
+    geometry_holder, geometry_reason = holders[geometry_term]
+    assert geometry_holder["symbols"] == ["MAX_FAULTS_PER_HEIGHT", "MAX_VALIDATORS_PER_HEIGHT"]
+    assert geometry_holder["exprs"] == {
+        "MAX_FAULTS_PER_HEIGHT": "10",
+        "MAX_VALIDATORS_PER_HEIGHT": "3 * MAX_FAULTS_PER_HEIGHT + 1",
+    }
+    assert geometry_holder["term_of"] == {
+        "MAX_FAULTS_PER_HEIGHT": [
+            "crates/iroha_model_base/src/topology.rs: MAX_VALIDATORS_PER_HEIGHT"
+        ]
+    }
+    assert excluded_terms[geometry_term] == geometry_holder["term_of"]["MAX_FAULTS_PER_HEIGHT"]
+    assert geometry_reason == (
+        "Committee geometry is a fixed protocol admission structure: exactly 3f + 1 "
+        "validators for 1 <= f <= 10. These unchanged constants moved to the "
+        "model-base topology owner. The exact geometry is distinct from the larger "
+        "generic frame-sizing ceiling transport.max_committee_size; neither is a "
+        "local tuning knob."
+    )
+    # Every other term retains the general term classification.
     for key in excluded_terms:
-        assert holders[key][1].startswith("Terms of excluded limits"), key
+        if key != geometry_term:
+            assert holders[key][1].startswith("Terms of excluded limits"), key
     # The cases a reviewer would try: a term of a product limit, of a limit function, of a
     # limit of another crate and of another term.
     for path, old, new, symbol in (
@@ -4621,6 +4768,12 @@ def test_every_term_of_the_path_crates_is_pinned_with_the_limits_it_is_part_of()
             "PRIVACY_RELEASE_CASE_COUNT_V1: usize = 4;",
             "PRIVACY_RELEASE_CASE_COUNT_V1: usize = 1;",
             "PRIVACY_RELEASE_CASE_COUNT_V1",
+        ),
+        (
+            "crates/iroha_model_base/src/topology.rs",
+            "MAX_FAULTS_PER_HEIGHT: usize = 10;",
+            "MAX_FAULTS_PER_HEIGHT: usize = 1;",
+            "MAX_FAULTS_PER_HEIGHT",
         ),
         (
             # A term of a limit function of another crate (Torii's `cfg_max_scan_millis`).

@@ -6,14 +6,15 @@
 //! to its immutable local network identity for transaction construction.
 use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::id::NetworkId;
+#[cfg(test)]
+use iroha_data_model::privacy::PrivacyProofEnvelopeV1;
 use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyCapabilityReadinessV1,
-    PrivacyCapabilityUnavailableReasonV1, PrivacyCompiledProfileResultV1,
-    PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
-    PrivacyConsensusLimitsV1, PrivacyEngineIdV1, PrivacyExact12CapabilityManifestV1,
-    PrivacyExact12CapabilityRowV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-    PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyProtocolLifecycleV1, PrivacyStatementV1, validate_privacy_capability_archive_v1,
+    PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
+    PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+    PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1, PrivacyEngineIdV1,
+    PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyProofSystemIdV1,
+    PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyStatementV1,
+    validate_privacy_capability_archive_v1,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -22,8 +23,8 @@ use pyo3::{
 };
 /// Validated canonical manifest bytes with a private optional Torii origin binding.
 ///
-/// The Python class intentionally exposes no public constructor.  Instances
-/// Public archive decoding applies native canonical and signature validation but grants
+/// The Python class intentionally exposes no public constructor.
+/// Public archive decoding applies native canonical validation but grants
 /// no admission. The transport-owned fetch function additionally pins the expected network.
 #[pyclass(
     name = "PrivacyExact12CapabilityManifestV1",
@@ -70,18 +71,9 @@ impl PyPrivacyExact12CapabilityManifestV1 {
     }
     fn from_authenticated_torii(archive: &[u8], expected_network_id: NetworkId) -> PyResult<Self> {
         let mut decoded = Self::decode(archive)?;
-        if decoded
-            .manifest
-            .qualification
-            .as_ref()
-            .is_some_and(|qualification| {
-                qualification.deployment_qualification.network_id != expected_network_id
-                    || &qualification.deployment_qualification.genesis_hash
-                        != expected_network_id.as_bytes()
-            })
-        {
+        if decoded.manifest.network_id != expected_network_id {
             return Err(PyValueError::new_err(
-                "Exact12 deployment qualification belongs to a different network",
+                "Exact12 capability manifest belongs to a different network",
             ));
         }
         decoded.authenticated_network_id = Some(expected_network_id);
@@ -94,7 +86,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         let network_id = self.authenticated_network_id.ok_or_else(|| PyValueError::new_err(
             "Exact12 admission requires an authenticated Torii response; decoded archives are inspection-only",
         ))?;
-        if network_id != expected_network_id {
+        if network_id != expected_network_id || self.manifest.network_id != expected_network_id {
             return Err(PyValueError::new_err(
                 "Exact12 capability admission belongs to a different transaction network",
             ));
@@ -120,10 +112,11 @@ impl PyPrivacyExact12CapabilityManifestV1 {
                     protocol_id.canonical_label()
                 ))
             })?;
-        if !row.is_network_available() {
+        if let PrivacyCapabilityReadinessV1::Unavailable(reason) = row.readiness {
             return Err(PyRuntimeError::new_err(format!(
-                "privacy protocol {} is not available in the committed Exact12 manifest",
-                protocol_id.canonical_label()
+                "privacy protocol {} is unavailable: {}",
+                protocol_id.canonical_label(),
+                unavailable_reason_label(reason)
             )));
         }
         let PrivacyCompiledProfileResultV1::Available(network_profile) = row.compiled_profile
@@ -146,6 +139,14 @@ impl PyPrivacyExact12CapabilityManifestV1 {
                 protocol_id.canonical_label()
             )));
         }
+        let limits = row
+            .effective_protocol_limits_v1()
+            .ok_or_else(|| PyValueError::new_err("selected native profile is unavailable"))?;
+        limits
+            .validate_with_ceiling(&local_snapshot.protocol_limits)
+            .map_err(|error| {
+                PyValueError::new_err(format!("selected native protocol limits rejected: {error}"))
+            })?;
         Ok(local_profile)
     }
     pub(crate) fn require_governed_statement(
@@ -153,53 +154,48 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         statement: &PrivacyStatementV1,
     ) -> PyResult<()> {
         self.require_authenticated_network(statement.context().network_id)?;
-        self.require_network_profile(statement.protocol_id())?;
-        let activation = self
+        let profile = self
+            .require_network_profile(statement.protocol_id())?
+            .snapshot();
+        let protocol_limits = self
             .manifest
             .protocols
             .iter()
             .find(|row| row.protocol_id == statement.protocol_id())
-            .and_then(|row| row.activation.as_ref())
-            .ok_or_else(|| PyValueError::new_err("Exact12 activation is absent"))?;
+            .and_then(|row| row.effective_protocol_limits_v1())
+            .ok_or_else(|| PyValueError::new_err("selected native profile is unavailable"))?;
         require_governed_statement_v1(
             statement,
-            activation,
+            &profile,
+            &protocol_limits,
             &self.manifest.consensus_policy.current_limits,
-            self.manifest.committed_height,
         )
     }
-    pub(crate) fn require_governed_x509_action(
+    /// Retain exact selected native admission and the original authenticated policy snapshot.
+    pub(crate) fn x509_policy(
         &self,
-        statement: &IrohaZkX509StarkP256StatementV1,
-        proof: &[u8],
-    ) -> PyResult<()> {
-        let limits = &self.manifest.consensus_policy.current_limits;
-        if proof.is_empty() || proof.len() > limits.max_proof_bytes_per_action as usize {
-            return Err(PyValueError::new_err(
-                "Exact12 proof exceeds current consensus limits",
-            ));
-        }
-        let statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
-        self.require_governed_statement(&statement)?;
-        let protocol_id = statement.protocol_id();
-        let envelope = PrivacyProofEnvelopeV1::bind_v1(
-            statement,
-            PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(proof.to_vec())),
-        )
-        .map_err(|_| PyValueError::new_err("Exact12 statement encoding failed"))?;
-        let activation = self
+        expected: NetworkId,
+    ) -> PyResult<(
+        PrivacyCompiledProfileSnapshotV1,
+        PrivacyProtocolLimitsV1,
+        PrivacyConsensusLimitsV1,
+    )> {
+        self.require_authenticated_network(expected)?;
+        let profile = self
+            .require_network_profile(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)?
+            .snapshot();
+        let protocol_limits = self
             .manifest
             .protocols
             .iter()
-            .find(|row| row.protocol_id == protocol_id)
-            .and_then(|row| row.activation.as_ref())
-            .ok_or_else(|| PyValueError::new_err("Exact12 activation is absent"))?;
-        require_governed_envelope_v1(
-            &envelope,
-            activation,
-            limits,
-            self.manifest.committed_height,
-        )
+            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .and_then(|row| row.effective_protocol_limits_v1())
+            .ok_or_else(|| PyValueError::new_err("selected native X509 profile is unavailable"))?;
+        Ok((
+            profile,
+            protocol_limits,
+            self.manifest.consensus_policy.current_limits,
+        ))
     }
     #[cfg(test)]
     pub(crate) fn test_fetched_binding_for_protocol(
@@ -207,46 +203,43 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         network_id: NetworkId,
     ) -> Self {
         // Unit fixture for the post-fetch boundary; archive inspection itself grants no origin.
-        let inspected = Self::test_binding_for_protocol(protocol_id);
+        let inspected = Self::test_binding_for_protocol_on_network(protocol_id, network_id);
         Self::from_authenticated_torii(&inspected.canonical_archive, network_id)
             .expect("validated test response at the authenticated transport boundary")
     }
     #[cfg(test)]
     pub(crate) fn test_binding_for_protocol(protocol_id: PrivacyProtocolIdV1) -> Self {
+        let network = crate::PyNetworkId::from_exact_bytes(&[0xA5; 32])
+            .unwrap()
+            .inner;
+        Self::test_binding_for_protocol_on_network(protocol_id, network)
+    }
+    #[cfg(test)]
+    fn test_binding_for_protocol_on_network(
+        protocol_id: PrivacyProtocolIdV1,
+        network_id: NetworkId,
+    ) -> Self {
         use iroha_data_model::privacy::{
-            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyActiveLifecycleV1,
-            PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
-            PrivacyProtocolLifecycleV1,
+            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
+            PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
         };
+        compiled_privacy_profile_v1(protocol_id).expect("selected test profile is compiled");
         let catalog = iroha_core_privacy::privacy_profiles::compiled_privacy_profile_catalog_v1()
             .expect("test compiled-profile catalog");
         let protocols = catalog
             .protocols
             .into_iter()
-            .map(|row| {
-                let activation = (row.protocol_id == protocol_id).then(|| {
-                    compiled_privacy_profile_v1(protocol_id)
-                        .expect("selected test profile is compiled")
-                        .activation_record(PrivacyProtocolLifecycleV1::Active(
-                            PrivacyActiveLifecycleV1 {
-                                proposed_at_height: 1,
-                                activated_at_height: 2,
-                                state_since_height: 2,
-                            },
-                        ))
-                });
-                PrivacyCapabilityRowV1 {
-                    protocol_id: row.protocol_id,
-                    compiled_profile: row.compiled_profile,
-                    activation,
-                }
+            .map(|row| PrivacyCapabilityRowV1 {
+                protocol_id: row.protocol_id,
+                compiled_profile: row.compiled_profile,
+                policy: None,
             })
             .collect();
         let manifest = PrivacyCapabilitySnapshotV1 {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
             committed_height: 3,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
-            qualification: None,
+            network_id,
             protocols,
         }
         .exact12_capability_manifest_v1()
@@ -258,31 +251,31 @@ impl PyPrivacyExact12CapabilityManifestV1 {
 
 fn require_governed_statement_v1(
     statement: &PrivacyStatementV1,
-    activation: &PrivacyProtocolActivationRecordV1,
+    profile: &PrivacyCompiledProfileSnapshotV1,
+    protocol_limits: &PrivacyProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
-    height: u64,
 ) -> PyResult<()> {
-    activation
+    profile
         .validate()
-        .map_err(|error| PyValueError::new_err(format!("invalid Exact12 activation: {error}")))?;
-    let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
-        return Err(PyValueError::new_err("Exact12 activation is not active"));
-    };
+        .map_err(|error| PyValueError::new_err(format!("invalid native profile: {error}")))?;
     let context = statement.context();
-    if height < active.state_since_height
-        || activation.protocol_id != statement.protocol_id()
-        || activation.parameter_id != context.parameter_id
-        || activation.parameter_digest != context.parameter_digest
-        || activation.verifier_digest != context.verifier_digest
-        || activation.statement_schema_digest != context.statement_schema_digest
-        || activation.engine_manifest_digest != context.engine_manifest_digest
+    if profile.protocol_id != statement.protocol_id()
+        || profile.parameter_id != context.parameter_id
+        || profile.parameter_digest != context.parameter_digest
+        || profile.verifier_digest != context.verifier_digest
+        || profile.statement_schema_digest != context.statement_schema_digest
+        || profile.engine_manifest_digest != context.engine_manifest_digest
     {
         return Err(PyValueError::new_err(
-            "Exact12 statement differs from the effective governed activation",
+            "Exact12 statement differs from the selected native profile",
         ));
     }
-    activation
-        .protocol_limits
+    protocol_limits
+        .validate_with_ceiling(&profile.protocol_limits)
+        .map_err(|error| {
+            PyValueError::new_err(format!("selected native protocol limits rejected: {error}"))
+        })?;
+    protocol_limits
         .validate_statement(statement)
         .map_err(|error| {
             PyValueError::new_err(format!(
@@ -296,14 +289,15 @@ fn require_governed_statement_v1(
     })
 }
 
+#[cfg(test)]
 fn require_governed_envelope_v1(
     envelope: &PrivacyProofEnvelopeV1,
-    activation: &PrivacyProtocolActivationRecordV1,
+    profile: &PrivacyCompiledProfileSnapshotV1,
+    protocol_limits: &PrivacyProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
-    height: u64,
 ) -> PyResult<()> {
     envelope
-        .validate_against_activation(activation, limits, height)
+        .validate_against_profile_v1(profile, protocol_limits, limits)
         .map_err(|error| {
             PyValueError::new_err(format!(
                 "Exact12 current governed envelope rejected: {error}"
@@ -324,6 +318,14 @@ impl PyPrivacyExact12CapabilityManifestV1 {
     const fn version(&self) -> u32 {
         self.manifest.version
     }
+    /// Exact genesis-derived network declared by the canonical manifest.
+    /// Admission additionally requires the private authenticated transport origin.
+    #[getter]
+    fn network_id(&self) -> crate::PyNetworkId {
+        crate::PyNetworkId {
+            inner: self.manifest.network_id,
+        }
+    }
     #[getter]
     const fn committed_height(&self) -> u64 {
         self.manifest.committed_height
@@ -336,7 +338,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         }
         Ok(rows.unbind())
     }
-    /// Require one active committed row and exact equality with this binary.
+    /// Require one available compiled row and exact equality with this binary.
     fn require_network_capability(
         &self,
         py: Python<'_>,
@@ -364,13 +366,13 @@ impl PyPrivacyExact12CapabilityManifestV1 {
 fn parse_protocol_id(label: &str) -> PyResult<PrivacyProtocolIdV1> {
     PrivacyProtocolIdV1::from_canonical_label(label).ok_or_else(|| {
         PyValueError::new_err(
-            "protocol_id must be one exact active Exact12 identifier; aliases and retired identifiers are rejected",
+            "protocol_id must be one exact retained Exact12 identifier; aliases and retired identifiers are rejected",
         )
     })
 }
 fn readiness_label(value: PrivacyCapabilityReadinessV1) -> &'static str {
     match value {
-        PrivacyCapabilityReadinessV1::ProductionQualified => "production-qualified",
+        PrivacyCapabilityReadinessV1::Available => "available",
         PrivacyCapabilityReadinessV1::Unavailable(_) => "unavailable",
     }
 }
@@ -378,6 +380,9 @@ fn compiled_profile_unavailable_reason_label(
     value: PrivacyCompiledProfileUnavailableReasonV1,
 ) -> &'static str {
     match value {
+        PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete => {
+            "joint-security-reduction-incomplete"
+        }
         PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable => "engine-unavailable",
         PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed => {
             "profile-initialization-failed"
@@ -391,16 +396,6 @@ fn unavailable_reason_label(value: PrivacyCapabilityUnavailableReasonV1) -> &'st
     match value {
         PrivacyCapabilityUnavailableReasonV1::CompiledProfile(reason) => {
             compiled_profile_unavailable_reason_label(reason)
-        }
-        PrivacyCapabilityUnavailableReasonV1::NotRegistered => "not-registered",
-        PrivacyCapabilityUnavailableReasonV1::Proposed => "proposed",
-        PrivacyCapabilityUnavailableReasonV1::Suspended => "suspended",
-        PrivacyCapabilityUnavailableReasonV1::Retired => "retired",
-        PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification => {
-            "missing-production-qualification"
-        }
-        PrivacyCapabilityUnavailableReasonV1::InvalidProductionQualification => {
-            "invalid-production-qualification"
         }
     }
 }
@@ -450,6 +445,12 @@ fn capability_tuple_dict(
         "manifest_digest",
         PyBytes::new(py, manifest.manifest_digest.as_bytes()),
     )?;
+    output.set_item(
+        "network_id",
+        crate::PyNetworkId {
+            inner: manifest.network_id,
+        },
+    )?;
     output.set_item("committed_height", manifest.committed_height)?;
     output.set_item("protocol_id", row.protocol_id.canonical_label())?;
     output.set_item("operation_schema", row.operation_schema.canonical_label())?;
@@ -458,7 +459,7 @@ fn capability_tuple_dict(
     output.set_item("readiness", readiness_label(row.readiness))?;
     let unavailable_reason = match row.readiness {
         PrivacyCapabilityReadinessV1::Unavailable(reason) => Some(unavailable_reason_label(reason)),
-        PrivacyCapabilityReadinessV1::ProductionQualified => None,
+        PrivacyCapabilityReadinessV1::Available => None,
     };
     output.set_item("unavailable_reason", unavailable_reason)?;
     output.set_item("network_available", row.is_network_available())?;
@@ -561,10 +562,9 @@ mod tests {
     use super::*;
     use iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1;
 
-    fn x509_governed_fixture() -> (PrivacyProofEnvelopeV1, PrivacyProtocolActivationRecordV1) {
+    fn x509_governed_fixture() -> (PrivacyProofEnvelopeV1, PrivacyCompiledProfileSnapshotV1) {
         use iroha_data_model::privacy::{
-            PrivacyActiveLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            privacy_exact12_fixture_bundle_v1,
+            PrivacyProtocolLimitsV1, privacy_exact12_fixture_bundle_v1,
         };
         let row = privacy_exact12_fixture_bundle_v1()
             .expect("canonical model fixture")
@@ -574,7 +574,7 @@ mod tests {
             .expect("one X509 fixture row");
         let envelope: PrivacyProofEnvelopeV1 = norito::decode_from_bytes(&row.envelope_norito)
             .expect("canonical X509 envelope fixture");
-        let activation = PrivacyProtocolActivationRecordV1 {
+        let profile = PrivacyCompiledProfileSnapshotV1 {
             protocol_id: envelope.protocol_id,
             proof_system_id: envelope.proof_system_id,
             engine_id: envelope.engine_id,
@@ -583,52 +583,80 @@ mod tests {
             verifier_digest: envelope.verifier_digest,
             statement_schema_digest: envelope.statement_schema_digest,
             engine_manifest_digest: envelope.engine_manifest_digest,
-            lifecycle: PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 2,
-                state_since_height: 2,
-            }),
-            protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V1,
-            pending_protocol_limits_tightening: None,
+            protocol_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
         };
-        (envelope, activation)
+        (envelope, profile)
     }
 
     #[test]
-    fn x509_preparation_checks_effective_activation_and_current_statement_limits() {
-        let (envelope, activation) = x509_governed_fixture();
+    fn x509_preparation_checks_selected_profile_and_current_statement_limits() {
+        let (envelope, profile) = x509_governed_fixture();
         let limits = PrivacyConsensusLimitsV1::taira_default();
         assert!(
-            require_governed_statement_v1(&envelope.statement, &activation, &limits, 3).is_ok()
+            require_governed_statement_v1(
+                &envelope.statement,
+                &profile,
+                &profile.protocol_limits,
+                &limits
+            )
+            .is_ok()
         );
         assert!(
-            require_governed_statement_v1(&envelope.statement, &activation, &limits, 1).is_err()
+            require_governed_statement_v1(
+                &envelope.statement,
+                &profile,
+                &PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+                &limits
+            )
+            .is_err()
         );
-        let mut other_verifier = activation;
+        let mut other_verifier = profile;
         other_verifier.verifier_digest =
             iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0x73; 32]);
         assert!(
-            require_governed_statement_v1(&envelope.statement, &other_verifier, &limits, 3)
-                .is_err()
+            require_governed_statement_v1(
+                &envelope.statement,
+                &other_verifier,
+                &profile.protocol_limits,
+                &limits
+            )
+            .is_err()
         );
         let mut tightened = limits;
         tightened.max_statement_and_encrypted_output_bytes_per_transaction = 1;
         assert!(tightened.validate().is_ok());
         assert!(
-            require_governed_statement_v1(&envelope.statement, &activation, &tightened, 3).is_err()
+            require_governed_statement_v1(
+                &envelope.statement,
+                &profile,
+                &profile.protocol_limits,
+                &tightened
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn x509_signing_checks_current_proof_and_action_byte_limits() {
-        let (envelope, activation) = x509_governed_fixture();
+        let (envelope, profile) = x509_governed_fixture();
         let limits = PrivacyConsensusLimitsV1::taira_default();
         // The fixture's model-valid proof bytes are not an engine proof or a release receipt.
-        assert!(require_governed_envelope_v1(&envelope, &activation, &limits, 3).is_ok());
+        assert!(
+            require_governed_envelope_v1(&envelope, &profile, &profile.protocol_limits, &limits)
+                .is_ok()
+        );
         let mut proof_tightened = limits;
         proof_tightened.max_proof_bytes_per_action = 2;
         assert!(proof_tightened.validate().is_ok());
-        assert!(require_governed_envelope_v1(&envelope, &activation, &proof_tightened, 3).is_err());
+        assert!(
+            require_governed_envelope_v1(
+                &envelope,
+                &profile,
+                &profile.protocol_limits,
+                &proof_tightened
+            )
+            .is_err()
+        );
         let mut action_tightened = limits;
         action_tightened.max_proof_bytes_per_action = 3;
         action_tightened.max_statement_and_encrypted_output_bytes_per_transaction = u32::try_from(
@@ -641,7 +669,13 @@ mod tests {
             u32::try_from(norito::to_bytes(&envelope).expect("envelope bytes").len() - 1).unwrap();
         assert!(action_tightened.validate().is_ok());
         assert!(
-            require_governed_envelope_v1(&envelope, &activation, &action_tightened, 3).is_err()
+            require_governed_envelope_v1(
+                &envelope,
+                &profile,
+                &profile.protocol_limits,
+                &action_tightened
+            )
+            .is_err()
         );
     }
     #[test]
@@ -653,6 +687,25 @@ mod tests {
         assert_ne!(
             privacy_validate_exact12_capability_manifest_v1_py(b"local-catalog-shell"),
             PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
+    }
+    #[test]
+    fn joint_security_reduction_failure_is_typed_and_unavailable() {
+        assert_eq!(
+            compiled_profile_unavailable_reason_label(
+                PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete
+            ),
+            "joint-security-reduction-incomplete"
+        );
+        assert_eq!(
+            readiness_label(PrivacyCapabilityReadinessV1::Available),
+            "available"
+        );
+        assert_eq!(
+            unavailable_reason_label(PrivacyCapabilityUnavailableReasonV1::CompiledProfile(
+                PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete
+            )),
+            "joint-security-reduction-incomplete"
         );
     }
     #[test]
@@ -668,7 +721,7 @@ mod tests {
         }
     }
     #[test]
-    fn validated_binding_preserves_bytes_and_fails_closed_without_registered_evidence() {
+    fn validated_archive_preserves_bytes_and_fails_closed_without_authenticated_origin() {
         let binding = PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
         );
@@ -702,8 +755,8 @@ mod tests {
             .expect("different marked network")
             .inner;
         assert!(inspected.require_authenticated_network(network).is_err());
-        // Exercise the private post-fetch constructor with a real Rust-validated unavailable
-        // archive. This proves origin/network handling, not production qualification.
+        // Exercise the private post-fetch constructor with a real Rust-validated
+        // archive. This checks the authenticated origin, not proof or State effects.
         let fetched = PyPrivacyExact12CapabilityManifestV1::from_authenticated_torii(
             &inspected.canonical_archive,
             network,
@@ -715,13 +768,123 @@ mod tests {
                 .require_authenticated_network(other_network)
                 .is_err()
         );
+        assert!(
+            PyPrivacyExact12CapabilityManifestV1::from_authenticated_torii(
+                &inspected.canonical_archive,
+                other_network
+            )
+            .is_err()
+        );
         let replayed = PyPrivacyExact12CapabilityManifestV1::decode(&fetched.canonical_archive)
             .expect("archived bytes remain valid for inspection");
         assert!(replayed.require_authenticated_network(network).is_err());
         assert!(
             fetched
                 .require_network_profile(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-                .is_err()
+                .is_ok()
         );
+    }
+    #[test]
+    fn optional_policy_preserves_native_defaults_and_exact_selected_tuple() {
+        use iroha_data_model::privacy::{PrivacyParameterDigestV1, PrivacyProtocolPolicyV1};
+        Python::initialize();
+        let protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let network = crate::PyNetworkId::from_exact_bytes(&[0xA5; 32])
+            .unwrap()
+            .inner;
+        let fetched = PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
+            protocol, network,
+        );
+        assert!(
+            fetched
+                .manifest
+                .protocols
+                .iter()
+                .all(|row| row.policy.is_none())
+        );
+        let profile = fetched
+            .require_network_profile(protocol)
+            .expect("native defaults require no registration");
+        let mut manifest = fetched.manifest.clone();
+        let row = manifest
+            .protocols
+            .iter_mut()
+            .find(|row| row.protocol_id == protocol)
+            .unwrap();
+        let mut limits = profile.protocol_limits;
+        let PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut pgc) = limits else {
+            panic!("selected PGC limits")
+        };
+        pgc.max_recipient_count = 1;
+        row.policy = Some(PrivacyProtocolPolicyV1 {
+            protocol_id: protocol,
+            current_limits: limits,
+            pending_update: None,
+        });
+        manifest.manifest_digest = manifest.computed_manifest_digest().unwrap();
+        let archive = manifest.canonical_bytes().unwrap();
+        let governed =
+            PyPrivacyExact12CapabilityManifestV1::from_authenticated_torii(&archive, network)
+                .unwrap();
+        assert_eq!(governed.require_network_profile(protocol).unwrap(), profile);
+        let row = manifest
+            .protocols
+            .iter_mut()
+            .find(|row| row.protocol_id == protocol)
+            .unwrap();
+        let PrivacyCompiledProfileResultV1::Available(ref mut substituted) = row.compiled_profile
+        else {
+            panic!("compiled PGC")
+        };
+        substituted.parameter_digest = PrivacyParameterDigestV1::new([0x91; 32]);
+        manifest.manifest_digest = manifest.computed_manifest_digest().unwrap();
+        let changed = PyPrivacyExact12CapabilityManifestV1::from_authenticated_torii(
+            &manifest.canonical_bytes().unwrap(),
+            network,
+        )
+        .unwrap();
+        let error = changed
+            .require_network_profile(protocol)
+            .expect_err("valid policy never authorizes a substituted native tuple");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the committed Exact12 capability tuple"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn x509_policy_retains_authenticated_network_and_exact_security_refusal() {
+        Python::initialize();
+        let network = crate::PyNetworkId::from_exact_bytes(&[0xA5; 32])
+            .unwrap()
+            .inner;
+        let other = crate::PyNetworkId::from_exact_bytes(&[0xA7; 32])
+            .unwrap()
+            .inner;
+        let fetched = PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            network,
+        );
+        let error = fetched
+            .x509_policy(network)
+            .expect_err("incomplete X509 must not be prepared");
+        assert!(
+            error
+                .to_string()
+                .contains("joint-security-reduction-incomplete"),
+            "{error}"
+        );
+        let error = fetched
+            .x509_policy(other)
+            .expect_err("cross-network source must fail before selected admission");
+        assert!(error.to_string().contains("network"), "{error}");
+        let inspected =
+            PyPrivacyExact12CapabilityManifestV1::decode(&fetched.canonical_archive).unwrap();
+        let error = inspected
+            .x509_policy(network)
+            .expect_err("archive has no authenticated origin");
+        assert!(error.to_string().contains("inspection-only"), "{error}");
     }
 }

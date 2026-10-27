@@ -78,18 +78,17 @@ fn namespace_from_suffix_id(
         ))
     })
 }
-fn ensure_configured_policy_payment_asset(
+fn ensure_original_policy_payment_asset(
     state_transaction: &mut StateTransaction<'_, '_>,
     namespace: crate::sns::SnsNamespace,
 ) -> Result<(), InstructionExecutionError> {
+    let payment_asset = crate::executor::root_fees::execution_custody_policy(state_transaction)?
+        .fee_asset_id
+        .canonical_address();
     crate::sns::ensure_namespace_policy_payment_asset_matches_configured(
         state_transaction.world(),
         namespace,
-        &state_transaction
-            .nexus
-            .fees
-            .fee_asset_id
-            .canonical_address(),
+        &payment_asset,
     )
     .map_err(|error| sns_mutation_instruction_error(error, state_transaction))
 }
@@ -298,7 +297,7 @@ impl Execute for EnsureAlias {
         }
         let target = intent.target();
         let namespace = namespace_from_suffix_id(crate::alias_setup::target_suffix_id(&target))?;
-        ensure_configured_policy_payment_asset(state_transaction, namespace)?;
+        ensure_original_policy_payment_asset(state_transaction, namespace)?;
         let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
             .map_err(|error| alias_setup_instruction_error(error, state_transaction))?;
         let owner = crate::alias_setup::alias_intent_owner(&intent).clone();
@@ -365,7 +364,7 @@ impl Execute for RenewAliasLease {
             ));
         }
         let namespace = namespace_from_suffix_id(selector.suffix_id)?;
-        ensure_configured_policy_payment_asset(state_transaction, namespace)?;
+        ensure_original_policy_payment_asset(state_transaction, namespace)?;
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let quote = crate::sns::quote_resolved_name_renewal(
             state_transaction.world(),
@@ -1432,6 +1431,214 @@ mod tests {
         block
             .commit_world_overlay_for_testing()
             .expect("policy update block commits");
+    }
+    #[test]
+    fn alias_payment_uses_original_fee_policy_despite_recipe_and_pending_sibling_changes() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        let different = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("different", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        assert_ne!(different, fixture.payment_asset);
+        let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+        {
+            let mut transaction = block.transaction();
+            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
+                .expect("the actual original policy matches the registered namespace");
+            transaction.nexus.fees.fee_asset_id = different.clone();
+            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
+                .expect("the local genesis-authoring recipe is not runtime authority");
+            let mut pending = transaction.root_fee_policy().unwrap().clone();
+            pending.fee_asset_id = different.clone();
+            // Deliberately bypass normal currency-immutability admission in this test:
+            // even a mismatched current projection cannot replace the original owner.
+            transaction
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            assert_eq!(
+                transaction
+                    .world
+                    .parameters()
+                    .root_fees()
+                    .unwrap()
+                    .fee_asset_id,
+                different
+            );
+            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
+                .expect("pending parameters cannot replace predecessor custody");
+            transaction.apply();
+        }
+        {
+            let mut sibling = block.transaction();
+            assert_eq!(
+                sibling.world.parameters().root_fees().unwrap().fee_asset_id,
+                different
+            );
+            sibling.nexus.fees.fee_asset_id = different;
+            ensure_original_policy_payment_asset(&mut sibling, crate::sns::SnsNamespace::Domain)
+                .expect("an applied sibling cannot replace predecessor custody");
+        }
+    }
+    #[test]
+    fn alias_payment_rejects_fake_genesis_custody_and_matching_local_recipe() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
+        assert_eq!(fixture.state.committed_height(), 1);
+        let different = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("different", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        // A height-one header over genuine committed genesis is ordinary custody.
+        {
+            let mut block =
+                fixture
+                    .state
+                    .block(BlockHeader::new(1.try_into().unwrap(), None, None, 0, 0));
+            let mut transaction = block.transaction();
+            assert!(!crate::executor::is_initial_genesis_context(&transaction));
+            let mut pending = transaction.root_fee_policy().unwrap().clone();
+            pending.fee_asset_id = different.clone();
+            transaction
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            transaction.nexus.fees.fee_asset_id = different.clone();
+            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
+                .expect("a fabricated genesis header cannot select current monetary state");
+        }
+        // Conversely, an incompatible original policy cannot be repaired by a matching recipe.
+        configure_test_fee_asset(&fixture.state, &different);
+        let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+        let mut transaction = block.transaction();
+        transaction.nexus.fees.fee_asset_id = fixture.payment_asset;
+        let error =
+            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
+                .expect_err("only the actual original fee policy may authorize the namespace asset");
+        let message = error.to_string();
+        assert!(message.contains("SNS policy payment asset"), "{message}");
+        assert!(
+            message.contains(&different.canonical_address()),
+            "{message}"
+        );
+    }
+
+
+    /// An actual renewal cannot repair original monetary mismatch from current/local recipes.
+    #[test]
+    fn renew_alias_rejects_original_fee_mismatch_before_balance_or_expiry_changes() {
+        let fixture = alias_auto_renew_fixture(Quantity::from(1_000_u32), 3);
+        assert_eq!(fixture.state.committed_height(), 1);
+        let different = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("different", "universal").unwrap(),
+            "fee".parse().unwrap(),
+        );
+        assert_ne!(different, fixture.payment_asset);
+        // Inject malformed retained monetary state for this negative test. The actual signed
+        // genesis/history remains present; production forbids changing its currency after H1.
+        configure_test_fee_asset(&fixture.state, &different);
+        let payer_before = asset_balance(&fixture.state, &fixture.payment_asset, &fixture.owner);
+        let collector_before =
+            asset_balance(&fixture.state, &fixture.payment_asset, &fixture.collector);
+        let current_expiry = {
+            let view = fixture.state.view();
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms
+        };
+        {
+            let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
+            let hash = Hash::prehashed([0xD8; Hash::LENGTH]);
+            let mut transaction = block.transaction_for_fastpq_testing(hash);
+            transaction.nexus.fees.fee_asset_id = fixture.payment_asset.clone();
+            let mut pending = transaction.root_fee_policy().unwrap().clone();
+            assert_eq!(pending.fee_asset_id, different);
+            pending.fee_asset_id = fixture.payment_asset.clone();
+            transaction
+                .world
+                .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                    pending.into_custom_parameter().unwrap(),
+                ))
+                .unwrap();
+            let target_expiry = current_expiry.checked_add(AUTO_RENEW_YEAR_MS).unwrap();
+            let quote = crate::sns::quote_resolved_name_renewal(
+                transaction.world(),
+                &fixture.selector,
+                current_expiry,
+                target_expiry,
+                transaction.block_unix_timestamp_ms(),
+            )
+            .expect("namespace policy and expiry admit the requested renewal");
+            assert_eq!(quote.payment_asset_definition_id, fixture.payment_asset);
+            assert_eq!(quote.collector_account, fixture.collector);
+            assert!(quote.charge_amount <= payer_before);
+            let renewal = RenewAliasLease::new(
+                fixture.target.clone(),
+                current_expiry,
+                target_expiry,
+                exact_alias_quote_guard(&transaction, fixture.selector.suffix_id, &quote),
+            );
+            let error = renewal
+                .execute(&fixture.owner, &mut transaction)
+                .expect_err("matching local/current fee recipes cannot replace original custody");
+            let message = error.to_string();
+            assert!(message.contains("SNS policy payment asset"), "{message}");
+            assert!(
+                message.contains(&different.canonical_address()),
+                "{message}"
+            );
+            assert_eq!(
+                asset_balance_in_world(transaction.world(), &fixture.payment_asset, &fixture.owner),
+                payer_before,
+                "original fee mismatch must precede payer debit"
+            );
+            assert_eq!(
+                asset_balance_in_world(
+                    transaction.world(),
+                    &fixture.payment_asset,
+                    &fixture.collector,
+                ),
+                collector_before,
+                "original fee mismatch must precede collector credit"
+            );
+            assert_eq!(
+                crate::sns::record_by_selector(transaction.world(), &fixture.selector)
+                    .unwrap()
+                    .unwrap()
+                    .expires_at_ms,
+                current_expiry,
+                "original fee mismatch must precede lease expiry mutation"
+            );
+            assert_eq!(
+                transaction.pending_transfer_transcript_count_for_testing(),
+                0
+            );
+            assert_eq!(transaction.last_tx_gas_used, 0);
+        }
+        let view = fixture.state.view();
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.owner),
+            payer_before
+        );
+        assert_eq!(
+            asset_balance_in_world(view.world(), &fixture.payment_asset, &fixture.collector),
+            collector_before
+        );
+        assert_eq!(
+            crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .unwrap()
+                .unwrap()
+                .expires_at_ms,
+            current_expiry
+        );
+        assert_eq!(
+            view.world().parameters().root_fees().unwrap().fee_asset_id,
+            different
+        );
     }
     #[test]
     fn alias_auto_renew_fixture_retains_genesis_identity_and_initial_accounting() {

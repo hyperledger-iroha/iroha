@@ -16919,7 +16919,11 @@ gas_limit: u64,
             fault: None,
         }.into());
     }
-    let queued = host.drain_instructions();
+    let queued = host.drain_instructions().map_err(|err| contract_vm_attempt_error(err, |err| ContractViewExecutionError {
+        message: format!("contract view cannot discard attachment custody: {err}"),
+        vm_diagnostic: None,
+        fault: None,
+    }))?;
     if !queued.is_empty() {
         return Err(ContractViewExecutionError {
             message: "view entrypoint attempted to emit instructions".to_owned(),
@@ -17154,7 +17158,14 @@ gas_limit: u64,
             queued_instructions: Vec::new(),
         }.into());
     }
-    let queued = host.drain_instructions();
+    let queued = host.drain_instructions().map_err(|err| contract_vm_attempt_error(err, |err| ContractCallSimulationError {
+        message: format!("contract simulation cannot discard attachment custody: {err}"),
+        vm_diagnostic: None,
+        fault: None,
+        normalized_payload: normalized_payload.clone(),
+        gas_used: gas_limit.saturating_sub(vm.gas_remaining),
+        queued_instructions: Vec::new(),
+    }))?;
     let durable_state_overlay = host.drain_durable_state_overlay();
     let gas_used = gas_limit.saturating_sub(vm.gas_remaining);
     let queued_instructions = queued;

@@ -31359,7 +31359,7 @@
                 "type": "null"
               },
               "readiness": {
-                "const": "production-qualified",
+                "const": "available",
                 "type": "string"
               }
             },
@@ -31398,108 +31398,6 @@
               },
               "reason": {
                 "const": "compiled-profile",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "not-registered",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "proposed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "suspended",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "retired",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "missing-production-qualification",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "invalid-production-qualification",
                 "type": "string"
               }
             },
@@ -31571,7 +31469,7 @@
             "$ref": "#/components/schemas/PrivacyProtocolIdV1"
           },
           "protocol_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
           "statement_schema_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
@@ -31637,6 +31535,23 @@
               },
               "reason": {
                 "const": "statement-schema-invalid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "joint-security-reduction-incomplete",
                 "type": "string"
               }
             },
@@ -31736,7 +31651,7 @@
         ],
         "type": "object"
       },
-      "PrivacyConsensusPolicyTighteningV1": {
+      "PrivacyConsensusPolicyUpdateV1": {
         "additionalProperties": false,
         "properties": {
           "effective_at_height": {
@@ -31766,10 +31681,10 @@
           "current_limits": {
             "$ref": "#/components/schemas/PrivacyConsensusLimitsV1"
           },
-          "pending_tightening": {
+          "pending_update": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrivacyConsensusPolicyTighteningV1"
+                "$ref": "#/components/schemas/PrivacyConsensusPolicyUpdateV1"
               },
               {
                 "type": "null"
@@ -31779,26 +31694,7 @@
         },
         "required": [
           "current_limits",
-          "pending_tightening"
-        ],
-        "type": "object"
-      },
-      "PrivacyDeploymentActivationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "protocol_id": {
-            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
-          }
-        },
-        "required": [
-          "protocol_id",
-          "activation_height"
+          "pending_update"
         ],
         "type": "object"
       },
@@ -31933,6 +31829,9 @@
           },
           "manifest_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "protocols": {
             "items": false,
@@ -32806,17 +32705,6 @@
             ],
             "type": "array"
           },
-          "qualification": {
-            "description": "Explicitly null until complete native-validated release and deployment evidence is committed.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyExact12QualificationRecordV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "version": {
             "const": 1,
             "format": "uint32",
@@ -32825,9 +32713,9 @@
         },
         "required": [
           "version",
+          "network_id",
           "committed_height",
           "consensus_policy",
-          "qualification",
           "protocols",
           "manifest_digest"
         ],
@@ -32836,16 +32724,6 @@
       "PrivacyExact12CapabilityRowV1": {
         "additionalProperties": false,
         "properties": {
-          "activation": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyProtocolActivationRecordV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "compiled_profile": {
             "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1"
           },
@@ -32854,6 +32732,16 @@
           },
           "operation_schema": {
             "$ref": "#/components/schemas/PrivacyOperationSchemaV1"
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "privacy_feature_mask": {
             "$ref": "#/components/schemas/PrivacyFeatureMaskV1"
@@ -32872,7 +32760,7 @@
           "privacy_feature_mask",
           "compiled_profile",
           "readiness",
-          "activation"
+          "policy"
         ],
         "type": "object"
       },
@@ -32924,17 +32812,6 @@
       "PrivacyExact12DeploymentQualificationV1": {
         "additionalProperties": false,
         "properties": {
-          "activation_transaction_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "activations": {
-            "items": {
-              "$ref": "#/components/schemas/PrivacyDeploymentActivationV1"
-            },
-            "maxItems": 12,
-            "minItems": 12,
-            "type": "array"
-          },
           "chain_id": {
             "maxLength": 128,
             "minLength": 1,
@@ -33001,8 +32878,6 @@
           "network_id",
           "genesis_hash",
           "release_manifest_digest",
-          "activation_transaction_digest",
-          "activations",
           "validator_roster_digest",
           "endpoint_version",
           "convergence_height",
@@ -33015,7 +32890,7 @@
       },
       "PrivacyExact12QualificationRecordV1": {
         "additionalProperties": false,
-        "description": "Complete portable release and target-network deployment evidence. Native admission additionally verifies signatures, exact ordering, nonzero digests, all cross-record identities and committed state. Schema conformance alone grants no production qualification.",
+        "description": "Portable release and target-network execution evidence for external diagnostics. Native validation checks signatures, exact ordering, nonzero digests, and cross-record identities; diagnostic tooling compares this evidence with independently observed committed state. This evidence is not protocol activation authority or a prerequisite for protocol use. Schema conformance alone grants no production qualification.",
         "properties": {
           "deployment_qualification": {
             "$ref": "#/components/schemas/PrivacyExact12DeploymentQualificationV1"
@@ -33256,7 +33131,61 @@
         ],
         "type": "object"
       },
-      "PrivacyProtocolActivationLimitsV1": {
+      "PrivacyProtocolIdV1": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "enum": [
+              "zk-ace-pq-authorization-v1",
+              "anonymous-pgc-k-out-of-n-v1",
+              "verange-transparent-range-v1",
+              "iroha-zk-ams-v1",
+              "vega-existing-credential-zk-v1",
+              "iroha-zk-x509-stark-p256-v1",
+              "iroha-jindo-polynomial-commitment-v1",
+              "iroha-bootle-lantern-anoncred-v1",
+              "orchard-halo2-actions-v1",
+              "monero-fcmp-plus-plus-v1",
+              "iroha-ivm-private-note-stark-v1",
+              "pq-masp-stark-v1"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "protocol",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolLimitsUpdateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits": {
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolLimitsV1": {
         "oneOf": [
           {
             "additionalProperties": false,
@@ -33591,275 +33520,30 @@
           }
         ]
       },
-      "PrivacyProtocolActivationRecordV1": {
+      "PrivacyProtocolPolicyV1": {
         "additionalProperties": false,
         "properties": {
-          "engine_id": {
-            "$ref": "#/components/schemas/PrivacyEngineIdV1"
+          "current_limits": {
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
-          "engine_manifest_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/PrivacyProtocolLifecycleV1"
-          },
-          "parameter_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "parameter_id": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "pending_protocol_limits_tightening": {
+          "pending_update": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrivacyProtocolLimitsTighteningV1"
+                "$ref": "#/components/schemas/PrivacyProtocolLimitsUpdateV1"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "proof_system_id": {
-            "$ref": "#/components/schemas/PrivacyProofSystemIdV1"
-          },
           "protocol_id": {
             "$ref": "#/components/schemas/PrivacyProtocolIdV1"
-          },
-          "protocol_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
-          },
-          "statement_schema_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "verifier_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
           }
         },
         "required": [
           "protocol_id",
-          "proof_system_id",
-          "engine_id",
-          "parameter_id",
-          "parameter_digest",
-          "verifier_digest",
-          "statement_schema_digest",
-          "engine_manifest_digest",
-          "lifecycle",
-          "protocol_limits",
-          "pending_protocol_limits_tightening"
-        ],
-        "type": "object"
-      },
-      "PrivacyProtocolIdV1": {
-        "additionalProperties": false,
-        "properties": {
-          "protocol": {
-            "enum": [
-              "zk-ace-pq-authorization-v1",
-              "anonymous-pgc-k-out-of-n-v1",
-              "verange-transparent-range-v1",
-              "iroha-zk-ams-v1",
-              "vega-existing-credential-zk-v1",
-              "iroha-zk-x509-stark-p256-v1",
-              "iroha-jindo-polynomial-commitment-v1",
-              "iroha-bootle-lantern-anoncred-v1",
-              "orchard-halo2-actions-v1",
-              "monero-fcmp-plus-plus-v1",
-              "iroha-ivm-private-note-stark-v1",
-              "pq-masp-stark-v1"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "protocol",
-          "value"
-        ],
-        "type": "object"
-      },
-      "PrivacyProtocolLifecycleV1": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "proposed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "active",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "suspended",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "oneOf": [
-                      {
-                        "format": "uint64",
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "retired",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "PrivacyProtocolLimitsTighteningV1": {
-        "additionalProperties": false,
-        "properties": {
-          "effective_at_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "next_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
-          },
-          "scheduled_at_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "scheduled_at_height",
-          "effective_at_height",
-          "next_limits"
+          "current_limits",
+          "pending_update"
         ],
         "type": "object"
       },
@@ -91840,7 +91524,7 @@
     },
     "/v1/privacy/capabilities": {
       "get": {
-        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation and production-qualification evidence, evidence-derived readiness, and singleton consensus policy from one authoritative committed state view.",
+        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, optional committed protocol limits, implementation readiness, and singleton consensus policy from one authoritative committed state view. Absent protocol policy selects compiled profile limits. The content digest does not authenticate the producer.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",

@@ -61,7 +61,7 @@ use crate::{
         zk_x509::engine::{ZkX509EngineErrorV1, verify_zk_x509_credential_proof_v1},
     },
     privacy_profiles::{
-        CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
+        CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_profile_v1,
     },
     privacy_state::{
         PrivacyFcmpAccumulatorStateV1, PrivacyOrchardPoolSnapshotV1, PrivacyOrchardPoolStateV1,
@@ -81,16 +81,17 @@ use iroha_data_model::{
         BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
         IrohaIvmPrivateNoteStarkStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
         IrohaZkAmsStatementV1, MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
-        PqMaspStarkStatementV1, PrivacyActionRoleV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1,
-        PrivacyNativeConsensusBindingV1, PrivacyNativeConsensusBindingValidationErrorV1,
-        PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofEnvelopeValidationError, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
-        PrivacyVeRangeBitLengthV1, PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
+        PqMaspStarkStatementV1, PrivacyActionRoleV1, PrivacyCommitmentV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1, PrivacyFcmpKeyImageV1,
+        PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1,
+        PrivacyNativeConsensusBindingValidationErrorV1, PrivacyNullifierV1,
+        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofEnvelopeValidationError, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVeRangeBitLengthV1,
+        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
         PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1, PrivacyZkAmsActionV1,
         VegaExistingCredentialStatementV1,
     },
@@ -137,8 +138,10 @@ pub struct PrivacyZkX509VerificationStateV1<'a> {
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct PrivacyVerificationContextV1<'a> {
-    /// Exact locally stored active record selected by protocol id.
-    pub activation: &'a PrivacyProtocolActivationRecordV1,
+    /// Canonical semantic profile selected from the actual native implementation.
+    pub profile: &'a PrivacyCompiledProfileSnapshotV1,
+    /// Effective ordinary protocol limits from committed policy or canonical defaults.
+    pub protocol_limits: &'a PrivacyProtocolLimitsV1,
     /// Singleton chain-wide limits effective for this incoming block.
     pub consensus_limits: &'a PrivacyConsensusLimitsV1,
     /// Exact genesis-header-derived network identity.
@@ -597,12 +600,11 @@ impl VerifiedPrivacyEffectsV1 {
 ///
 /// # Errors
 ///
-/// Rejects a missing/altered compiled profile, malformed or inactive
-/// activation, envelope inconsistency, wrong execution context, a role the
+/// Rejects a missing/altered compiled profile, malformed semantic profile, envelope inconsistency, wrong execution context, a role the
 /// dispatch registry records as unsupported, non-canonical native wire value,
 /// or failed proof equation.
 ///
-/// Failure precedence is consensus-critical: compiled activation is checked first, governed and
+/// Failure precedence is consensus-critical: canonical native profile is checked first, ordinary-policy and
 /// intrinsic envelope validity second, trusted execution context third, canonical byte charging
 /// fourth, the typed dispatch registry fifth, and the selected native verifier last.
 #[doc(hidden)]
@@ -610,63 +612,27 @@ pub fn verify_privacy_envelope_v1(
     envelope: &PrivacyProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
-    validate_compiled_privacy_activation_v1(context.activation).map_err(|source| {
-        PrivacyVerificationErrorV1::CompiledActivation(Box::new(
-            PrivacyCompiledActivationFailureV1 { source },
-        ))
+    validate_compiled_privacy_profile_v1(context.profile).map_err(|source| {
+        PrivacyVerificationErrorV1::CompiledProfile(Box::new(PrivacyCompiledProfileFailureV1 {
+            source,
+        }))
     })?;
-    verify_privacy_envelope_after_compiled_activation_v1(envelope, context)
+    verify_privacy_envelope_after_compiled_profile_v1(envelope, context)
 }
-fn verify_privacy_envelope_after_compiled_activation_v1(
+fn verify_privacy_envelope_after_compiled_profile_v1(
     envelope: &PrivacyProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
     envelope
-        .validate_against_activation(
-            context.activation,
+        .validate_against_profile_v1(
+            context.profile,
+            context.protocol_limits,
             context.consensus_limits,
-            context.current_height,
         )
         .map_err(|source| {
             PrivacyVerificationErrorV1::Envelope(Box::new(PrivacyEnvelopeFailureV1 { source }))
         })?;
-    if context.genesis_hash == [0; 32] {
-        return Err(PrivacyVerificationErrorV1::Context(Box::new(
-            PrivacyVerificationContextFailureV1::new(
-                PrivacyVerificationContextFailureCodeV1::ZeroGenesisHash,
-                "non-zero committed genesis hash",
-                "all-zero digest",
-            ),
-        )));
-    }
-    if context.network_id.as_bytes() != &context.genesis_hash {
-        return Err(PrivacyVerificationErrorV1::Context(Box::new(
-            PrivacyVerificationContextFailureV1::new(
-                PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch,
-                context.network_id.to_string(),
-                format!("{:02x?}", context.genesis_hash),
-            ),
-        )));
-    }
-    let statement_context = envelope.statement.context();
-    if statement_context.network_id != *context.network_id {
-        return Err(PrivacyVerificationErrorV1::Context(Box::new(
-            PrivacyVerificationContextFailureV1::new(
-                PrivacyVerificationContextFailureCodeV1::NetworkIdMismatch,
-                context.network_id.to_string(),
-                statement_context.network_id.to_string(),
-            ),
-        )));
-    }
-    if statement_context.action_index != context.expected_action_index {
-        return Err(PrivacyVerificationErrorV1::Context(Box::new(
-            PrivacyVerificationContextFailureV1::new(
-                PrivacyVerificationContextFailureCodeV1::ActionIndexMismatch,
-                context.expected_action_index.to_string(),
-                statement_context.action_index.to_string(),
-            ),
-        )));
-    }
+    validate_privacy_execution_context_v1(envelope.statement.context(), context)?;
     // Canonical encoding is repeated here deliberately: the validated exact
     // bytes become the rollback-safe budget charge returned with the effects.
     let encoded_action_bytes = norito::canonical_frame_len(envelope)
@@ -683,7 +649,7 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
         PrivacyVerificationErrorV1::Envelope(Box::new(PrivacyEnvelopeFailureV1 { source }))
     })?;
     // A role without usable verification is refused here with its typed limitation, before any
-    // proof byte is examined. This refusal does not depend on an activation record.
+    // proof byte is examined. This refusal does not depend on an profile record.
     require_supported_privacy_action_role_v1(role)
         .map_err(|source| PrivacyVerificationErrorV1::UnsupportedOperation(Box::new(source)))?;
     // Route only on the closed statement enum so adding a protocol cannot compile until this
@@ -785,7 +751,7 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
             verify_vega_existing_credential_v1(statement, proof, context)?
         }
         PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) => {
-            verify_zk_x509_certificate_v1(statement, proof, context)?
+            verify_zk_x509_certificate_v1(statement, proof.as_bytes(), context)?
         }
         PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) => {
             verify_jindo_batched_evaluation_v1(statement, proof, envelope, context)?
@@ -814,9 +780,53 @@ fn verify_privacy_envelope_after_compiled_activation_v1(
         ledger,
     )
 }
+/// Check the actual executing network, committed genesis and privacy-action ordinal.
+fn validate_privacy_execution_context_v1(
+    statement_context: &iroha_data_model::privacy::PrivacyStatementContextV1,
+    context: &PrivacyVerificationContextV1<'_>,
+) -> Result<(), PrivacyVerificationErrorV1> {
+    if context.genesis_hash == [0; 32] {
+        return Err(PrivacyVerificationErrorV1::Context(Box::new(
+            PrivacyVerificationContextFailureV1::new(
+                PrivacyVerificationContextFailureCodeV1::ZeroGenesisHash,
+                "non-zero committed genesis hash",
+                "all-zero digest",
+            ),
+        )));
+    }
+    if context.network_id.as_bytes() != &context.genesis_hash {
+        return Err(PrivacyVerificationErrorV1::Context(Box::new(
+            PrivacyVerificationContextFailureV1::new(
+                PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch,
+                context.network_id.to_string(),
+                format!("{:02x?}", context.genesis_hash),
+            ),
+        )));
+    }
+    if statement_context.network_id != *context.network_id {
+        return Err(PrivacyVerificationErrorV1::Context(Box::new(
+            PrivacyVerificationContextFailureV1::new(
+                PrivacyVerificationContextFailureCodeV1::NetworkIdMismatch,
+                context.network_id.to_string(),
+                statement_context.network_id.to_string(),
+            ),
+        )));
+    }
+    if statement_context.action_index != context.expected_action_index {
+        return Err(PrivacyVerificationErrorV1::Context(Box::new(
+            PrivacyVerificationContextFailureV1::new(
+                PrivacyVerificationContextFailureCodeV1::ActionIndexMismatch,
+                context.expected_action_index.to_string(),
+                statement_context.action_index.to_string(),
+            ),
+        )));
+    }
+    Ok(())
+}
+
 fn verify_zk_x509_certificate_v1(
     statement: &iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
-    proof: &PrivacyProofBytesV1,
+    proof: &[u8],
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let verification_state = context
@@ -840,7 +850,7 @@ fn verify_zk_x509_certificate_v1(
         statement,
         verification_state.authoritative_state,
         context.genesis_hash,
-        proof.as_bytes(),
+        proof,
     )
     .map_err(|source| {
         PrivacyVerificationErrorV1::NativeZkX509(Box::new(PrivacyZkX509VerificationFailureV1 {
@@ -1862,10 +1872,13 @@ pub enum PrivacyVerificationErrorV1 {
     Context(Box<PrivacyVerificationContextFailureV1>),
     /// The active governance record differs from executable consensus code.
     #[error(transparent)]
-    CompiledActivation(Box<PrivacyCompiledActivationFailureV1>),
-    /// Typed envelope or governed lifecycle validation failed.
+    CompiledProfile(Box<PrivacyCompiledProfileFailureV1>),
+    /// Typed envelope, canonical profile or resource-policy validation failed.
     #[error(transparent)]
     Envelope(Box<PrivacyEnvelopeFailureV1>),
+    /// The canonical signed-attachment X.509 request or its materialized statement is invalid.
+    #[error(transparent)]
+    AttachedZkX509(Box<iroha_data_model::isi::privacy::PrivacyZkX509RequestErrorV1>),
     /// The selected role has no usable native verification in this source tree.
     ///
     /// This typed refusal carries the role and its concrete limitation. It is
@@ -1983,8 +1996,8 @@ impl PrivacyVerificationContextFailureV1 {
     }
 }
 #[derive(Debug, Error, Clone, Copy)]
-#[error("privacy activation does not match the compiled native profile: {source}")]
-pub struct PrivacyCompiledActivationFailureV1 {
+#[error("privacy profile does not match the compiled native profile: {source}")]
+pub struct PrivacyCompiledProfileFailureV1 {
     source: CompiledPrivacyProfileValidationErrorV1,
 }
 #[derive(Debug, Error, Clone, Copy)]
@@ -2394,16 +2407,15 @@ mod tests {
         privacy::{
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-            PrivacyEncryptionKeyV1, PrivacyEngineIdV1, PrivacyFcmpInputPublicV1,
-            PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1, PrivacyFcmpTreeRootV1,
-            PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyJindoFieldElementV1,
-            PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyOrchardActionV1,
-            PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
-            PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
-            PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1,
+            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyEncryptionKeyV1, PrivacyEngineIdV1,
+            PrivacyFcmpInputPublicV1, PrivacyFcmpKeyImageV1, PrivacyFcmpPoolBootstrapV1,
+            PrivacyFcmpTreeRootV1, PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1,
+            PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNoteEncryptionKeyDigestV1,
+            PrivacyOrchardActionV1, PrivacyP256PointV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyPqMaspPoolBootstrapV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyRecipientIdV1,
             PrivacyStatementContextV1, PrivacyStatementValidationError,
             PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1,
             PrivacyValueBalanceV1, VeRangeTransparentRangeStatementV1,
@@ -2420,24 +2432,19 @@ mod tests {
         bytes[31] = value;
         SecretScalarV1::from_bytes(bytes).expect("canonical non-zero scalar")
     }
-    fn active_profile() -> (CompiledPrivacyProfileV1, PrivacyProtocolActivationRecordV1) {
+    fn compiled_profile_and_snapshot()
+    -> (CompiledPrivacyProfileV1, PrivacyCompiledProfileSnapshotV1) {
         let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("compiled VeRange");
-        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 2,
-                state_since_height: 2,
-            },
-        ));
-        (profile, activation)
+        let snapshot = profile.snapshot();
+        (profile, snapshot)
     }
     fn valid_envelope() -> (
         PrivacyProofEnvelopeV1,
-        PrivacyProtocolActivationRecordV1,
+        PrivacyCompiledProfileSnapshotV1,
         NetworkId,
     ) {
-        let (compiled, activation) = active_profile();
+        let (compiled, profile) = compiled_profile_and_snapshot();
         let network_id = network_id(0xA7);
         let native_profile = VeRangeBitLengthV1::Bits32;
         let values = [7_u64, 19_u64];
@@ -2518,7 +2525,7 @@ mod tests {
                 statement,
                 proof: PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(proof)),
             },
-            activation,
+            profile,
             network_id,
         )
     }
@@ -2529,7 +2536,7 @@ mod tests {
     }
     struct JindoFixture {
         envelope: PrivacyProofEnvelopeV1,
-        activation: PrivacyProtocolActivationRecordV1,
+        profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
     }
     impl JindoFixture {
@@ -2537,13 +2544,7 @@ mod tests {
             let compiled =
                 compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
                     .expect("compiled Jindo");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
+            let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let polynomials = vec![
                 vec![
@@ -2624,7 +2625,7 @@ mod tests {
                         PrivacyProofBytesV1::new(proof),
                     ),
                 },
-                activation,
+                profile,
                 network_id,
             }
         }
@@ -2633,7 +2634,8 @@ mod tests {
             consensus_limits: &'a PrivacyConsensusLimitsV1,
         ) -> PrivacyVerificationContextV1<'a> {
             PrivacyVerificationContextV1 {
-                activation: &self.activation,
+                profile: &self.profile,
+                protocol_limits: &self.profile.protocol_limits,
                 consensus_limits,
                 network_id: &self.network_id,
                 genesis_hash: [0xa7; 32],
@@ -2655,7 +2657,7 @@ mod tests {
     }
     struct BootleLanternFixture {
         envelope: PrivacyProofEnvelopeV1,
-        activation: PrivacyProtocolActivationRecordV1,
+        profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
         policy: BootleLanternIssuerPolicyV1,
     }
@@ -2664,13 +2666,7 @@ mod tests {
             let compiled =
                 compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
                     .expect("compiled Bootle/Lantern");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
+            let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let genesis_hash = [0xA7; 32];
             let context = PrivacyStatementContextV1 {
@@ -2807,7 +2803,7 @@ mod tests {
                         proof,
                     )),
                 },
-                activation,
+                profile,
                 network_id,
                 policy,
             }
@@ -2817,7 +2813,8 @@ mod tests {
             consensus_limits: &'a PrivacyConsensusLimitsV1,
         ) -> PrivacyVerificationContextV1<'a> {
             PrivacyVerificationContextV1 {
-                activation: &self.activation,
+                profile: &self.profile,
+                protocol_limits: &self.profile.protocol_limits,
                 consensus_limits,
                 network_id: &self.network_id,
                 genesis_hash: [0xA7; 32],
@@ -2855,7 +2852,7 @@ mod tests {
     }
     struct OrchardFixture {
         envelope: PrivacyProofEnvelopeV1,
-        activation: PrivacyProtocolActivationRecordV1,
+        profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
         namespace: PrivacyNamespaceV1,
         snapshot: PrivacyOrchardPoolSnapshotV1,
@@ -2864,13 +2861,7 @@ mod tests {
         fn new() -> Self {
             let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
                 .expect("compiled Orchard");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
+            let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xB6; 32]);
             let namespace = PrivacyNamespaceV1::new(
@@ -2967,7 +2958,7 @@ mod tests {
             };
             Self {
                 envelope,
-                activation,
+                profile,
                 network_id,
                 namespace,
                 snapshot,
@@ -2975,7 +2966,8 @@ mod tests {
         }
         fn verification_context(&self) -> PrivacyVerificationContextV1<'_> {
             PrivacyVerificationContextV1 {
-                activation: &self.activation,
+                profile: &self.profile,
+                protocol_limits: &self.profile.protocol_limits,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
                 network_id: &self.network_id,
                 genesis_hash: [0xA7; 32],
@@ -3112,7 +3104,7 @@ mod tests {
     }
     struct PgcFixture {
         envelope: PrivacyProofEnvelopeV1,
-        activation: PrivacyProtocolActivationRecordV1,
+        profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
         namespace: PrivacyNamespaceV1,
         total_supply: u32,
@@ -3132,13 +3124,7 @@ mod tests {
         ) -> Self {
             let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
                 .expect("compiled Anonymous PGC");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
+            let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xb1; 32]);
             let namespace = PrivacyNamespaceV1::new(
@@ -3322,7 +3308,7 @@ mod tests {
             };
             Self {
                 envelope,
-                activation,
+                profile,
                 network_id,
                 namespace,
                 total_supply,
@@ -3335,7 +3321,8 @@ mod tests {
         }
         fn verification_context(&self) -> PrivacyVerificationContextV1<'_> {
             PrivacyVerificationContextV1 {
-                activation: &self.activation,
+                profile: &self.profile,
+                protocol_limits: &self.profile.protocol_limits,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
                 network_id: &self.network_id,
                 genesis_hash: [0xa7; 32],
@@ -3373,11 +3360,12 @@ mod tests {
         }
     }
     fn verification_context<'a>(
-        activation: &'a PrivacyProtocolActivationRecordV1,
+        profile: &'a PrivacyCompiledProfileSnapshotV1,
         network_id: &'a NetworkId,
     ) -> PrivacyVerificationContextV1<'a> {
         PrivacyVerificationContextV1 {
-            activation,
+            profile,
+            protocol_limits: &profile.protocol_limits,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
             network_id,
             genesis_hash: *network_id.as_bytes(),
@@ -3419,12 +3407,12 @@ mod tests {
     }
     fn assert_rejected(
         envelope: &PrivacyProofEnvelopeV1,
-        activation: &PrivacyProtocolActivationRecordV1,
+        profile: &PrivacyCompiledProfileSnapshotV1,
         network_id: &NetworkId,
         label: &str,
     ) {
         assert!(
-            verify_privacy_envelope_v1(envelope, &verification_context(activation, network_id))
+            verify_privacy_envelope_v1(envelope, &verification_context(profile, network_id))
                 .is_err(),
             "adversarial envelope `{label}` was accepted"
         );
@@ -3460,7 +3448,8 @@ mod tests {
     fn zk_ams_production_dispatch_covers_batch_and_successor_provisioning() {
         let fixture = zk_ams_runtime_fixture_for_test();
         let context = |expected_action_index| PrivacyVerificationContextV1 {
-            activation: &fixture.activation,
+            profile: &fixture.profile,
+            protocol_limits: &fixture.profile.protocol_limits,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
             network_id: &fixture.network_id,
             genesis_hash: fixture.genesis_hash,
@@ -3559,7 +3548,7 @@ mod tests {
     }
     #[test]
     fn verified_verange_effects_are_exact_and_non_mutating() {
-        let (envelope, activation, network_id) = valid_envelope();
+        let (envelope, profile, network_id) = valid_envelope();
         let canonical_bytes = u64::try_from(
             norito::encode_canonical(&envelope)
                 .expect("canonical envelope")
@@ -3579,7 +3568,7 @@ mod tests {
             canonical_bytes
         );
         let effects =
-            verify_privacy_envelope_v1(&envelope, &verification_context(&activation, &network_id))
+            verify_privacy_envelope_v1(&envelope, &verification_context(&profile, &network_id))
                 .expect("valid proof");
         assert_eq!(
             effects.protocol_id(),
@@ -4746,10 +4735,11 @@ mod tests {
         )
         .expect("canonical PQA1 wrapper");
         let envelope = PqMaspPreflightFixture::envelope(&statement, outer.clone());
-        let (_, activation) = active_profile();
+        let (_, profile) = compiled_profile_and_snapshot();
         let network_id = statement.context.network_id;
         let context = || PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &profile,
+            protocol_limits: &profile.protocol_limits,
             consensus_limits: &TEST_CONSENSUS_LIMITS,
             network_id: &network_id,
             genesis_hash,
@@ -5350,12 +5340,12 @@ mod tests {
     }
     #[test]
     fn same_display_label_cannot_bridge_distinct_network_geneses() {
-        let (envelope, activation, network_id) = valid_envelope();
+        let (envelope, profile, network_id) = valid_envelope();
         // A human-readable ChainName may be identical for these deployments;
         // it is deliberately absent from both the statement and verifier
         // context. Only the exact genesis-derived NetworkId participates here.
         let other_network = self::network_id(0xA8);
-        let mut other_network_context = verification_context(&activation, &other_network);
+        let mut other_network_context = verification_context(&profile, &other_network);
         other_network_context.genesis_hash = *other_network.as_bytes();
         let error = verify_privacy_envelope_v1(&envelope, &other_network_context)
             .expect_err("wrong network");
@@ -5364,7 +5354,7 @@ mod tests {
             PrivacyVerificationErrorV1::Context(detail)
                 if detail.code == PrivacyVerificationContextFailureCodeV1::NetworkIdMismatch
         ));
-        let mut context = verification_context(&activation, &network_id);
+        let mut context = verification_context(&profile, &network_id);
         context.expected_action_index = 1;
         let error =
             verify_privacy_envelope_v1(&envelope, &context).expect_err("wrong action index");
@@ -5373,7 +5363,7 @@ mod tests {
             PrivacyVerificationErrorV1::Context(detail)
                 if detail.code == PrivacyVerificationContextFailureCodeV1::ActionIndexMismatch
         ));
-        let mut context = verification_context(&activation, &network_id);
+        let mut context = verification_context(&profile, &network_id);
         context.genesis_hash = [0; 32];
         let error = verify_privacy_envelope_v1(&envelope, &context).expect_err("zero genesis");
         assert!(matches!(
@@ -5383,29 +5373,29 @@ mod tests {
         ));
     }
     #[test]
-    fn admission_failure_precedence_is_activation_then_envelope_then_context() {
-        let (envelope, activation, _) = valid_envelope();
+    fn admission_failure_precedence_is_profile_then_envelope_then_context() {
+        let (envelope, profile, _) = valid_envelope();
         let wrong_network = network_id(0xA8);
         let mut malformed_envelope = envelope.clone();
         malformed_envelope.proof =
             PrivacyProofV1::ZkAcePqAuthorizationV1(envelope.proof.bytes().clone());
-        let mut altered_activation = activation;
-        altered_activation.verifier_digest.0[0] ^= 1;
-        let mut all_invalid_context = verification_context(&altered_activation, &wrong_network);
+        let mut altered_profile = profile;
+        altered_profile.verifier_digest.0[0] ^= 1;
+        let mut all_invalid_context = verification_context(&altered_profile, &wrong_network);
         all_invalid_context.genesis_hash = [0; 32];
         all_invalid_context.expected_action_index = 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&malformed_envelope, &all_invalid_context),
-            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
+            Err(PrivacyVerificationErrorV1::CompiledProfile(_))
         ));
-        let mut envelope_and_context_invalid = verification_context(&activation, &wrong_network);
+        let mut envelope_and_context_invalid = verification_context(&profile, &wrong_network);
         envelope_and_context_invalid.genesis_hash = [0; 32];
         envelope_and_context_invalid.expected_action_index = 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&malformed_envelope, &envelope_and_context_invalid),
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
-        let mut context_only_invalid = verification_context(&activation, &wrong_network);
+        let mut context_only_invalid = verification_context(&profile, &wrong_network);
         context_only_invalid.genesis_hash = [0; 32];
         context_only_invalid.expected_action_index = 1;
         assert!(matches!(
@@ -5415,16 +5405,16 @@ mod tests {
         ));
     }
     #[test]
-    fn altered_activation_statement_and_proof_are_rejected() {
-        let (envelope, activation, network_id) = valid_envelope();
-        let mut altered_activation = activation;
-        altered_activation.verifier_digest.0[0] ^= 1;
+    fn altered_profile_statement_and_proof_are_rejected() {
+        let (envelope, profile, network_id) = valid_envelope();
+        let mut altered_profile = profile;
+        altered_profile.verifier_digest.0[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &envelope,
-                &verification_context(&altered_activation, &network_id)
+                &verification_context(&altered_profile, &network_id)
             ),
-            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
+            Err(PrivacyVerificationErrorV1::CompiledProfile(_))
         ));
         let mut altered_statement = envelope.clone();
         let PrivacyStatementV1::VeRangeTransparentRangeV1(statement) =
@@ -5440,7 +5430,7 @@ mod tests {
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &altered_statement,
-                &verification_context(&activation, &network_id)
+                &verification_context(&profile, &network_id)
             ),
             Err(PrivacyVerificationErrorV1::NativeVeRange(_))
         ));
@@ -5453,11 +5443,11 @@ mod tests {
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &altered_proof,
-                &verification_context(&activation, &network_id)
+                &verification_context(&profile, &network_id)
             ),
             Err(PrivacyVerificationErrorV1::NativeVeRange(_))
         ));
-        let mut context = verification_context(&activation, &network_id);
+        let mut context = verification_context(&profile, &network_id);
         context.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, &context),
@@ -5467,7 +5457,7 @@ mod tests {
     }
     #[test]
     fn proof_wire_rejects_truncation_extensions_and_single_byte_malleation() {
-        let (envelope, activation, network_id) = valid_envelope();
+        let (envelope, profile, network_id) = valid_envelope();
         let PrivacyProofV1::VeRangeTransparentRangeV1(proof) = &envelope.proof else {
             unreachable!("VeRange fixture")
         };
@@ -5481,7 +5471,7 @@ mod tests {
             bytes.bytes.truncate(length);
             assert_rejected(
                 &candidate,
-                &activation,
+                &profile,
                 &network_id,
                 &format!("truncated-{length}"),
             );
@@ -5494,7 +5484,7 @@ mod tests {
             bytes.bytes.extend_from_slice(suffix);
             assert_rejected(
                 &candidate,
-                &activation,
+                &profile,
                 &network_id,
                 &format!("trailing-{}", suffix.len()),
             );
@@ -5507,7 +5497,7 @@ mod tests {
             bytes.bytes[offset] ^= 0x80;
             assert_rejected(
                 &candidate,
-                &activation,
+                &profile,
                 &network_id,
                 &format!("bit-flip-{offset}"),
             );
@@ -5517,23 +5507,23 @@ mod tests {
             unreachable!("VeRange fixture")
         };
         bytes.bytes.fill(0);
-        assert_rejected(&all_zero, &activation, &network_id, "all-zero-proof");
+        assert_rejected(&all_zero, &profile, &network_id, "all-zero-proof");
     }
     #[test]
     fn statement_shape_order_and_public_inputs_are_cryptographically_bound() {
-        let (envelope, activation, network_id) = valid_envelope();
+        let (envelope, profile, network_id) = valid_envelope();
         let mut empty = envelope.clone();
         let statement = verange_statement_mut(&mut empty);
         statement.value_commitments.clear();
         statement.aggregation_count = 0;
         refresh_statement_digest(&mut empty);
-        assert_rejected(&empty, &activation, &network_id, "empty-batch");
+        assert_rejected(&empty, &profile, &network_id, "empty-batch");
         let mut count_mismatch = envelope.clone();
         verange_statement_mut(&mut count_mismatch).aggregation_count = 1;
         refresh_statement_digest(&mut count_mismatch);
         assert_rejected(
             &count_mismatch,
-            &activation,
+            &profile,
             &network_id,
             "aggregation-count-mismatch",
         );
@@ -5541,22 +5531,17 @@ mod tests {
         let statement = verange_statement_mut(&mut duplicate);
         statement.value_commitments[1] = statement.value_commitments[0];
         refresh_statement_digest(&mut duplicate);
-        assert_rejected(&duplicate, &activation, &network_id, "duplicate-commitment");
+        assert_rejected(&duplicate, &profile, &network_id, "duplicate-commitment");
         let mut reordered = envelope.clone();
         verange_statement_mut(&mut reordered)
             .value_commitments
             .swap(0, 1);
         refresh_statement_digest(&mut reordered);
-        assert_rejected(
-            &reordered,
-            &activation,
-            &network_id,
-            "reordered-commitments",
-        );
+        assert_rejected(&reordered, &profile, &network_id, "reordered-commitments");
         let mut changed_policy = envelope.clone();
         verange_statement_mut(&mut changed_policy).policy_id = PrivacyPolicyIdV1::new([0xA3; 32]);
         refresh_statement_digest(&mut changed_policy);
-        assert_rejected(&changed_policy, &activation, &network_id, "changed-policy");
+        assert_rejected(&changed_policy, &profile, &network_id, "changed-policy");
         let mut changed_asset = envelope.clone();
         verange_statement_mut(&mut changed_asset).asset_definition_id =
             AssetDefinitionId::derive_from_components(
@@ -5564,59 +5549,36 @@ mod tests {
                 Name::from_str("other_asset").expect("name"),
             );
         refresh_statement_digest(&mut changed_asset);
-        assert_rejected(&changed_asset, &activation, &network_id, "changed-asset");
+        assert_rejected(&changed_asset, &profile, &network_id, "changed-asset");
         let mut changed_profile = envelope.clone();
         verange_statement_mut(&mut changed_profile).bit_length = PrivacyVeRangeBitLengthV1::Bits64;
         refresh_statement_digest(&mut changed_profile);
         assert_rejected(
             &changed_profile,
-            &activation,
+            &profile,
             &network_id,
             "changed-bit-length",
         );
     }
     #[test]
-    fn governance_lifecycle_and_transcript_context_cannot_be_replayed() {
-        let (envelope, activation, network_id) = valid_envelope();
-        let mut proposed = activation;
-        proposed.lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-            proposed_at_height: 1,
-        });
-        assert!(matches!(
-            verify_privacy_envelope_v1(
-                &envelope,
-                &verification_context(&proposed, &network_id)
-            ),
-            Err(PrivacyVerificationErrorV1::Envelope(detail))
-                if matches!(
-                    detail.source,
-                    PrivacyProofEnvelopeValidationError::ActivationNotActive
-                )
-        ));
-        let mut future = activation;
-        let PrivacyProtocolLifecycleV1::Active(ref mut active) = future.lifecycle else {
-            unreachable!("active fixture")
-        };
-        active.state_since_height = 11;
-        assert!(matches!(
-            verify_privacy_envelope_v1(
-                &envelope,
-                &verification_context(&future, &network_id)
-            ),
-            Err(PrivacyVerificationErrorV1::Envelope(detail))
-                if matches!(
-                    detail.source,
-                    PrivacyProofEnvelopeValidationError::ActivationNotEffective {
-                        current_height: 10,
-                        effective_height: 11,
-                    }
-                )
-        ));
+    fn ordinary_policy_and_transcript_context_cannot_be_substituted() {
+        let (envelope, profile, network_id) = valid_envelope();
+        verify_privacy_envelope_v1(&envelope, &verification_context(&profile, &network_id))
+            .expect("canonical native proof needs no profile state");
+        let wrong_limits = PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1;
+        let mut wrong_policy_context = verification_context(&profile, &network_id);
+        wrong_policy_context.protocol_limits = &wrong_limits;
+        assert!(
+            matches!(verify_privacy_envelope_v1(&envelope, &wrong_policy_context),
+                Err(PrivacyVerificationErrorV1::Envelope(detail))
+                    if matches!(detail.source, PrivacyProofEnvelopeValidationError::ProfileProtocolLimits(_))
+            )
+        );
         let replay_network = self::network_id(0xA8);
         let mut replayed = envelope.clone();
         verange_statement_mut(&mut replayed).context.network_id = replay_network;
         refresh_statement_digest(&mut replayed);
-        let mut replay_context = verification_context(&activation, &replay_network);
+        let mut replay_context = verification_context(&profile, &replay_network);
         replay_context.genesis_hash = *replay_network.as_bytes();
         assert!(matches!(
             verify_privacy_envelope_v1(&replayed, &replay_context),
@@ -5625,7 +5587,7 @@ mod tests {
         let mut replayed = envelope.clone();
         verange_statement_mut(&mut replayed).context.action_index = 1;
         refresh_statement_digest(&mut replayed);
-        let mut context = verification_context(&activation, &network_id);
+        let mut context = verification_context(&profile, &network_id);
         context.expected_action_index = 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&replayed, &context),
@@ -5871,13 +5833,13 @@ mod tests {
                 Err(PrivacyVerificationErrorV1::Envelope(_))
             ));
         }
-        let mut altered_activation = fixture.activation;
-        altered_activation.verifier_digest.0[0] ^= 1;
+        let mut altered_profile = fixture.profile;
+        altered_profile.verifier_digest.0[0] ^= 1;
         let mut context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        context.activation = &altered_activation;
+        context.profile = &altered_profile;
         assert!(matches!(
             verify_privacy_envelope_v1(&fixture.envelope, &context),
-            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
+            Err(PrivacyVerificationErrorV1::CompiledProfile(_))
         ));
     }
     #[test]
@@ -6057,13 +6019,13 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeBootleLantern(_)
                 | PrivacyVerificationErrorV1::Envelope(_))
         ));
-        let mut altered_activation = fixture.activation;
-        altered_activation.engine_manifest_digest.0[0] ^= 1;
-        let mut activation_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
-        activation_context.activation = &altered_activation;
+        let mut altered_profile = fixture.profile;
+        altered_profile.engine_manifest_digest.0[0] ^= 1;
+        let mut profile_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        profile_context.profile = &altered_profile;
         assert!(matches!(
-            verify_privacy_envelope_v1(&fixture.envelope, &activation_context),
-            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
+            verify_privacy_envelope_v1(&fixture.envelope, &profile_context),
+            Err(PrivacyVerificationErrorV1::CompiledProfile(_))
         ));
     }
     include!("privacy_verifier/governed_binding_tests.rs");
@@ -6158,7 +6120,7 @@ pub mod test_fixtures {
     }
     pub(super) struct FcmpFixture {
         pub(super) envelope: PrivacyProofEnvelopeV1,
-        pub(super) activation: PrivacyProtocolActivationRecordV1,
+        pub(super) profile: PrivacyCompiledProfileSnapshotV1,
         pub(super) network_id: NetworkId,
         pub(super) snapshot: PrivacyProofManagedPoolSnapshotV1,
         pub(super) initial_output: PrivacyFcmpOutputTupleV1,
@@ -6167,13 +6129,7 @@ pub mod test_fixtures {
         pub(super) fn new() -> Self {
             let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
                 .expect("compiled FCMP++");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
+            let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xC1; 32]);
             let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -6316,7 +6272,8 @@ pub mod test_fixtures {
                 proof: PrivacyProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(Vec::new())),
             };
             let verification_context = PrivacyVerificationContextV1 {
-                activation: &activation,
+                profile: &profile,
+                protocol_limits: &profile.protocol_limits,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
                 network_id: &network_id,
                 genesis_hash: [0xA7; 32],
@@ -6350,7 +6307,7 @@ pub mod test_fixtures {
             ));
             Self {
                 envelope,
-                activation,
+                profile,
                 network_id,
                 snapshot,
                 initial_output,
@@ -6362,7 +6319,8 @@ pub mod test_fixtures {
             snapshot: Option<&'a PrivacyProofManagedPoolSnapshotV1>,
         ) -> PrivacyVerificationContextV1<'a> {
             PrivacyVerificationContextV1 {
-                activation: &self.activation,
+                profile: &self.profile,
+                protocol_limits: &self.profile.protocol_limits,
                 consensus_limits: &TEST_CONSENSUS_LIMITS,
                 network_id: &self.network_id,
                 genesis_hash: [0xA7; 32],
@@ -6385,7 +6343,7 @@ pub mod test_fixtures {
     #[doc(hidden)]
     pub struct FcmpRuntimeFixtureForTest {
         pub envelope: PrivacyProofEnvelopeV1,
-        pub activation: PrivacyProtocolActivationRecordV1,
+        pub profile: PrivacyCompiledProfileSnapshotV1,
         pub network_id: NetworkId,
         pub snapshot: PrivacyProofManagedPoolSnapshotV1,
         pub initial_output: PrivacyFcmpOutputTupleV1,
@@ -6398,7 +6356,7 @@ pub mod test_fixtures {
         let fixture = fcmp_fixture();
         FcmpRuntimeFixtureForTest {
             envelope: fixture.envelope.clone(),
-            activation: fixture.activation,
+            profile: fixture.profile,
             network_id: fixture.network_id,
             snapshot: fixture.snapshot.clone(),
             initial_output: fixture.initial_output,
@@ -6411,7 +6369,7 @@ pub mod test_fixtures {
     pub struct ZkAmsRuntimeFixtureForTest {
         pub batch_envelope: PrivacyProofEnvelopeV1,
         pub provision_envelope: PrivacyProofEnvelopeV1,
-        pub activation: PrivacyProtocolActivationRecordV1,
+        pub profile: PrivacyCompiledProfileSnapshotV1,
         pub network_id: NetworkId,
         pub genesis_hash: [u8; 32],
         pub current_height: u64,
@@ -6428,13 +6386,7 @@ pub mod test_fixtures {
         let fixture = FIXTURE.get_or_init(|| {
             let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
                 .expect("compiled ZK-AMS profile");
-            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ));
+            let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let genesis_hash = [0xA7; 32];
             let issuer_signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
@@ -6716,7 +6668,7 @@ pub mod test_fixtures {
             ZkAmsRuntimeFixtureForTest {
                 batch_envelope,
                 provision_envelope,
-                activation,
+                profile,
                 network_id,
                 genesis_hash,
                 current_height: 10,
@@ -6731,7 +6683,7 @@ pub mod test_fixtures {
         ZkAmsRuntimeFixtureForTest {
             batch_envelope: fixture.batch_envelope.clone(),
             provision_envelope: fixture.provision_envelope.clone(),
-            activation: fixture.activation,
+            profile: fixture.profile,
             network_id: fixture.network_id,
             genesis_hash: fixture.genesis_hash,
             current_height: fixture.current_height,
@@ -6744,3 +6696,6 @@ pub mod test_fixtures {
         }
     }
 }
+
+mod x509_attachment;
+pub use x509_attachment::verify_privacy_zk_x509_attached_v1;

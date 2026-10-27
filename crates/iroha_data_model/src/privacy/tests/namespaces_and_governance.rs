@@ -591,15 +591,14 @@ fn pgc_public_memo_rejects_noncanonical_sizes_order_and_ciphertexts() {
     statement.anonymity_set_public_keys = (1..=32).map(p256_point).collect();
     statement.transfer_ciphertexts = (1..=32).map(p256_ciphertext).collect();
     thirty_two.validate(&limits).expect("closed n=32 profile");
-    let governed =
-        PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1 {
-            max_anonymity_set_size: 16,
-            max_recipient_count: 8,
-        });
+    let governed = PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+        max_anonymity_set_size: 16,
+        max_recipient_count: 8,
+    });
     assert!(matches!(
         governed.validate_statement(&thirty_two),
-        Err(PrivacyActivationStatementLimitsError::CountExceeds {
-            field: PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
+        Err(PrivacyProfileStatementLimitsError::CountExceeds {
+            field: PrivacyProtocolLimitFieldV1::AnonymousPgcAnonymitySetSize,
             count: 32,
             max: 16
         })
@@ -649,66 +648,62 @@ fn verange_uses_only_closed_unsigned_ranges_and_effective_taira_cap() {
         }),
         Err(PrivacyStatementValidationError::ZeroP256Point { index: 0 })
     ));
-    let invalid_activation =
-        PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(VeRangeActivationLimitsV1 {
-            max_aggregation_count: 9,
-        });
+    let invalid_limits = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+        max_aggregation_count: 9,
+    });
     assert!(matches!(
-        invalid_activation.validate(),
-        Err(
-            PrivacyProtocolActivationLimitsValidationError::ExceedsHardMaximum {
-                field: PrivacyActivationLimitFieldV1::VeRangeAggregationCount,
-                value: 9,
-                hard_max: 8
-            }
-        )
+        invalid_limits.validate(),
+        Err(PrivacyProtocolLimitsValidationError::ExceedsHardMaximum {
+            field: PrivacyProtocolLimitFieldV1::VeRangeAggregationCount,
+            value: 9,
+            hard_max: 8
+        })
     ));
 }
 #[test]
-fn protocol_activation_profiles_reject_zero_and_over_ceiling_values() {
+fn protocol_limits_reject_zero_and_over_ceiling_values() {
     for protocol in PrivacyProtocolIdV1::ALL {
         protocol_limits(protocol)
             .validate()
             .expect("default protocol profile");
     }
     let invalid = [
-        PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1 {
+        PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
             max_anonymity_set_size: 15,
             max_recipient_count: 8,
         }),
-        PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+        PrivacyProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
             max_batch_size: 0,
             max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
         }),
-        PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+        PrivacyProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
             max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
             max_ring_size: 15,
         }),
-        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
-            JindoActivationLimitsV1 {
-                max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1 + 1,
-            },
-        ),
-        PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
+        PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1 + 1,
+        }),
+        PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
             max_action_count: 0,
         }),
-        PrivacyProtocolActivationLimitsV1::MoneroFcmpPlusPlusV1(FcmpActivationLimitsV1 {
+        PrivacyProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
             max_input_count: FCMP_MAX_INPUTS_V1 + 1,
             max_output_count: FCMP_MAX_OUTPUTS_V1,
         }),
-        PrivacyProtocolActivationLimitsV1::IrohaIvmPrivateNoteStarkV1(
-            IvmPrivateNoteActivationLimitsV1 {
-                max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
-                max_output_count: 0,
-            },
-        ),
-        PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(PqMaspActivationLimitsV1 {
+        PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
+            max_output_count: 0,
+        }),
+        PrivacyProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
             max_input_count: PQ_MASP_MAX_INPUTS_V1,
             max_output_count: PQ_MASP_MAX_OUTPUTS_V1 + 1,
         }),
     ];
     for value in invalid {
-        assert!(value.validate().is_err(), "invalid activation: {value:?}");
+        assert!(
+            value.validate().is_err(),
+            "invalid protocol limits: {value:?}"
+        );
     }
 }
 #[test]
@@ -796,14 +791,14 @@ fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
         mutate(|provision| provision.key_image = PrivacyZkAmsKeyImageV1::new([0; 32])),
         Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage)
     ));
-    let governed = PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+    let governed = PrivacyProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
         max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
         max_ring_size: 16,
     });
     assert!(matches!(
         governed.validate_statement(&zk_ams_provision_statement(32)),
-        Err(PrivacyActivationStatementLimitsError::CountExceeds {
-            field: PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+        Err(PrivacyProfileStatementLimitsError::CountExceeds {
+            field: PrivacyProtocolLimitFieldV1::ZkAmsRingSize,
             count: 32,
             max: 16
         })
@@ -975,15 +970,13 @@ fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
     assert_jindo_field_and_batch_validation(&base, &limits);
     assert_jindo_commitment_encoding_validation(&base, &limits);
     assert_jindo_coefficient_boundaries(&base, &limits);
-    let governed = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
-        JindoActivationLimitsV1 {
-            max_polynomial_count: 1,
-        },
-    );
+    let governed = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+        max_polynomial_count: 1,
+    });
     assert!(matches!(
         governed.validate_statement(&base),
-        Err(PrivacyActivationStatementLimitsError::CountExceeds {
-            field: PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+        Err(PrivacyProfileStatementLimitsError::CountExceeds {
+            field: PrivacyProtocolLimitFieldV1::JindoPolynomialCount,
             count: 4,
             max: 1
         })

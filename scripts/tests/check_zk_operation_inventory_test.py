@@ -519,7 +519,7 @@ class Exact12(Base):
         text = source(VERIFIER)
         arm = "        PrivacyStatementV1::PqMaspStarkV1(statement) => {\n            verify_pq_masp_action_v1(statement, proof, envelope, context)?\n        }\n"
         self.assertIn(arm, text)
-        self.assert_fails(run("check_exact12", overrides={VERIFIER: text.replace(arm, "")}), "the dispatch of verify_privacy_envelope_after_compiled_activation_v1")
+        self.assert_fails(run("check_exact12", overrides={VERIFIER: text.replace(arm, "")}), "the dispatch of verify_privacy_envelope_after_compiled_profile_v1")
 
     def test_changed_compiled_profile_arm_fails(self) -> None:
         overrides = replaced(PROFILES, "PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => compiled_orchard_profile_v1(),",
@@ -577,8 +577,8 @@ class ClosedLists(Base):
              "Self::KaigiUsage => Some(KaigiRelation::Authorization)", "kaigi selects"),
             ("Self::ConfidentialTransfer => Some(Kind::Transfer)",
              "Self::ConfidentialTransfer => Some(Kind::Full)", "confidential selects"),
-            ("if let Some(kind) = self.kaigi() {\n            kind.circuit_id()",
-             "if let Some(_kind) = self.kaigi() {\n            KaigiRelation::Usage.circuit_id()", "circuit_id must delegate"),
+            ("            KaigiRelation::circuit_id,",
+             "            |_| KaigiRelation::Usage.circuit_id(),", "circuit_id must delegate"),
         ):
             self.assert_fails(run("check_generic", overrides=replaced(path, original, substitute)), fragment)
         for path, original, substitute, fragment in (
@@ -863,7 +863,7 @@ def small_selection(inventory: dict) -> dict:
     section = inventory["guarantee_selection"]
     section["selector_census"]["roots"] = ["crates/iroha_core/src/smartcontracts/isi/kaigi", "crates/iroha_core_zk/src/verification.rs",
                                            "crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs", "crates/iroha_core/src/smartcontracts/isi/game.rs",
-                                           "crates/iroha_core_privacy/src/privacy_state.rs", "crates/iroha_core/src/state.rs",
+                                           "crates/iroha_core_privacy/src/privacy_state.rs", "crates/iroha_core_privacy/src/privacy_verifier.rs", "crates/iroha_core/src/state.rs",
                                            "crates/iroha_core/src/pipeline_gas_policy/retained.rs",
                                            "crates/iroha_core/src/smartcontracts/ivm/host.rs", "crates/iroha_data_model/src/proof.rs",
                                            "crates/iroha_torii/src/routing.rs"]
@@ -937,7 +937,7 @@ class GuaranteeSelection(Base):
         del sites["soracloud.typed_role_feature"]["open_defect"]
         sites["kaigi.policy_named_key"]["selector"] = "astrology"
         del sites["voting.election_keys"]["site"]
-        sites["exact12.qualification_singleton"]["open_defect"] = {"what": "x"}
+        sites["exact12.envelope_digests"]["open_defect"] = {"what": "x"}
         del sites["axt.fee_sponsor_binding"]["chooses_guarantee"]
         inventory["guarantee_selection"]["source_inclusion_census"]["files"][0]["use"] = "decoration"
         inventory["guarantee_selection"]["source_inclusion_census"]["files"][1]["site"] = "no.such.site"
@@ -946,7 +946,7 @@ class GuaranteeSelection(Base):
         self.assert_fails(errors, "sites[soracloud.typed_role_feature]: a selector that can choose a guarantee is an open defect")
         self.assert_fails(errors, "sites[kaigi.policy_named_key]: selector must be one of")
         self.assert_fails(errors, "sites[voting.election_keys]: site (path and symbol) is required")
-        self.assert_fails(errors, "sites[exact12.qualification_singleton]: open_defect needs owner_task and what")
+        self.assert_fails(errors, "sites[exact12.envelope_digests]: open_defect needs owner_task and what")
         self.assert_fails(errors, "sites[axt.fee_sponsor_binding]: chooses_guarantee must say")
         self.assert_fails(errors, "use must be identity or export")
         self.assert_fails(errors, "an identity use names its site")
@@ -1750,7 +1750,7 @@ class PlainBallotAndRestoreGuards(Base):
             "world.axt_handle_counters": 10, "world.axt_source_transfer_replay_ledger": 4,
             "world.axt_asset_incarnations": 3, "world.axt_replay_ledger": 3,
             "world.axt_handle_budget_ledger": 1, "world.axt_spend_nonce_ledger": 1,
-            "world.privacy_consensus_policy": 1,
+            "world.privacy_consensus_policy": 1, "world.privacy_protocol_policies": 1,
         })
         refs = INVENTORY["admission_routes"]["restore"]["references"]
         for site in guards:
@@ -1951,11 +1951,12 @@ class SelectionEvidence(Base):
         overrides = replaced(path, old, old + " let inline_vk = proof.inline_verifying_key.clone();")
         self.assert_fails(run("check_guarantee_selection", overrides=overrides), f"`inline_key` occurs 2 times in {path}, recorded 0")
 
-    def test_qualification_site_records_the_binary_chain_and_roster_conditions(self) -> None:
-        site = next(site for site in INVENTORY["guarantee_selection"]["sites"] if site["id"] == "exact12.qualification_singleton")
-        for word in ("ABI hash", "syscall-list digest", "chain id", "validator roster"):
-            self.assertIn(word, site["what"])
-        self.assertEqual(len(site["registration_conditions"]), 3)
+    def test_retired_qualification_is_not_a_guarantee_selector(self) -> None:
+        self.assertNotIn("exact12.qualification_singleton", {site["id"] for site in INVENTORY["guarantee_selection"]["sites"]})
+        site = next(site for site in INVENTORY["guarantee_selection"]["sites"] if site["id"] == "exact12.envelope_digests")
+        self.assertIn("compiled", site["what"])
+        self.assertTrue(site["rejection_tests"])
+        self.assertNotIn("admission_gate", INVENTORY["exact12"])
 
     def test_constructed_profiles_are_asserted_by_a_default_test(self) -> None:
         profiles = INVENTORY["exact12"]["compiled_profiles"]
@@ -1974,7 +1975,7 @@ class SelectionEvidence(Base):
             protocol(inventory, "PqMaspStarkV1")["verifier"]["symbol"] = "fn verify_pq_masp_other_v1("
         self.assert_fails(run("check_exact12", edited(renamed)), "does not call the recorded verifier `verify_pq_masp_other_v1`")
         self.assertEqual(C.Checker(INVENTORY, REAL, None).dispatch_entries(),
-                         ["verify_privacy_envelope_after_compiled_activation_v1", "verify_privacy_envelope_v1"])
+                         ["verify_privacy_envelope_after_compiled_profile_v1", "verify_privacy_envelope_v1"])
 
     def test_a_relation_core_is_reached_from_its_verifier(self) -> None:
         def cut(inventory: dict) -> None:
@@ -2063,7 +2064,7 @@ class Maintenance(Base):
     def test_main_exit_codes(self) -> None:
         code, out, err, written = self.call_main(["--no-compile"], [])
         self.assertEqual((code, written), (0, []))
-        self.assertIn("93 operations (81 registered instructions)", out)
+        self.assertIn("91 operations (79 registered instructions)", out)
         code, out, err, _ = self.call_main(["--no-compile"], ["operations[x]: wrong", "routes[y]: wrong"])
         self.assertEqual(code, 1)
         self.assertIn("operations[x]: wrong", err)
@@ -2155,7 +2156,7 @@ class Exact12Roles(Base):
             self.assertTrue(row["missing"], row["role"])
             self.assertEqual(row["verification"] == "refused", "limitation" in row, row["role"])
             self.assertEqual(row["state_effects"] == "unreachable", row["verification"] == "refused", row["role"])
-        self.assertEqual({row["state_effects"] for row in rows}, {"gated", "none", "unreachable"})
+        self.assertEqual({row["state_effects"] for row in rows}, {"implemented", "none", "unreachable"})
         verify_only = [row["role"] for row in rows if row["effect_class"] == "VerifyOnly"]
         self.assertEqual(verify_only, ["VeRangeRange", "VegaCredentialPresentation", "JindoBatchedEvaluation",
                                        "BootleLanternPresentation"])
@@ -2203,29 +2204,35 @@ class Exact12Roles(Base):
     def test_state_effects_follow_verification_effect_class_and_the_admission_gate(self) -> None:
         def edit(inventory: dict) -> None:
             role(inventory, "VeRangeRange")["state_effects"] = "gated"
-            role(inventory, "OrchardActions")["state_effects"] = "implemented"
+            role(inventory, "OrchardActions")["state_effects"] = "gated"
             role(inventory, "ZkAceAuthorization")["state_effects"] = "gated"
             role(inventory, "JindoBatchedEvaluation")["ledger_effect"] = "OrchardActions"
         errors = run("check_action_roles", edited(edit))
         self.assert_fails(errors, "exact12.roles[VeRangeRange]: state_effects must be `none`")
-        self.assert_fails(errors, "exact12.roles[OrchardActions]: state_effects must be `gated`")
+        self.assert_fails(errors, "exact12.roles[OrchardActions]: state_effects must be `implemented`")
         self.assert_fails(errors, "exact12.roles[ZkAceAuthorization]: state_effects must be `unreachable`")
         self.assert_fails(errors, "exact12.roles[JindoBatchedEvaluation]: effect class `VerifyOnly` hands over ledger effect `None`")
 
-        # When the handler stops calling the admission gate (P.5), applied roles are `implemented`.
+        # Actual implementation/policy admission remains mandatory after retirement.
         text = source(PRIVACY_HANDLERS)
-        call = "let activation = *resolve_qualified_privacy_activation_v1("
+        call = "let admitted = resolve_admitted_privacy_protocol_v1("
         self.assertIn(call, text)
-        ungated = {PRIVACY_HANDLERS: text.replace(call, "let activation = *resolve_registered_activation(")}
-        errors = run("check_action_roles", overrides=ungated)
-        self.assert_fails(errors, "the handler no longer calls the admission gate; remove `gate_site`")
-        self.assert_fails(errors, "exact12.roles[OrchardActions]: state_effects must be `implemented`")
-        self.assertFalse(any("VeRangeRange" in error for error in errors), errors)
+        unchecked = {PRIVACY_HANDLERS: text.replace(call, "let admitted = unchecked_protocol(")}
+        self.assert_fails(run("check_action_roles", overrides=unchecked),
+                          "selected native implementation and policy admission must remain in the handler")
+        for field in ("gate_site", "admission_gate"):
+            def restored(inventory: dict) -> None:
+                target = inventory["exact12"]["roles"] if field == "gate_site" else inventory["exact12"]
+                target[field] = {"path": PRIVACY_HANDLERS, "symbol": "documentary_gate"}
+            self.assert_fails(run("check_action_roles", edited(restored)),
+                              "retired documentary admission-gate metadata is forbidden")
 
-        def without_gate(inventory: dict) -> None:
-            del inventory["exact12"]["roles"]["gate_site"]
-        self.assert_fails(run("check_action_roles", edited(without_gate)),
-                          "the handler calls the admission gate; record it as `gate_site`")
+    def test_protocol_effect_status_matches_its_roles_after_gate_retirement(self) -> None:
+        def edit(inventory: dict) -> None:
+            item = next(item for item in inventory["exact12"]["protocols"] if item["variant"] == "OrchardHalo2ActionsV1")
+            item["status"]["state_effects"] = "gated"
+        self.assert_fails(run("check_action_roles", edited(edit)),
+                          "protocol OrchardHalo2ActionsV1 records state effects `gated`")
 
     def test_delivery_needs_the_typed_registry_and_implemented_owner_tasks(self) -> None:
         def edit(inventory: dict) -> None:
@@ -2255,7 +2262,7 @@ class Exact12Roles(Base):
         errors = run("check_action_roles", edited(edit))
         self.assert_fails(errors, "exact12.roles: protocol VegaExistingCredentialZkV1 is recorded `implemented`")
         self.assert_fails(errors, "exact12.roles: protocol IrohaZkAmsV1 records ledger effects ['ZkAmsBatchAdmission']")
-        self.assert_fails(errors, "exact12.roles[OrchardActions]: the dispatch `verify_privacy_envelope_after_compiled_activation_v1` "
+        self.assert_fails(errors, "exact12.roles[OrchardActions]: the dispatch `verify_privacy_envelope_after_compiled_profile_v1` "
                                   "does not reach native verifier `verify_orchard_shortcut_v1`")
         self.assert_fails(errors, "exact12.roles[PqMaspTransition]: protocol_id gives")
         self.assert_fails(errors, "exact12.roles: protocol PqMaspStarkV1 has no role")
@@ -2341,7 +2348,7 @@ class Exact12SingleRoute(Base):
             struct = f"/// Second carrier.\npub struct SubmitSecondPrivacyProofV1 {{\n    /// Payload.\n    pub {field},\n}}"
             self.assert_fails(run(self.METHOD, overrides=appended(PRIVACY_INSTRUCTIONS, struct)),
                               f"{PRIVACY_INSTRUCTIONS}: `SubmitSecondPrivacyProofV1.{name}` carries an Exact12 envelope")
-        other = "/// Unrelated.\npub struct RegisterSomethingV1 {\n    /// Payload.\n    pub activation: PrivacyProtocolActivationRecordV1,\n}"
+        other = "/// Unrelated.\npub struct RegisterSomethingV1 {\n    /// Payload.\n    pub policy: PrivacyProtocolPolicyV1,\n}"
         self.assert_clean(run(self.METHOD, overrides=appended(PRIVACY_INSTRUCTIONS, other)))
         overrides = replaced(PRIVACY_INSTRUCTIONS, "pub envelope: PrivacyProofEnvelopeV1,", "pub envelope: PrivacyEnvelopeBytesV1,")
         self.assert_fails(run(self.METHOD, overrides=overrides),
@@ -2438,10 +2445,10 @@ class Exact12SingleRoute(Base):
 
         def edit(inventory: dict) -> None:
             effects = inventory["exact12"]["single_route"]["effects"]
-            effects["ledger_consumers"][1]["use"] = "ledger_application"
+            effects["ledger_consumers"][2]["use"] = "ledger_application"
             effects["matchers"].append({"path": CORE_PRIVACY, "use": "elsewhere"})
         errors = run(self.METHOD, edited(edit))
-        self.assert_fails(errors, "exactly the handler applies a verified effect")
+        self.assert_fails(errors, "exactly the recorded role owners apply verified effects")
         self.assert_fails(errors, f"{CORE_PRIVACY} is a recorded matcher and names no variant")
         self.assert_fails(errors, f"matchers[{CORE_PRIVACY}].use must be one of")
 
@@ -2588,10 +2595,10 @@ class Exact12RouteReaders(Base):
     def test_handler_gate_is_read_from_the_impl_block(self) -> None:
         checker = C.Checker(INVENTORY, C.Tree())
         entry = INVENTORY["exact12"]["single_route"]["handler"]["entry"]
-        self.assertTrue(checker.handler_is_gated(entry, "resolve_qualified_privacy_activation_v1"))
+        self.assertTrue(checker.handler_is_gated(entry, "resolve_admitted_privacy_protocol_v1"))
         self.assertFalse(checker.handler_is_gated(entry, "no_such_gate"))
         self.assertFalse(checker.handler_is_gated({"path": PRIVACY_HANDLERS, "symbol": "impl Execute for NoSuchInstructionV1"},
-                                                  "resolve_qualified_privacy_activation_v1"))
+                                                  "resolve_admitted_privacy_protocol_v1"))
 
     def test_a_cargo_target_with_required_features_gates_its_tests(self) -> None:
         self.assertEqual(C.target_required_feature(REAL, "iroha_core", "src/bin/privacy_exact12_action_driver.rs"),
@@ -2654,7 +2661,7 @@ class OriginalInvocationEntry(Base):
         for old, new, error in (
             ("downcast_ref::<BootstrapPrivacyPgcAccountsV1>()", "downcast_ref::<SubmitPrivacyProofV1>()", "exact instruction and entry"),
             ("return privacy::execute_pgc_bootstrap(bootstrap, authority, state, invocation);", "return other(bootstrap, authority, state, invocation);", "exact instruction and entry"),
-            ("if let Some(invocation) = invocation {", "if let Some(invocation) = fabricated {", "dispatch_guard"),
+            ("Some(AttachmentExecution::Direct(invocation)) => {\n            if let Some(bootstrap)", "Some(AttachmentExecution::Direct(fabricated)) => {\n            if let Some(bootstrap)", "dispatch_guard"),
         ):
             with self.subTest(old=old):
                 self.assert_fails(self.entry_errors(replaced(PGC_DIRECT, old, new)), error)
@@ -2667,9 +2674,9 @@ class OriginalInvocationEntry(Base):
         )), "context_parameter")
 
     def test_comments_cannot_supply_the_dispatch_guard_or_context_parameter(self) -> None:
-        guard = "if let Some(invocation) = invocation {"
+        guard = "Some(AttachmentExecution::Direct(invocation)) => {\n            if let Some(bootstrap)"
         self.assert_fails(self.entry_errors(replaced(
-            PGC_DIRECT, guard, "/* " + guard + " */ if let Some(invocation) = forged {",
+            PGC_DIRECT, guard, "/* " + guard + " */ Some(AttachmentExecution::Direct(forged)) => {\n            if let Some(bootstrap)",
         )), "dispatch_guard")
         parameter = "invocation: &mut crate::executor::attachment_custody::Invocation<'_, '_>,"
         self.assert_fails(self.entry_errors(replaced(

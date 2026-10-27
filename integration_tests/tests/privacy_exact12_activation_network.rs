@@ -1,25 +1,20 @@
-//! Four-validator governance lifecycle coverage for the complete canonical
-//! first-release exact-12 privacy registry. Eight executable profiles retain
-//! positive governance coverage; ZK-ACE, ZK-AMS, Vega, and ZK-X509 remain
-//! explicitly unavailable and fail closed on every validator.
+//! Four-validator canonical privacy catalog and ordinary resource-policy coverage.
+//! Available native profiles require no protocol registration. Unavailable implementations
+//! retain their exact diagnostics. Authorized limit decreases and increases become effective
+//! at committed block boundaries, survive cold restart, and preserve the native profiles.
 //!
-//! This scenario deliberately does not construct privacy proofs. The isolated
-//! release-evidence runner owns native-engine proof coverage; this test proves
-//! that consensus persists, activates, replays, and recovers the exact
-//! compiled governance bindings identically on all validators.
+//! This scenario does not construct valid privacy proofs. Native proof/action scenarios own
+//! that coverage; the generic X509 wire is explicitly rejected in favor of signed attachments.
 //!
-//! Release gate:
-//! ```text
-//! TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 \
-//! IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests \
-//! --test network_functional --features zk-stark \
-//! privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart \
-//! -- --exact --nocapture --test-threads=1
-//! ```
+//! Run with `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1
+//! IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests
+//! --test network_functional --features zk-stark
+//! privacy_exact12_activation_network::canonical_exact12_policy_updates_survive_four_peer_replay_and_restart
+//! -- --exact --nocapture --test-threads=1`.
 use super::privacy_exact12_network_support::{privacy_capabilities, wait_for_transaction_on_peers};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::blocking::Client;
+use iroha::{blocking::Client, client::FeeQuoteRequest};
 use iroha_core_privacy::privacy_profiles::{
     CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
     compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
@@ -28,27 +23,27 @@ use iroha_data_model::{
     Level,
     isi::{
         Grant, InstructionBox, Log,
-        privacy::{
-            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
-        },
+        privacy::{SchedulePrivacyProtocolLimitsUpdateV1, SubmitPrivacyProofV1},
     },
     permission::Permission,
     privacy::{
-        PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+        JindoLimitsV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
-        PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
+        PrivacyProofEnvelopeV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, privacy_exact12_fixture_bundle_v1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
+    transaction::{
+        FeePaymentIntent, SignedTransaction, TransactionBuilder,
+        signed::PrivacyTransactionIntentErrorV1,
+    },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use std::time::Duration;
 use tokio::time::{Instant, sleep, timeout};
-const TEST_NAME: &str =
-    "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart";
+const TEST_NAME: &str = "canonical_exact12_policy_updates_survive_four_peer_replay_and_restart";
 const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(60);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -72,19 +67,18 @@ const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 4] = [
 struct ExpectedProtocolState {
     protocol_id: PrivacyProtocolIdV1,
     compiled_profile: PrivacyCompiledProfileResultV1,
-    activation: Option<PrivacyProtocolActivationRecordV1>,
+    policy: Option<PrivacyProtocolPolicyV1>,
 }
 fn is_expected_unavailable(protocol_id: PrivacyProtocolIdV1) -> bool {
     UNAVAILABLE_PROTOCOLS.contains(&protocol_id)
 }
-// Pin exact diagnostics: incomplete X509 geometry is a profile initialization
-// failure, not an available engine or a reason to weaken its production gate.
+// Pin actual implementation diagnostics; no resource policy can complete a missing relation.
 fn expected_unavailable_reason(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Option<PrivacyCompiledProfileUnavailableReasonV1> {
     match protocol_id {
         ZK_X509_PROTOCOL => {
-            Some(PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed)
+            Some(PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete)
         }
         ZK_ACE_PROTOCOL | ZK_AMS_PROTOCOL | VEGA_PROTOCOL => {
             Some(PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable)
@@ -97,7 +91,7 @@ fn expected_unavailable_error(
 ) -> Option<CompiledPrivacyProfileErrorV1> {
     match protocol_id {
         ZK_X509_PROTOCOL => {
-            Some(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })
+            Some(CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete { protocol_id })
         }
         ZK_ACE_PROTOCOL | ZK_AMS_PROTOCOL | VEGA_PROTOCOL => {
             Some(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
@@ -159,18 +153,6 @@ fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
         .chain()
         .any(|cause| cause.to_string().to_ascii_lowercase().contains(&needle))
 }
-fn is_exact_replay_error(error: &eyre::Report) -> bool {
-    [
-        "prtry:already_committed",
-        "prtry:already_enqueued",
-        "already_committed",
-        "already_enqueued",
-        "transaction already committed",
-        "transaction already present in the queue",
-    ]
-    .iter()
-    .any(|needle| error_chain_contains(error, needle))
-}
 fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
     ensure!(
         PrivacyProtocolIdV1::COUNT == 12,
@@ -231,22 +213,22 @@ fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
 }
 fn expected_states(
     profiles: &[CompiledPrivacyProfileV1],
-    activations: impl IntoIterator<Item = Option<PrivacyProtocolActivationRecordV1>>,
+    policies: impl IntoIterator<Item = Option<PrivacyProtocolPolicyV1>>,
 ) -> Result<Vec<ExpectedProtocolState>> {
-    let activations = activations.into_iter().collect::<Vec<_>>();
+    let policies = policies.into_iter().collect::<Vec<_>>();
     ensure!(
         profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
-            && activations.len() == profiles.len(),
-        "expected-state construction requires exactly {} available profiles and activations",
+            && policies.len() == profiles.len(),
+        "expected-state construction requires exactly {} available profiles and policies",
         PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
     );
-    let mut available = profiles.iter().copied().zip(activations).peekable();
+    let mut available = profiles.iter().copied().zip(policies).peekable();
     let mut expected = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     for protocol_id in PrivacyProtocolIdV1::ALL {
         let compiled_profile = compiled_privacy_profile_snapshot_result_v1(protocol_id);
-        let activation = match compiled_profile {
+        let policy = match compiled_profile {
             PrivacyCompiledProfileResultV1::Available(snapshot) => {
-                let Some((compiled, activation)) = available.next() else {
+                let Some((compiled, policy)) = available.next() else {
                     return Err(eyre!(
                         "compiled profile list omitted available protocol `{}`",
                         protocol_id.canonical_label()
@@ -258,7 +240,7 @@ fn expected_states(
                     "compiled binding/order drifted for available protocol `{}`",
                     protocol_id.canonical_label()
                 );
-                activation
+                policy
             }
             PrivacyCompiledProfileResultV1::Unavailable(reason)
                 if Some(reason) == expected_unavailable_reason(protocol_id) =>
@@ -275,7 +257,7 @@ fn expected_states(
         expected.push(ExpectedProtocolState {
             protocol_id,
             compiled_profile,
-            activation,
+            policy,
         });
     }
     ensure!(
@@ -324,11 +306,11 @@ fn assert_exact12_snapshot(
             row.compiled_profile
         );
         ensure!(
-            row.activation == state.activation,
-            "{context}: governed lifecycle/binding drifted for `{}`: expected {:?}, got {:?}",
+            row.policy == state.policy,
+            "{context}: committed resource policy drifted for `{}`: expected {:?}, got {:?}",
             protocol_id.canonical_label(),
-            state.activation,
-            row.activation
+            state.policy,
+            row.policy
         );
     }
     Ok(())
@@ -404,44 +386,71 @@ async fn next_execution_height(client: &Client) -> Result<u64> {
         .checked_add(EXECUTION_CARRIER_BLOCKS)
         .ok_or_else(|| eyre!("native transaction privacy-governance execution height overflowed"))
 }
-fn proposed_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 { proposed_at_height },
-    ))
-}
-fn instruction_transaction(
+async fn instruction_transaction(
     client: &Client,
     instruction: impl Into<InstructionBox>,
-) -> SignedTransaction {
-    instructions_transaction(client, vec![instruction.into()])
+) -> Result<SignedTransaction> {
+    instructions_transaction(client, vec![instruction.into()]).await
 }
-fn instructions_transaction(
+async fn instructions_transaction(
     client: &Client,
     instructions: Vec<InstructionBox>,
-) -> SignedTransaction {
-    {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                instructions,
-                no_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction")
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        no_fee(),
+        Metadata::default(),
+    ))?;
+    // The default genesis charges ordinary instructions. Quote the same payload before
+    // signing so negative policy probes reach their intended validator, not a missing fee cap.
+    let quote = account
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await
+        .wrap_err("quote exact network-test payload")?;
+    quote
+        .validate_for_draft(&payload)
+        .map_err(|error| eyre!(error))?;
+    payload.fee_payment = quote.intent.clone();
+    quote
+        .validate_for_signed_payload(&payload)
+        .map_err(|error| eyre!(error))?;
+    account.sign_transaction(payload).map_err(Into::into)
 }
-fn intent_bound_privacy_transaction(
+async fn unavailable_protocol_transaction(
     client: &Client,
     mut envelope: PrivacyProofEnvelopeV1,
 ) -> Result<SignedTransaction> {
     // Keep one exact client-owned payload while deriving the self-referential fields. Building a
     // second client transaction would change its time/nonce and stale the resulting intent.
-    let draft = instruction_transaction(client, SubmitPrivacyProofV1::new(envelope.clone()));
+    envelope.statement.context_mut().network_id = *client.client().network_id();
+    envelope.statement_digest = envelope
+        .statement
+        .digest()
+        .wrap_err("bind unavailable-protocol fixture to the actual network")?;
+    let draft =
+        instruction_transaction(client, SubmitPrivacyProofV1::new(envelope.clone())).await?;
+    bind_unavailable_fixture_transaction(draft, envelope, client.client().key_pair().private_key())
+}
+
+fn bind_unavailable_fixture_transaction(
+    draft: SignedTransaction,
+    mut envelope: PrivacyProofEnvelopeV1,
+    private_key: &iroha_crypto::PrivateKey,
+) -> Result<SignedTransaction> {
     let payload = draft.payload().clone();
+    if envelope.protocol_id == ZK_X509_PROTOCOL {
+        // This deliberate invalid-wire probe must reach the node. Generic X509 has no
+        // valid generic intent: the signed payload is rejected before native ISI execution.
+        ensure!(
+            matches!(
+                payload.privacy_transaction_intent_binding_if_present_v1(),
+                Err(PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment)
+            ),
+            "generic X509 fixture lost its dedicated signed-attachment refusal"
+        );
+        return Ok(draft);
+    }
     let intent = payload
         .privacy_transaction_intent_digest_v1()
         .wrap_err("derive unavailable-protocol transaction intent")?;
@@ -453,7 +462,7 @@ fn intent_bound_privacy_transaction(
     let transaction = TransactionBuilder::from_payload(payload)
         .wrap_err("reopen unavailable-protocol payload")?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.client().key_pair().private_key())
+        .try_sign(private_key)
         .wrap_err("sign unavailable-protocol transaction")?;
     ensure!(
         transaction
@@ -465,6 +474,54 @@ fn intent_bound_privacy_transaction(
     );
     Ok(transaction)
 }
+#[test]
+fn unavailable_fixture_transactions_preserve_native_admission_boundaries() -> Result<()> {
+    let bundle = privacy_exact12_fixture_bundle_v1()?;
+    for protocol_id in UNAVAILABLE_PROTOCOLS {
+        let row = bundle
+            .rows
+            .iter()
+            .find(|row| row.protocol_id == protocol_id)
+            .expect("exact12 fixture includes every protocol");
+        let envelope: PrivacyProofEnvelopeV1 = norito::decode_from_bytes(&row.envelope_norito)?;
+        let network_id = envelope.statement.context().network_id;
+        let mut builder = TransactionBuilder::new(network_id, ALICE_ID.clone(), no_fee())
+            .with_instructions([SubmitPrivacyProofV1::new(envelope.clone())]);
+        builder.set_ttl(Duration::from_secs(3_600));
+        let draft = builder.try_sign(ALICE_KEYPAIR.private_key())?;
+        let draft_hash = draft.hash();
+        let draft_fee = draft.fee_payment_intent().clone();
+        let transaction =
+            bind_unavailable_fixture_transaction(draft, envelope, ALICE_KEYPAIR.private_key())?;
+        transaction.verify_signature()?;
+        assert_eq!(transaction.fee_payment_intent(), &draft_fee);
+        assert_eq!(transaction.payload().network_id(), Some(&network_id));
+        if protocol_id == ZK_X509_PROTOCOL {
+            assert_eq!(
+                transaction.hash(),
+                draft_hash,
+                "retain the exact invalid wire probe"
+            );
+            assert!(matches!(
+                transaction
+                    .payload()
+                    .privacy_transaction_intent_binding_if_present_v1(),
+                Err(PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment)
+            ));
+        } else {
+            transaction
+                .payload()
+                .validate_privacy_transaction_intent_binding_v1()?;
+            assert_ne!(
+                transaction.hash(),
+                draft_hash,
+                "bind the fixture to its signed intent"
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn submit_signed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
@@ -485,7 +542,7 @@ async fn submit_instruction(
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
-    let transaction = instruction_transaction(client, instruction);
+    let transaction = instruction_transaction(client, instruction).await?;
     submit_signed_transaction(client, &transaction, context).await
 }
 fn assert_unreleased_profiles_unavailable(
@@ -522,10 +579,10 @@ fn assert_unreleased_profiles_unavailable(
             row.compiled_profile
         );
         ensure!(
-            row.activation.is_none(),
-            "{context}: unavailable protocol `{}` unexpectedly has an activation: {:?}",
+            row.policy.is_none(),
+            "{context}: unavailable protocol `{}` unexpectedly has a policy: {:?}",
             protocol_id.canonical_label(),
-            row.activation
+            row.policy
         );
     }
     Ok(())
@@ -639,9 +696,13 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
                 );
         });
     let context = stringify!(all_unreleased_profiles_fail_closed_across_four_peer_restart);
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| {
+            eyre!(
+                "unavailable-profile coverage requires four real validators; sandbox did not start"
+            )
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
@@ -683,7 +744,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
                         protocol_id.canonical_label()
                     )
                 })?;
-            let action = intent_bound_privacy_transaction(&client, envelope)?;
+            let action = unavailable_protocol_transaction(&client, envelope).await?;
             let action_error = submit_signed_transaction(
                 &client,
                 &action,
@@ -697,7 +758,11 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
             ensure!(
                 error_chain_contains(
                     &action_error,
-                    "production qualification is not registered"
+                    &if protocol_id == ZK_X509_PROTOCOL {
+                        PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment.to_string()
+                    } else {
+                        expected_unavailable_error(protocol_id).expect("pinned reason").to_string()
+                    }
                 ),
                 "production action for `{}` rejected for wrong reason: {action_error:?}",
                 protocol_id.canonical_label()
@@ -710,7 +775,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
         wait_for_identical_unreleased_profiles(
             &all_clients,
             pre_restart_height,
-            "unavailable-profile activation and action rejections must preserve closed state",
+            "unavailable-profile policy and action rejections must preserve closed state",
         )
         .await?;
         let restart_index = all_clients.len() - 1;
@@ -726,7 +791,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
                 Level::INFO,
                 "unavailable-profile restart sentinel".to_owned(),
             ),
-        );
+        ).await?;
         submit_signed_transaction(
             &client,
             &sentinel,
@@ -778,7 +843,11 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
             ensure!(
                 error_chain_contains(
                     &replay_error,
-                    "production qualification is not registered"
+                    &if *protocol_id == ZK_X509_PROTOCOL {
+                        PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment.to_string()
+                    } else {
+                        expected_unavailable_error(*protocol_id).expect("pinned reason").to_string()
+                    }
                 ),
                 "post-restart action for `{}` rejected for wrong reason: {replay_error:?}",
                 protocol_id.canonical_label()
@@ -793,15 +862,108 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
     network.shutdown().await;
     result
 }
-#[test]
-fn canonical_exact12_governance_survives_four_peer_activation_replay_and_restart() -> Result<()> {
-    super::privacy_exact12_network_support::run_network_case(
-        "canonical_exact12_governance_survives_four_peer_activation_replay_and_restart",
-        canonical_exact12_governance_survives_four_peer_activation_replay_and_restart_impl,
+
+fn jindo_limits(count: u32) -> PrivacyProtocolLimitsV1 {
+    PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+        max_polynomial_count: count,
+    })
+}
+
+fn expected_with_jindo_policy(
+    profiles: &[CompiledPrivacyProfileV1],
+    policy: Option<PrivacyProtocolPolicyV1>,
+) -> Result<Vec<ExpectedProtocolState>> {
+    expected_states(
+        profiles,
+        profiles.iter().map(|profile| {
+            if profile.protocol_id == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 {
+                policy
+            } else {
+                None
+            }
+        }),
     )
 }
-async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_restart_impl()
--> Result<()> {
+
+async fn advance_policy_height(client: &Client, target: u64) -> Result<()> {
+    // Idle chains make no blocks: every step is a real signed ordinary transaction.
+    for _ in 0..16 {
+        let height = privacy_capabilities(client).await?.committed_height;
+        if height == target {
+            return Ok(());
+        }
+        ensure!(
+            height < target,
+            "policy update overshot exact target height {target}"
+        );
+        submit_instruction(
+            client,
+            Log::new(
+                Level::INFO,
+                format!("privacy-policy carrier {} for {target}", height + 1),
+            ),
+            "commit ordinary policy-boundary carrier",
+        )
+        .await?;
+    }
+    Err(eyre!(
+        "policy boundary did not reach {target} within 16 signed carriers"
+    ))
+}
+
+#[test]
+fn canonical_policy_expectations_preserve_profiles_and_future_limits() {
+    let profiles = compiled_available_profiles().expect("exact native catalog");
+    let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+    let defaults = PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id);
+    let policy = PrivacyProtocolPolicyV1 {
+        protocol_id,
+        current_limits: defaults,
+        pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height: 2,
+            effective_at_height: 10,
+            next_limits: jindo_limits(1),
+        }),
+    };
+    policy
+        .validate_at_committed_height(2)
+        .expect("ordinary future decrease");
+    let expected = expected_with_jindo_policy(&profiles, Some(policy)).unwrap();
+    assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
+    for state in expected {
+        assert_eq!(
+            state.compiled_profile,
+            compiled_privacy_profile_snapshot_result_v1(state.protocol_id)
+        );
+        assert_eq!(
+            state.policy,
+            (state.protocol_id == protocol_id).then_some(policy)
+        );
+    }
+    let increased = PrivacyProtocolPolicyV1 {
+        current_limits: jindo_limits(1),
+        pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height: 10,
+            effective_at_height: 13,
+            next_limits: defaults,
+        }),
+        ..policy
+    };
+    increased
+        .validate_at_committed_height(10)
+        .expect("ordinary future increase");
+}
+
+#[test]
+fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart() -> Result<()> {
+    super::privacy_exact12_network_support::run_network_case(
+        TEST_NAME,
+        canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_impl,
+    )
+}
+
+async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_impl() -> Result<()>
+{
     require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
     let profiles = compiled_available_profiles()?;
@@ -810,19 +972,26 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         .with_auto_populated_trusted_peers()
         .with_block_cadence(TEST_BLOCK_CADENCE)
         .with_permissioned_consensus()
+        // Alice remains unauthorized until an existing holder delegates this exact token.
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanEnactGovernance),
+            BOB_ID.clone(),
+        ))
         .with_config_layer(|layer| {
             layer.write(
                 ["nexus", "storage", "local_budget_bytes"],
                 TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
             );
         });
-    let Some(network) = sandbox::start_network_async_or_skip(builder, TEST_NAME).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, TEST_NAME)
+        .await?
+        .ok_or_else(|| {
+            eyre!("policy coverage requires four real validators; sandbox did not start")
+        })?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
-            "exact-12 lifecycle test requires exactly four trusted validators"
+            "policy test requires exactly four validators"
         );
         let all_clients = network
             .peers()
@@ -830,405 +999,319 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let client = all_clients[0].clone();
-        let absent = expected_states(&profiles, std::iter::repeat_n(None, profiles.len()))?;
-        let initial_height = privacy_capabilities(&client).await
-            .wrap_err("query initial exact-12 governance state")?
-            .committed_height;
-        let initial_snapshots = wait_for_identical_exact12_snapshots(
+        let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+        let defaults = PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id);
+        ensure!(
+            defaults != jindo_limits(1),
+            "Jindo fixture requires a nontrivial safe decrease"
+        );
+        let absent = expected_with_jindo_policy(&profiles, None)?;
+        let initial_height = privacy_capabilities(&client).await?.committed_height;
+        let initial = wait_for_identical_exact12_snapshots(
             &all_clients,
             initial_height,
             &absent,
-            "available profiles must begin inactive while ZK-ACE, ZK-AMS, Vega, and ZK-X509 remain unavailable",
+            "canonical profiles are available without registered protocol policies",
         )
         .await?;
-        let immutable_consensus_policy = initial_snapshots[0].consensus_policy;
-        let unauthorized_height = next_execution_height(&client).await?;
-        let unauthorized_error = submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(proposed_activation(
-                profiles[0],
-                unauthorized_height,
-            )),
-            "privacy activation registration without CanEnactGovernance must reject",
-        )
-        .await
-        .expect_err("unauthorized exact-12 activation registration was accepted");
-        ensure!(
-            error_chain_contains(&unauthorized_error, "not permitted: CanEnactGovernance"),
-            "unauthorized activation registration rejected for wrong reason: \
-             {unauthorized_error:?}"
-        );
-        let post_unauthorized_height = privacy_capabilities(&client).await
-            .wrap_err("query exact-12 state after unauthorized registration rejection")?
-            .committed_height;
-        wait_for_identical_exact12_snapshots(
-            &all_clients,
-            post_unauthorized_height,
-            &absent,
-            "unauthorized registration rejection must not register any available activation",
-        )
-        .await?;
-        submit_instruction(
-            &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account().clone()),
-            "grant CanEnactGovernance for exact-12 activation",
-        )
-        .await?;
-        let rejected_height = next_execution_height(&client).await?;
-        let forged_activation_height = rejected_height.checked_add(1)
-            .ok_or_else(|| eyre!("forged activation height overflowed"))?;
-        let rejected_transaction = instructions_transaction(&client, vec![
-            RegisterPrivacyProtocolActivationV1::new(proposed_activation(
-                profiles[0], rejected_height,
-            )).into(),
-            TransitionPrivacyProtocolLifecycleV1::new(
-                profiles[0].protocol_id,
-                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                    proposed_at_height: rejected_height,
-                    activated_at_height: forged_activation_height,
-                    state_since_height: forged_activation_height,
-                }),
-            ).into(),
-        ]);
-        let rejected_error = submit_signed_transaction(
-            &client, &rejected_transaction,
-            "same-transaction activation with a forged effective height must reject",
-        ).await.expect_err("future-dated explicit activation was accepted");
-        ensure!(error_chain_contains(&rejected_error, "differs from current height"),
-            "forged activation height rejected for wrong reason: {rejected_error:?}");
-        let post_rejection_height = privacy_capabilities(&client).await
-            .wrap_err("query state after rejected registration plus activation")?
-            .committed_height;
-        wait_for_identical_exact12_snapshots(
-            &all_clients, post_rejection_height, &absent,
-            "failed activation must roll back its preceding registration on every peer",
-        ).await?;
-        let tampered_height = next_execution_height(&client).await?;
-        let mut substituted = proposed_activation(profiles[0], tampered_height);
-        ensure!(
-            profiles[0].verifier_digest != profiles[1].verifier_digest,
-            "cross-profile substitution fixture requires distinct verifier digests"
-        );
-        substituted.verifier_digest = profiles[1].verifier_digest;
-        let tampered_error = submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(substituted),
-            "cross-profile verifier binding substitution must reject",
-        )
-        .await
-        .expect_err("cross-profile exact-12 activation substitution was accepted");
-        ensure!(
-            error_chain_contains(&tampered_error, "does not match compiled native profile"),
-            "cross-profile activation substitution rejected for wrong reason: \
-             {tampered_error:?}"
-        );
-        let post_tamper_height = privacy_capabilities(&client).await
-            .wrap_err("query exact-12 state after substitution rejection")?
-            .committed_height;
-        wait_for_identical_exact12_snapshots(
-            &all_clients,
-            post_tamper_height,
-            &absent,
-            "rejected profile substitution must not register any activation",
-        )
-        .await?;
-        let first_registration_height = next_execution_height(&client).await?;
-        let registration_span = u64::try_from(profiles.len() - 1)
-            .expect("available profile count fits u64")
-            .checked_mul(EXECUTION_CARRIER_BLOCKS)
-            .ok_or_else(|| eyre!("available-profile registration span overflowed"))?;
-        let final_registration_height = first_registration_height
-            .checked_add(registration_span)
-            .ok_or_else(|| eyre!("final available-profile registration height overflowed"))?;
-        let mut proposed_records = Vec::with_capacity(profiles.len());
-        let mut first_proposal_transaction = None;
-        for (index, compiled) in profiles.iter().copied().enumerate() {
-            let registration_offset = u64::try_from(index)
-                .expect("exact-12 index fits u64")
-                .checked_mul(EXECUTION_CARRIER_BLOCKS)
-                .ok_or_else(|| eyre!("exact-12 registration offset overflowed"))?;
-            let expected_height = first_registration_height
-                .checked_add(registration_offset)
-                .ok_or_else(|| eyre!("exact-12 proposal height overflowed"))?;
-            let observed_height = next_execution_height(&client).await?;
-            ensure!(
-                observed_height == expected_height,
-                "proposal `{}` would land at height {observed_height}, expected deterministic \
-                 height {expected_height}",
-                compiled.protocol_id.canonical_label()
-            );
-            let proposed = proposed_activation(compiled, expected_height);
-            // Normal activation is one signed transaction. Other rows intentionally remain
-            // pending to exercise durable pending governance and restart below.
-            let mut instructions = vec![RegisterPrivacyProtocolActivationV1::new(proposed).into()];
-            if index == 0 {
-                instructions.push(TransitionPrivacyProtocolLifecycleV1::new(
-                    compiled.protocol_id,
-                    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                        proposed_at_height: expected_height,
-                        activated_at_height: expected_height,
-                        state_since_height: expected_height,
-                    }),
-                ).into());
+        let immutable_consensus_policy = initial[0].consensus_policy;
+        for snapshot in &initial {
+            for row in &snapshot.protocols {
+                ensure!(
+                    row.is_network_available()
+                        == matches!(
+                            row.compiled_profile,
+                            PrivacyCompiledProfileResultV1::Available(_)
+                        ),
+                    "a documentary prerequisite changed native availability"
+                );
             }
-            let transaction = instructions_transaction(&client, instructions);
-            let submitted_hash = submit_signed_transaction(
-                &client,
-                &transaction,
-                &format!(
-                    "register exact compiled activation for `{}`",
-                    compiled.protocol_id.canonical_label()
+        }
+        let unauthorized = submit_instruction(
+            &client,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
+                protocol_id,
+                next_execution_height(&client).await? + 4,
+                jindo_limits(1),
+            ),
+            "ordinary resource update still requires CanEnactGovernance",
+        )
+        .await
+        .expect_err("unauthorized policy update was accepted");
+        ensure!(
+            error_chain_contains(&unauthorized, "not permitted: CanEnactGovernance"),
+            "unauthorized update failed for wrong reason: {unauthorized:?}"
+        );
+        wait_for_identical_exact12_snapshots(
+            &all_clients,
+            initial_height,
+            &absent,
+            "unauthorized update must not create a policy",
+        )
+        .await?;
+        let governor = bounded_client(
+            network.peers()[0].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone()),
+        );
+        submit_instruction(
+            &governor,
+            Grant::account_permission(
+                Permission::from(CanEnactGovernance),
+                client.client().account().clone(),
+            ),
+            "grant ordinary resource-policy permission",
+        )
+        .await?;
+
+        // Each invalid update is its own signed transaction. No test relies on exceeding
+        // the unchanged per-transaction privacy action limit to simulate rollback.
+        for (limits, future) in [
+            (jindo_limits(0), true),
+            (jindo_limits(u32::MAX), true),
+            (defaults, true),
+            (
+                PrivacyProtocolLimitsV1::canonical_default_v1(
+                    PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
                 ),
+                true,
+            ),
+            (jindo_limits(1), false),
+        ] {
+            let incoming = next_execution_height(&client).await?;
+            let effective = if future { incoming + 4 } else { incoming };
+            let error = submit_instruction(
+                &client,
+                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, effective, limits),
+                "invalid limits, no-op, foreign tag or current-height schedule must reject",
+            )
+            .await
+            .expect_err("invalid policy update was accepted");
+            ensure!(
+                error_chain_contains(&error, "privacy protocol-limit update rejected"),
+                "policy failed outside its semantic validator: {error:?}"
+            );
+            let after_rejection = privacy_capabilities(&client).await?.committed_height;
+            wait_for_identical_exact12_snapshots(
+                &all_clients,
+                after_rejection,
+                &absent,
+                "invalid update must leave every profile and absent policy unchanged",
             )
             .await?;
-            ensure!(
-                *submitted_hash.as_ref() == *transaction.hash().as_ref(),
-                "submitted proposal hash drifted for `{}`",
-                compiled.protocol_id.canonical_label()
-            );
-            if index == 0 {
-                first_proposal_transaction = Some(transaction);
-            }
-            proposed_records.push(proposed);
         }
-        ensure!(
-            privacy_capabilities(&client).await
-                .wrap_err("query height after exact-12 proposals")?
-                .committed_height
-                == final_registration_height,
-            "the available-profile proposals did not occupy their deterministic native transaction execution heights"
-        );
-        let mut registered_records = proposed_records.clone();
-        registered_records[0].lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: first_registration_height,
-            activated_at_height: first_registration_height,
-            state_since_height: first_registration_height,
-        });
-        let proposed = expected_states(&profiles, registered_records.iter().copied().map(Some))?;
-        let proposed_snapshots = wait_for_identical_exact12_snapshots(
-            &all_clients,
-            final_registration_height,
-            &proposed,
-            "first profile activated in its registration transaction; other proposals stay pending",
+
+        let scheduled = next_execution_height(&client).await?;
+        let effective = scheduled
+            .checked_add(8)
+            .ok_or_else(|| eyre!("policy height overflow"))?;
+        let decrease = PrivacyProtocolPolicyV1 {
+            protocol_id,
+            current_limits: defaults,
+            pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: scheduled,
+                effective_at_height: effective,
+                next_limits: jindo_limits(1),
+            }),
+        };
+        let schedule_transaction = instruction_transaction(
+            &client,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, effective, jindo_limits(1)),
+        )
+        .await?;
+        let accepted_hash = submit_signed_transaction(
+            &client,
+            &schedule_transaction,
+            "schedule bounded limit decrease without registration",
         )
         .await?;
         ensure!(
-            proposed_snapshots.iter().all(|snapshot| snapshot
-                .protocols
-                .iter()
-                .filter(|row| !is_expected_unavailable(row.protocol_id)
-                    && row.protocol_id != profiles[0].protocol_id)
-                .all(|row| row
-                    .activation
-                    .is_some_and(|record| !record.lifecycle.is_active()))),
-            "an intentionally pending proposal was incorrectly exposed as Active"
+            *accepted_hash.as_ref() == *schedule_transaction.hash().as_ref(),
+            "signed update hash changed"
         );
-        let last_pre_activation_height = final_registration_height;
+        let pending = expected_with_jindo_policy(&profiles, Some(decrease))?;
+        wait_for_identical_exact12_snapshots(
+            &all_clients,
+            scheduled,
+            &pending,
+            "future update must preserve current default limits",
+        )
+        .await?;
+        let duplicate = instruction_transaction(
+            &client,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, effective + 1, jindo_limits(1)),
+        )
+        .await?;
+        ensure!(
+            duplicate.hash() != schedule_transaction.hash(),
+            "fresh duplicate must have a distinct intent"
+        );
+        let duplicate_error =
+            submit_signed_transaction(&client, &duplicate, "second pending update must reject")
+                .await
+                .expect_err("pending policy overwritten");
+        ensure!(
+            error_chain_contains(&duplicate_error, "already has a pending limit update"),
+            "pending collision failed for wrong reason: {duplicate_error:?}"
+        );
+        let stopped_height = privacy_capabilities(&client).await?.committed_height;
+        ensure!(
+            stopped_height < effective,
+            "pending fixture reached its boundary too early"
+        );
+        let stopped = wait_for_identical_exact12_snapshots(
+            &all_clients,
+            stopped_height,
+            &pending,
+            "pending-update rejection must preserve complete state",
+        )
+        .await?;
+        ensure!(
+            stopped
+                .iter()
+                .all(|s| s.consensus_policy == immutable_consensus_policy),
+            "protocol scheduling changed global consensus limits"
+        );
+        // Torii acknowledges an authenticated committed replay idempotently; the
+        // same hash and unchanged finalized state prove it was not executed again.
+        let replay_hash = submit_signed_transaction(
+            &client,
+            &schedule_transaction,
+            "exact committed schedule replay must acknowledge its existing result",
+        )
+        .await?;
+        ensure!(
+            replay_hash == accepted_hash,
+            "replay changed the signed transaction hash"
+        );
+        wait_for_transaction_on_peers(
+            &all_clients,
+            &schedule_transaction,
+            "exact committed schedule replay identity",
+            PEER_CONVERGENCE_TIMEOUT,
+        )
+        .await?;
+        let after_replay = wait_for_identical_exact12_snapshots(
+            &all_clients,
+            stopped_height,
+            &pending,
+            "idempotent replay preserves pending state",
+        )
+        .await?;
+        ensure!(
+            after_replay == stopped,
+            "exact replay changed finalized capability state"
+        );
+        ensure!(
+            privacy_capabilities(&client).await?.committed_height == stopped_height,
+            "exact transaction replay created a block"
+        );
+
         let restart_index = all_clients.len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
         ensure!(
             restart_peer.shutdown_if_started().await,
-            "selected Proposed exact-12 validator was not running before activation catch-up \
-             coverage"
+            "pending-policy validator was not running"
         );
         timeout(
             RESTART_TIMEOUT,
             restart_peer.start_checked(config_layers.iter(), None),
         )
         .await
-        .map_err(|_| {
-            eyre!("pre-activation exact-12 persistence restart exceeded {RESTART_TIMEOUT:?}")
-        })?
-        .wrap_err("restart Proposed exact-12 validator from its persisted state")?;
-        let persisted_proposed = wait_for_identical_exact12_snapshots(
+        .map_err(|_| eyre!("pending-policy cold restart timed out"))??;
+        let persisted = wait_for_identical_exact12_snapshots(
             std::slice::from_ref(&all_clients[restart_index]),
-            last_pre_activation_height,
-            &proposed,
-            "cold-restarted validator recovers available proposals and closed unavailable rows",
+            stopped_height,
+            &pending,
+            "cold restart must recover the exact future schedule",
         )
         .await?;
         ensure!(
-            persisted_proposed[0].committed_height == last_pre_activation_height,
-            "cold-restarted validator recovered Proposed exact-12 state at height {}, expected \
-             its exact stopped height {last_pre_activation_height}",
-            persisted_proposed[0].committed_height
-        );
-        ensure!(
-            persisted_proposed[0].consensus_policy == immutable_consensus_policy,
-            "cold-restarted validator recovered a mutated privacy consensus policy"
+            persisted[0].committed_height == stopped_height
+                && persisted[0].consensus_policy == immutable_consensus_policy,
+            "pending-policy cold restore changed committed state"
         );
         ensure!(
             restart_peer.shutdown_if_started().await,
-            "cold-restarted Proposed exact-12 validator was not running before the activation \
-             quorum probe"
+            "restarted validator was not running"
         );
-        let healthy_clients = all_clients[..restart_index].to_vec();
-        let activation_height = next_execution_height(&client).await?;
-        let active_records = profiles
-            .iter()
-            .copied()
-            .zip(proposed_records.iter().copied())
-            .enumerate()
-            .map(|(index, (compiled, proposed))| {
-                let PrivacyProtocolLifecycleV1::Proposed(proposed_lifecycle) = proposed.lifecycle
-                else {
-                    unreachable!("locally constructed proposal has Proposed lifecycle");
-                };
-                let activated_at = if index == 0 { first_registration_height } else { activation_height };
-                compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-                    PrivacyActiveLifecycleV1 {
-                        proposed_at_height: proposed_lifecycle.proposed_at_height,
-                        activated_at_height: activated_at,
-                        state_since_height: activated_at,
-                    },
-                ))
-            })
-            .collect::<Vec<_>>();
-        let transitions = active_records.iter().skip(1).map(|record| {
-            TransitionPrivacyProtocolLifecycleV1::new(record.protocol_id, record.lifecycle).into()
-        }).collect::<Vec<InstructionBox>>();
-        let activation_transaction = instructions_transaction(&client, transitions);
-        submit_signed_transaction(&client, &activation_transaction,
-            "explicitly activate pending profiles with the three-validator quorum").await?;
-        let active = expected_states(&profiles, active_records.iter().copied().map(Some))?;
-        let active_snapshots = wait_for_identical_exact12_snapshots(
-            &healthy_clients,
-            activation_height,
-            &active,
-            "the three-validator quorum explicitly activates pending profiles while validator four \
-             remains offline with the earlier mixed state and unavailable rows stay closed",
-        )
-        .await?;
-        ensure!(
-            active_snapshots.iter().all(|snapshot| snapshot
-                .protocols
-                .iter()
-                .filter(|row| !is_expected_unavailable(row.protocol_id))
-                .all(|row| row
-                    .activation
-                    .is_some_and(|record| record.lifecycle.is_active()))),
-            "an available lifecycle failed to become Active at the shared governed height"
-        );
-        ensure!(
-            active_snapshots
-                .iter()
-                .all(|snapshot| snapshot.consensus_policy == immutable_consensus_policy),
-            "exact-12 registration or activation mutated the privacy consensus policy"
-        );
-        let immutable_active_rows = active_snapshots[0].protocols.clone();
-        let first_proposal_transaction = first_proposal_transaction
-            .as_ref()
-            .ok_or_else(|| eyre!("first exact-12 proposal transaction was not retained"))?;
-        let mut duplicate_metadata = Metadata::default();
-        duplicate_metadata.insert(
-            "privacy_exact12_fresh_duplicate"
-                .parse()
-                .expect("static exact-12 duplicate metadata key is valid"),
-            activation_height,
-        );
-        let fresh_duplicate_registration ={
-    let account = client.account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            [RegisterPrivacyProtocolActivationV1::new(
-                proposed_records[0],
-            )],
-            no_fee(),
-            duplicate_metadata,
-        ))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
-        ensure!(
-            fresh_duplicate_registration.hash() != first_proposal_transaction.hash(),
-            "fresh duplicate registration must have a distinct signed transaction hash"
-        );
-        let duplicate_error = submit_signed_transaction(
-            &client,
-            &fresh_duplicate_registration,
-            "freshly signed duplicate exact-12 registration must reach governance and reject",
-        )
-        .await
-        .expect_err("freshly signed duplicate exact-12 registration was accepted");
-        ensure!(
-            error_chain_contains(&duplicate_error, "is already registered"),
-            "fresh duplicate registration rejected for wrong reason: {duplicate_error:?}"
-        );
-        let height_after_fresh_duplicate = privacy_capabilities(&client).await
-            .wrap_err("query exact-12 height after fresh duplicate registration rejection")?
-            .committed_height;
-        let post_duplicate_snapshots = wait_for_identical_exact12_snapshots(
-            &healthy_clients,
-            height_after_fresh_duplicate,
-            &active,
-            "fresh duplicate rejection preserves active profiles and closed unavailable rows",
-        )
-        .await?;
-        ensure!(
-            post_duplicate_snapshots
-                .iter()
-                .all(|snapshot| snapshot.protocols == immutable_active_rows),
-            "fresh duplicate registration mutated an exact-12 capability row"
-        );
-        ensure!(
-            post_duplicate_snapshots
-                .iter()
-                .all(|snapshot| snapshot.consensus_policy == immutable_consensus_policy),
-            "fresh duplicate registration mutated the privacy consensus policy"
-        );
-        let height_before_replay = privacy_capabilities(&client).await
-            .wrap_err("query exact-12 height before proposal replay")?
-            .committed_height;
-        let replay_error = submit_signed_transaction(
-            &client,
-            first_proposal_transaction,
-            "exact committed activation proposal replay must reject",
-        )
-        .await
-        .expect_err("exact committed activation proposal replay was accepted");
-        ensure!(
-            is_exact_replay_error(&replay_error),
-            "exact activation proposal replay rejected for wrong reason: {replay_error:?}"
-        );
-        ensure!(
-            privacy_capabilities(&client).await
-                .wrap_err("query exact-12 height after proposal replay")?
-                .committed_height
-                == height_before_replay,
-            "exact activation proposal replay unexpectedly committed another block"
-        );
-        let expected_catch_up_height = height_before_replay
-            .checked_add(EXECUTION_CARRIER_BLOCKS)
-            .ok_or_else(|| eyre!("exact-12 catch-up height overflowed"))?;
-        let catch_up_transaction = instruction_transaction(
-            &client,
-            Log::new(
-                Level::INFO,
-                format!("exact-12 restart catch-up block {expected_catch_up_height}"),
-            ),
-        );
-        let catch_up_hash = submit_signed_transaction(
-            &client,
-            &catch_up_transaction,
-            "commit exact-12 restart catch-up sentinel",
-        )
-        .await?;
-        ensure!(
-            *catch_up_hash.as_ref() == *catch_up_transaction.hash().as_ref(),
-            "submitted catch-up sentinel hash differs from its signed transaction"
-        );
+        let healthy = &all_clients[..restart_index];
+        advance_policy_height(&client, effective - 1).await?;
         wait_for_identical_exact12_snapshots(
-            &healthy_clients,
-            expected_catch_up_height,
-            &active,
-            "healthy validators preserve active profiles and closed unavailable rows",
+            healthy,
+            effective - 1,
+            &pending,
+            "pending decrease must remain unapplied through the preceding block",
         )
         .await?;
-        wait_for_transaction_on_peers(
-            &healthy_clients,
-            &catch_up_transaction,
-            "healthy-validator exact-12 catch-up sentinel finality",
-            PEER_CONVERGENCE_TIMEOUT,
+        advance_policy_height(&client, effective).await?;
+        let reduced = PrivacyProtocolPolicyV1 {
+            current_limits: jindo_limits(1),
+            pending_update: None,
+            ..decrease
+        };
+        let reduced_expectation = expected_with_jindo_policy(&profiles, Some(reduced))?;
+        let reduced_snapshots = wait_for_identical_exact12_snapshots(
+            healthy,
+            effective,
+            &reduced_expectation,
+            "three-validator quorum applies decrease only at the exact future boundary",
+        )
+        .await?;
+        ensure!(
+            reduced_snapshots
+                .iter()
+                .all(|s| s.committed_height == effective),
+            "decrease boundary differs across peers"
+        );
+
+        let increase_scheduled = next_execution_height(&client).await?;
+        let increase_effective = increase_scheduled + 3;
+        let increase_transaction = instruction_transaction(
+            &client,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, increase_effective, defaults),
+        )
+        .await?;
+        submit_signed_transaction(
+            &client,
+            &increase_transaction,
+            "schedule restoration to canonical limits",
+        )
+        .await?;
+        let increased_pending = PrivacyProtocolPolicyV1 {
+            pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: increase_scheduled,
+                effective_at_height: increase_effective,
+                next_limits: defaults,
+            }),
+            ..reduced
+        };
+        wait_for_identical_exact12_snapshots(
+            healthy,
+            increase_scheduled,
+            &expected_with_jindo_policy(&profiles, Some(increased_pending))?,
+            "future increase preserves reduced limits until its boundary",
+        )
+        .await?;
+        advance_policy_height(&client, increase_effective - 1).await?;
+        wait_for_identical_exact12_snapshots(
+            healthy,
+            increase_effective - 1,
+            &expected_with_jindo_policy(&profiles, Some(increased_pending))?,
+            "pending increase must remain unapplied through the preceding block",
+        )
+        .await?;
+        advance_policy_height(&client, increase_effective).await?;
+        let restored = PrivacyProtocolPolicyV1 {
+            current_limits: defaults,
+            pending_update: None,
+            ..reduced
+        };
+        let final_expected = expected_with_jindo_policy(&profiles, Some(restored))?;
+        wait_for_identical_exact12_snapshots(
+            healthy,
+            increase_effective,
+            &final_expected,
+            "ordinary authorized increase returns to canonical bounds",
         )
         .await?;
         timeout(
@@ -1236,35 +1319,60 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
             restart_peer.start_checked(config_layers.iter(), None),
         )
         .await
-        .map_err(|_| eyre!("exact-12 validator restart exceeded {RESTART_TIMEOUT:?}"))?
-        .wrap_err("restart exact-12 validator")?;
-        let recovered = wait_for_identical_exact12_snapshots(
-            &all_clients,
-            expected_catch_up_height,
-            &active,
-            "restarted validator catches up active profiles and closed unavailable rows",
-        )
-        .await?;
+        .map_err(|_| eyre!("policy catch-up restart timed out"))??;
         wait_for_transaction_on_peers(
             &all_clients,
-            &catch_up_transaction,
-            "post-restart exact-12 catch-up sentinel visibility",
+            &increase_transaction,
+            "post-restart signed update finality",
             PEER_CONVERGENCE_TIMEOUT,
         )
         .await?;
-        ensure!(
-            recovered[restart_index].protocols == immutable_active_rows,
-            "restarted validator recovered different exact-12 bindings or lifecycles"
-        );
-        ensure!(
-            recovered[restart_index].consensus_policy == immutable_consensus_policy,
-            "restarted validator recovered a different privacy consensus policy"
-        );
+        let recovered = wait_for_identical_exact12_snapshots(
+            &all_clients,
+            increase_effective,
+            &final_expected,
+            "fourth validator replays both policy boundaries and recovers identical state",
+        )
+        .await?;
         ensure!(
             recovered
                 .iter()
-                .all(|snapshot| snapshot.committed_height == expected_catch_up_height),
-            "four validators did not converge at the exact catch-up height"
+                .all(|s| s.committed_height == increase_effective
+                    && s.consensus_policy == immutable_consensus_policy),
+            "policy catch-up changed height or consensus policy"
+        );
+        let restarted = bounded_client(restart_peer.client());
+        let replay = submit_signed_transaction(
+            &restarted,
+            &schedule_transaction,
+            "cold-restored peer must acknowledge the original committed result without execution",
+        )
+        .await?;
+        ensure!(
+            replay == accepted_hash,
+            "cold-restored replay changed the signed transaction hash"
+        );
+        wait_for_transaction_on_peers(
+            &all_clients,
+            &schedule_transaction,
+            "cold-restored original schedule identity",
+            PEER_CONVERGENCE_TIMEOUT,
+        )
+        .await?;
+        let after_replay = wait_for_identical_exact12_snapshots(
+            &all_clients,
+            increase_effective,
+            &final_expected,
+            "cold-restored idempotent replay preserves complete state",
+        )
+        .await?;
+        ensure!(
+            after_replay == recovered,
+            "cold-restored replay changed finalized state"
+        );
+        ensure!(
+            privacy_capabilities(&restarted).await? == recovered[restart_index],
+            "idempotent replay mutated cold-restored capability state"
         );
         Ok(())
     }

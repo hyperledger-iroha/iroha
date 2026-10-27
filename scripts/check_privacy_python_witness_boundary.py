@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import zk_rust_lexical_index as rust_index  # noqa: E402
+
 GENERIC11_PROTOCOLS: Final[tuple[str, ...]] = (
     "zk-ace-pq-authorization-v1",
     "anonymous-pgc-k-out-of-n-v1",
@@ -32,10 +35,9 @@ DIRECT_BUNDLE_METHODS: Final[tuple[str, ...]] = (
     "sign_privacy_ivm_private_note_action_v1",
     "sign_privacy_pq_masp_note_action_v1",
 )
-ZK_X509_METHODS: Final[tuple[str, ...]] = (
-    "prepare_privacy_zk_x509_identity_presentation_action_v1",
-    "sign_privacy_zk_x509_identity_presentation_action_v1",
-)
+ZK_X509_PREPARE: Final = "prepare_privacy_zk_x509_identity_presentation_action_v1"
+ZK_X509_RETIRED_SIGN: Final = "sign_privacy_zk_x509_identity_presentation_action_v1"
+ZK_X509_OWNER: Final = "PrivacyX509PreparedTransactionV1"
 RAW_WITNESS_FAMILIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("ZK-ACE", ("sign_privacy_zk_ace_transfer_action_v1",)),
     ("Jindo", ("sign_privacy_jindo_action_v1",)),
@@ -133,12 +135,73 @@ def _read(path: Path, errors: list[str]) -> str:
 
 
 def _rust_function_names(source: str) -> set[str]:
-    return set(
-        re.findall(
-            r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s+([a-zA-Z0-9_]+)(?:\s*<[^\n{;]*>)?\s*\(",
-            source,
-        )
+    return {item.name for item in rust_index.functions(source) if not item.test_only()}
+
+
+def _x509_owner_errors(
+    binding: str, owner: str, actions: str, tx_methods: dict[str, ast.FunctionDef]
+) -> list[str]:
+    """Check source custody; this lexical gate does not qualify native execution."""
+    errors: list[str] = []
+    masked = rust_index.mask(owner)
+    binding_masked = rust_index.mask(binding)
+    functions = {
+        item.qualified_name(): item
+        for item in rust_index.functions(owner, masked)
+        if not item.test_only()
+    }
+    prepared = "PyPrivacyX509PreparedTransactionV1"
+    owner_struct = re.search(
+        rf"#\[pyclass\([^]]*\bfrozen\b[^]]*\)\]\s*"
+        rf"pub\(crate\)\s+struct\s+{prepared}\s*\{{([^}}]*)\}}", masked,
     )
+    fields = ("plan: DirectPlan", "admission: PyPrivacyExact12CapabilityManifestV1",
+              "network_id: NetworkId", "chain_discriminant: u16")
+    if owner_struct is None or any(
+        field not in " ".join(owner_struct.group(1).split()) for field in fields
+    ) or re.search(r"\bpub\b", owner_struct.group(1)):
+        errors.append("X509 native prepared owner must be frozen with private retained custody")
+    methods = [item for item in functions.values() if any(
+        block.kind == "impl" and block.name == prepared and "pymethods" in block.attributes
+        for block in item.chain()
+    )]
+    if any("new" in item.attributes or "setter" in item.attributes for item in methods):
+        errors.append("X509 native prepared owner exposes a constructor or setter")
+    if {item.name for item in methods} != {
+        "sign", "ordered_intent_digest", "action_statement_digest",
+        "action_statement_norito", "materialized_statement_norito",
+    }:
+        errors.append("X509 prepared owner exposes a noncanonical public surface")
+    sign = functions.get(f"{prepared}::sign")
+    signature = "" if sign is None else re.sub(r"\s+", "", masked[sign.header_start:sign.body_start]).replace(",)", ")")
+    if signature != "fnsign(&self,private_key:&[u8],credential_proof:&[u8])->PyResult<SignedTransactionEnvelope>":
+        errors.append("X509 signing must accept only the original owner, key and proof")
+    guards = {
+        f"{prepared}::prepare": ("require_empty_privacy_action_builder_v1", "x509_policy", "decode_request", "to_model_builder", "DirectPlan::prepare", "require_governed_statement"),
+        f"{prepared}::sign": ("require_key", "x509_policy", "require_governed_statement", "validate_materialized_against_profile_v1", "require_proof_bound", "validate_zk_x509_credential_proof_container_v1", "complete", "try_sign", "verify_signature"),
+        "DirectPlan::prepare": ("validate_proof_free_v1", "bind_attachment_statements_v1", "ordered_intent_digest_v1", "materialize_statement_v1", "statement_digest_for_v1"),
+        "DirectPlan::complete": ("require_proof_bound", "validate_signed_attachments_v1", "ordered_intent_digest_v1", "self.intent", "self.action", "self.action_digest", "self.materialized"),
+    }
+    for name, required in guards.items():
+        item = functions.get(name)
+        body = "" if item is None else masked[item.body_start:item.end]
+        for guard in required:
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(guard)}\b", body) is None:
+                errors.append(f"X509 custody guard missing from {name}: {guard}")
+    if "mod privacy_x509_transaction;" not in binding_masked or not re.search(
+        rf"add_class\s*::\s*<\s*privacy_x509_transaction::{prepared}\s*>", binding_masked
+    ):
+        errors.append("X509 prepared owner is not the registered native producer")
+    functions_in_binding = _rust_function_names(binding)
+    if ZK_X509_RETIRED_SIGN in functions_in_binding or ZK_X509_RETIRED_SIGN in tx_methods:
+        errors.append("retired mutable-draft X509 signing bypass remains public")
+    if ZK_X509_PREPARE not in functions_in_binding or ZK_X509_PREPARE not in tx_methods:
+        errors.append("X509 native prepared-owner entry point is missing")
+    elif _parameters(tx_methods[ZK_X509_PREPARE]) != ("self", "canonical_request_archive"):
+        errors.append("X509 preparation must accept only the canonical proof-free request")
+    if re.search(r"\bZkX509\s*\(", rust_index.mask(actions)):
+        errors.append("X509 is incorrectly routed through the generic action dispatcher")
+    return errors
 
 
 def _python_class(tree: ast.Module, name: str) -> ast.ClassDef | None:
@@ -260,6 +323,8 @@ def inspect_repository(root: Path) -> BoundaryReport:
         root / "python/iroha_python/iroha_python_rs/src/lib.rs", errors
     )
     python_tx = _read(root / "python/iroha_python/src/iroha_python/tx.py", errors)
+    x509_owner = _read(root / "python/iroha_python/iroha_python_rs/src/privacy_x509_transaction.rs", errors)
+    native_actions = _read(root / "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs", errors)
     rust_worker = _read(
         root / "python/iroha_python/iroha_python_rs/src/privacy_wallet_worker.rs",
         errors,
@@ -295,7 +360,7 @@ def inspect_repository(root: Path) -> BoundaryReport:
         if method in rust_methods or method in tx_methods:
             errors.append(f"legacy direct owner-bundle method remains public: {method}")
 
-    builder_pymethods = _rust_pymethods_impl(rust_binding, "TransactionBuilder")
+    builder_pymethods = _rust_pymethods_impl(rust_index.mask(rust_binding), "TransactionBuilder")
     if not builder_pymethods:
         errors.append("PyO3 TransactionBuilder methods are missing or malformed")
     else:
@@ -379,9 +444,7 @@ def inspect_repository(root: Path) -> BoundaryReport:
     if worker_exports != WORKER_TOP_LEVEL_EXPORTS:
         errors.append("Python worker __all__ is not the exact public controller contract")
 
-    for method in ZK_X509_METHODS:
-        if method not in rust_methods or method not in tx_methods:
-            errors.append(f"separate ZK-X509 transport method is missing: {method}")
+    errors.extend(_x509_owner_errors(rust_binding, x509_owner, native_actions, tx_methods))
     retained_start = rust_worker.find("fn retained_protocol(")
     retained_end = rust_worker.find("\nfn ", retained_start + 1)
     retained_source = (
@@ -424,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if not report.release_ready:
         return 1
-    print("privacy Python witness boundary is release-ready")
+    print("privacy Python witness/source boundary checks pass (structural only)")
     return 0
 
 

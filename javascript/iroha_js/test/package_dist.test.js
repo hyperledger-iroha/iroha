@@ -921,20 +921,21 @@ test("package declarations expose the Exact12 manifest without retired privacy t
   }
   assert.match(
     optionalDeclarations,
-    /export interface PrivacyExact12CapabilityRowV1\s*\{[\s\S]*readonly protocol_id:\s*PrivacyProtocolTagV1;[\s\S]*readonly operation_schema:[\s\S]*readonly execution_mode:[\s\S]*readonly privacy_feature_mask:\s*number;[\s\S]*readonly compiled_profile:\s*PrivacyCompiledProfileResultV1;[\s\S]*readonly readiness:\s*PrivacyCapabilityReadinessV1;[\s\S]*readonly activation:\s*PrivacyProtocolActivationRecordV1 \| null;/u,
+    /export interface PrivacyExact12CapabilityRowV1\s*\{[\s\S]*readonly protocol_id:\s*PrivacyProtocolTagV1;[\s\S]*readonly operation_schema:[\s\S]*readonly execution_mode:[\s\S]*readonly privacy_feature_mask:\s*number;[\s\S]*readonly compiled_profile:\s*PrivacyCompiledProfileResultV1;[\s\S]*readonly readiness:\s*PrivacyCapabilityReadinessV1;[\s\S]*readonly policy:\s*PrivacyProtocolPolicyV1 \| null;/u,
   );
   assert.match(
     optionalDeclarations,
-    /readiness:\s*"production-qualified";\s*detail:\s*null/u,
+    /readiness:\s*"available";\s*detail:\s*null/u,
   );
   assert.doesNotMatch(
     optionalDeclarations,
     /\bPrivacyProtocolProductionQualificationV1\b|\bproduction_qualification\b/u,
   );
-  assert.match(
+  assert.doesNotMatch(
     optionalDeclarations,
-    /readonly qualification:\s*PrivacyExact12QualificationRecordV1 \| null;/u,
+    /\b(?:qualification|PrivacyExact12QualificationRecordV1|PrivacyProtocolActivationRecordV1|PrivacyProtocolLifecycleV1|PrivacyConsensusPolicyTighteningV1|pending_tightening)\b/u,
   );
+  assert.match(optionalDeclarations, /readonly pending_update:\s*PrivacyConsensusPolicyUpdateV1 \| null;/u);
   assert.doesNotMatch(
     optionalDeclarations,
     /\b(?:available-experimental|activation_state|limitation|assurance)\b/u,

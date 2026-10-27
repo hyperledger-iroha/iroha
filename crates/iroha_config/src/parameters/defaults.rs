@@ -3390,10 +3390,6 @@ pub mod nexus {
     }
     /// Atomic private cross-dataspace settlement defaults.
     pub mod atomic_private_settlement {
-        /// The production path is governed and disabled until explicitly activated.
-        pub const ENABLED: bool = false;
-        /// Minimum governance notice before an activation height becomes effective.
-        pub const MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 7_200;
         /// Audited fixed-shape private-note proof profile version.
         pub const PROOF_PROFILE_VERSION: u16 = 1;
         /// Maximum dataspace legs admitted in one private atomic bundle.

@@ -74,8 +74,7 @@ fn build_torii(
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let network_id = *state.network_id_ref();
-    let torii = Torii::new(
-        build_identity_test_fixture::build_identity(),
+    let torii = Torii::new_with_handle(
         state.chain_id_ref().clone(),
         network_id,
         kiso,
@@ -87,6 +86,14 @@ fn build_torii(
         state,
         da_receipt_signer,
         OnlinePeersProvider::new(peers_rx),
+        None,
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
+        ),
     )
     .expect("valid Torii push fixture");
     let router = torii

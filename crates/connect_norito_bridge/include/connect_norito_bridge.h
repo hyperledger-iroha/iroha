@@ -495,9 +495,9 @@ int32_t connect_norito_decode_ciphertext_frame(
 // released with `iroha_privacy_free_buffer`, which zeroizes privacy output
 // memory before release.
 // The catalog describes only profiles compiled into this binary. It contains
-// no committed height, consensus policy, activation, lifecycle, or readiness
-// state. Fetch a fresh PrivacyCapabilitySnapshotV1 from live Torii before
-// treating a protocol as ready for proof submission.
+// no committed height, consensus policy, or protocol policy. Fetch a fresh
+// PrivacyExact12CapabilityManifestV1 from live Torii before checking whether
+// the selected protocol/profile and effective limits permit proof submission.
 typedef enum iroha_privacy_compiled_profile_catalog_validation_status_v1 {
     IROHA_PRIVACY_COMPILED_PROFILE_CATALOG_VALID_V1 = 0,
     IROHA_PRIVACY_COMPILED_PROFILE_CATALOG_NULL_POINTER_V1 = 1,
@@ -518,9 +518,9 @@ int32_t iroha_privacy_validate_compiled_profile_catalog_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
 
-// Authoritative canonical/semantic evidence validation, including all release,
-// audit and deployment signatures. Only zero accepts. The caller separately
-// authenticates Torii and matches all committed tuples to its local catalog.
+// Authoritative canonical profile/policy validation. Only zero accepts.
+// The caller separately authenticates Torii and the exact selected network/profile.
+// Release, audit, registration and activation records do not enable an implementation.
 typedef enum iroha_privacy_exact12_capability_validation_status_v1 {
     IROHA_PRIVACY_EXACT12_CAPABILITY_VALID_V1 = 0,
     IROHA_PRIVACY_EXACT12_CAPABILITY_NULL_POINTER_V1 = 1,
@@ -536,6 +536,18 @@ typedef enum iroha_privacy_exact12_capability_validation_status_v1 {
 int32_t iroha_privacy_validate_exact12_capability_manifest_v1(
     const uint8_t* archive_ptr,
     unsigned long archive_len);
+
+// Canonical construction-time profile, expected-network and effective resource-limit
+// validation shared with JNI. Zero accepts construction; proof cryptography and execution
+// authorization remain separate obligations. Pointers are borrowed only for this call.
+int32_t iroha_privacy_validate_exact12_submit_proof_construction_v1(
+    const uint8_t* manifest_ptr,
+    unsigned long manifest_len,
+    uint32_t protocol_index,
+    const uint8_t* instruction_ptr,
+    unsigned long instruction_len,
+    const uint8_t* expected_network_ptr,
+    unsigned long expected_network_len);
 
 // Complete Rust-derived canonical bytes through signed-transaction and hash
 // layers for all twelve first-release rows. The archive is accepted only when
@@ -583,6 +595,36 @@ int32_t connect_norito_zk_x509_prepare_ownership_signing_v1(
     uint8_t** out_digest,
     unsigned long* out_digest_len);
 
+
+// ---------------- Opaque direct X509 transaction owner ----------------
+// Revision 1 in ABI 31. Manifest, empty ordinary TransactionPayload and dedicated
+// SubmitPrivacyZkX509CertificateV1 are canonical Norito frames; network is 32 bytes.
+// Caller must authenticate manifest origin separately (for example sealed HTTPS
+// admission). Native code enforces current selected local profile, exact network,
+// governed context, original authority and one Proof/ActionProof occurrence.
+// The handle never repeats. Close prevents new calls; accepted calls retain ownership.
+// Projections: 0 ordered-intent digest, 1 action digest, 2 canonical ActionStatementV1,
+// 3 canonical tagged PrivacyStatementV1. They cannot replace retained source.
+// Sign takes only handle, 32-byte Ed25519 seed and raw credential-proof container.
+// Output is canonical versioned SignedTransaction. Free every output with
+// iroha_privacy_free_buffer. Errors clear writable outputs; pointers must be valid
+// for their lengths and output destinations must be writable and disjoint.
+// Status: 0 success; -1 invalid input; -2 invalid/stale handle; -3 resource;
+// -4 canonical archive; -5 network; -6 authority; -7 original source; -8 policy;
+// -9 proof container; -11 local tuple; -20 engine unavailable; -21 initialization;
+// -22 conflicting schema id; -23 missing schema reference;
+// -24 JointSecurityReductionIncomplete; -100 internal error.
+int32_t connect_norito_zk_x509_transaction_prepare_v1(
+    const uint8_t* network, unsigned long network_len,
+    const uint8_t* manifest, unsigned long manifest_len,
+    const uint8_t* payload, unsigned long payload_len,
+    const uint8_t* request, unsigned long request_len, uint64_t* out_handle);
+int32_t connect_norito_zk_x509_transaction_projection_v1(uint64_t handle, uint32_t kind,
+    uint8_t** out, unsigned long* out_len);
+int32_t connect_norito_zk_x509_transaction_sign_v1(uint64_t handle,
+    const uint8_t* seed, unsigned long seed_len, const uint8_t* proof, unsigned long proof_len,
+    uint8_t** out, unsigned long* out_len);
+int32_t connect_norito_zk_x509_transaction_close_v1(uint64_t handle);
 
 // ---------------- Envelope helpers ----------------
 int32_t connect_norito_encode_envelope_sign_request_tx(

@@ -42,8 +42,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami genesis embed-pop`↴](#kagami-genesis-embed-pop)
 * [`kagami genesis normalize`↴](#kagami-genesis-normalize)
 * [`kagami privacy-bootstrap`↴](#kagami-privacy-bootstrap)
-* [`kagami privacy-bootstrap emit-taira-v1`↴](#kagami-privacy-bootstrap-emit-taira-v1)
-* [`kagami privacy-bootstrap validate-taira-v1`↴](#kagami-privacy-bootstrap-validate-taira-v1)
+* [`kagami privacy-bootstrap catalog`↴](#kagami-privacy-bootstrap-catalog)
 * [`kagami privacy-bootstrap validate-taira-nevo-review-v1`↴](#kagami-privacy-bootstrap-validate-taira-nevo-review-v1)
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
@@ -95,7 +94,7 @@ Common tasks:
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `genesis` — Commands related to genesis
-* `privacy-bootstrap` — Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+* `privacy-bootstrap` — Inspect native privacy profiles and prepare reviewed Taira release inputs
 * `verify` — Verify a genesis manifest against a preset profile
 * `advanced` — Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
 
@@ -919,42 +918,23 @@ Expand a genesis manifest and show the final ordered transactions
 
 ## `kagami privacy-bootstrap`
 
-Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+Inspect native privacy profiles and prepare reviewed Taira release inputs
 
 **Usage:** `kagami privacy-bootstrap <COMMAND>`
 
 ###### **Subcommands:**
 
-* `emit-taira-v1` — Emit one height-1 template of twelve ordered registration/activation pairs
-* `validate-taira-v1` — Validate an emitted exact-12 instruction set and its digest inventory
+* `catalog` — Print the complete native catalog, including concrete unavailable implementations
 * `validate-taira-nevo-review-v1` — Validate a reviewed Taira NEVO genesis source template without creating release artifacts
 * `render-taira-release-v1` — Compose a secret-free Taira release plan, config, and non-signable genesis source template
 
 
 
-## `kagami privacy-bootstrap emit-taira-v1`
+## `kagami privacy-bootstrap catalog`
 
-Emit one height-1 template of twelve ordered registration/activation pairs
+Print the complete native catalog, including concrete unavailable implementations
 
-**Usage:** `kagami privacy-bootstrap emit-taira-v1 --instructions-output <INSTRUCTIONS_OUTPUT> --report-output <REPORT_OUTPUT>`
-
-###### **Options:**
-
-* `--instructions-output <INSTRUCTIONS_OUTPUT>` — New file receiving the canonical governance-template instruction array
-* `--report-output <REPORT_OUTPUT>` — New file receiving base64 Norito instructions and deterministic digests
-
-
-
-## `kagami privacy-bootstrap validate-taira-v1`
-
-Validate an emitted exact-12 instruction set and its digest inventory
-
-**Usage:** `kagami privacy-bootstrap validate-taira-v1 --instructions <INSTRUCTIONS> --report <REPORT>`
-
-###### **Options:**
-
-* `--instructions <INSTRUCTIONS>` — Canonical genesis instruction JSON array emitted by this command group
-* `--report <REPORT>` — Canonical digest inventory emitted alongside the instruction array
+**Usage:** `kagami privacy-bootstrap catalog`
 
 
 
@@ -975,12 +955,10 @@ Validate a reviewed Taira NEVO genesis source template without creating release 
 
 Compose a secret-free Taira release plan, config, and non-signable genesis source template
 
-**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --activation-instructions <ACTIVATION_INSTRUCTIONS> --activation-report <ACTIVATION_REPORT> --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
+**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
 
 ###### **Options:**
 
-* `--activation-instructions <ACTIVATION_INSTRUCTIONS>` — Exact-12 instruction JSON emitted by `emit-taira-v1`
-* `--activation-report <ACTIVATION_REPORT>` — Digest report emitted together with the exact-12 instructions
 * `--broker-public-export <BROKER_PUBLIC_EXPORT>` — Canonical public JSON emitted by the qualified peer-1 broker
 * `--plan-template <PLAN_TEMPLATE>` — Canonical disabled Taira privacy plan template
 * `--config-template <CONFIG_TEMPLATE>` — Canonical disabled peer-1 Taira config template

@@ -34,7 +34,8 @@ impl PartialEq for Type {
                 | (Self::DomainId, Self::DomainId)
                 | (Self::Name, Self::Name)
                 | (Self::Json, Self::Json)
-                | (Self::Unit, Self::Unit) => {}
+                | (Self::Unit, Self::Unit)
+                | (Self::PendingAction, Self::PendingAction) => {}
                 (Self::Enum(left), Self::Enum(right)) => {
                     if left != right {
                         return false;
@@ -146,6 +147,7 @@ impl Clone for Type {
                     Self::Name => values.push(Self::Name),
                     Self::Json => values.push(Self::Json),
                     Self::Unit => values.push(Self::Unit),
+                    Self::PendingAction => values.push(Self::PendingAction),
                     Self::Enum(descriptor) => {
                         values.push(Self::Enum(Arc::clone(descriptor)));
                     }
@@ -1582,6 +1584,7 @@ pub(crate) fn type_name(ty: &Type) -> String {
         Type::Name => "Name".into(),
         Type::Json => "Json".into(),
         Type::Unit => "()".into(),
+        Type::PendingAction => "PendingAction".into(),
         Type::Enum(descriptor) => descriptor.identity.clone(),
         Type::ErrorEnum(descriptor) => descriptor.identity.clone(),
         Type::Secret(inner) => format!("Secret<{}>", type_name(inner)),
@@ -1606,7 +1609,8 @@ pub(crate) fn type_name(ty: &Type) -> String {
             )
         }
         Type::Struct { name, .. }
-            if name == "kotodama::AssetUidHoldingQuote" && ty == &asset_uid_holding_quote_type() =>
+            if name == "kotodama::AssetUidHoldingQuote"
+                && ty == &asset_uid_holding_quote_type() =>
         {
             "AssetUidHoldingQuote".into()
         }
@@ -1663,6 +1667,7 @@ pub(super) fn render_source_type_name(ty: &Type) -> String {
                 Type::Name => rendered.push_str("Name"),
                 Type::Json => rendered.push_str("Json"),
                 Type::Unit => rendered.push_str("()"),
+                Type::PendingAction => rendered.push_str("PendingAction"),
                 Type::Enum(descriptor) => rendered.push_str(
                     descriptor
                         .identity
@@ -1723,7 +1728,9 @@ pub(super) fn render_source_type_name(ty: &Type) -> String {
                     }
                 }
                 Type::Struct { name, .. } => {
-                    if name == "kotodama::AssetUidHoldingQuote" && ty == &asset_uid_holding_quote_type() {
+                    if name == "kotodama::AssetUidHoldingQuote"
+                        && ty == &asset_uid_holding_quote_type()
+                    {
                         rendered.push_str("AssetUidHoldingQuote");
                         continue;
                     }

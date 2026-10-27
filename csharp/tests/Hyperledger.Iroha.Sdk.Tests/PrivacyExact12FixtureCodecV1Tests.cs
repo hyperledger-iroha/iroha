@@ -27,7 +27,7 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
         {
             var row = bundle.Rows[index];
             Assert.Equal((PrivacyProtocolIdV1)index, row.ProtocolId);
-            Assert.Equal(PrivacyExact12FixtureCodecV1.SubmitProofWireId, row.SubmitProofWireId);
+            Assert.Equal(PrivacyExact12FixtureCodecV1.SubmitWireIdFor(row.ProtocolId), row.SubmitProofWireId);
             Assert.NotEmpty(row.StatementNorito);
             Assert.NotEmpty(row.EnvelopeNorito);
             Assert.NotEmpty(row.SubmitProofInstructionNorito);
@@ -540,6 +540,35 @@ public sealed class PrivacyExact12FixtureCodecV1Tests
         candidate[0] ^= 0xFF;
         trusted[0] ^= 0xFF;
         Assert.Equal(canonical, PrivacyExact12FixtureCodecV1.EncodeCanonical(bundle));
+    }
+
+    [Fact]
+    public void X509FixtureRequiresOriginalProofFreeRequestAndActionStatementBindings()
+    {
+        var bundle = PrivacyExact12FixtureCodecV1.DecodeCanonical(Fixture.Value.Archive);
+        var row = bundle.Rows[5];
+        Assert.Equal(PrivacyExact12FixtureCodecV1.SubmitX509WireId, row.SubmitProofWireId);
+        Assert.Throws<ArgumentException>(() => CopyRow(row, wireId: PrivacyExact12FixtureCodecV1.SubmitProofWireId));
+        // All these public-byte substitutions retain outer field sizes. The X509
+        // validator must reject them before any trusted-reference comparison.
+        foreach (var mutate in new Func<PrivacyExact12TypedFixtureRowV1>[] {
+            () => CopyRow(row, instruction: FlipLast(row.SubmitProofInstructionNorito)),
+            () => CopyRow(row, projection: FlipLast(row.TransactionIntentProjectionNorito)),
+            () => CopyRow(row, intentDigest: FlipLast(row.TransactionIntentDigest)),
+            () => CopyRow(row, unsignedTransaction: FlipLast(row.UnsignedTransactionPayloadNorito)),
+            () => CopyRow(row, signedTransaction: FlipLast(row.SignedTransactionVersionedNorito)),
+            () => CopyRow(row, transactionHash: FlipLast(row.SignedTransactionHash)),
+            () => CopyRow(row, instruction: bundle.Rows[0].SubmitProofInstructionNorito),
+        }) Assert.Throws<ArgumentException>(() => mutate());
+        var payload = NoritoCodec.Decode("iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1", row.SubmitProofInstructionNorito).Payload;
+        payload[^1] = 1; // slot_index: replace only the final scalar byte, then repair CRC.
+        var request = NoritoCodec.Encode("iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1", payload, NoritoCodec.CanonicalLayoutFlags);
+        Assert.Throws<ArgumentException>(() => CopyRow(row, instruction: request));
+    }
+
+    private static byte[] FlipLast(byte[] value)
+    {
+        var copy = (byte[])value.Clone(); copy[^1] ^= 1; return copy;
     }
 
     private static PrivacyExact12TypedFixtureRowV1 CopyRow(

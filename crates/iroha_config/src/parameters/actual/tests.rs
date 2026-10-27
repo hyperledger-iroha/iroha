@@ -1040,8 +1040,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(hash.as_ref()),
-            // TODO: regenerate from the current native owner after the coherent monetary retirement.
-            "580c30ad6b72555fbac82835d086c8fbaea22fdeb8170669c8f00f745183de35",
+            "e7a1a6d899bbd33e460e086999297b34ec8600fd2b812bc6378f314341bce12f",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -1628,8 +1627,7 @@ mod tests {
                     &[],
                     &[],
                 ),
-                // TODO: regenerate from the current native owner after the coherent monetary retirement.
-                "580c30ad6b72555fbac82835d086c8fbaea22fdeb8170669c8f00f745183de35",
+                "e7a1a6d899bbd33e460e086999297b34ec8600fd2b812bc6378f314341bce12f",
             ),
             (
                 "sora",
@@ -1640,7 +1638,7 @@ mod tests {
                     &golden_validators(),
                     &golden_lineage()[..3],
                 ),
-                "5bf597842b80453ea6aa1a63d986d1298f5db9ac35c8440bb85b5a8c7c9cf351",
+                "c73eac6773210f04e0136882903a1d9c8222740b19f6a664b43933920e54c8fd",
             ),
             (
                 "taira",
@@ -1651,7 +1649,7 @@ mod tests {
                     &golden_validators(),
                     &golden_lineage(),
                 ),
-                "f93a860a9606b62422d2b7fc9bd5560cb4ded174b09d083695f6afbb82ed565d",
+                "70968361b56d3429985653e174bc46cbc52638af3539a461a730d07ae360d22d",
             ),
         ];
         let mut failures = Vec::new();
@@ -1755,6 +1753,93 @@ mod tests {
             "the fresh Taira catalog routes bpng by target dataspace only"
         );
     }
+    /// Emit the actual default/Sora/Taira test-owner preimages without rewriting golden pins.
+    /// Explicit authored fee recipes here are test inputs, never runtime policy fallbacks.
+    #[test]
+    #[ignore = "explicit native capture of public configuration fixtures; retain stdout"]
+    fn capture_nexus_policy_and_amx_preimages() {
+        let pipeline = Pipeline::default();
+        let cases = [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ];
+        for (label, nexus, validators, lineage) in cases {
+            // Capture the exact three AMX inputs used by the existing golden tests.
+            let encoded = sumeragi_nexus_amx_context_preimage(
+                &nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
+            let expected = sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
+            assert_eq!(Hash::new(&encoded), expected);
+            let record = norito::json!({
+                "schema_version": 1,
+                "kind": "nexus_amx",
+                "case": label,
+                "original_fees": "authored_test_recipe",
+                "domain_hex": "",
+                "encoded_hex": (hex::encode(&encoded)),
+                "preimage_hex": (hex::encode(&encoded)),
+                "digest_hex": (hex::encode(<[u8; 32]>::from(expected))),
+                "recommended_template_hex": (hex::encode(
+                    iroha_data_model::block::consensus::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH
+                )),
+            });
+            println!(
+                "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                norito::json::to_json(&record).unwrap()
+            );
+            // Nexus policy is a separate owner from both compiled-profile and AMX hashes.
+            // Preserve the meaningful distinction between no original fees and an authored policy.
+            for (fee_case, fees) in [("absent", None), ("authored", Some(&nexus.fees))] {
+                let encoded =
+                    nexus_consensus_policy_preimage_with_runtime_policies(&nexus, fees, None, None)
+                        .unwrap();
+                let expected =
+                    nexus_consensus_policy_digest_with_runtime_policies(&nexus, fees, None, None)
+                        .unwrap();
+                let domain = b"iroha:nexus:consensus-policy:v1\0";
+                let preimage = [domain.as_slice(), encoded.as_slice()].concat();
+                assert_eq!(<[u8; 32]>::from(Hash::new(&preimage)), expected);
+                let record = norito::json!({
+                    "schema_version": 1,
+                    "kind": "nexus_policy",
+                    "case": (format!("{label}/{fee_case}")),
+                    "original_fees": fee_case,
+                    "compliance_policy": "absent",
+                    "lane_manifest_policy": "absent",
+                    "domain_hex": (hex::encode(domain)),
+                    "encoded_hex": (hex::encode(&encoded)),
+                    "preimage_hex": (hex::encode(&preimage)),
+                    "digest_hex": (hex::encode(expected)),
+                });
+                println!(
+                    "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                    norito::json::to_json(&record).unwrap()
+                );
+            }
+        }
+    }
+
 }
 #[cfg(test)]
 mod sora_profile_tests {
@@ -1806,4 +1891,7 @@ enabled = true
     }
     include!("sora_profile_discovery_disabled_test.rs");
     include!("sora_profile_runtime_tests.rs");
+
+
+
 }

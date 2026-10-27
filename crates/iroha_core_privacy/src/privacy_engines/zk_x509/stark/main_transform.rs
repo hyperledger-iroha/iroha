@@ -26,10 +26,47 @@ pub(super) struct MainTransformReceiptV1 {
     metal_columns: usize,
 }
 
+// The full MAIN layout's largest masked polynomial is native log19 plus its
+// original hiding coefficients. This public allocation can coexist with source
+// callbacks, so the common source envelope reserves it before any source build.
+const MAX_PUBLIC_COSET_POWERS_V1: usize = (1 << 19) + MASK_DEGREE + 1;
+pub(super) const PUBLIC_COSET_POWERS_ALLOWANCE_V1: usize = MAX_PUBLIC_COSET_POWERS_V1
+    * core::mem::size_of::<F>()
+    + core::mem::size_of::<MainTraceCosetEvaluatorV1>();
+
+/// Verifier-public generator powers; no witness or transcript material is stored.
+struct PublicCosetPowersV1 {
+    values: Vec<F>,
+}
+
+impl PublicCosetPowersV1 {
+    fn new_v1(count: usize) -> Result<Self, AggregateStarkErrorV1> {
+        if count == 0 || count > MAX_PUBLIC_COSET_POWERS_V1 {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        if values.capacity() != count {
+            return Err(AggregateStarkErrorV1::AllocationFailure);
+        }
+        let shift = F(GOLDILOCKS_GENERATOR_V1);
+        let mut power = F::ONE;
+        for _ in 0..count {
+            values.push(power);
+            power = power.mul(shift);
+        }
+        Ok(Self { values })
+    }
+}
+
 pub(super) struct MainTraceCosetEvaluatorV1 {
     evaluation_rows: usize,
     device_columns: usize,
     receipt: MainTransformReceiptV1,
+    // One owner for the entire joined commitment/replay; released with self.
+    coset_powers: Option<PublicCosetPowersV1>,
 }
 
 impl MainTraceCosetEvaluatorV1 {
@@ -53,12 +90,24 @@ impl MainTraceCosetEvaluatorV1 {
             available,
             fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
         );
+        // check_before_sources_v1 already reserved this whole public owner;
+        // do not spend that allowance again or subtract it twice here. CPU-only
+        // evaluation retains its existing implementation and allocates no table.
+        let coset_powers = if device_columns == 0 {
+            None
+        } else {
+            Some(
+                PublicCosetPowersV1::new_v1(MAX_PUBLIC_COSET_POWERS_V1)
+                    .map_err(map_aggregate_error_v1)?,
+            )
+        };
         #[cfg(test)]
         prover_observation::policy_v1(device_columns);
         Ok(Self {
             evaluation_rows: layout.common_lde_size(),
             device_columns,
             receipt: MainTransformReceiptV1::default(),
+            coset_powers,
         })
     }
 
@@ -197,25 +246,32 @@ impl MainTraceCosetEvaluatorV1 {
             prover_observation::completed_transform_v1(false, columns.len());
             return Ok(result);
         }
+        let powers = &self
+            .coset_powers
+            .as_ref()
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?
+            .values;
+        if columns.iter().any(|column| column.len() > powers.len()) {
+            return Err(AggregateStarkErrorV1::InvalidLayout);
+        }
         // Guard both allocation levels before any private write. Each FFT
         // operates on at most the admitted batch, although eight outputs live.
         let mut words = PrivateTableV1::new(Vec::new(), erase_word_rows_v1);
         words
             .try_reserve_exact(columns.len())
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        for coefficients in columns {
+        for _ in columns {
             let mut column = PrivateTableV1::new(Vec::new(), zeroize_words_v1);
             column
                 .try_reserve_exact(rows)
                 .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
             column.resize(rows, 0);
-            let mut power = F::ONE;
-            for (output, coefficient) in column.iter_mut().zip(coefficients.iter()) {
-                *output = coefficient.mul(power).0;
-                power = power.mul(shift);
-            }
             words.push(column.into_vec());
         }
+        // Public powers are constructed once, not once per private column.
+        // Each output has one writer; elementwise products introduce no reduction
+        // or scheduling-dependent arithmetic and preserve the original FFT order.
+        populate_coset_words_v1(&mut words, columns, powers)?;
         for batch in words.chunks_mut(self.device_columns) {
             match transform(batch, root.0)? {
                 Backend::Cpu => {
@@ -264,6 +320,34 @@ impl MainTraceCosetEvaluatorV1 {
     }
 }
 
+/// Populate caller-owned, zero-padded columns from already validated canonical
+/// coefficients. The public table is borrowed; no duplicate table is allocated.
+fn populate_coset_words_v1(
+    words: &mut [Vec<u64>],
+    columns: &[Column],
+    powers: &[F],
+) -> Result<(), AggregateStarkErrorV1> {
+    if words.len() != columns.len()
+        || columns.is_empty()
+        || words.iter().zip(columns).any(|(output, coefficients)| {
+            coefficients.len() > output.len() || coefficients.len() > powers.len()
+        })
+    {
+        return Err(AggregateStarkErrorV1::InvalidLayout);
+    }
+    words
+        .par_iter_mut()
+        .zip(columns.par_iter())
+        .for_each(|(output, coefficients)| {
+            for ((output, coefficient), power) in
+                output.iter_mut().zip(coefficients.iter()).zip(powers)
+            {
+                *output = coefficient.mul(*power).0;
+            }
+        });
+    Ok(())
+}
+
 fn erase_word_rows_v1(rows: &mut [Vec<u64>]) {
     for row in rows {
         zeroize_words_v1(row);
@@ -305,10 +389,11 @@ mod tests {
             evaluator.device_columns,
             select_device_columns_v1(
                 layout.common_lde_size(),
-                596_974_144
+                596_640_064
                     - core::mem::size_of::<E>()
                     - 288_345_698
-                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
+                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+                    - PUBLIC_COSET_POWERS_ALLOWANCE_V1,
                 fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
             )
         );
@@ -325,10 +410,11 @@ mod tests {
         assert_eq!(
             select_device_columns_v1(
                 layout.common_lde_size(),
-                596_974_144
+                596_640_064
                     - core::mem::size_of::<E>()
                     - 288_345_698
-                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
+                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+                    - PUBLIC_COSET_POWERS_ALLOWANCE_V1,
                 Some(Backend::Metal),
             ),
             2
@@ -363,15 +449,17 @@ mod tests {
         assert_eq!(
             assembly_limit,
             (12_usize << 30)
-                - (3_697_993_152 + core::mem::size_of::<E>())
+                - (3_698_327_232 + core::mem::size_of::<E>())
                 - (8 << 30)
                 - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+                - PUBLIC_COSET_POWERS_ALLOWANCE_V1
         );
         assert_eq!(
             assembly_limit,
-            596_974_144
+            596_640_064
                 - core::mem::size_of::<E>()
                 - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+                - PUBLIC_COSET_POWERS_ALLOWANCE_V1
         );
         assert_eq!(
             select_metal_columns_v1(layout.common_lde_size(), assembly_limit - 288_345_698),
@@ -401,6 +489,7 @@ mod tests {
                     evaluation_rows: 64,
                     device_columns,
                     receipt: MainTransformReceiptV1::default(),
+                    coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
                 };
                 let (output, erased) = inspection::observe_v1(|| {
                     evaluator
@@ -448,6 +537,7 @@ mod tests {
                         evaluation_rows: 64,
                         device_columns: 2,
                         receipt: MainTransformReceiptV1::default(),
+                        coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
                     };
                     evaluator.evaluate_with_v1(&columns, 4, 6, |batch, _| {
                         batch[0][0] = 999;
@@ -482,6 +572,7 @@ mod tests {
             evaluation_rows: 64,
             device_columns: 2,
             receipt: MainTransformReceiptV1::default(),
+            coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
         };
         let mut columns = columns_v1(3);
         let mut calls = 0;
@@ -534,6 +625,8 @@ mod tests {
                         evaluation_rows: 64,
                         device_columns,
                         receipt: MainTransformReceiptV1::default(),
+                        coset_powers: (device_columns != 0)
+                            .then(|| PublicCosetPowersV1::new_v1(64).unwrap()),
                     };
                     let actual = evaluator
                         .evaluate_selected_with_v1(
@@ -567,6 +660,7 @@ mod tests {
             evaluation_rows: 64,
             device_columns: 1,
             receipt: MainTransformReceiptV1::default(),
+            coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
         };
         let result = evaluator.evaluate_selected_with_v1(&columns, 4, 6, Some(&[0]), |batch, _| {
             batch[0][63] = GOLDILOCKS_MODULUS_V1;
@@ -632,6 +726,7 @@ mod tests {
                     evaluation_rows: rows,
                     device_columns: 0,
                     receipt: MainTransformReceiptV1::default(),
+                    coset_powers: None,
                 };
                 let pruned = cpu
                     .evaluate_selected_v1(&columns, native, common, &selected)
@@ -657,3 +752,7 @@ mod tests {
 #[cfg(test)]
 #[path = "main_common22_coarse_diagnostic_tests.rs"]
 mod common22_coarse_diagnostic_tests;
+
+#[cfg(test)]
+#[path = "main_public_coset_powers_tests.rs"]
+mod public_coset_powers_tests;

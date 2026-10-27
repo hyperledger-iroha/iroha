@@ -35,8 +35,19 @@ def native_selection_guard():
 def test_native_selection_preserves_old_suites_and_adds_canonical_consumers(native_selection_guard) -> None:
     expected = (
         "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitiesV1Test",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1Test",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyCapabilityModelInvariantV1Test",
+        "org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1Test",
         "org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test",
         "org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1Test",
+        "org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateJavaConsumerTest",
+        "org.hyperledger.iroha.sdk.tx.SignedAttachmentVectorsTest",
+        "org.hyperledger.iroha.sdk.tx.norito.SignedAttachmentsCodecTest",
+        "org.hyperledger.iroha.sdk.tx.TransactionBuilderTest",
+        "org.hyperledger.iroha.sdk.tx.SignedTransactionHasherTest",
+        "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest",
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest",
         "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
         "org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
@@ -63,7 +74,7 @@ def test_native_selection_preserves_old_suites_and_adds_canonical_consumers(nati
     assert errors == []
 
 
-@pytest.mark.parametrize("index", range(22))
+@pytest.mark.parametrize("index", range(33))
 def test_native_selection_rejects_each_omitted_old_or_new_suite(native_selection_guard, index: int) -> None:
     name = native_selection_guard.JVM_NATIVE_TEST_SELECTIONS[index]
     gate = read("ci/check_privacy_jvm_sdk.sh")

@@ -48,6 +48,7 @@ async function loadSubject(name, nativeModuleSource) {
     "privacyCapabilityAdmission",
     "privacyCapabilityTransport",
     "strictLosslessJson",
+    "networkId",
   ]) {
     const target = new URL(`../src/${dependency}.js`, import.meta.url).href;
     writeSubjectFile(
@@ -137,7 +138,7 @@ function consensusPolicy() {
       max_commitments_per_action: 8,
       retained_root_count: 2048,
     },
-    pending_tightening: null,
+    pending_update: null,
   };
 }
 
@@ -166,68 +167,6 @@ function releaseBinding(protocolId, index) {
   };
 }
 
-function qualificationPayload() {
-  const releaseDigest = Array(32).fill(0xb1);
-  return {
-    release_manifest: {
-      version: 1,
-      catalog_id: "iroha-privacy-exact12-v1",
-      catalog_commitment: Array.from(Buffer.from(
-        "5bcf366fb18d2e4361486c015da5b41a3fb00edf05611042ccc452120d176eb0",
-        "hex",
-      )),
-      source: {},
-      abi_version: 1,
-      abi_hash: Array(32).fill(0xa1),
-      syscall_list_digest: Array(32).fill(0xa2),
-      executables: [],
-      protocols: PRIVACY_PROTOCOL_IDS_V1.map((protocolId, index) => ({
-        ...releaseBinding(protocolId, index),
-        security_claim: {},
-        security_claim_digest: Array(32).fill(index + 101),
-      })),
-      stage_receipts: [],
-      proof_artifacts: [],
-      sdk_packages: [],
-      hardware_results: [],
-      release_artifact_set_digest: Array(32).fill(0xa3),
-      audits: [],
-      audit_bundle_digest: Array(32).fill(0xa4),
-      release_signatures: [],
-      manifest_digest: releaseDigest,
-    },
-    deployment_qualification: {
-      version: 1,
-      chain_id: "fixture-chain",
-      network_id: TEST_LOCAL_SIGNING_CONTEXT.networkId.literal,
-      genesis_hash: Array.from(TEST_LOCAL_SIGNING_CONTEXT.networkId.toBytes()),
-      release_manifest_digest: [...releaseDigest],
-      activation_transaction_digest: Array(32).fill(0xd2),
-      activations: PRIVACY_PROTOCOL_IDS_V1.map((protocolId) => ({
-        protocol_id: tagged(protocolId),
-        activation_height: 2,
-      })),
-      validator_roster_digest: Array(32).fill(0xd3),
-      endpoint_version: "v1",
-      convergence_height: 3,
-      converged_state_digest: Array(32).fill(0xd4),
-      validator_canaries: [],
-      validator_signatures: [],
-      qualification_digest: Array(32).fill(0xd5),
-    },
-  };
-}
-
-function qualifiedManifestPayload() {
-  const payload = manifestPayload();
-  payload.qualification = qualificationPayload();
-  payload.protocols[1].readiness = {
-    readiness: "production-qualified",
-    detail: null,
-  };
-  return payload;
-}
-
 function manifestPayload() {
   const unavailable = {
     status: "unavailable",
@@ -238,26 +177,17 @@ function manifestPayload() {
     version: 1,
     committed_height: 42,
     consensus_policy: consensusPolicy(),
-    qualification: null,
+    network_id: TEST_LOCAL_SIGNING_CONTEXT.networkId.literal,
     protocols: PRIVACY_PROTOCOL_IDS_V1.map((protocolId, index) => {
       const active = protocolId === ACTIVE_PROTOCOL;
       const compiledProfile = active
         ? { status: "available", value: profile }
         : structuredClone(unavailable);
-      const activation = active
-        ? {
-            ...structuredClone(profile),
-            lifecycle: {
-              state: "active",
-              record: {
-                proposed_at_height: 1,
-                activated_at_height: 2,
-                state_since_height: 2,
-              },
-            },
-            pending_protocol_limits_tightening: null,
-          }
-        : null;
+      const policy = active ? {
+        protocol_id: tagged(protocolId),
+        current_limits: structuredClone(profile.protocol_limits),
+        pending_update: null,
+      } : null;
       const [operationSchema, executionMode, featureMask] = OPERATION_TUPLES[index];
       return {
         protocol_id: tagged(protocolId),
@@ -266,13 +196,7 @@ function manifestPayload() {
         privacy_feature_mask: featureMask,
         compiled_profile: compiledProfile,
         readiness: active
-          ? {
-              readiness: "unavailable",
-              detail: {
-                reason: "missing-production-qualification",
-                detail: null,
-              },
-            }
+          ? { readiness: "available", detail: null }
           : {
               readiness: "unavailable",
               detail: {
@@ -280,7 +204,7 @@ function manifestPayload() {
                 detail: structuredClone(unavailable.value),
               },
             },
-        activation,
+        policy,
       };
     }),
     manifest_digest: Array(32).fill(0xa5),
@@ -408,7 +332,11 @@ test("canonical decoder preserves immutable bytes and the closed Exact12 mapping
     assert.ok(manifest instanceof PrivacyExact12CapabilityManifestV1);
     assert.equal(manifest.version, 1);
     assert.equal(manifest.committed_height, 42n);
-    assert.equal(manifest.qualification, null);
+    assert.equal(manifest.network_id.literal, TEST_LOCAL_SIGNING_CONTEXT.networkId.literal);
+    assert.equal(Object.hasOwn(manifest, "qualification"), false);
+    const networkBytes = manifest.network_id.toBytes();
+    networkBytes[0] ^= 1;
+    assert.equal(manifest.network_id.literal, TEST_LOCAL_SIGNING_CONTEXT.networkId.literal);
     assert.deepEqual(manifest.canonicalBytes(), ARCHIVE);
     const returned = manifest.canonicalBytes();
     returned[0] ^= 0xff;
@@ -434,7 +362,7 @@ test("canonical decoder preserves immutable bytes and the closed Exact12 mapping
       "privacy_feature_mask",
       "compiled_profile",
       "readiness",
-      "activation",
+      "policy",
     ]);
     assert.deepEqual(manifest.protocols[0].readiness, {
       readiness: "unavailable",
@@ -444,11 +372,8 @@ test("canonical decoder preserves immutable bytes and the closed Exact12 mapping
       },
     });
     assert.deepEqual(manifest.protocols[1].readiness, {
-      readiness: "unavailable",
-      detail: {
-        reason: "missing-production-qualification",
-        detail: null,
-      },
+      readiness: "available",
+      detail: null,
     });
   });
 });
@@ -473,22 +398,22 @@ test("privacy consensus maxima match Rust transport fixtures and reject one over
   }
 });
 
-test("only authenticated transport grants admission; archived qualified evidence remains inspection-only", async () => {
-  await withNative(fakeNative(qualifiedManifestPayload()), async () => {
+test("only authenticated transport grants admission; archived available rows remain inspection-only", async () => {
+  await withNative(fakeNative(manifestPayload()), async () => {
     const archived = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
     assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(archived, ACTIVE_PROTOCOL), /authenticated Torii-origin/u);
     const manifest = await fetchTestManifest();
-    assert.equal(Object.isFrozen(manifest.qualification), true);
-    assert.equal(Object.isFrozen(manifest.qualification.release_manifest), true);
+    assert.equal(Object.isFrozen(manifest.network_id), true);
+    assert.equal(Object.hasOwn(manifest, "qualification"), false);
     assert.deepEqual(manifest.protocols[1].readiness, {
-      readiness: "production-qualified",
+      readiness: "available",
       detail: null,
     });
     const admission = requirePrivacyExact12CapabilityAdmissionV1(
       manifest,
       ACTIVE_PROTOCOL,
     );
-    assert.equal(admission.readiness, "production-qualified");
+    assert.equal(admission.readiness, "available");
     assert.equal(admission.protocol_id, ACTIVE_PROTOCOL);
     assert.deepEqual(admission.network_id, Array.from(TEST_LOCAL_SIGNING_CONTEXT.networkId.toBytes()));
     assert.equal(admission.torii_origin, "https://privacy.example.test");
@@ -497,16 +422,9 @@ test("only authenticated transport grants admission; archived qualified evidence
   });
 });
 
-test("qualification tuple drift derives unavailable and never reaches native admission", async () => {
-  const payload = qualifiedManifestPayload();
-  payload.qualification.release_manifest.protocols[1].parameter_digest[0] ^= 1;
-  payload.protocols[1].readiness = {
-    readiness: "unavailable",
-    detail: {
-      reason: "invalid-production-qualification",
-      detail: null,
-    },
-  };
+test("committed policy protocol drift rejects before native admission", async () => {
+  const payload = manifestPayload();
+  payload.protocols[1].policy.protocol_id = tagged(PRIVACY_PROTOCOL_IDS_V1[2]);
   let admissionCalls = 0;
   await withNative(fakeNative(payload, {
     privacyRequireExact12CapabilityTupleV1: () => {
@@ -514,12 +432,7 @@ test("qualification tuple drift derives unavailable and never reaches native adm
       return true;
     },
   }), async () => {
-    const manifest = await fetchTestManifest();
-    assert.deepEqual(manifest.protocols[1].readiness, payload.protocols[1].readiness);
-    assert.throws(
-      () => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL),
-      /not production-qualified/u,
-    );
+    await assert.rejects(fetchTestManifest(), /row protocol/u);
     assert.equal(admissionCalls, 0);
   });
 });
@@ -560,11 +473,11 @@ test("projection substitutions fail even behind a lying JSON projection helper",
     (value) => { value.protocols[0].activation_state = { activation_state: "not-registered", detail: null }; },
     (value) => { value.protocols[6].limitation = null; },
     (value) => {
-      value.protocols[1].activation.assurance = {
+      value.protocols[1].policy.assurance = {
         assurance: "experimental",
         value: null,
       };
-      value.protocols[1].activation.production_qualification = null;
+      value.protocols[1].policy.production_qualification = null;
     },
     (value) => { value.manifest_digest = Array(32).fill(0); },
     (value) => { value.unknown = true; },
@@ -581,59 +494,18 @@ test("projection substitutions fail even behind a lying JSON projection helper",
   }
 });
 
-test("unavailable readiness preserves exact registration and lifecycle reasons", async () => {
-  const cases = [
-    ["not-registered", null],
-    [
-      "proposed",
-      {
-        state: "proposed",
-        record: { proposed_at_height: 1 },
-      },
-    ],
-    [
-      "suspended",
-      {
-        state: "suspended",
-        record: {
-          proposed_at_height: 1,
-          activated_at_height: 2,
-          state_since_height: 3,
-        },
-      },
-    ],
-    [
-      "retired",
-      {
-        state: "retired",
-        record: {
-          proposed_at_height: 1,
-          activated_at_height: 2,
-          state_since_height: 3,
-        },
-      },
-    ],
-  ];
-  for (const [reason, lifecycle] of cases) {
+test("retired registration and lifecycle readiness cannot disable a compiled profile", async () => {
+  for (const reason of ["not-registered", "proposed", "suspended", "retired"]) {
     const payload = manifestPayload();
-    const row = payload.protocols[1];
-    if (lifecycle === null) {
-      row.activation = null;
-    } else {
-      row.activation.lifecycle = lifecycle;
-    }
-    row.readiness = {
-      readiness: "unavailable",
-      detail: { reason, detail: null },
-    };
+    payload.protocols[1].policy = null;
+    payload.protocols[1].readiness = { readiness: "unavailable", detail: { reason, detail: null } };
     await withNative(fakeNative(payload), () => {
-      const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
-      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /evidence-derived available/u);
     });
   }
 });
 
-test("pending tightening accepts next block and rejects invalid snapshot heights", async () => {
+test("pending policy update accepts next block and rejects invalid snapshot heights", async () => {
   for (const kind of ["consensus", "protocol"]) {
     for (const [scheduled, effective, committed, accepted] of [
       [42, 43, 42, true],
@@ -652,14 +524,14 @@ test("pending tightening accepts next block and rejects invalid snapshot heights
       const pending = { scheduled_at_height: scheduled, effective_at_height: effective };
       if (kind === "consensus") {
         pending.next_limits = { ...payload.consensus_policy.current_limits, retained_root_count: 1024 };
-        payload.consensus_policy.pending_tightening = pending;
+        payload.consensus_policy.pending_update = pending;
       } else {
         const row = payload.protocols[1];
         pending.next_limits = {
           protocol: ACTIVE_PROTOCOL,
           limits: { max_anonymity_set_size: 32, max_recipient_count: 8 },
         };
-        row.activation.pending_protocol_limits_tightening = pending;
+        row.policy.pending_update = pending;
       }
       // Native JSON carries uint64 values as integer tokens, never quoted strings.
       const native = fakeNative(payload, {
@@ -673,8 +545,8 @@ test("pending tightening accepts next block and rejects invalid snapshot heights
         if (accepted) {
           const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
           const actual = kind === "consensus"
-            ? manifest.consensus_policy.pending_tightening
-            : manifest.protocols[1].activation.pending_protocol_limits_tightening;
+            ? manifest.consensus_policy.pending_update
+            : manifest.protocols[1].policy.pending_update;
           assert.equal(actual.effective_at_height, BigInt(effective));
           assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL));
         } else {
@@ -685,88 +557,101 @@ test("pending tightening accepts next block and rejects invalid snapshot heights
   }
 });
 
-test("proposed remains pending at later heights until explicit activation", async () => {
+test("compiled availability uses defaults without a registration at every committed height", async () => {
   for (const committedHeight of [1, 42, 4_000]) {
     const payload = manifestPayload();
     payload.committed_height = committedHeight;
-    const row = payload.protocols[1];
-    row.activation.lifecycle = { state: "proposed", record: { proposed_at_height: 1 } };
-    row.readiness = { readiness: "unavailable", detail: { reason: "proposed", detail: null } };
-    await withNative(fakeNative(payload), () => {
-      const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
-      assert.deepEqual(manifest.protocols[1].activation.lifecycle.record, { proposed_at_height: 1n });
-      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
-    });
-    row.readiness = { readiness: "unavailable", detail: { reason: "missing-production-qualification", detail: null } };
-    await withNative(fakeNative(payload), () => {
-      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /Exact12 capability manifest/u);
+    payload.protocols[1].policy = null;
+    await withNative(fakeNative(payload), async () => {
+      const manifest = await fetchTestManifest();
+      assert.equal(manifest.protocols[1].policy, null);
+      assert.equal(requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL).readiness, "available");
     });
   }
 });
 
-test("same-height activation preserves history and qualification requirements", async () => {
-  for (const [state, since, reason] of [
-    ["active", 1, "missing-production-qualification"],
-    ["suspended", 2, "suspended"],
-    ["retired", 2, "retired"],
+test("ordinary policies preserve unavailable relations and reject retired activation layouts", async () => {
+  const payload = manifestPayload();
+  payload.protocols[5].policy = {
+    protocol_id: tagged(PRIVACY_PROTOCOL_IDS_V1[5]),
+    current_limits: { protocol: PRIVACY_PROTOCOL_IDS_V1[5], limits: null },
+    pending_update: null,
+  };
+  await withNative(fakeNative(payload), async () => {
+    const manifest = await fetchTestManifest();
+    assert.equal(manifest.protocols[5].readiness.readiness, "unavailable");
+    assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, PRIVACY_PROTOCOL_IDS_V1[5]), /not available/u);
+  });
+  for (const mutate of [
+    (p) => { p.protocols[1].activation = null; },
+    (p) => { p.protocols[1].policy.lifecycle = { state: "active", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } }; },
+    (p) => { p.protocols[1].policy.pending_protocol_limits_tightening = null; },
+    (p) => { p.consensus_policy.pending_tightening = null; },
   ]) {
+    const retired = manifestPayload(); mutate(retired);
+    await withNative(fakeNative(retired), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+    });
+  }
+});
+
+test("ordinary updates accept bounded increases and decreases but reject no-ops and ceilings", async () => {
+  for (const increase of [false, true]) {
     const payload = manifestPayload();
-    const row = payload.protocols[1];
-    row.activation.lifecycle = {
-      state,
-      record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: since },
+    payload.consensus_policy.current_limits.retained_root_count = increase ? 1024 : 2048;
+    payload.consensus_policy.pending_update = {
+      scheduled_at_height: 42, effective_at_height: 43,
+      next_limits: { ...payload.consensus_policy.current_limits, retained_root_count: increase ? 2048 : 1024 },
     };
-    row.readiness = { readiness: "unavailable", detail: { reason, detail: null } };
+    const policy = payload.protocols[1].policy;
+    policy.current_limits.limits.max_recipient_count = increase ? 4 : 8;
+    policy.pending_update = {
+      scheduled_at_height: 42, effective_at_height: 43,
+      next_limits: { protocol: ACTIVE_PROTOCOL, limits: { max_anonymity_set_size: 64, max_recipient_count: increase ? 8 : 4 } },
+    };
     await withNative(fakeNative(payload), () => {
       const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
-      assert.equal(manifest.protocols[1].activation.lifecycle.record.activated_at_height, 1n);
-      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+      assert.equal(manifest.protocols[1].policy.pending_update.next_limits.limits.max_recipient_count, increase ? 8 : 4);
     });
+  }
+  for (const kind of ["consensus", "protocol"]) {
+    for (const invalid of ["no-op", "ceiling", "protocol", "zero"]) {
+      const payload = manifestPayload();
+      const policy = kind === "consensus" ? payload.consensus_policy : payload.protocols[1].policy;
+      const next = structuredClone(policy.current_limits);
+      if (invalid === "ceiling") {
+        if (kind === "consensus") next.retained_root_count = 2049;
+        else next.limits.max_recipient_count = 9;
+      } else if (invalid === "zero") {
+        if (kind === "consensus") next.retained_root_count = 0;
+        else next.limits.max_recipient_count = 0;
+      } else if (invalid === "protocol") {
+        if (kind === "consensus") next.max_actions_per_transaction = 2;
+        else next.protocol = PRIVACY_PROTOCOL_IDS_V1[2];
+      }
+      policy.pending_update = { scheduled_at_height: 42, effective_at_height: 43, next_limits: next };
+      await withNative(fakeNative(payload), () => {
+        assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+      });
+    }
   }
 });
 
-test("explicit activation rejects scheduled fields and reversed or future history", async () => {
-  const cases = [
-    { state: "proposed", record: { proposed_at_height: 1, activate_at_height: 43 } },
-    { state: "proposed", record: {} },
-    { state: "proposed", record: { proposed_at_height: 0 } },
-    { state: "proposed", record: { proposed_at_height: 43 } },
-    { state: "active", record: { proposed_at_height: 2, activated_at_height: 1, state_since_height: 2 } },
-    { state: "active", record: { proposed_at_height: 1, activated_at_height: 2, state_since_height: 1 } },
-    { state: "active", record: { proposed_at_height: 1, activated_at_height: 43, state_since_height: 43 } },
-    { state: "suspended", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } },
-    { state: "retired", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } },
-    { state: "retired", record: { proposed_at_height: 1, activated_at_height: null, state_since_height: 1 } },
-  ];
-  for (const lifecycle of cases) {
-    const payload = manifestPayload();
-    const row = payload.protocols[1];
-    row.activation.lifecycle = lifecycle;
-    const reason = lifecycle.state === "active" ? "missing-production-qualification" : lifecycle.state;
-    row.readiness = { readiness: "unavailable", detail: { reason, detail: null } };
-    await withNative(fakeNative(payload), () => {
-      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /Exact12 capability manifest/u);
-    });
-  }
-});
-
-test("admission rejects active rows without registered production qualification", async () => {
+test("selected active protocol admits without a global qualification receipt", async () => {
   let nativeAdmissionCalls = 0;
   await withNative(fakeNative(manifestPayload(), {
-    privacyRequireExact12CapabilityTupleV1: () => {
+    privacyRequireExact12CapabilityTupleV1: (_archive, protocolId, network) => {
       nativeAdmissionCalls += 1;
+      assert.equal(protocolId, ACTIVE_PROTOCOL);
+      assert.deepEqual(network, TEST_LOCAL_SIGNING_CONTEXT.networkId.toBytes());
       return true;
     },
   }), async () => {
     const manifest = await fetchTestManifest();
-    assert.throws(
-      () => requirePrivacyExact12CapabilityAdmissionV1(
-        manifest,
-        ACTIVE_PROTOCOL,
-      ),
-      /not production-qualified/u,
-    );
-    assert.equal(nativeAdmissionCalls, 0);
+    assert.equal(manifest.protocols.filter((row) => row.readiness.readiness === "unavailable").length, 11);
+    const admission = requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL);
+    assert.equal(admission.readiness, "available");
+    assert.equal(nativeAdmissionCalls, 1);
     for (const retired of [
       "jindo-lattice-pcs-zk-v0",
       "sis-with-hints",
@@ -777,6 +662,7 @@ test("admission rejects active rows without registered production qualification"
         /retained Exact12 identifier/u,
       );
     }
+    assert.equal(nativeAdmissionCalls, 1);
   });
 });
 
@@ -860,7 +746,7 @@ test("N-API Torii fetch requests exact bounded Norito and browser fallback is ab
 
 
 test("forged symbol transports, other-network archives and insecure response origins reject", async () => {
-  await withNative(fakeNative(qualifiedManifestPayload()), async () => {
+  await withNative(fakeNative(manifestPayload()), async () => {
     let forgedCalls = 0;
     const forged = {};
     for (const key of Object.getOwnPropertySymbols(ToriiClient.prototype)) {
@@ -884,14 +770,14 @@ test("forged symbol transports, other-network archives and insecure response ori
 
 test("transport origin never substitutes for native tuple or network validation", async () => {
   for (const result of [false, "true", null]) {
-    await withNative(fakeNative(qualifiedManifestPayload(), {
+    await withNative(fakeNative(manifestPayload(), {
       privacyRequireExact12CapabilityTupleV1: () => result,
     }), async () => {
       const manifest = await fetchTestManifest();
       assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL), /sole success value/u);
     });
   }
-  await withNative(fakeNative(qualifiedManifestPayload(), {
+  await withNative(fakeNative(manifestPayload(), {
     privacyRequireExact12CapabilityTupleV1: () => { throw new Error("native network or tuple mismatch"); },
   }), async () => {
     const manifest = await fetchTestManifest();
@@ -921,7 +807,7 @@ test("unreadable transport origin is rejected without invoking getters and cance
 });
 
 test("Exact12 transport ignores mutable client and static normalization overrides", async () => {
-  await withNative(fakeNative(qualifiedManifestPayload()), async () => {
+  await withNative(fakeNative(manifestPayload()), async () => {
     let fetchCalls = 0;
     let overrideCalls = 0;
     const client = new ToriiClient("https://privacy.example.test", {
@@ -955,15 +841,118 @@ test("Exact12 transport ignores mutable client and static normalization override
 });
 
 
-test("privacy STARK capability bindings reject a different outer suite", async () => {
+test("selected protocol binding rejects another proof suite", async () => {
   for (const [key, field, label] of [
-    ["proof_system_id", "proof_system", "stark-fri-poseidon-x7-goldilocks-6x64-v1"],
-    ["engine_id", "engine", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+    ["proof_system_id", "proof_system", "stark-fri-sha3-384-goldilocks-v1"],
+    ["engine_id", "engine", "native-goldilocks-sha3-384-stark-fri-v1"],
   ]) {
-    const payload = qualifiedManifestPayload();
-    payload.qualification.release_manifest.protocols[0][key][field] = label;
-    await withNative(fakeNative(payload), async () => {
+    const payload = manifestPayload();
+    payload.protocols[1].compiled_profile.value[key][field] = label;
+    await withNative(fakeNative(payload), () => {
       assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
     });
   }
+});
+
+test("retired global qualification layout and readiness are rejected", async () => {
+  for (const mutate of [
+    (payload) => { payload.qualification = null; },
+    (payload) => { delete payload.network_id; },
+    (payload) => { payload.protocols[1].readiness = { readiness: "production-qualified", detail: null }; },
+    (payload) => { payload.protocols[1].readiness = { readiness: "unavailable", detail: { reason: "missing-production-qualification", detail: null } }; },
+  ]) {
+    const payload = manifestPayload();
+    mutate(payload);
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+    });
+  }
+});
+
+test("network identity requires the exact canonical marked hash literal", async () => {
+  for (const value of [null, "fixture-chain", Array(32).fill(0xa5),
+    TEST_LOCAL_SIGNING_CONTEXT.networkId.literal.toLowerCase(),
+    TEST_LOCAL_SIGNING_CONTEXT.networkId.literal.slice(0, -1) + "X"]) {
+    const payload = manifestPayload();
+    payload.network_id = value;
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+    });
+  }
+});
+
+test("protocol sequence accepts exactly twelve rows and rejects both adjacent counts", async () => {
+  for (const count of [11, 13]) {
+    const payload = manifestPayload();
+    payload.protocols = count === 11 ? payload.protocols.slice(0, 11) : [...payload.protocols, payload.protocols[0]];
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /exactly the 12 canonical protocol rows/u);
+    });
+  }
+});
+
+test("unfinished X509 joint security reduction rejects only its selected operation", async () => {
+  const payload = manifestPayload();
+  const row = payload.protocols[5];
+  const reason = { reason: "joint-security-reduction-incomplete", detail: null };
+  row.compiled_profile = { status: "unavailable", value: structuredClone(reason) };
+  row.readiness = { readiness: "unavailable", detail: { reason: "compiled-profile", detail: structuredClone(reason) } };
+  const calls = [];
+  await withNative(fakeNative(payload, {
+    privacyRequireExact12CapabilityTupleV1: (_archive, protocolId) => { calls.push(protocolId); return true; },
+  }), async () => {
+    const manifest = await fetchTestManifest();
+    assert.deepEqual(manifest.protocols[5].compiled_profile.value, reason);
+    assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, PRIVACY_PROTOCOL_IDS_V1[5]), /joint-security-reduction-incomplete/u);
+    requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL);
+    assert.deepEqual(calls, [ACTIVE_PROTOCOL]);
+  });
+  row.compiled_profile.value.detail = {};
+  await withNative(fakeNative(payload), () => {
+    assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /null detail/u);
+  });
+});
+
+test("an unrelated remote tuple mismatch leaves the matching selected protocol usable", async () => {
+  const payload = manifestPayload();
+  const row = payload.protocols[6];
+  const profile = {
+    ...releaseBinding(PRIVACY_PROTOCOL_IDS_V1[6], 6),
+    protocol_limits: { protocol: PRIVACY_PROTOCOL_IDS_V1[6], limits: { max_polynomial_count: 4 } },
+  };
+  profile.parameter_digest[0] ^= 1;
+  row.compiled_profile = { status: "available", value: structuredClone(profile) };
+  row.policy = null;
+  row.readiness = { readiness: "available", detail: null };
+  const calls = [];
+  await withNative(fakeNative(payload, {
+    privacyRequireExact12CapabilityTupleV1: (_archive, protocolId) => {
+      calls.push(protocolId);
+      if (protocolId !== ACTIVE_PROTOCOL) throw new Error("selected native tuple mismatch");
+      return true;
+    },
+  }), async () => {
+    const manifest = await fetchTestManifest();
+    requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL);
+    assert.deepEqual(calls, [ACTIVE_PROTOCOL]);
+    assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, PRIVACY_PROTOCOL_IDS_V1[6]), (error) => {
+      assert.ok(error instanceof PrivacyExact12CapabilityManifestError);
+      assert.equal(error.cause?.message, "selected native tuple mismatch");
+      return true;
+    });
+    assert.deepEqual(calls, [ACTIVE_PROTOCOL, PRIVACY_PROTOCOL_IDS_V1[6]]);
+  });
+});
+
+
+test("selected native admission never requires an unrelated local catalog lookup", async () => {
+  let calls = 0;
+  await withNative(fakeNative(manifestPayload(), {
+    privacyCompiledProfileCatalogV1: () => { throw new Error("unrelated catalog must not be queried"); },
+    privacyRequireExact12CapabilityTupleV1: () => { calls += 1; return true; },
+  }), async () => {
+    const manifest = await fetchTestManifest();
+    assert.equal(requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL).readiness, "available");
+    assert.equal(calls, 1);
+  });
 });

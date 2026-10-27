@@ -5259,6 +5259,31 @@ impl Compiler {
                             push_syscall(&mut code, syscalls::SYSCALL_VERIFY_PROOF);
                             spill_syscall_result(dest, &mut code)?;
                         }
+                        Instr::PresentX509 { dest, payload } => {
+                            // Public and internal `bytes` parameters use Blob carriers.
+                            // The existing metered normalizer preserves the exact payload
+                            // while supplying the bridge's required NoritoBytes pointer type.
+                            load_pointer(payload, 10, scratch1, DataKind::Blob, &mut code)?;
+                            code.extend_from_slice(&publish_tlv);
+                            push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
+                            push_word(
+                                &mut code,
+                                encode_addi(
+                                    11,
+                                    0,
+                                    i16::try_from(
+                                        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509,
+                                    )
+                                    .expect("X509 operation tag fits i16"),
+                                )?,
+                            );
+                            push_syscall_imm8(
+                                &mut code,
+                                syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                            );
+                            // This is an opaque queue ordinal, never a proof-success bit.
+                            spill_syscall_result(dest, &mut code)?;
+                        }
                         Instr::VendorExecuteInstruction { payload, kind } => {
                             load_pointer(payload, 10, scratch1, DataKind::NoritoBytes, &mut code)?;
                             // Mirror into INPUT to satisfy pointer‑ABI validation
@@ -9593,7 +9618,8 @@ fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType,
                 "state type `{name}` was not resolved before CNTR schema emission"
             ));
         }
-        Type::ContractRef(_)
+        Type::PendingAction
+        | Type::ContractRef(_)
         | Type::Secret(_)
         | Type::AxtDescriptor
         | Type::AxtAnchoredSpendV1
@@ -10279,7 +10305,8 @@ fn record_isi_access(
             };
             add_trigger_rw(access_set, &id);
         }
-        ir::Instr::VendorExecuteInstruction { payload, .. } => {
+        ir::Instr::PresentX509 { payload, .. }
+        | ir::Instr::VendorExecuteInstruction { payload, .. } => {
             // The emitted instruction bridge has Dynamic syscall access. Literal
             // payload hints remain useful, but cannot claim complete access for
             // that bridge: artifact admission validates the reachable syscall
@@ -12092,6 +12119,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
             access_class_for_builtin(Builtin::GetRegisterMerkleCompact)
         }
         ir::Instr::VerifyProof { .. } => access_class_for_builtin(Builtin::VerifyProof),
+        ir::Instr::PresentX509 { .. } => access_class_for_builtin(Builtin::PresentX509),
         ir::Instr::VendorExecuteInstruction { kind, .. } => access_class_for_builtin(match kind {
             ir::VendorInstructionKind::SubmitBallot => Builtin::ScExecuteSubmitBallot,
         }),

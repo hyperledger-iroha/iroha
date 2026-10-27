@@ -480,8 +480,8 @@ exhaustion.
 
 Torii integration
 
-- `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` value that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct it, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
-- `Torii::new` has one feature-independent, telemetry-disabled signature. Embeddings that collect telemetry use `new_with_handle` explicitly. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
+- `Torii::new_with_handle` is the single Torii constructor. Pass the executable build identity and an explicit telemetry profile through `ToriiRuntimeDeps::new(build_identity, telemetry)`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to pair the runtime handle with its active profile, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable. Tests can use `routing::MaybeTelemetry::for_tests()` for an in-process telemetry handle.
+- With `app_api`, Strict startup requires the node-owned private-settlement availability and phase signer capabilities in `ToriiRuntimeDeps`; attach them through `with_private_settlement_availability_signer` and `with_private_settlement_phase_signer`. The receipt signer supplies neither capability. Emergency Fast withholds these capabilities and durable services until a Strict restart. Test fixtures explicitly choose their BLS node identity and pass it to `test_utils::with_private_settlement_test_signers`; production startup must supply its original node-owned capabilities.
 
 - `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid I105 payloads, checksum failures, selector-prefixed bytes, and other strict-parser failures). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
 

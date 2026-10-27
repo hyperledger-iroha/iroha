@@ -177,7 +177,9 @@ fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
         let mut host = CoreHost::new(account.clone());
         host.syscall(ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY, &mut vm)
             .expect("queue transfer-availability instruction");
-        let queued = host.drain_instructions();
+        let queued = host
+            .drain_instructions()
+            .expect("ordinary instruction inspection retains no attachment owner");
         assert_eq!(queued.len(), 1);
         let instruction = queued[0]
             .as_any()
@@ -253,7 +255,9 @@ fn pointer_abi_daily_limit_preserves_some_and_none() {
         let mut host = CoreHost::new(account.clone());
         host.syscall(ivm_sys::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT, &mut vm)
             .expect("queue daily-limit instruction");
-        let queued = host.drain_instructions();
+        let queued = host
+            .drain_instructions()
+            .expect("ordinary instruction inspection retains no attachment owner");
         assert_eq!(queued.len(), 1);
         let instruction = queued[0]
             .as_any()

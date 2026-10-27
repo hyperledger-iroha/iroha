@@ -204,3 +204,111 @@ fn value_auxiliary_batches_match_every_endpoint_cell_and_scalar_columns() {
         bound.post_base = Some(token);
     }
 }
+
+#[test]
+fn value_auxiliary_public_selection_covers_every_bounded_range_and_boundary() {
+    let width = P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1;
+    for count in 1..=crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1 {
+        for first in 0..=width - count {
+            let selection = P256ValueAuxSelectionV1::new_v1(first, count).unwrap();
+            let selected = first..first + count;
+            assert_eq!(
+                selection.native,
+                selected.clone().any(|c| c < VALUE_WRITER_AUX)
+            );
+            assert_eq!(
+                selection.writer,
+                selected
+                    .clone()
+                    .any(|c| (VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX).contains(&c))
+            );
+            assert_eq!(
+                selection.arithmetic_copy,
+                selected.clone().any(|c| c >= VALUE_ARITHMETIC_COPY_AUX)
+            );
+        }
+    }
+    for (first, count) in [(0, 0), (0, 9), (width, 1), (width - 1, 2), (usize::MAX, 1)] {
+        assert_eq!(
+            P256ValueAuxSelectionV1::new_v1(first, count),
+            Err(P256AggregateAdapterErrorV1::Topology)
+        );
+    }
+}
+
+#[test]
+#[ignore = "full native value source, dense oracle and selected terminal failure"]
+fn value_auxiliary_selected_replay_preserves_dense_cells_and_terminal_refusal() {
+    let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();
+    let token = super::tests::main_post_base_v1(83);
+    let bound = base.bind_v1(&token).unwrap();
+    let registration = P256MainRegistrationV1::new_v1(0, P256MainAdapterV1::ValueBus, 0).unwrap();
+    let value = bound
+        .signature_v1(registration)
+        .unwrap()
+        .value
+        .as_ref()
+        .unwrap();
+    // These windows include both pure-family ranges and both family boundaries.
+    for first in [
+        0,
+        VALUE_WRITER_AUX - 4,
+        VALUE_WRITER_AUX,
+        VALUE_ARITHMETIC_COPY_AUX - 4,
+        VALUE_ARITHMETIC_COPY_AUX,
+        P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1 - 8,
+    ] {
+        let selection = P256ValueAuxSelectionV1::new_v1(first, 8).unwrap();
+        let mut selected = bound.value_execution_aux_stream_v1(registration).unwrap();
+        let mut dense = P256ValueExecutionAggregateStreamV1::new_v1(value).unwrap();
+        for _ in 0..P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1 {
+            let actual = zeroize::Zeroizing::new(
+                selected
+                    .next_selected_aux_row_v1(selection)
+                    .unwrap()
+                    .unwrap(),
+            );
+            let expected = zeroize::Zeroizing::new(dense.next_aux_row_v1().unwrap().unwrap());
+            assert_eq!(&actual[first..first + 8], &expected[first..first + 8]);
+            if !selection.native {
+                assert!(actual[..VALUE_WRITER_AUX].iter().all(|v| *v == F::ZERO));
+            }
+            if !selection.writer {
+                assert!(
+                    actual[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX]
+                        .iter()
+                        .all(|v| *v == F::ZERO)
+                );
+            }
+            if !selection.arithmetic_copy {
+                assert!(
+                    actual[VALUE_ARITHMETIC_COPY_AUX..]
+                        .iter()
+                        .all(|v| *v == F::ZERO)
+                );
+            }
+        }
+        assert!(
+            selected
+                .next_selected_aux_row_v1(selection)
+                .unwrap()
+                .is_none()
+        );
+        assert!(dense.next_aux_row_v1().unwrap().is_none());
+    }
+    let first = VALUE_ARITHMETIC_COPY_AUX;
+    let selection = P256ValueAuxSelectionV1::new_v1(first, 1).unwrap();
+    let mut selected = bound.value_execution_aux_stream_v1(registration).unwrap();
+    selected.arithmetic_copy_terminal[0] = selected.arithmetic_copy_terminal[0].add(F::ONE);
+    let mut column = zeroize::Zeroizing::new(vec![F(97); P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1]);
+    assert_eq!(
+        fill_aggregate_aux_columns_v1::<P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1>(
+            P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
+            first,
+            &mut [&mut column],
+            || selected.next_selected_aux_row_v1(selection)
+        ),
+        Err(P256AggregateAdapterErrorV1::Constraint)
+    );
+    assert!(column.iter().all(|v| *v == F::ZERO));
+}

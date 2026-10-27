@@ -237,6 +237,7 @@ impl DurableMusubiPublicationServiceClockV1 {
             validate_lock(storage)?;
             root.reconcile_atomic_staging(
                 &[CLOCK_STATE_FILE, CLOCK_LOCK_FILE],
+                16,
                 1,
                 MAX_CLOCK_STATE_BYTES,
             )

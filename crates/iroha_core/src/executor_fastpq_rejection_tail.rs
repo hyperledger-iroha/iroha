@@ -217,7 +217,8 @@ fn check(
                     .sponsor_program()
                     .is_some_and(|(selected, _)| selected == program) =>
             {
-                &state.nexus.fees.sponsor_vault_custody_account_id
+                crate::executor::root_fees::sponsor_vault_custody(state)
+                    .map_err(|error| TailError::Fault(error.to_string()))?
             }
             _ => {
                 return Err(TailError::Fault(

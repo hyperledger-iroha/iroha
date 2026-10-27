@@ -730,11 +730,11 @@ fn evidence_seeds_are_deterministic_and_purpose_separated() {
     );
 }
 #[test]
-fn zk_x509_profile_is_unavailable_until_qualification_and_resource_facts_are_total() {
+fn zk_x509_profile_refuses_missing_joint_reduction_while_resource_facts_are_total() {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
     assert!(matches!(
         compiled_privacy_profile_v1(protocol_id),
-        Err(crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+        Err(crate::privacy_profiles::CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete {
             protocol_id: unavailable,
         }) if unavailable == protocol_id
     ));

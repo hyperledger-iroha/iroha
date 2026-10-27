@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import ast
 import importlib.util
 from pathlib import Path
@@ -184,9 +186,12 @@ def test_current_wallet_c_and_jni_inventory_matches_independent_source_declarati
     assert jni_rust == set(MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS)
 
 
-def test_native_privacy_inventory_requires_authoritative_capability_validator() -> None:
-    missing = "iroha_privacy_validate_exact12_capability_manifest_v1"
-    assert len(MODULE.APPROVED_PRIVACY_C_EXPORTS) == 6
+@pytest.mark.parametrize("missing", [
+    "iroha_privacy_validate_exact12_capability_manifest_v1",
+    "iroha_privacy_validate_exact12_submit_proof_construction_v1",
+])
+def test_native_privacy_inventory_requires_authoritative_capability_validator(missing: str) -> None:
+    assert len(MODULE.APPROVED_PRIVACY_C_EXPORTS) == 7
     assert missing in MODULE.REQUIRED_SYMBOLS["csharp"]
     symbols = [symbol for symbol in MODULE.APPROVED_PRIVACY_C_EXPORTS if symbol != missing]
     try:
@@ -199,8 +204,11 @@ def test_native_privacy_inventory_requires_authoritative_capability_validator() 
         raise AssertionError("native privacy artifact without capability validator was accepted")
 
 
-def test_native_c_probe_rejects_missing_privacy_capability_validator() -> None:
-    missing = "iroha_privacy_validate_exact12_capability_manifest_v1"
+@pytest.mark.parametrize("missing", [
+    "iroha_privacy_validate_exact12_capability_manifest_v1",
+    "iroha_privacy_validate_exact12_submit_proof_construction_v1",
+])
+def test_native_c_probe_rejects_missing_privacy_capability_validator(missing: str) -> None:
     library = types.SimpleNamespace(**{
         symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS["csharp"]
         if symbol != missing
@@ -977,7 +985,7 @@ def test_swift_retained_bridge_exports_have_one_canonical_header_owner() -> None
                         if initialized:
                             continue
                         for index, item in enumerate(declarator):
-                            if not item.startswith("connect_norito_"):
+                            if not item.startswith(("connect_norito_", "iroha_privacy_")):
                                 continue
                             left = index
                             while left > 0 and declarator[left - 1] == "(":
@@ -1023,7 +1031,7 @@ def test_swift_retained_bridge_exports_have_one_canonical_header_owner() -> None
                     assert depth == 0 and tokens[cursor:cursor + 1] == [";"]
                     initializers.append({
                         item for item in tokens[start:cursor - 1]
-                        if item.startswith("connect_norito_")
+                        if item.startswith(("connect_norito_", "iroha_privacy_"))
                     })
             braces += (token == "{") - (token == "}")
             parentheses += (token == "(") - (token == ")")
@@ -1117,7 +1125,12 @@ def test_swift_retained_bridge_exports_have_one_canonical_header_owner() -> None
     retention = (
         REPO_ROOT / "IrohaSwift/Sources/NoritoBridgeRetention/NoritoBridgeRetention.c"
     ).read_text(encoding="utf-8")
+    privacy = "iroha_privacy_validate_exact12_submit_proof_construction_v1"
+    assert prototype_counts(f"int32_t {privacy}(const uint8_t *data);") == Counter({privacy: 1})
+    assert prototype_counts(f"/* int32_t {privacy}(void); */") == Counter()
+    assert retained_exports(initializer.replace(first, privacy)) == {privacy, second}
     retained = retained_exports(retention)
+    assert set(MODULE.APPROVED_PRIVACY_C_EXPORTS) <= retained
     assert {
         "connect_norito_decode_control_approve_sig_alg",
         "connect_norito_encode_envelope_sign_result_ok_with_alg",
@@ -1141,3 +1154,27 @@ def test_abi31_rejects_all_retired_timed_ovn_exports() -> None:
                 assert "retired protocol symbols" in str(error)
             else:
                 raise AssertionError(f"ABI 31 accepted retired symbol: {symbol}")
+
+
+def test_csharp_x509_owner_exports_are_required_and_match_actual_imports() -> None:
+    """Omitting any opaque-owner operation must fail the packaged native contract."""
+    source = (REPO_ROOT / "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyX509PreparedTransactionV1.cs").read_text()
+    header = (REPO_ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h").read_text()
+    owner = (REPO_ROOT / "crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs").read_text()
+    imports = set(re.findall(r'EntryPoint = "([^"]+)"', source))
+    required = MODULE.REQUIRED_SYMBOLS["csharp"]
+    assert len(MODULE.ZK_X509_TRANSACTION_C_EXPORTS) == 4
+    assert imports <= set(required)
+    for symbol in MODULE.ZK_X509_TRANSACTION_C_EXPORTS:
+        assert symbol in imports
+        assert re.search(r"\b" + symbol + r"\s*\(", header)
+        assert re.search(r"\bfn\s+" + symbol + r"\s*\(", owner)
+        library = types.SimpleNamespace(**{name: object() for name in required if name != symbol})
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-owned-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert "missing required symbols" in str(error)
+                assert symbol in str(error)
+            else:
+                raise AssertionError(f"C# native artifact accepted without {symbol}")

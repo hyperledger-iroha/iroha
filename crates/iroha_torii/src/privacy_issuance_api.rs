@@ -1286,8 +1286,8 @@ fn committed_snapshot_v1(
             return Err(BootleLanternIssuanceApiErrorV1::PolicyUnavailable);
         }
     };
-    let activation = view
-        .qualified_privacy_activation_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+    let admitted = view
+        .admitted_privacy_protocol_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
         .map_err(|_| BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
     let committed_height = capabilities.committed_height;
     if committed_height == 0
@@ -1325,11 +1325,11 @@ fn committed_snapshot_v1(
             canonical_genesis_hash,
             policy.record_digest.as_bytes(),
         )?),
-        parameter_id: activation.parameter_id,
-        parameter_digest: activation.parameter_digest,
-        verifier_digest: activation.verifier_digest,
-        statement_schema_digest: activation.statement_schema_digest,
-        engine_manifest_digest: activation.engine_manifest_digest,
+        parameter_id: admitted.profile().parameter_id,
+        parameter_digest: admitted.profile().parameter_digest,
+        verifier_digest: admitted.profile().verifier_digest,
+        statement_schema_digest: admitted.profile().statement_schema_digest,
+        engine_manifest_digest: admitted.profile().engine_manifest_digest,
     };
     if profile.parameter_id != context.parameter_id
         || profile.parameter_digest != context.parameter_digest

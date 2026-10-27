@@ -3166,12 +3166,6 @@ impl_default!(NexusAxt => {
 /// Governed atomic private cross-dataspace settlement configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Whether admission is enabled, subject to the governed activation height.
-    pub enabled: bool,
-    /// First block height at which the path may be admitted.
-    pub activation_height: Option<u64>,
-    /// Minimum notice required between governance approval and activation.
-    pub minimum_activation_notice_blocks: NonZeroU64,
     /// Audited fixed-shape private-note proof profile version.
     pub proof_profile_version: NonZeroU16,
     /// Maximum number of ordered dataspace legs in one bundle.
@@ -3208,12 +3202,6 @@ pub struct NexusAtomicPrivateSettlement {
 }
 impl_default!(NexusAtomicPrivateSettlement => {
         Self {
-            enabled: defaults::nexus::atomic_private_settlement::ENABLED,
-            activation_height: None,
-            minimum_activation_notice_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
-            )
-            .expect("private-settlement activation notice must be non-zero"),
             proof_profile_version: NonZeroU16::new(
                 defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
             )
@@ -3758,9 +3746,6 @@ struct NexusConsensusAxtV1 {
 }
 #[derive(Encode)]
 struct NexusConsensusAtomicPrivateSettlementV1 {
-    enabled: bool,
-    activation_height: Option<u64>,
-    minimum_activation_notice_blocks: u64,
     proof_profile_version: u16,
     max_participants: u16,
     max_expiry_blocks: u64,
@@ -4064,12 +4049,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             replay_retention_slots: nexus.axt.replay_retention_slots.get(),
         },
         atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
-            enabled: nexus.atomic_private_settlement.enabled,
-            activation_height: nexus.atomic_private_settlement.activation_height,
-            minimum_activation_notice_blocks: nexus
-                .atomic_private_settlement
-                .minimum_activation_notice_blocks
-                .get(),
             proof_profile_version: nexus.atomic_private_settlement.proof_profile_version.get(),
             max_participants: nexus.atomic_private_settlement.max_participants.get(),
             max_expiry_blocks: nexus.atomic_private_settlement.max_expiry_blocks.get(),

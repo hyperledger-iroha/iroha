@@ -5927,6 +5927,7 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "NftView",
         "QueryPage",
         "AssetUidHoldingQuote",
+        "PendingAction",
         "AxtDescriptor",
         "AxtAnchoredSpendV1",
         "ProofBlob",

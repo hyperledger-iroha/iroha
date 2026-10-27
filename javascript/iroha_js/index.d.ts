@@ -106,32 +106,24 @@ export type {
   PrivacyCompiledProfileBindingsV1,
   PrivacyCompiledProfileResultV1,
   PrivacyConsensusLimitsV1,
-  PrivacyConsensusPolicyTighteningV1,
+  PrivacyConsensusPolicyUpdateV1,
   PrivacyConsensusPolicyV1,
   PrivacyEngineIdV1,
   PrivacyEngineTagV1,
-  PrivacyExact12DeploymentQualificationV1,
   PrivacyExact12CapabilityAdmissionV1,
   PrivacyExact12CapabilityManifestNodeClientV1,
   PrivacyExact12CapabilityManifestRequestOptions,
   PrivacyExact12CapabilityRowV1,
-  PrivacyExact12QualificationRecordV1,
-  PrivacyExact12ReleaseManifestV1,
   PrivacyExecutionModeV1,
   PrivacyFixed32BytesV1,
   PrivacyOperationSchemaV1,
   PrivacyProofSystemIdV1,
   PrivacyProofSystemTagV1,
-  PrivacyProtocolActivationRecordV1,
+  PrivacyProtocolPolicyV1,
   PrivacyProtocolIdV1,
-  PrivacyProtocolLifecycleV1,
+  PrivacyProtocolLimitsUpdateV1,
   PrivacyProtocolLimitsV1,
-  PrivacyReleaseProtocolBindingV1,
   PrivacyProtocolTagV1,
-  PrivacyDeploymentActivationV1,
-  PrivacySecurityClaimV1,
-  PrivacySecurityModelTagV1,
-  PrivacySecurityModelV1,
   PrivacyTaggedUnitV1,
   PrivacyU64V1,
 } from "./privacy-capabilities.js";
@@ -11576,7 +11568,7 @@ export interface PrivacyExact12TypedFixtureRowV1 {
   protocolId: PrivacyExact12ProtocolIdV1;
   statementNorito: Uint8Array;
   envelopeNorito: Uint8Array;
-  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofWireId: "iroha.privacy.submit_proof.v1" | "iroha.privacy.submit_zk_x509_certificate.v1";
   submitProofInstructionNorito: Uint8Array;
   transactionIntentProjectionNorito: Uint8Array;
   transactionIntentDigest: Uint8Array;
@@ -11588,7 +11580,7 @@ export interface PrivacyExact12TypedFixtureRowInputV1 {
   protocolId: PrivacyExact12ProtocolIdV1;
   statementNorito: BinaryLike;
   envelopeNorito: BinaryLike;
-  submitProofWireId: "iroha.privacy.submit_proof.v1";
+  submitProofWireId: "iroha.privacy.submit_proof.v1" | "iroha.privacy.submit_zk_x509_certificate.v1";
   submitProofInstructionNorito: BinaryLike;
   transactionIntentProjectionNorito: BinaryLike;
   transactionIntentDigest: BinaryLike;
@@ -14565,3 +14557,6 @@ export function inspectToriiAccountIdentityViaNativeTransport(
   input: { networkId: NetworkId; baseUrl: string; accountId: string },
   transport: (request: Readonly<{ requestId: string; body: string }>) => Promise<unknown>,
 ): Promise<NativeAccountIdentity>;
+
+export { PrivacyX509DirectTransactionV1, preparePrivacyX509DirectTransactionV1, buildPrivacyX509DirectTransactionV1 } from "./privacy-x509.js";
+export type { PrivacyX509DirectTransactionInputV1, PrivacyX509BytesV1 } from "./privacy-x509.js";

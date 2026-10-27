@@ -5107,6 +5107,7 @@ seiyaku Callee {
 }
 include!("host/nested_contract_state_and_rollback_tests.rs");
 include!("host/attachment_lifecycle_tests.rs");
+include!("host/x509_attachment_tests.rs");
 include!("host/nested_return_funding_tests.rs");
 include!("host/shared_vm_cycle_budget_tests.rs");
 #[test]
@@ -7509,6 +7510,7 @@ fn host_execution_artifacts_apply_queued_uses_queued_authority_snapshot() {
     let source_call = Hash::from(source.hash_as_entrypoint());
     let mut stx = block.transaction_for_fastpq_testing(source_call);
     let artifacts = HostExecutionArtifacts {
+        x509_queue_backing: None,
         queued: vec![QueuedEffect {
             payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
                 InstructionBox::from(Transfer::asset_quantity(
@@ -7579,6 +7581,7 @@ fn rejected_queued_confidential_instruction_retains_host_artifact_gas() {
             .expect("completed fixture gas quote");
     assert!(confidential_gas_delta > 0);
     let artifacts = HostExecutionArtifacts {
+        x509_queue_backing: None,
         queued: vec![QueuedEffect {
             payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
                 instruction.clone(),
@@ -7767,6 +7770,7 @@ seiyaku DurableOwner {
         .expect("foreign durable path");
     assert!(!authorization.owns_durable_state_path(&foreign_path));
     let artifacts = HostExecutionArtifacts {
+        x509_queue_backing: None,
         queued: Vec::new(),
         entrypoint_authorization: Some(authorization.clone()),
         confidential_gas_delta: 0,

@@ -241,6 +241,15 @@ public final class PrivacyNativeBridgeJavaConsumerTest {
     final org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1 typed =
         PrivacyNativeBridge.compiledProfileCatalogTypedV1();
     assert typed.protocols.size() == 12;
+    final PrivacyCompiledProfileResultV1 x509 =
+        typed.protocols.get(PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal())
+            .compiledProfile;
+    assert x509 instanceof PrivacyCompiledProfileResultV1.Unavailable;
+    final PrivacyCompiledProfileResultV1.Unavailable unavailableX509 =
+        (PrivacyCompiledProfileResultV1.Unavailable) x509;
+    assert unavailableX509.reason
+        == PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE;
+    assert unavailableX509.statementSchemaError == null;
     assert Arrays.equals(
         canonical,
         org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(

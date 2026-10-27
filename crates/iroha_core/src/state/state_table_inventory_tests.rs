@@ -1840,11 +1840,6 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Accumulator("confidential_note_tree"),
     },
     ConstructionUse {
-        path: "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-        uses: &[("ConfidentialTree", 2)],
-        owner: UseOwner::Accumulator("confidential_note_tree"),
-    },
-    ConstructionUse {
         path: "crates/iroha_core/src/snapshot.rs",
         uses: &[("MerkleTree", 7)],
         owner: UseOwner::Roots(&["state_snapshot_chunk_root"]),
@@ -1866,6 +1861,11 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
             Use::BlockContent,
             "Recomputes a committed block's Network input and output Merkle roots from authenticated frame windows and checks them against the header and certified result: block content, not a State-content root",
         ),
+    },
+    ConstructionUse {
+        path: "crates/iroha_core/src/state/ivm_zk_roots.rs",
+        uses: &[("ConfidentialTree", 1)],
+        owner: UseOwner::Accumulator("confidential_note_tree"),
     },
     ConstructionUse {
         path: "crates/iroha_core/src/state/output_capacity.rs",
@@ -9318,6 +9318,103 @@ fn state_inventory_native_abc_result_tag_is_a_schema_name() {
         Some(DomainOwner::Other(Use::Name))
     ));
     assert!(!scan.unlisted_domains.contains(&format!("{tag} in {path}")));
+}
+
+/// Privacy wire names and proof-free action input digests retain their distinct roles.
+#[test]
+fn privacy_request_inventory_pins_exact_domains_and_source_uses() {
+    let paths = [
+        "crates/iroha_data_model/src/isi/privacy.rs",
+        "crates/iroha_data_model/src/isi/privacy_x509_request.rs",
+        "crates/iroha_data_model/src/isi/registry/wire_ids.rs",
+    ];
+    let texts = paths.map(source);
+    let scan = scan_sources(
+        paths
+            .iter()
+            .zip(texts.iter())
+            .map(|(path, text)| (*path, text.as_str())),
+    );
+    let owners = domain_owners();
+    for (literal, declaration) in [
+        (
+            "iroha.privacy.schedule_consensus_policy_update.v1",
+            paths[0],
+        ),
+        ("iroha.privacy.schedule_protocol_limits_update.v1", paths[0]),
+        ("iroha.privacy.submit_zk_x509_certificate.v1", paths[1]),
+    ] {
+        assert_eq!(owners.get(literal), Some(&DomainOwner::Other(Use::Name)));
+        assert_eq!(
+            scan.literal_uses.get(literal),
+            Some(&BTreeMap::from([
+                (declaration.to_owned(), 1_usize),
+                (paths[2].to_owned(), 1_usize),
+            ])),
+            "the wire name must remain visible at its declaration and dispatch registry"
+        );
+    }
+    let digest_domain = "iroha.privacy.zk-x509-request-public-inputs.v1";
+    assert_eq!(
+        owners.get(digest_domain),
+        Some(&DomainOwner::Other(Use::BlockContent))
+    );
+    assert_eq!(
+        scan.literal_uses.get(digest_domain),
+        Some(&BTreeMap::from([(paths[1].to_owned(), 1_usize)]))
+    );
+    // A new version of either role must not inherit its neighbour's classification.
+    for literal in [
+        "iroha.privacy.schedule_consensus_policy_update.v2",
+        "iroha.privacy.schedule_protocol_limits_update.v2",
+        "iroha.privacy.submit_zk_x509_certificate.v2",
+        "iroha.privacy.zk-x509-request-public-inputs.v2",
+    ] {
+        let probe = format!("const DOMAIN: &str = \"{literal}\";");
+        let probe = scan_sources([(paths[1], probe.as_str())]);
+        assert_eq!(
+            probe.unlisted_domains,
+            BTreeSet::from([format!("{literal} in {}", paths[1])])
+        );
+        assert!(std::panic::catch_unwind(|| probe.require_complete()).is_err());
+    }
+}
+
+/// The immutable root projection remains owned by the confidential-note accumulator.
+#[test]
+fn ivm_zk_roots_inventory_tracks_current_owner_and_refuses_extra_constructions() {
+    let current = "crates/iroha_core/src/state/ivm_zk_roots.rs";
+    let former = "crates/iroha_core/src/smartcontracts/ivm/host.rs";
+    let listed = CONSTRUCTION_USES
+        .iter()
+        .find(|listed| listed.path == current)
+        .expect("the current confidential-root projection is listed");
+    assert_eq!(listed.uses, &[("ConfidentialTree", 1)]);
+    assert!(matches!(
+        listed.owner,
+        UseOwner::Accumulator("confidential_note_tree")
+    ));
+    assert!(CONSTRUCTION_USES.iter().all(|listed| listed.path != former));
+    let text = source(current);
+    let old_text = source(former);
+    let scan = scan_sources([(current, text.as_str()), (former, old_text.as_str())]);
+    assert!(scan.unlisted_uses.is_empty(), "{:?}", scan.unlisted_uses);
+    assert!(!scan.stale_uses.contains(current));
+    for (path, original) in [(current, text.as_str()), (former, old_text.as_str())] {
+        let changed = format!("{original}\nuse crate::zk::ConfidentialTree;\n");
+        let probe = scan_sources([(path, changed.as_str())]);
+        assert_eq!(probe.unlisted_uses.len(), 1);
+        assert!(
+            probe
+                .unlisted_uses
+                .iter()
+                .next()
+                .is_some_and(|item| item.starts_with(path)),
+            "{:?}",
+            probe.unlisted_uses
+        );
+        assert!(std::panic::catch_unwind(|| probe.require_complete()).is_err());
+    }
 }
 
 /// A test-only argument cannot hide the next original AMX State-reader method.

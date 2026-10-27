@@ -3971,14 +3971,14 @@
       "group": "x509",
       "what": "Exact largest encoding of the current X5S1 proof geometry.",
       "unit": "bytes",
-      "value": 9412944,
+      "value": 9435984,
       "source": "constant",
       "class": "consensus",
       "owner": {
         "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
         "symbol": "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1",
         "kind": "const",
-        "expr": "9_412_944"
+        "expr": "9_435_984"
       },
       "inclusive": true,
       "enforcement": [
@@ -3995,7 +3995,7 @@
         },
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
-          "name": "complete_stark_geometry_fits_cap_while_activation_requires_evidence"
+          "name": "complete_stark_geometry_fits_cap_while_joint_security_construction_is_missing"
         }
       ]
     },
@@ -4029,7 +4029,7 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_numeric.rs",
-          "contains": "assert!(ZK_X509_MAX_CRL_AGE_SECONDS_V1 <= u16::MAX as u64); ZK_X509_MAX_CRL_AGE_SECONDS_V1 as u16"
+          "contains": "assert!(ZK_X509_MAX_CRL_AGE_SECONDS_V1 <= u16::MAX as u64); let bytes = ZK_X509_MAX_CRL_AGE_SECONDS_V1.to_le_bytes(); u16::from_le_bytes([bytes[0], bytes[1]])"
         },
         {
           "stage": "sdk",
@@ -4167,7 +4167,7 @@
         },
         {
           "stage": "follower",
-          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs",
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/certificate.rs",
           "contains": "if serials.len() >= ZK_X509_MAX_CRL_ENTRIES_V1 {"
         }
       ],
@@ -4201,7 +4201,7 @@
       "observations": [
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs",
-          "contains": "prove_elapsed.as_secs_f64() <= ZK_X509_PROVER_TARGET_SECONDS_V1 as f64,",
+          "contains": "assert!( prove_elapsed <= std::time::Duration::from_secs(ZK_X509_PROVER_TARGET_SECONDS_V1), \"complete proof exceeds unchanged proving target; verified public proof and receipt retained at {}\",",
           "what": "The diagnostic prover compares its measured wall time with the target; the result is evidence and no validator reads it."
         }
       ]
@@ -4801,7 +4801,7 @@
         {
           "stage": "transport",
           "path": "crates/iroha_core/src/sumeragi/driver/mod.rs",
-          "contains": "match WireMessage::decode(frame, self.shared.frame_limit) {"
+          "contains": "WireMessage::decode(frame, self.shared.frame_limit) .is_ok_and(|msg| self.deliver_message(from.clone(), msg))"
         },
         {
           "stage": "sync",
@@ -11618,7 +11618,7 @@
     {
       "id": "transaction_cap_fits_block_payload",
       "expr": "transaction.max_tx_bytes + block.payload_transaction_reserve_bytes <= block.max_block_bytes",
-      "why": "A transaction admitted under the committed cap must fit the effective block payload after its non-transaction reserve. Pure policy checks and the complete-invocation, executed-genesis, governance and restore hooks validate the next and following effective heights; a rejected candidate rolls back without changing any parameter.",
+      "why": "A transaction admitted under the committed cap must fit the effective block payload after its non-transaction reserve. Pure policy checks and the complete-invocation, executed-genesis, governance and restore hooks validate the next and following effective heights and any later pending privacy-policy boundary under the following effective cap; a rejected candidate rolls back without changing any parameter.",
       "expect": {
         "today": "holds",
         "x2_target": "holds"
@@ -11667,6 +11667,14 @@
         {
           "path": "crates/iroha_core/src/state/deserialize_core.rs",
           "name": "resource_restore_rejects_incoherent_original_undo_before_rollback"
+        },
+        {
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "name": "later_privacy_increase_checks_the_exact_future_boundary_and_second_successor_cap"
+        },
+        {
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "name": "later_privacy_increase_checks_signed_action_context_and_transaction_budget"
         }
       ],
       "enforcement": [
@@ -11683,7 +11691,12 @@
         {
           "stage": "follower",
           "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
-          "contains": "for (effective_height, cap) in [ (next, next_max_block_bytes), (after_next, after_next_max_block_bytes), ] {"
+          "contains": "for (effective_height, cap) in [ (next, next_max_block_bytes), (after_next, after_next_max_block_bytes), ] .into_iter() .chain(later_policy_boundary) {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_data_model/src/parameter/system/resource_coherence.rs",
+          "contains": "let later_policy_boundary = privacy .pending_update .as_ref() .filter(|pending| pending.effective_at_height > after_next) .map(|pending| (pending.effective_at_height, after_next_max_block_bytes));"
         },
         {
           "stage": "follower",
@@ -13767,7 +13780,7 @@
       "struct": "NexusConsensusPolicyPreimageV1",
       "field_form": "struct_tree",
       "source": "node_local",
-      "what": "The typed catalog of [nexus] node configuration that decides validity: the function builds this struct from the node's Nexus configuration, and its hash is the Nexus consensus-policy digest bound into execution_policy_digest_v1 as nexus.policy_digest. The code is authoritative; this view records which of its fields are resource bounds of the transaction and proof path (each a node-local validity bound with an F.4 defect) and why every other field is not. The checker reads the fields of the struct and of the structs it nests and fails on a field that is neither.",
+      "what": "The typed Nexus consensus-policy preimage is defined and built in iroha_config::parameters::actual. Its current lifetime parameter borrows the exact original committed RootFeePolicy through Option<PayloadRef>; it does not create a node-local monetary fallback. The ten listed resource bounds retain their node-local classification and F.4 defects. The code is authoritative: the checker reads this struct and its nested same-file structs, checks that the named function constructs it, and requires every leaf field to be listed or excluded with a reason. The digest remains bound into execution_policy_digest_v1 as nexus.policy_digest. Monetary staking fields are no longer in this preimage; current monetary consumer and authority qualification remain separate obligations.",
       "fields": {
         "atomic_private_settlement.max_participants": "transaction.config_private_settlement_max_participants",
         "atomic_private_settlement.max_carrier_bytes": "transaction.config_private_settlement_max_carrier_bytes",
@@ -13804,20 +13817,11 @@
           ]
         },
         {
-          "reason": "Public-lane staking policy: validator modes, minimum stake, the capacities of the validator, stake-share and unbond registries, the unbonding delay, the slash ratio and the custody accounts. They bound the staking registry and committee membership, not a proof, transaction, block, transport or VM resource of this path. F.4 owns them as node-local validity policy.",
+          "reason": "Validator activation modes and committee capacity are the remaining staking fields in this Nexus configuration preimage. Monetary terms, share/unbond capacities, delay and exact custody identities belong to the mandatory committed PublicLaneStakingPolicy (public_lane_staking_v1), and are absent from this struct and its node-context tags. Their removal from this catalog does not remove their separate validation or close F.4 consumer qualification.",
           "fields": [
             "staking.public_validator_mode",
             "staking.restricted_validator_mode",
-            "staking.min_validator_stake",
-            "staking.max_validators",
-            "staking.max_stake_shares_per_validator",
-            "staking.max_pending_unbonds_per_share",
-            "staking.unbonding_delay.seconds",
-            "staking.unbonding_delay.nanoseconds",
-            "staking.max_slash_bps",
-            "staking.stake_asset_id",
-            "staking.stake_escrow_account_id",
-            "staking.slash_sink_account_id"
+            "staking.max_validators"
           ]
         },
         {
@@ -13845,12 +13849,8 @@
           ]
         },
         {
-          "reason": "The activation switch of atomic private settlement and its notice period: an activation gate. P.5 and F.4 remove runtime activation predicates.",
-          "fields": [
-            "atomic_private_settlement.enabled",
-            "atomic_private_settlement.activation_height",
-            "atomic_private_settlement.minimum_activation_notice_blocks"
-          ]
+          "reason": "Retired atomic private settlement enable, activation-height and notice fields. This empty classification retains no active parameter; current native and regenerated authority/history validation remain pending.",
+          "fields": []
         },
         {
           "reason": "Relation and audit-policy identity of atomic private settlement (proof profile version, permitted policy versions, minimum auditor approvals): which relation and policy apply, not a resource bound. P.20 and F.4 own them.",
@@ -14427,8 +14427,8 @@
         }
       },
       {
-        "path": "crates/iroha_data_model/src/block/consensus.rs",
-        "reason": "Committee-size geometry (3f + 1 with f <= 10): a protocol structure bound, covered on the transport path by transport.max_committee_size.",
+        "path": "crates/iroha_model_base/src/topology.rs",
+        "reason": "Committee geometry is a fixed protocol admission structure: exactly 3f + 1 validators for 1 <= f <= 10. These unchanged constants moved to the model-base topology owner. The exact geometry is distinct from the larger generic frame-sizing ceiling transport.max_committee_size; neither is a local tuning knob.",
         "symbols": [
           "MAX_FAULTS_PER_HEIGHT",
           "MAX_VALIDATORS_PER_HEIGHT"
@@ -14436,6 +14436,11 @@
         "exprs": {
           "MAX_FAULTS_PER_HEIGHT": "10",
           "MAX_VALIDATORS_PER_HEIGHT": "3 * MAX_FAULTS_PER_HEIGHT + 1"
+        },
+        "term_of": {
+          "MAX_FAULTS_PER_HEIGHT": [
+            "crates/iroha_model_base/src/topology.rs: MAX_VALIDATORS_PER_HEIGHT"
+          ]
         }
       },
       {
@@ -14743,9 +14748,9 @@
           "ZK_X509_MAX_NATIVE_TRACE_ROWS_V1": "1 << ZK_X509_MAX_NATIVE_TRACE_LOG2_V1",
           "ZK_X509_MAX_CONSTRAINT_DEGREE_V1": "7",
           "ZK_X509_FRI_EXCLUSIVE_DEGREE_CAP_V1": "589_824",
-          "ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1": "7_536_672",
+          "ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1": "7_558_432",
           "ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1": "1_446_016",
-          "ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1": "7_908_768",
+          "ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1": "7_931_808",
           "ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1": "1_498_816"
         }
       },
@@ -15213,14 +15218,11 @@
       },
       {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "reason": "Lane fusion and autoscale policy, staking registry capacities and the slash ratio, and DA attester sampling and rotation: lane scheduling, committee and staking policy. The catalog nexus_consensus_policy_v1 excludes the same fields with its reasons.",
+        "reason": "Lane fusion and autoscale policy, validator capacity, and DA attester sampling and rotation: lane scheduling and committee policy. The catalog nexus_consensus_policy_v1 excludes these current fields with its reasons. Monetary staking terms have no node defaults: the former share/unbond/slash constants are retired, and the mandatory committed PublicLaneStakingPolicy owns those terms. Removing retired names does not qualify its execution consumers.",
         "symbols": [
           "MAX_WINDOW_SLOTS",
           "MAX_LANE_ID_EXCLUSIVE",
           "MAX_VALIDATORS",
-          "MAX_STAKE_SHARES_PER_VALIDATOR",
-          "MAX_PENDING_UNBONDS_PER_SHARE",
-          "MAX_SLASH_BPS",
           "SAMPLE_SIZE_MAX",
           "MAX_HITS_PER_WINDOW"
         ],
@@ -15231,9 +15233,6 @@
           "MAX_WINDOW_SLOTS": "16",
           "MAX_LANE_ID_EXCLUSIVE": "8",
           "MAX_VALIDATORS": "nonzero!(32_u32)",
-          "MAX_STAKE_SHARES_PER_VALIDATOR": "nonzero!(256_u32)",
-          "MAX_PENDING_UNBONDS_PER_SHARE": "nonzero!(8_u32)",
-          "MAX_SLASH_BPS": "10_000",
           "SAMPLE_SIZE_MAX": "96",
           "MAX_HITS_PER_WINDOW": "4"
         }
@@ -16148,7 +16147,7 @@
               "DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1"
             ],
             "exprs": {
-              "DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1": "&[ \"as\", \"permission\", \"authorize\", \"break\", \"const\", \"continue\", \"else\", \"enum\", \"error\", \"export\", \"false\", \"fn\", \"for\", \"hajimari\", \"if\", \"import\", \"in\", \"include\", \"kaizen\", \"kotoage\", \"let\", \"match\", \"module\", \"return\", \"seiyaku\", \"state\", \"struct\", \"event\", \"emit\", \"trigger\", \"true\", \"var\", \"view\", \"int\", \"decimal\", \"quantity\", \"bool\", \"string\", \"bytes\", \"Json\", \"AccountId\", \"AssetDefinitionId\", \"AssetId\", \"DomainId\", \"Name\", \"NftId\", \"DataSpaceId\", \"Option\", \"Result\", \"List\", \"ListError\", \"NumericError\", \"StateMap\", \"StateCursor\", \"StatePage\", \"Secret\", \"AccountView\", \"AssetView\", \"AssetDefinitionView\", \"DomainView\", \"NftView\", \"QueryPage\", \"AssetUidHoldingQuote\", \"AxtDescriptor\", \"AxtAnchoredSpendV1\", \"ProofBlob\", \"SoracloudRequest\", \"SoracloudResponse\", \"state_map_get\", \"__kotodama_state_page\", \"__kotodama_state_take\", \"__kotodama_list_len\", \"__kotodama_list_get\", \"__kotodama_list_set\", \"__kotodama_list_push\", \"__kotodama_list_try_set\", \"__kotodama_list_try_push\", \"__kotodama_list_pop\", \"__kotodama_list_contains\", \"__kotodama_list_take\", \"__kotodama_list_enumerate\", \"__kotodama_decimal_div_round\", \"__kotodama_decimal_mul_div_round\", \"__kotodama_quantity_mul_div_round\", \"__kotodama_quantity_div_round\", \"__kotodama_quantity_ratio_round\", \"__kotodama_decimal_to_int_trunc\", \"__kotodama_decimal_to_int_round\", \"__kotodama_option_ok_or\", \"__kotodama_result_or_err\", ]",
+              "DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1": "&[ \"as\", \"permission\", \"authorize\", \"break\", \"const\", \"continue\", \"else\", \"enum\", \"error\", \"export\", \"false\", \"fn\", \"for\", \"hajimari\", \"if\", \"import\", \"in\", \"include\", \"kaizen\", \"kotoage\", \"let\", \"match\", \"module\", \"return\", \"seiyaku\", \"state\", \"struct\", \"event\", \"emit\", \"trigger\", \"true\", \"var\", \"view\", \"int\", \"decimal\", \"quantity\", \"bool\", \"string\", \"bytes\", \"Json\", \"AccountId\", \"AssetDefinitionId\", \"AssetId\", \"DomainId\", \"Name\", \"NftId\", \"DataSpaceId\", \"Option\", \"Result\", \"List\", \"ListError\", \"NumericError\", \"StateMap\", \"StateCursor\", \"StatePage\", \"Secret\", \"AccountView\", \"AssetView\", \"AssetDefinitionView\", \"DomainView\", \"NftView\", \"QueryPage\", \"AssetUidHoldingQuote\", \"PendingAction\", \"AxtDescriptor\", \"AxtAnchoredSpendV1\", \"ProofBlob\", \"SoracloudRequest\", \"SoracloudResponse\", \"state_map_get\", \"__kotodama_state_page\", \"__kotodama_state_take\", \"__kotodama_list_len\", \"__kotodama_list_get\", \"__kotodama_list_set\", \"__kotodama_list_push\", \"__kotodama_list_try_set\", \"__kotodama_list_try_push\", \"__kotodama_list_pop\", \"__kotodama_list_contains\", \"__kotodama_list_take\", \"__kotodama_list_enumerate\", \"__kotodama_decimal_div_round\", \"__kotodama_decimal_mul_div_round\", \"__kotodama_quantity_mul_div_round\", \"__kotodama_quantity_div_round\", \"__kotodama_quantity_ratio_round\", \"__kotodama_decimal_to_int_trunc\", \"__kotodama_decimal_to_int_round\", \"__kotodama_option_ok_or\", \"__kotodama_result_or_err\", ]",
               "DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1": "&[\"__kotodama_link_\"]"
             }
           },
@@ -16369,7 +16368,7 @@
               "KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS"
             ],
             "exprs": {
-              "KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS": "&[ \"int\", \"decimal\", \"quantity\", \"bool\", \"string\", \"bytes\", \"Json\", \"AccountId\", \"AssetDefinitionId\", \"AssetId\", \"DomainId\", \"Name\", \"NftId\", \"DataSpaceId\", \"Option\", \"Result\", \"List\", \"ListError\", \"NumericError\", \"StateMap\", \"StateCursor\", \"StatePage\", \"Secret\", \"AccountView\", \"AssetView\", \"AssetDefinitionView\", \"DomainView\", \"NftView\", \"QueryPage\", \"AssetUidHoldingQuote\", \"AxtDescriptor\", \"AxtAnchoredSpendV1\", \"ProofBlob\", \"SoracloudRequest\", \"SoracloudResponse\", \"state_map_get\", \"__kotodama_state_page\", \"__kotodama_state_take\", \"__kotodama_list_len\", \"__kotodama_list_get\", \"__kotodama_list_set\", \"__kotodama_list_push\", \"__kotodama_list_try_set\", \"__kotodama_list_try_push\", \"__kotodama_list_pop\", \"__kotodama_list_contains\", \"__kotodama_list_take\", \"__kotodama_list_enumerate\", \"__kotodama_decimal_div_round\", \"__kotodama_decimal_mul_div_round\", \"__kotodama_quantity_mul_div_round\", \"__kotodama_quantity_div_round\", \"__kotodama_quantity_ratio_round\", \"__kotodama_decimal_to_int_trunc\", \"__kotodama_decimal_to_int_round\", \"__kotodama_option_ok_or\", \"__kotodama_result_or_err\", \"i8\", \"i16\", \"i32\", \"i64\", \"i128\", \"isize\", \"u8\", \"u16\", \"u32\", \"u64\", \"u128\", \"usize\", \"num\", \"Int\", \"Integer\", \"float\", \"f32\", \"f64\", \"Decimal\", \"Fixed\", \"FixedPoint\", \"Amount\", \"amount\", \"money\", \"Quantity\", \"number\", ]"
+              "KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS": "&[ \"int\", \"decimal\", \"quantity\", \"bool\", \"string\", \"bytes\", \"Json\", \"AccountId\", \"AssetDefinitionId\", \"AssetId\", \"DomainId\", \"Name\", \"NftId\", \"DataSpaceId\", \"Option\", \"Result\", \"List\", \"ListError\", \"NumericError\", \"StateMap\", \"StateCursor\", \"StatePage\", \"Secret\", \"AccountView\", \"AssetView\", \"AssetDefinitionView\", \"DomainView\", \"NftView\", \"QueryPage\", \"AssetUidHoldingQuote\", \"PendingAction\", \"AxtDescriptor\", \"AxtAnchoredSpendV1\", \"ProofBlob\", \"SoracloudRequest\", \"SoracloudResponse\", \"state_map_get\", \"__kotodama_state_page\", \"__kotodama_state_take\", \"__kotodama_list_len\", \"__kotodama_list_get\", \"__kotodama_list_set\", \"__kotodama_list_push\", \"__kotodama_list_try_set\", \"__kotodama_list_try_push\", \"__kotodama_list_pop\", \"__kotodama_list_contains\", \"__kotodama_list_take\", \"__kotodama_list_enumerate\", \"__kotodama_decimal_div_round\", \"__kotodama_decimal_mul_div_round\", \"__kotodama_quantity_mul_div_round\", \"__kotodama_quantity_div_round\", \"__kotodama_quantity_ratio_round\", \"__kotodama_decimal_to_int_trunc\", \"__kotodama_decimal_to_int_round\", \"__kotodama_option_ok_or\", \"__kotodama_result_or_err\", \"i8\", \"i16\", \"i32\", \"i64\", \"i128\", \"isize\", \"u8\", \"u16\", \"u32\", \"u64\", \"u128\", \"usize\", \"num\", \"Int\", \"Integer\", \"float\", \"f32\", \"f64\", \"Decimal\", \"Fixed\", \"FixedPoint\", \"Amount\", \"amount\", \"money\", \"Quantity\", \"number\", ]"
             }
           },
           {
@@ -16593,18 +16592,16 @@
               "MAX_TTL_MILLIS",
               "MAX_CREATION_TIME_MILLIS",
               "MAX_ASSET_DEFINITION_ID_BYTES",
-              "MAX_COMPILED_PROFILE_BYTES",
-              "MAX_ACTIVATION_TEMPLATE_BYTES"
+              "MAX_COMPILED_PROFILE_BYTES"
             ],
             "exprs": {
               "MAX_REQUEST_BYTES": "16 * 1024",
               "MAX_TRANSACTION_BYTES": "TAIRA_PRIVACY_MAX_ACTION_BYTES_V1 as usize",
-              "MAX_RESPONSE_BYTES": "2 * MAX_TRANSACTION_BYTES + 2 * MAX_COMPILED_PROFILE_BYTES + 2 * MAX_ACTIVATION_TEMPLATE_BYTES + MAX_REQUEST_BYTES",
+              "MAX_RESPONSE_BYTES": "2 * MAX_TRANSACTION_BYTES + 2 * MAX_COMPILED_PROFILE_BYTES + MAX_REQUEST_BYTES",
               "MAX_TTL_MILLIS": "2 * 60 * 60 * 1_000",
               "MAX_CREATION_TIME_MILLIS": "9_223_372_036_854_775_807",
               "MAX_ASSET_DEFINITION_ID_BYTES": "1024",
-              "MAX_COMPILED_PROFILE_BYTES": "64 * 1024",
-              "MAX_ACTIVATION_TEMPLATE_BYTES": "64 * 1024"
+              "MAX_COMPILED_PROFILE_BYTES": "64 * 1024"
             }
           },
           {
@@ -18860,7 +18857,7 @@
         ]
       },
       {
-        "reason": "Privacy products beside the listed action and proof bounds (proof.privacy_max_action_bytes, proof.privacy_max_proof_bytes_per_action): the FCMP++ layer count, the decode limits of the compiled-profile catalog and capability archives, the exact-12 fixture bundle and release-manifest text bounds and the largest representable zk-X509 time. A catalog or archive is read from a node's own release material; none bounds bytes a transaction carries beyond the listed bounds.",
+        "reason": "Privacy products beside the listed action and proof bounds (proof.privacy_max_action_bytes, proof.privacy_max_proof_bytes_per_action): the FCMP++ layer count, the decode limits of the compiled-profile catalog and runtime capability archives, the exact-12 fixture bundle and release-manifest text bounds and the largest representable zk-X509 time. Compiled catalogs and documentary release material have separate owners; runtime capability manifests project an authoritative committed snapshot and are decoded at their dedicated archive boundary. Archive inputs may be untrusted, so their byte, sequence, field, cumulative element, allocation and depth checks remain mandatory. The runtime sequence is the exact twelve-protocol catalog; documentary evidence does not enlarge it. These product archive ceilings do not replace or enlarge the listed transaction or proof admission bounds.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/privacy/proofs.rs",
@@ -18899,7 +18896,7 @@
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "256 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1": "32",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "16 * 1024",
+              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "16 * PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
@@ -19504,7 +19501,7 @@
               "LANE_COMPLIANCE_POLICY_MAX_TOTAL_ELEMENTS": "64 * 1024",
               "LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES": "16 * 1024 * 1024",
               "LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH": "64",
-              "LANE_COMPLIANCE_LOAD_LIMITS": "LaneComplianceLoadLimits { max_files: MAX_ACTIVE_EXECUTION_LANES, max_file_bytes: LANE_COMPLIANCE_POLICY_MAX_BYTES, max_aggregate_bytes: LANE_COMPLIANCE_POLICY_AGGREGATE_MAX_BYTES, max_field_bytes: LANE_COMPLIANCE_POLICY_MAX_FIELD_BYTES, max_sequence_elements: LANE_COMPLIANCE_POLICY_MAX_SEQUENCE_ELEMENTS, max_total_elements: LANE_COMPLIANCE_POLICY_MAX_TOTAL_ELEMENTS, max_decode_allocated_bytes: LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES, max_decode_depth: LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH, }",
+              "LANE_COMPLIANCE_LOAD_LIMITS": "LaneComplianceLoadLimits { files: MAX_ACTIVE_EXECUTION_LANES, file_bytes: LANE_COMPLIANCE_POLICY_MAX_BYTES, aggregate_bytes: LANE_COMPLIANCE_POLICY_AGGREGATE_MAX_BYTES, field_bytes: LANE_COMPLIANCE_POLICY_MAX_FIELD_BYTES, sequence_elements: LANE_COMPLIANCE_POLICY_MAX_SEQUENCE_ELEMENTS, total_elements: LANE_COMPLIANCE_POLICY_MAX_TOTAL_ELEMENTS, decode_allocated_bytes: LANE_COMPLIANCE_POLICY_MAX_DECODE_ALLOCATED_BYTES, decode_depth: LANE_COMPLIANCE_POLICY_MAX_DECODE_DEPTH, }",
               "LANE_COMPLIANCE_POLICY_DECODE_ALLOCATION_MULTIPLIER": "8",
               "LANE_COMPLIANCE_POLICY_DECODE_FIXED_ALLOCATION_BYTES": "16 * 1024"
             }
@@ -19561,7 +19558,7 @@
               "GOVERNANCE_OVERLAY_MAX_MODULES_V1": "256",
               "GOVERNANCE_OVERLAY_MAX_PARAMS_PER_MODULE_V1": "128",
               "GOVERNANCE_OVERLAY_MAX_PARAMS_V1": "4 * 1024",
-              "MANIFEST_JSON_LIMITS_V1": "ManifestJsonLimits { max_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_V1, max_strings: MANIFEST_SOURCE_MAX_STRINGS_V1, max_total_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_TOTAL_V1, max_rule_units: MANIFEST_SOURCE_MAX_RULE_UNITS_V1, max_depth: MANIFEST_SOURCE_MAX_JSON_DEPTH_V1, }"
+              "MANIFEST_JSON_LIMITS_V1": "ManifestJsonLimits { string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_V1, strings: MANIFEST_SOURCE_MAX_STRINGS_V1, total_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_TOTAL_V1, rule_units: MANIFEST_SOURCE_MAX_RULE_UNITS_V1, max_depth: MANIFEST_SOURCE_MAX_JSON_DEPTH_V1, }"
             }
           }
         ]
@@ -21269,7 +21266,7 @@
             }
           },
           {
-            "path": "crates/iroha_data_model/src/block/consensus.rs",
+            "path": "crates/iroha_model_base/src/topology.rs",
             "symbols": [
               "MIN_VALIDATORS_PER_HEIGHT"
             ],
@@ -21909,8 +21906,8 @@
               "default_lane_epoch_capacity"
             ],
             "exprs": {
-              "default_capacity": "match NonZeroUsize::new(Self::DEFAULT_CAPACITY) { Some(capacity) => capacity, None => NonZeroUsize::MIN, }",
-              "default_lane_epoch_capacity": "match NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY) { Some(capacity) => capacity, None => NonZeroUsize::MIN, }"
+              "default_capacity": "NonZeroUsize::new(Self::DEFAULT_CAPACITY).map_or(NonZeroUsize::MIN, |capacity| capacity)",
+              "default_lane_epoch_capacity": "NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY) .map_or(NonZeroUsize::MIN, |capacity| capacity)"
             }
           },
           {
@@ -24163,9 +24160,6 @@
             "symbols": [
               "MAX_NEXUS_AMX_CONTEXT_BYTES_V1",
               "STAKING_MAX_VALIDATORS",
-              "STAKING_MAX_STAKE_SHARES_PER_VALIDATOR",
-              "STAKING_MAX_PENDING_UNBONDS_PER_SHARE",
-              "STAKING_MAX_SLASH_BPS",
               "AXT_MAX_CLOCK_SKEW_MS",
               "FUSION_MAX_WINDOW_SLOTS",
               "AUTOSCALE_MAX_LANE_ID_EXCLUSIVE",
@@ -24179,9 +24173,6 @@
             "exprs": {
               "MAX_NEXUS_AMX_CONTEXT_BYTES_V1": "1 << 20",
               "STAKING_MAX_VALIDATORS": "\"nexus.staking.max_validators\"",
-              "STAKING_MAX_STAKE_SHARES_PER_VALIDATOR": "\"nexus.staking.max_stake_shares_per_validator\"",
-              "STAKING_MAX_PENDING_UNBONDS_PER_SHARE": "\"nexus.staking.max_pending_unbonds_per_share\"",
-              "STAKING_MAX_SLASH_BPS": "\"nexus.staking.max_slash_bps\"",
               "AXT_MAX_CLOCK_SKEW_MS": "\"nexus.axt.max_clock_skew_ms\"",
               "FUSION_MAX_WINDOW_SLOTS": "\"nexus.fusion.max_window_slots\"",
               "AUTOSCALE_MAX_LANE_ID_EXCLUSIVE": "\"nexus.autoscale.max_lane_id_exclusive\"",
@@ -25178,6 +25169,38 @@
         "exprs": {
           "MAX_INITIALIZATION_ROWS": "65_536"
         }
+      },
+      {
+        "reason": "These two proof-free SubmitPrivacyZkX509CertificateV1 allocation preflight ceilings are derived from proof.privacy_max_statement_and_encrypted_output_bytes_per_transaction (the existing 256 KiB tagged-statement hard ceiling) and the maintained canonical framing owner. The request replaces only the statement enum u32 discriminant with the length-prefixed action/slot reference; the boxed request adds its registered wire tuple and InstructionBox frame. Original VM/executor allocation custody is reserved before decode or source normalization, while committed statement, proof, action and transaction admission limits still apply independently and may be tighter. Exact native-frame-layout and exact-request-charge/+1 regressions cover the framing equation and consensus charge. These are fixed derived allocation geometries, not new independently configurable admission limits or exceptions to the existing caps; both complete defining expressions remain pinned.",
+        "files": [
+          {
+            "path": "crates/iroha_data_model/src/isi/privacy_x509_request.rs",
+            "symbols": [
+              "canonical_frame_byte_limit_v1",
+              "canonical_instruction_box_frame_byte_limit_v1"
+            ],
+            "exprs": {
+              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
+              "canonical_instruction_box_frame_byte_limit_v1": "let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags()); let tuple = crate::isi::encoded_instruction_tuple_len( Self::WIRE_ID, Self::canonical_frame_byte_limit_v1(), ) .expect(\"fixed registered request tuple fits usize\"); crate::isi::framed_instruction_payload_len_for::<crate::isi::InstructionBox>(tuple) .expect(\"fixed instruction box ceiling fits usize\")"
+            }
+          }
+        ]
+      },
+      {
+        "reason": "The private-settlement sidecar committed namespace contains at most the configured hard record ceiling plus one promotion overlap and one private staging child. Its distinct staging namespace holds only the retained exclusive writer lock and one interrupted native temporary. These are bounded local filesystem inventory checks, not consensus validity or proof qualification. Startup scans committed records sequentially; staging cleanup retains both original objects without a descriptor per committed record.",
+        "files": [
+          {
+            "path": "crates/iroha_core/src/private_settlement/sidecar_store.rs",
+            "symbols": [
+              "SIDECAR_MAX_COMMITTED_NAMES_V1",
+              "SIDECAR_MAX_STAGED_FILES_V1"
+            ],
+            "exprs": {
+              "SIDECAR_MAX_COMMITTED_NAMES_V1": "PRIVATE_SETTLEMENT_SIDECAR_HARD_MAX_RECORDS_V1 + 2",
+              "SIDECAR_MAX_STAGED_FILES_V1": "1"
+            }
+          }
+        ]
       }
     ],
     "literals": {
@@ -27320,7 +27343,7 @@
               "path": "crates/iroha_core/src/kagemusha_wallet_v1/event_evidence.rs",
               "sites": {
                 "self.count.get() > (1_u64 << 32)": 1,
-                "u64::try_from(events.len()).map_err(invalid)? > (1_u64 << 32)": 1
+                "u64::try_from(events.len()).map_err(|error| invalid(&error))? > (1_u64 << 32)": 1
               }
             },
             {
@@ -28524,6 +28547,28 @@
                 "wallet_scope_canonical.len() > 16384": 1,
                 "json::to_vec(fees).map_err(|error| error.to_string())?.len() > 8192": 1,
                 "charges.len() > 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Gas parameter duplicate selection sorts preadmitted inline asset keys with original indices, inspects adjacent pairs (windows(2)), and selects the earliest duplicate index with min(). Two is pair geometry; min selects an error position, not a count, byte, gas or work ceiling. Scratch storage remains preadmitted through the original AllocationBudget. The native semantic walk preserves invalid-address, duplicate and invalid-rate error ordering.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/pipeline_gas_policy/gas_admission.rs",
+              "sites": {
+                "scratch .as_slice() .windows(2) .filter(|w| w[0].0.is_some() && w[0].0 == w[1].0) .map(|w| w[1].1) .min()": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The native FX parameter-publication suffix accepts the existing producer's paired event geometry: six transfer events, at most two destination Asset::Created events and at most one transfer-control metadata event per leg. Both original event buffers must advance equally by six through ten events before the final parameter notification; ordinary callers still require zero preceding events. This closed sequence-shape and retained-source check does not grant monetary authority or replace allocation admission. Local output backing is reserved before mutation, and incomplete, excessive or unpaired sequences remain rejected.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/state/parameter_publication.rs",
+              "sites": {
+                "(6..=10).contains(&count)": 1
               }
             }
           ]

@@ -330,7 +330,12 @@ impl FileWorkflowStorage {
             return Ok(0);
         }
         workflow
-            .reconcile_atomic_staging(&present, MAX_STAGED_RECORDS, MAX_WORKFLOW_JOURNAL_BYTES_V1)
+            .reconcile_atomic_staging(
+                &present,
+                16,
+                MAX_STAGED_RECORDS,
+                MAX_WORKFLOW_JOURNAL_BYTES_V1,
+            )
             .map_err(|error| unavailable("remove interrupted workflow journal staging", &error))
     }
 

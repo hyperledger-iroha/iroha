@@ -417,10 +417,11 @@ and transaction ID. The shared Rust corpus in `fixtures/zk/signed_attachments_v1
 pins full payload bytes, carrier options and lane witnesses, explicit account/contract bindings,
 and normalized digest preimages. `Executable.IvmProved` carries bytecode, the claimed overlay,
 and marked event/gas commitments; `withIvmExecutionProof` binds its single execution carrier.
-Its intent projection excludes the generated overlay and output commitments. Typed privacy
-submission projection uses the current Rust model through `PrivacyNativeBridge`, with canonical
-bounded decoding for all twelve protocols in direct and batch forms. This requires the matching
-native bridge; its encode-only projection path grants no privacy construction admission.
+Its intent projection excludes the generated overlay and output commitments. The eleven generic
+privacy submission projections use the current Rust model through `PrivacyNativeBridge`. X.509
+keeps its proof-free request unchanged in the ordered intent and binds its statement through the
+original `ActionStatementV1`. Both routes require the matching native bridge for canonical bounded
+decoding; projection and statement materialization grant no privacy construction admission.
 Cryptographic proof verification and state admission remain node responsibilities.
 
 ### One-shot signed HTTP requests
@@ -955,7 +956,7 @@ every connection.
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` exposes local build metadata only.
+`PrivacyNativeBridge` exposes local build metadata and canonical request-binding helpers.
 `compiledProfileCatalogV1()` returns this binary's canonical typed
 `PrivacyCompiledProfileCatalogV1` Norito archive, and
 `protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
@@ -966,12 +967,40 @@ committed `/v1/privacy/capabilities` manifest from live Torii.
 `HttpClientTransport.getPrivacyCapabilities(canonicalAuth)` performs a one-shot
 authenticated HTTPS fetch (or explicitly opted-in local HTTP) for `ClientConfig`'s immutable local
 network, verifies
-the exact response URL and bounded Norito body, and native-validates its signatures
-and deployment network before privately binding its origin. Public archive decoding
+the exact response URL and bounded Norito body, and native-validates the canonical
+manifest and its digest. Both native and managed admission require the manifest's
+authoritative top-level `network_id` to equal that network, including when every
+protocol is unavailable, before privately binding its origin. Public archive decoding
 is inspection-only and cannot mint admission. Native construction validates the
 selected activation and limits; the transaction encoder also requires the token's
 network to equal the enclosing transaction network. Java consumers use this same
 Kotlin-owned boundary.
+
+The runtime manifest carries `version`, `network_id`, `committed_height`,
+`consensus_policy`, the twelve canonical `protocols` rows, and `manifest_digest`.
+A supported compiled profile with active committed policy is `available`; an
+unsupported or inactive protocol is `unavailable` for its exact closed reason.
+Documentary release and deployment qualification are separate diagnostics and do
+not grant runtime admission. Availability is per protocol; it retains the current
+network, compiled tuple, policy, cryptographic, permission, replay and resource
+checks without requiring all twelve protocols to be available.
+
+X.509 remains unavailable with `joint-security-reduction-incomplete` because its
+joint Fiat–Shamir security reduction is incomplete. Its request-binding helpers
+remain inspectable, but the current catalog cannot authorize X.509 submission.
+
+X.509 uses `SubmitPrivacyZkX509CertificateV1.fromStatementV1` with the independent
+statement and attachment action ordinal. Its context retains the separate privacy ordinal and
+zero derived intent. Supply the explicit `plannedProofOccurrenceV1` descriptor before
+`materializeStatementV1` derives the original payload binding; replace that occurrence with
+the raw proof, preserve its index and kind, and bind the final attachment statements before
+signing. `toInstructionBoxV1` requires current capability admission. The request contains no
+proof bytes; the signed `Proof`/`ActionProof` occurrence owns the proof.
+
+`ci/check_privacy_jvm_sdk.sh` selects both the Kotlin X.509 producer tests and the Java
+consumer tests alongside canonical transaction, attachment, signer, hash and fixture controls
+and its existing suites. Their native execution requires a matching bridge and authentically
+regenerated Exact12 and signed-attachment fixtures.
 
 Genesis `confidential_features` and `zk_policy_hash` values are opaque consensus
 fingerprints, never client-side proof or backend selectors.

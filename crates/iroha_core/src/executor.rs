@@ -3148,6 +3148,30 @@ pub struct ContractRuntimeExecutionContext {
     pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     pub(crate) entrypoint: String,
 }
+/// Add a borrowed metadata clone layout without allocating.
+pub(crate) fn add_clone_bytes(total: &mut usize, bytes: usize) -> Result<(), ivm::VMError> {
+    *total = total
+        .checked_add(bytes)
+        .ok_or(ivm::VMError::AllocationDeferred(
+            iroha_allocation::AllocationRefusal::DemandOverflow,
+        ))?;
+    Ok(())
+}
+/// Add the account owner's exact key and member clone layouts.
+pub(crate) fn add_account_clone_bytes(
+    total: &mut usize,
+    account: &AccountId,
+) -> Result<(), ivm::VMError> {
+    let mut result = Ok(());
+    account
+        .for_each_admission_clone_layout(|layout| {
+            if result.is_ok() {
+                result = add_clone_bytes(total, layout.size());
+            }
+        })
+        .map_err(|_| ivm::VMError::NoritoInvalid)?;
+    result
+}
 /// Immutable authorization selected before a contract invocation is decoded or executed.
 ///
 /// This snapshot deliberately carries the permission name chosen from the validated artifact.
@@ -3166,6 +3190,36 @@ pub(crate) struct ContractEntrypointAuthorizationSnapshot {
     parent: Option<Box<ContractEntrypointAuthorizationSnapshot>>,
 }
 impl ContractEntrypointAuthorizationSnapshot {
+    /// Bound the retained metadata clone from its actual borrowed authorization chain.
+    /// Account key/member layouts and parent boxes are exact; string lengths
+    /// conservatively include inline strings, which require no heap allocation.
+    pub(crate) fn queued_clone_bytes(&self) -> Result<usize, ivm::VMError> {
+        let mut bytes = 0usize;
+        let mut current = Some(self);
+        while let Some(node) = current {
+            add_account_clone_bytes(&mut bytes, &node.authority)?;
+            for len in [
+                node.entrypoint.len(),
+                node.contract_address.as_str().len(),
+                node.contract_alias
+                    .as_ref()
+                    .map_or(0, |alias| AsRef::<str>::as_ref(alias).len()),
+                node.contract_alias_binding
+                    .as_ref()
+                    .map_or(0, |binding| AsRef::<str>::as_ref(&binding.alias).len()),
+            ] {
+                add_clone_bytes(&mut bytes, len)?;
+            }
+            if let EntrypointAuthorizationV1::Permission(name) = &node.authorization {
+                add_clone_bytes(&mut bytes, AsRef::<str>::as_ref(name).len())?;
+            }
+            current = node.parent.as_deref();
+            if current.is_some() {
+                add_clone_bytes(&mut bytes, std::mem::size_of::<Self>())?;
+            }
+        }
+        Ok(bytes)
+    }
     /// Capture the exact live identity and selected artifact permission at dispatch time.
     pub(crate) fn new(
         authority: AccountId,
@@ -3468,7 +3522,7 @@ pub(crate) struct ContractInvocationOutcome {
     /// Gas consumed by the VM, including execution that ended in a later artifact error.
     pub(crate) gas_used: u64,
     /// Guest-emitted instructions that were successfully applied.
-    pub(crate) executed_instructions: Vec<InstructionBox>,
+    pub(crate) executed_instructions: crate::smartcontracts::ivm::host::ExecutedHostInstructions,
     /// Trigger-local NFT sequence after successful guest execution.
     pub(crate) next_nft_sequence: Option<u64>,
 }
@@ -6343,6 +6397,20 @@ impl Executor {
             )));
         }
         Self::enforce_transaction_gas_fits_block(state_transaction, used)?;
+        if ivm_proved_replay.as_ref().is_some_and(|replay| {
+            replay.queued.iter().any(|effect| {
+                matches!(
+                    &effect.payload,
+                    crate::smartcontracts::ivm::host::QueuedEffectPayload::AttachedX509(_)
+                )
+            })
+        }) {
+            // TODO(I.3): proved overlays need their own original signed invocation
+            // binding; they cannot import an ordinary contract's custody owner.
+            return Err(ValidationFail::NotPermitted(
+                "X.509 attached effects are unsupported in proved-overlay roots".into(),
+            ));
+        }
         // Preserve deterministic work accounting even if an instruction later
         // rejects. The block corridor decides whether the rejected live
         // transaction is fee-eligible and carries these counters forward.
@@ -6500,6 +6568,12 @@ impl Executor {
                         (None, None) => {}
                     }
                     match queued.payload {
+                        crate::smartcontracts::ivm::host::QueuedEffectPayload::AttachedX509(_) => {
+                            return Err(ValidationFail::NotPermitted(
+                                "X.509 attached effects are unsupported in proved-overlay roots"
+                                    .into(),
+                            ));
+                        }
                         crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
                             instruction,
                         ) => {
@@ -7106,9 +7180,10 @@ impl Executor {
         }
         let artifacts = artifacts
             .map_err(|attempt| state_transaction.attempt_error_to_validation_fail(attempt))?;
-        let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-            &artifacts.queued_instructions_by_authority(),
-            &artifacts.queued_instructions_with_authority(),
+        let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_views(
+            artifacts.queued_instruction_views(),
+            artifacts.queued_instruction_authority_count(),
+            artifacts.queued_instruction_views(),
             state_transaction,
             runtime_origin,
         )
@@ -7121,7 +7196,7 @@ impl Executor {
         if validation_outcome == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp {
             return Ok(ContractInvocationOutcome {
                 gas_used,
-                executed_instructions: Vec::new(),
+                executed_instructions: Default::default(),
                 next_nft_sequence,
             });
         }
@@ -8566,7 +8641,7 @@ impl Executor {
         instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-        attachment_invocation: Option<&mut attachment_custody::Invocation<'_, '_>>,
+        attachment_invocation: Option<attachment_direct::AttachmentExecution<'_, '_, '_>>,
     ) -> Result<(), ValidationFail> {
         // An attachment invocation carries no original parliament genesis authority.
         state_transaction.clear_direct_parliament_candidate_testing();
@@ -8586,7 +8661,7 @@ impl Executor {
         instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-        attachment_invocation: Option<&mut attachment_custody::Invocation<'_, '_>>,
+        attachment_invocation: Option<attachment_direct::AttachmentExecution<'_, '_, '_>>,
     ) -> Result<(), ValidationFail> {
         // A user executor/contract cannot inherit original native genesis authority.
         if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_)) {
@@ -8665,7 +8740,7 @@ impl Executor {
         instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-        attachment_invocation: Option<&mut attachment_custody::Invocation<'_, '_>>,
+        attachment_invocation: Option<attachment_direct::AttachmentExecution<'_, '_, '_>>,
     ) -> Result<(), ValidationFail> {
         fn has_modify_nft_metadata_permission(
             state_transaction: &mut StateTransaction<'_, '_>,
@@ -9425,7 +9500,7 @@ fn dispatch_instruction_with_ivm(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     instruction: &InstructionBox,
-    attachment_invocation: Option<&mut attachment_custody::Invocation<'_, '_>>,
+    attachment_invocation: Option<attachment_direct::AttachmentExecution<'_, '_, '_>>,
 ) -> Result<(), ValidationFail> {
     let latest_block = state_transaction
         .latest_block()

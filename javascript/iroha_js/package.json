@@ -139,6 +139,10 @@
       "browser": "./dist/petal.js",
       "import": "./dist/petal.js",
       "types": "./petal.d.ts"
+    },
+    "./privacy-x509": {
+      "types": "./privacy-x509.d.ts",
+      "import": "./dist/privacyX509Transaction.js"
     }
   },
   "typesVersions": {
@@ -223,6 +227,9 @@
       ],
       "petal": [
         "./petal.d.ts"
+      ],
+      "privacy-x509": [
+        "./privacy-x509.d.ts"
       ]
     }
   },
@@ -310,7 +317,8 @@
     "game.d.ts",
     "game-resources.d.ts",
     "nft.d.ts",
-    "petal.d.ts"
+    "petal.d.ts",
+    "privacy-x509.d.ts"
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",

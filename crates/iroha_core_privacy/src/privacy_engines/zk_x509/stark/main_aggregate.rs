@@ -563,6 +563,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             &layout,
             statement,
             assembly.rfc_base.schedule.shape,
+            assembly.crl_public_inputs,
         )?;
         let key_alphas = key_plan.derive_alphas_v1(&mut transcript)?;
         let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;
@@ -1260,11 +1261,13 @@ fn main_log19_fixed_polynomial_set_v1(
     } else {
         None
     };
-    // Existing registration metadata reserves two 134-field public rows
-    // plus 16 words. The transpose needs no larger row or heap allocation;
-    // fixed-row construction and its nested temporary lifetimes are unchanged.
+    // Each producer owns its separately sized fixed row. Resource accounting
+    // reserves both current/next rows at the maximum producer width plus16 words.
     const _: () =
-        assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 <= P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1);
+        assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    const _: () = assert!(
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 <= main_resources::MAIN_FIXED_REPLAY_ROW_WIDTH_V1
+    );
     if (2..=5).contains(&index) {
         // These final public columns were already retained together by the old
         // per-column path. Construct each complete SHA row once into that same

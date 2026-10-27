@@ -86,7 +86,7 @@ Query syscall (Norito)
 - Gas is `base + per_item + per_byte`, with per-item cost multiplied when sorting is requested and an offset penalty applied for large pagination skips.
 
 Vendor syscall (Norito)
-- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and the mandatory operation tag `1` (`SubmitBallot`) in `r11`. Tag `0`, every other tag, mismatched instruction types, and other instruction types are rejected with `PermissionDenied`. In particular a contract cannot execute `RecordSccpMessage` under any tag: an outbound SCCP record executes only from signed transactions, directly or through a multisig proposal that signed approvals execute (`specs/sccp.md` §4.4).
+- `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory exact operation tag in `r11`: `1` for `SubmitBallot`, or `2` for `SubmitPrivacyZkX509CertificateV1`. Tag `0`, every other tag, and mismatched instruction types are rejected with `PermissionDenied`. The X509 request contains its public statement with zero request intent digest and an existing signed action attachment reference (slot zero), never copied proof bytes. The authoritative host derives the original signed intent and queues the request. Its `r10` result is a local `PendingAction` ordinal; verification and effects become authoritative only in the final transaction receipt. Hosts without original signed attachment custody refuse tag `2`. In particular a contract cannot execute `RecordSccpMessage` under any tag: an outbound SCCP record executes only from signed transactions, directly or through a multisig proposal that signed approvals execute (`specs/sccp.md` §4.4).
 
 Ordering and OUTPUT
 - Syscalls execute in program order. Hosts must apply their side effects in the order received.
@@ -416,7 +416,7 @@ Smart‑contract helpers (Norito)
   operations may use the retained artifact's declarations during suspension,
   but invocation still requires an active instance. Lifecycle hook grants use
   the separate exact address-and-hook token.
-- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot`) → 0 — Gas: G_sci
+- 0xA0 EXECUTE_INSTRUCTION — Args: `r10=&NoritoBytes(InstructionBox)`, `r11=operation_tag` (`1=SubmitBallot;2=SubmitPrivacyZkX509CertificateV1`) → tag 1: 0; tag 2: opaque `PendingAction` ordinal — Gas: G_sci
 - 0xA5 SUBSCRIPTION_BILL — Args: none → 0 — Gas: G_sub_bill
   - Uses trigger metadata `subscription_ref` to locate the subscription NFT, computes charges, updates subscription metadata (including `subscription_invoice`), and reschedules the billing trigger.
 - 0xA6 SUBSCRIPTION_RECORD_USAGE — Args: none → 0 — Gas: G_sub_usage
@@ -492,8 +492,18 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 
 Canonical instruction bridge
 - `EXECUTE_INSTRUCTION` accepts only a pointer-ABI `NoritoBytes` payload containing the canonical
-  Norito frame of one data-model `InstructionBox`. Register `r11` must contain the matching
-  operation tag `1`, and the instruction must be `SubmitBallot`.
+  Norito frame of one data-model `InstructionBox`. Register `r11` must contain
+  the exact operation tag (`1=SubmitBallot`, `2=SubmitPrivacyZkX509CertificateV1`) and matching concrete instruction. The X509 token denotes queued work only.
+- `ledger::credentials::present_x509(request: bytes)` first uses the existing metered
+  bytes normalizer. Tag 2 returns the original signed `proof_ref.action_index` as
+  `PendingAction` only after funded queue insertion. It grants no proof-success,
+  authority, nullifier or effect receipt. Standalone hosts without original signed
+  custody reject this operation. Native verification and current-State atomic effects
+  belong to the executor when the queue is drained.
+- `PendingAction` is a nominal invocation-local word (CS1 node tag 13, public `u32`
+  in a `u64` slot). Internal helpers may pass and return it, including local products
+  and containers. Public/cross-contract signatures, encoding and persistent state
+  reject it recursively; it has no numeric/bool conversion or comparison.
 - JSON pointers, raw JSON envelopes, direct concrete-instruction frames, alternate-layout Norito
   frames, tag `0`, unknown tags, mismatched instruction types, and all other instruction types are
   rejected. There is no compatibility decoding path.
@@ -740,7 +750,8 @@ node enforces that policy unconditionally.
   generator, every artifact the `abi` surface lists as carrying it;
   `scripts/check_first_release_history.py` fails until the golden, the carriers
   and the inventory agree. Admission keeps rejecting any other `abi_hash`.
-- Syscall `0xA0` defines exactly one operation tag, `1=SubmitBallot`; every
+- Syscall `0xA0` defines two typed operation tags, `1=SubmitBallot` and
+  `2=SubmitPrivacyZkX509CertificateV1`; every
   other tag is rejected. Contracts cannot record outbound SCCP messages: an
   encoded `RecordSccpMessage` fails under every tag, and a contract-registered
   trigger or any other opaque execution output that derives `RecordSccpMessage`
@@ -865,7 +876,7 @@ node enforces that policy unconditionally.
 | 0x98 | BLAKE2B256_HASH | r10=&Blob(message) | r10=ptr (&Blob(raw Blake2b-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x99 | KECCAK256_HASH | r10=&Blob(message) | r10=ptr (&Blob(Keccak-256 digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
 | 0x9A | IROHA_HASH | r10=&Blob(message) | r10=ptr (&Blob(Iroha Hash::new digest)) | asset:gas/G_hash@ivm.core/v2 + bytes |
-| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
+| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot;2=SubmitPrivacyZkX509CertificateV1) | tag1:u64=0;tag2:r10=PendingAction(original signed action ordinal;queued only;no proof/effect authority) | asset:gas/G_sci@ivm.core/v2 |
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |

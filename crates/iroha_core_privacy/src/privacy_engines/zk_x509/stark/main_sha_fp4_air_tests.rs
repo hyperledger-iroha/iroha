@@ -99,7 +99,7 @@ fn four_complete_sha_fp4_registrations_match_independent_base_polynomial_lifting
         let actual = evaluator
             .evaluate_residues_v1(&current, &next, &context(terminal))
             .unwrap();
-        assert_eq!(actual.len(), 564);
+        assert_eq!(actual.len(), 593);
         let mut expected = vec![E::ZERO; actual.len()];
         // Total degree six includes fixed columns. Cubic cell substitution
         // therefore needs nineteen independent base-field samples.

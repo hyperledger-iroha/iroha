@@ -5,6 +5,7 @@
  */
 
 import { getNativeBinding } from "./native.js";
+import { NetworkId, networkIdBytes } from "./networkId.js";
 import {
   bindPrivacyExact12CapabilityAdmissionV1,
   requirePrivacyExact12CapabilityAdmissionV1,
@@ -86,22 +87,22 @@ const CONSENSUS_LIMIT_MAXIMA = Object.freeze({
 });
 
 function parseConsensusPolicy(value, committedHeight, path) {
-  const policy = objectWithExactKeys(value, ["current_limits", "pending_tightening"], path);
+  const policy = objectWithExactKeys(value, ["current_limits", "pending_update"], path);
   const currentLimits = parseConsensusLimits(policy.current_limits, `${path}.current_limits`);
   let pending = null;
-  if (policy.pending_tightening !== null) {
-    const pendingPath = `${path}.pending_tightening`;
-    const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], pendingPath);
-    const scheduled = positiveU64(tightening.scheduled_at_height, `${pendingPath}.scheduled_at_height`);
-    const effective = positiveU64(tightening.effective_at_height, `${pendingPath}.effective_at_height`);
+  if (policy.pending_update !== null) {
+    const pendingPath = `${path}.pending_update`;
+    const update = objectWithExactKeys(policy.pending_update, ["scheduled_at_height", "effective_at_height", "next_limits"], pendingPath);
+    const scheduled = positiveU64(update.scheduled_at_height, `${pendingPath}.scheduled_at_height`);
+    const effective = positiveU64(update.effective_at_height, `${pendingPath}.effective_at_height`);
     if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) {
       fail("has invalid committed-height schedule", pendingPath);
     }
-    const nextLimits = parseConsensusLimits(tightening.next_limits, `${pendingPath}.next_limits`);
-    assertStrictTightening(currentLimits, nextLimits, pendingPath);
+    const nextLimits = parseConsensusLimits(update.next_limits, `${pendingPath}.next_limits`);
+    assertUpdateChanged(currentLimits, nextLimits, pendingPath);
     pending = { scheduled_at_height: scheduled, effective_at_height: effective, next_limits: nextLimits };
   }
-  return { current_limits: currentLimits, pending_tightening: pending };
+  return { current_limits: currentLimits, pending_update: pending };
 }
 
 function parseConsensusLimits(value, path) {
@@ -123,15 +124,12 @@ function parseConsensusLimits(value, path) {
 }
 
 function parseCapabilityRow(value, expectedProtocol, committedHeight, path) {
-  const row = objectWithExactKeys(value, ["protocol_id", "compiled_profile", "activation"], path);
+  const row = objectWithExactKeys(value, ["protocol_id", "compiled_profile", "policy"], path);
   const protocol = taggedUnit(row.protocol_id, "protocol", "value", PRIVACY_PROTOCOL_IDS_V1, `${path}.protocol_id`);
   if (protocol !== expectedProtocol) fail(`must be canonical protocol ${expectedProtocol}`, `${path}.protocol_id`);
   const compiled = parseCompiledProfile(row.compiled_profile, protocol, `${path}.compiled_profile`);
-  const activation = row.activation === null ? null : parseActivation(row.activation, protocol, compiled, committedHeight, `${path}.activation`);
-  if (activation !== null && compiled.status !== "available") {
-    fail("cannot activate an unavailable compiled profile", `${path}.activation`);
-  }
-  return { protocol_id: tagged(protocol, "protocol", "value"), compiled_profile: compiled, activation };
+  const policy = row.policy === null ? null : parseProtocolPolicy(row.policy, protocol, committedHeight, `${path}.policy`);
+  return { protocol_id: tagged(protocol, "protocol", "value"), compiled_profile: compiled, policy };
 }
 
 function parseCompiledProfile(value, protocol, path) {
@@ -145,7 +143,7 @@ function parseCompiledProfile(value, protocol, path) {
 
 function parseUnavailableReason(value, path) {
   const reason = objectWithExactKeys(value, ["reason", "detail"], path);
-  if (reason.reason === "engine-unavailable" || reason.reason === "profile-initialization-failed") {
+  if (reason.reason === "engine-unavailable" || reason.reason === "profile-initialization-failed" || reason.reason === "joint-security-reduction-incomplete") {
     if (reason.detail !== null) fail("unit unavailable reason must have null detail", `${path}.detail`);
     return { reason: reason.reason, detail: null };
   }
@@ -164,23 +162,15 @@ function parseProfileBindings(value, protocol, path) {
   return { ...bindings, protocol_limits: limits };
 }
 
-function parseActivation(value, protocol, compiled, committedHeight, path) {
-  const record = objectWithExactKeys(value, [
-    "protocol_id", "proof_system_id", "engine_id", "parameter_id", "parameter_digest",
-    "verifier_digest", "statement_schema_digest", "engine_manifest_digest", "lifecycle",
-    "protocol_limits", "pending_protocol_limits_tightening",
-  ], path);
-  const bindings = parseBindings(record, protocol, path);
-  if (compiled.status === "available") assertEqualBindings(bindings, compiled.value, path);
-  const protocolLimits = parseProtocolLimits(record.protocol_limits, protocol, `${path}.protocol_limits`);
-  if (compiled.status === "available") assertLimitsAtMost(protocolLimits, compiled.value.protocol_limits, `${path}.protocol_limits`);
-  const lifecycle = parseLifecycle(record.lifecycle, committedHeight, `${path}.lifecycle`);
-  const pending = parseProtocolTightening(record.pending_protocol_limits_tightening, protocolLimits, committedHeight, `${path}.pending_protocol_limits_tightening`);
+function parseProtocolPolicy(value, protocol, committedHeight, path) {
+  const policy = objectWithExactKeys(value, ["protocol_id", "current_limits", "pending_update"], path);
+  const id = taggedUnit(policy.protocol_id, "protocol", "value", PRIVACY_PROTOCOL_IDS_V1, `${path}.protocol_id`);
+  if (id !== protocol) fail("does not match its row protocol", `${path}.protocol_id`);
+  const current = parseProtocolLimits(policy.current_limits, protocol, `${path}.current_limits`);
   return {
-    ...bindings,
-    lifecycle,
-    protocol_limits: protocolLimits,
-    pending_protocol_limits_tightening: pending,
+    protocol_id: tagged(protocol, "protocol", "value"),
+    current_limits: current,
+    pending_update: parseProtocolUpdate(policy.pending_update, current, committedHeight, `${path}.pending_update`),
   };
 }
 
@@ -238,59 +228,21 @@ function limitFieldsFor(protocol) {
   }
 }
 
-function parseLifecycle(value, committedHeight, path) {
-  const lifecycle = objectWithExactKeys(value, ["state", "record"], path);
-  const state = lifecycle.state;
-  if (!new Set(["proposed", "active", "suspended", "retired"]).has(state)) fail("unknown lifecycle state", `${path}.state`);
-  const keys = state === "proposed"
-    ? ["proposed_at_height"]
-    : ["proposed_at_height", "activated_at_height", "state_since_height"];
-  const record = objectWithExactKeys(lifecycle.record, keys, `${path}.record`);
-  const proposed = positiveU64(record.proposed_at_height, `${path}.record.proposed_at_height`);
-  let normalized;
-  if (state === "proposed") {
-    if (proposed > committedHeight) fail("claims a proposal after committed height", path);
-    normalized = { proposed_at_height: proposed };
-  } else {
-    const activated = state === "retired" && record.activated_at_height === null ? null : positiveU64(record.activated_at_height, `${path}.record.activated_at_height`);
-    const since = positiveU64(record.state_since_height, `${path}.record.state_since_height`);
-    if (proposed > committedHeight || since > committedHeight || (activated !== null && activated > committedHeight)) fail("claims a state after committed height", path);
-    if (activated === null ? state !== "retired" || since <= proposed : activated < proposed || (state === "active" ? since < activated : since <= activated)) fail("has invalid lifecycle ordering", path);
-    normalized = { proposed_at_height: proposed, activated_at_height: activated, state_since_height: since };
-  }
-  return { state, record: normalized };
-}
-
-function parseProtocolTightening(value, current, committedHeight, path) {
+function parseProtocolUpdate(value, current, committedHeight, path) {
   if (value === null) return null;
-  const tightening = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
-  const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
-  const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
+  const update = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
+  const scheduled = positiveU64(update.scheduled_at_height, `${path}.scheduled_at_height`);
+  const effective = positiveU64(update.effective_at_height, `${path}.effective_at_height`);
   if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
-  const next = parseProtocolLimits(tightening.next_limits, current.protocol, `${path}.next_limits`);
-  assertLimitsAtMost(next, current, `${path}.next_limits`);
-  if (sameJson(next, current)) fail("must be a strict tightening", path);
+  const next = parseProtocolLimits(update.next_limits, current.protocol, `${path}.next_limits`);
+  if (sameJson(next, current)) fail("must change at least one limit", path);
   return { scheduled_at_height: scheduled, effective_at_height: effective, next_limits: next };
 }
 
-function assertEqualBindings(actual, expected, path) {
-  for (const key of ["protocol_id", "proof_system_id", "engine_id", "parameter_id", "parameter_digest", "verifier_digest", "statement_schema_digest", "engine_manifest_digest"]) {
-    if (!sameJson(actual[key], expected[key])) fail(`does not match compiled profile ${key}`, `${path}.${key}`);
+function assertUpdateChanged(current, next, path) {
+  if (!CONSENSUS_LIMIT_KEYS.some((key) => next[key] !== current[key])) {
+    fail("must change at least one limit", path);
   }
-}
-
-function assertLimitsAtMost(actual, ceiling, path) {
-  if (actual.protocol !== ceiling.protocol || (actual.limits === null) !== (ceiling.limits === null)) fail("protocol-limit tag differs from compiled ceiling", path);
-  if (actual.limits !== null) for (const key of Object.keys(actual.limits)) if (actual.limits[key] > ceiling.limits[key]) fail("exceeds the compiled profile ceiling", `${path}.${key}`);
-}
-
-function assertStrictTightening(current, next, path) {
-  let changed = false;
-  for (const key of CONSENSUS_LIMIT_KEYS) {
-    if (next[key] > current[key]) fail("cannot increase a consensus limit", `${path}.next_limits.${key}`);
-    changed ||= next[key] !== current[key];
-  }
-  if (!changed) fail("must be a strict tightening", path);
 }
 
 function taggedUnit(value, tagKey, contentKey, permitted, path) {
@@ -339,11 +291,6 @@ function u32(value, path) {
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_U32) fail("must be a safe uint32 integer", path);
   return value;
 }
-function u16(value, path) {
-  const result = u32(value, path);
-  if (result > 0xffff) fail("must be a uint16 integer", path);
-  return result;
-}
 function positiveU32(value, path) { const result = u32(value, path); if (result === 0) fail("must be non-zero", path); return result; }
 function u64(value, path) {
   let result;
@@ -365,59 +312,6 @@ function deepFreeze(value) { if (value && typeof value === "object" && !Object.i
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_JSON_MAX_BYTES_V1 = 2 * 1024 * 1024;
 const PRIVACY_EXACT12_MANIFEST_CONSTRUCTOR = Symbol("Exact12 manifest constructor");
 const privacyExact12ManifestState = new WeakMap();
-const privacyExact12QualificationState = new WeakMap();
-
-const PRIVACY_EXACT12_RELEASE_MANIFEST_KEYS_V1 = Object.freeze([
-  "version",
-  "catalog_id",
-  "catalog_commitment",
-  "source",
-  "abi_version",
-  "abi_hash",
-  "syscall_list_digest",
-  "executables",
-  "protocols",
-  "stage_receipts",
-  "proof_artifacts",
-  "sdk_packages",
-  "hardware_results",
-  "release_artifact_set_digest",
-  "audits",
-  "audit_bundle_digest",
-  "release_signatures",
-  "manifest_digest",
-]);
-
-const PRIVACY_EXACT12_RELEASE_PROTOCOL_BINDING_KEYS_V1 = Object.freeze([
-  "protocol_id",
-  "proof_system_id",
-  "engine_id",
-  "parameter_id",
-  "parameter_digest",
-  "verifier_digest",
-  "statement_schema_digest",
-  "engine_manifest_digest",
-  "security_claim",
-  "security_claim_digest",
-]);
-
-const PRIVACY_EXACT12_DEPLOYMENT_QUALIFICATION_KEYS_V1 = Object.freeze([
-  "version",
-  "chain_id",
-  "network_id",
-  "genesis_hash",
-  "release_manifest_digest",
-  "activation_transaction_digest",
-  "activations",
-  "validator_roster_digest",
-  "endpoint_version",
-  "convergence_height",
-  "converged_state_digest",
-  "validator_canaries",
-  "validator_signatures",
-  "qualification_digest",
-]);
-
 const PRIVACY_EXACT12_OPERATION_TUPLES_V1 = Object.freeze([
   Object.freeze(["zk_ace_authorization_action_v1", "authorization_action", 0]),
   Object.freeze(["anonymous_pgc_payment_action_v1", "payment_action", 6]),
@@ -467,7 +361,7 @@ export class PrivacyExact12CapabilityManifestV1 {
     this.version = projection.version;
     this.committed_height = projection.committed_height;
     this.consensus_policy = projection.consensus_policy;
-    this.qualification = projection.qualification;
+    this.network_id = projection.network_id;
     this.protocols = projection.protocols;
     this.manifest_digest = projection.manifest_digest;
     privacyExact12ManifestState.set(this, {
@@ -489,7 +383,7 @@ export class PrivacyExact12CapabilityManifestV1 {
 /**
  * Return this N-API binary's canonical compiled-profile catalog bytes.
  *
- * This local catalog has no committed height or activation state and therefore
+ * This local catalog has no committed height or committed policy and therefore
  * never authorizes network construction by itself.
  */
 export function compiledProfileCatalogV1() {
@@ -591,11 +485,9 @@ export async function getPrivacyExact12CapabilityManifestV1(client, options) {
   const state = privacyExact12ManifestState.get(manifest);
   state.expectedNetworkId = Uint8Array.from(transport.expectedNetworkId);
   state.origin = transport.origin;
-  const qualification = manifest.qualification?.deployment_qualification;
-  if (qualification && !state.expectedNetworkId.every(
-    (byte, index) => byte === qualification.genesis_hash[index],
-  )) {
-    manifestFailV1("deployment qualification belongs to a different network", "transport");
+  const actualNetworkId = manifest.network_id.toBytes();
+  if (!state.expectedNetworkId.every((byte, index) => byte === actualNetworkId[index])) {
+    manifestFailV1("capability manifest belongs to a different network", "transport");
   }
   bindPrivacyExact12CapabilityAdmissionV1(
     manifest,
@@ -605,7 +497,7 @@ export async function getPrivacyExact12CapabilityManifestV1(client, options) {
 }
 
 /**
- * Require one production-qualified row and exact native-local compiled tuple.
+ * Require one available row and exact native-local compiled tuple.
  *
  * Transaction builders must call this guard with the validated manifest at
  * construction time. A local catalog, digest shell, or caller-created object
@@ -614,24 +506,25 @@ export async function getPrivacyExact12CapabilityManifestV1(client, options) {
 function admitPrivacyExact12CapabilityTupleV1(manifest, protocolId) {
   const state = privacyExact12ManifestState.get(manifest);
   if (!state) manifestFailV1("lost its native validation state", "admission");
+  const actualNetworkId = manifest.network_id.toBytes();
+  if (!state.expectedNetworkId || !state.expectedNetworkId.every((byte, index) => byte === actualNetworkId[index])) {
+    manifestFailV1("capability manifest belongs to a different network", "admission");
+  }
   const index = requirePrivacyExact12ProtocolIdV1(protocolId);
   const row = manifest.protocols[index];
   const readiness = row.readiness.readiness;
   if (
-    readiness !== "production-qualified"
-    || row.activation?.lifecycle.state !== "active"
-    || manifest.qualification === null
+    readiness !== "available"
     || row.compiled_profile.status !== "available"
   ) {
     manifestFailV1(
-      `protocol ${protocolId} is not production-qualified in committed state`,
+      `protocol ${protocolId} is not available in committed state: ${row.compiled_profile.value.reason}`,
       `protocols[${index}]`,
     );
   }
   const native = requirePrivacyExact12NativeV1();
-  // Validate the immutable local catalog surface as an independent prerequisite;
-  // the native admission call below performs the actual exact row comparison.
-  compiledProfileCatalogFromNativeV1(native);
+  // The native guard checks only the selected implementation, exact tuple and
+  // effective policy. Unrelated catalog entries are not admission prerequisites.
   const admitted = callPrivacyExact12NativeV1(
     native,
     "privacyRequireExact12CapabilityTupleV1",
@@ -733,7 +626,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     "version",
     "committed_height",
     "consensus_policy",
-    "qualification",
+    "network_id",
     "protocols",
     "manifest_digest",
   ], "Exact12 capability manifest");
@@ -752,12 +645,16 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     committedHeight,
     "Exact12 capability manifest.consensus_policy",
   );
-  const qualification = manifest.qualification === null
-    ? null
-    : parsePrivacyExact12QualificationV1(
-        manifest.qualification,
-        "Exact12 capability manifest.qualification",
-      );
+  let networkId;
+  try {
+    networkId = NetworkId.parse(manifest.network_id);
+  } catch (cause) {
+    throw new PrivacyExact12CapabilityManifestError(
+      "must be a canonical NetworkId",
+      "Exact12 capability manifest.network_id",
+      { cause },
+    );
+  }
   if (
     !Array.isArray(manifest.protocols)
     || manifest.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length
@@ -776,13 +673,13 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
       "privacy_feature_mask",
       "compiled_profile",
       "readiness",
-      "activation",
+      "policy",
     ], path);
     const base = parseCapabilityRow(
       {
         protocol_id: row.protocol_id,
         compiled_profile: row.compiled_profile,
-        activation: row.activation,
+        policy: row.policy,
       },
       PRIVACY_PROTOCOL_IDS_V1[index],
       committedHeight,
@@ -813,8 +710,6 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
     const readiness = parsePrivacyExact12ReadinessV1(
       row.readiness,
       base,
-      qualification,
-      committedHeight,
       `${path}.readiness`,
     );
     return {
@@ -824,14 +719,14 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
       privacy_feature_mask: featureMask,
       compiled_profile: base.compiled_profile,
       readiness,
-      activation: base.activation,
+      policy: base.policy,
     };
   });
   return deepFreeze({
     version: PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1,
     committed_height: committedHeight,
     consensus_policy: consensusPolicy,
-    qualification,
+    network_id: networkId,
     protocols,
     manifest_digest: manifestFixed32V1(
       manifest.manifest_digest,
@@ -840,150 +735,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
   });
 }
 
-function parsePrivacyExact12QualificationV1(value, path) {
-  const record = exactManifestObjectV1(
-    value,
-    ["release_manifest", "deployment_qualification"],
-    path,
-  );
-  const releasePath = `${path}.release_manifest`;
-  const release = exactManifestObjectV1(
-    record.release_manifest,
-    PRIVACY_EXACT12_RELEASE_MANIFEST_KEYS_V1,
-    releasePath,
-  );
-  if (u16(release.version, `${releasePath}.version`) !== 1) {
-    manifestFailV1("version must be exactly 1", `${releasePath}.version`);
-  }
-  if (u16(release.abi_version, `${releasePath}.abi_version`) !== 1) {
-    manifestFailV1("ABI version must be exactly 1", `${releasePath}.abi_version`);
-  }
-  if (
-    !Array.isArray(release.protocols)
-    || release.protocols.length !== PRIVACY_PROTOCOL_IDS_V1.length
-  ) {
-    manifestFailV1(
-      "protocols must contain exactly the 12 canonical release bindings",
-      `${releasePath}.protocols`,
-    );
-  }
-  const releaseBindings = release.protocols.map((rawBinding, index) => {
-    const bindingPath = `${releasePath}.protocols[${index}]`;
-    const binding = exactManifestObjectV1(
-      rawBinding,
-      PRIVACY_EXACT12_RELEASE_PROTOCOL_BINDING_KEYS_V1,
-      bindingPath,
-    );
-    return parseBindings(binding, PRIVACY_PROTOCOL_IDS_V1[index], bindingPath);
-  });
-
-  const deploymentPath = `${path}.deployment_qualification`;
-  const deployment = exactManifestObjectV1(
-    record.deployment_qualification,
-    PRIVACY_EXACT12_DEPLOYMENT_QUALIFICATION_KEYS_V1,
-    deploymentPath,
-  );
-  if (u16(deployment.version, `${deploymentPath}.version`) !== 1) {
-    manifestFailV1("version must be exactly 1", `${deploymentPath}.version`);
-  }
-  const releaseManifestDigest = manifestFixed32V1(
-    release.manifest_digest,
-    `${releasePath}.manifest_digest`,
-  );
-  const deployedReleaseManifestDigest = manifestFixed32V1(
-    deployment.release_manifest_digest,
-    `${deploymentPath}.release_manifest_digest`,
-  );
-  if (!manifestValuesEqualV1(releaseManifestDigest, deployedReleaseManifestDigest)) {
-    manifestFailV1(
-      "must name the embedded release manifest",
-      `${deploymentPath}.release_manifest_digest`,
-    );
-  }
-  manifestFixed32V1(deployment.genesis_hash, `${deploymentPath}.genesis_hash`);
-  if (
-    !Array.isArray(deployment.activations)
-    || deployment.activations.length !== PRIVACY_PROTOCOL_IDS_V1.length
-  ) {
-    manifestFailV1(
-      "activations must contain exactly the 12 canonical protocols",
-      `${deploymentPath}.activations`,
-    );
-  }
-  const activationHeights = deployment.activations.map((rawActivation, index) => {
-    const activationPath = `${deploymentPath}.activations[${index}]`;
-    const activation = exactManifestObjectV1(
-      rawActivation,
-      ["protocol_id", "activation_height"],
-      activationPath,
-    );
-    taggedUnit(
-      activation.protocol_id,
-      "protocol",
-      "value",
-      [PRIVACY_PROTOCOL_IDS_V1[index]],
-      `${activationPath}.protocol_id`,
-    );
-    return positiveU64(
-      activation.activation_height,
-      `${activationPath}.activation_height`,
-    );
-  });
-  const convergenceHeight = positiveU64(
-    deployment.convergence_height,
-    `${deploymentPath}.convergence_height`,
-  );
-  if (activationHeights.some((height) => height >= convergenceHeight)) {
-    manifestFailV1(
-      "every activation must precede convergence",
-      `${deploymentPath}.activations`,
-    );
-  }
-
-  // Rust has already validated every signature, audit, artifact, and digest in
-  // the canonical archive. Retain that complete projection while recording only
-  // the tuple metadata needed to recompute row readiness locally.
-  const qualification = {
-    release_manifest: release,
-    deployment_qualification: deployment,
-  };
-  privacyExact12QualificationState.set(qualification, {
-    releaseBindings,
-    activationHeights,
-    convergenceHeight,
-  });
-  return deepFreeze(qualification);
-}
-
-function qualificationMatchesCapabilityRowV1(qualification, row, committedHeight) {
-  const evidence = privacyExact12QualificationState.get(qualification);
-  if (!evidence || evidence.convergenceHeight > committedHeight) return false;
-  const protocol = row.protocol_id.protocol;
-  const index = PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol);
-  if (
-    index < 0
-    || row.compiled_profile.status !== "available"
-    || row.activation?.lifecycle.state !== "active"
-  ) return false;
-  const releaseBinding = evidence.releaseBindings[index];
-  const compiledBinding = row.compiled_profile.value;
-  for (const key of [
-    "protocol_id",
-    "proof_system_id",
-    "engine_id",
-    "parameter_id",
-    "parameter_digest",
-    "verifier_digest",
-    "statement_schema_digest",
-    "engine_manifest_digest",
-  ]) {
-    if (!manifestValuesEqualV1(releaseBinding[key], compiledBinding[key])) return false;
-  }
-  return evidence.activationHeights[index]
-    === row.activation.lifecycle.record.activated_at_height;
-}
-
-function parsePrivacyExact12ReadinessV1(value, row, qualification, committedHeight, path) {
+function parsePrivacyExact12ReadinessV1(value, row, path) {
   const readiness = exactManifestObjectV1(value, ["readiness", "detail"], path);
   let expectedReadiness;
   let expectedReason = null;
@@ -992,31 +744,8 @@ function parsePrivacyExact12ReadinessV1(value, row, qualification, committedHeig
     expectedReadiness = "unavailable";
     expectedReason = "compiled-profile";
     expectedReasonDetail = row.compiled_profile.value;
-  } else if (row.activation === null) {
-    expectedReadiness = "unavailable";
-    expectedReason = "not-registered";
   } else {
-    switch (row.activation.lifecycle.state) {
-      case "proposed":
-      case "suspended":
-      case "retired":
-        expectedReadiness = "unavailable";
-        expectedReason = row.activation.lifecycle.state;
-        break;
-      case "active":
-        if (qualification === null) {
-          expectedReadiness = "unavailable";
-          expectedReason = "missing-production-qualification";
-        } else if (!qualificationMatchesCapabilityRowV1(qualification, row, committedHeight)) {
-          expectedReadiness = "unavailable";
-          expectedReason = "invalid-production-qualification";
-        } else {
-          expectedReadiness = "production-qualified";
-        }
-        break;
-      default:
-        manifestFailV1("has an unknown lifecycle state", path);
-    }
+    expectedReadiness = "available";
   }
   if (readiness.readiness !== expectedReadiness) {
     manifestFailV1(
@@ -1024,11 +753,11 @@ function parsePrivacyExact12ReadinessV1(value, row, qualification, committedHeig
       `${path}.readiness`,
     );
   }
-  if (expectedReadiness === "production-qualified") {
+  if (expectedReadiness === "available") {
     if (readiness.detail !== null) {
       manifestFailV1("must have null detail", `${path}.detail`);
     }
-    return { readiness: "production-qualified", detail: null };
+    return { readiness: "available", detail: null };
   }
   const detail = exactManifestObjectV1(
     readiness.detail,
@@ -1137,4 +866,20 @@ function manifestValuesEqualV1(left, right) {
 
 function manifestFailV1(message, path) {
   throw new PrivacyExact12CapabilityManifestError(message, path);
+}
+
+/** @internal Copy authenticated original bytes for a native construction owner.
+ * This establishes transport origin and exact network only; the native producer
+ * must enforce the actual selected profile, request tuple and committed policy.
+ */
+export function privacyExact12AuthenticatedConstructionArchiveV1(manifest, expectedNetworkId) {
+  const state = privacyExact12ManifestState.get(manifest);
+  if (!state?.origin || !state.expectedNetworkId) {
+    manifestFailV1("construction requires an authenticated Torii-origin manifest", "construction");
+  }
+  const expected = networkIdBytes(expectedNetworkId, "expectedNetworkId");
+  if (!state.expectedNetworkId.every((byte, index) => byte === expected[index])) {
+    manifestFailV1("construction belongs to a different network", "construction");
+  }
+  return Uint8Array.from(state.canonicalArchive);
 }

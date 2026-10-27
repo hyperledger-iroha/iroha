@@ -807,7 +807,8 @@ impl SignedAttachmentErrorV1 {
         }
     }
 
-    pub(super) fn from_encoding_attempt(original: ncore::DecodeAttemptError) -> Self {
+    /// Preserve the observed original encoding cause for same-crate typed consumers.
+    pub(crate) fn from_encoding_attempt(original: ncore::DecodeAttemptError) -> Self {
         original
             .into_local_refusal()
             .map_or_else(|_| Self::CanonicalEncodingFailed, Self::LocalResource)

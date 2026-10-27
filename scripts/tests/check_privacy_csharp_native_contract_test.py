@@ -104,6 +104,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             '"${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
             "Hyperledger.Iroha.Sdk.Tests.PrivacyNativeTests",
             "Hyperledger.Iroha.Sdk.Tests.PrivacyExact12FixtureCodecV1Tests",
+            "Hyperledger.Iroha.Sdk.Tests.PrivacyX509PreparedTransactionV1Tests",
             "Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests",
             '--filter-class "${test_class}"',
         ):

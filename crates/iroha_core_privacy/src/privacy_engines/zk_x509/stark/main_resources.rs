@@ -163,13 +163,36 @@ fn sum(values: &[usize]) -> Result<usize, ZkX509StarkErrorV1> {
     })
 }
 
-// Row replay uses the existing clearing batch helper. Fixed fields are public;
-// this conservative row+metadata charge fits independently of backend choice.
-type P256AggregateFixedReplayScratchV1 = (
-    [F; super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
-    [F; super::super::super::p256_aggregate_adapter::P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
+// The SHA and P-256 matrix producers own separate public fixed rows. Charge
+// both current/next scratch rows at their maximum width, independently of the
+// selected producer or transform backend.
+/// Maximum row owned by either batched public fixed-matrix producer.
+pub(super) const MAIN_FIXED_REPLAY_ROW_WIDTH_V1: usize =
+    if ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 > P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 {
+        ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
+    } else {
+        P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1
+    };
+type MainFixedReplayScratchV1 = (
+    [F; MAIN_FIXED_REPLAY_ROW_WIDTH_V1],
+    [F; MAIN_FIXED_REPLAY_ROW_WIDTH_V1],
     [usize; 16],
 );
+
+#[cfg(test)]
+#[test]
+fn fixed_replay_scratch_charges_both_rows_of_the_widest_matrix_producer() {
+    assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 137);
+    assert_eq!(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, 134);
+    assert_eq!(
+        MAIN_FIXED_REPLAY_ROW_WIDTH_V1,
+        ZK_X509_SHA_BATCH_FIXED_WIDTH_V1.max(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1)
+    );
+    let required = 2 * 137 * core::mem::size_of::<F>() + 16 * core::mem::size_of::<usize>();
+    assert_eq!(core::mem::size_of::<MainFixedReplayScratchV1>(), required);
+    let arithmetic_only = 2 * 134 * core::mem::size_of::<F>() + 16 * core::mem::size_of::<usize>();
+    assert_eq!(required - arithmetic_only, 48);
+}
 
 /// Distinct caller lifetime boundaries; replay/cache and worker/source scratch
 /// retain their separate reservations throughout the registration.
@@ -218,7 +241,7 @@ impl MainRegistrationQuotientPayloadV1 {
                 aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
                 core::mem::size_of::<&mut [F]>(),
             ])?,
-            core::mem::size_of::<P256AggregateFixedReplayScratchV1>(),
+            core::mem::size_of::<MainFixedReplayScratchV1>(),
             main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
                 segment.trace_log2,
                 stripe,
@@ -419,6 +442,10 @@ impl MainProverBufferPlanV1 {
             // and in every later phase, even when the current public domain
             // uses no table. No private capacity can select table/fallback.
             main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1,
+            // The joined evaluator survives its source/replay callbacks. Its
+            // independent public coset table therefore coexists with the FFT
+            // tables above and must be reserved in every policy's peak envelope.
+            main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1,
         ])?;
         if required > self.remaining_source_and_runtime_envelope {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);

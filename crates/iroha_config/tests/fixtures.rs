@@ -659,8 +659,6 @@ fn nexus_atomic_private_settlement_fields_load_from_fixture() {
     let config = load_config_from_fixtures("nexus_atomic_private_settlement_full.toml")
         .expect("private-settlement config should be valid");
     let private = &config.nexus.atomic_private_settlement;
-    assert!(private.enabled);
-    assert_eq!(private.activation_height, Some(100_000));
     assert_eq!(private.max_participants.get(), 16);
     assert_eq!(private.proof_profile_version.get(), 1);
     assert_eq!(private.sidecar_max_records.get(), 512);
@@ -713,14 +711,26 @@ fn nexus_atomic_private_settlement_rejects_sidecar_capacity_above_v1_caps() {
 }
 
 #[test]
-fn nexus_atomic_private_settlement_requires_activation_height_and_canonical_bounds() {
+fn nexus_atomic_private_settlement_rejects_retired_activation_fields() {
+    for fixture in [
+        "bad.nexus_atomic_private_settlement_retired_enabled.toml",
+        "bad.nexus_atomic_private_settlement_retired_activation.toml",
+        "bad.nexus_atomic_private_settlement_retired_notice.toml",
+    ] {
+        assert!(
+            load_config_from_fixtures(fixture).is_err(),
+            "retired activation configuration {fixture} must not be accepted",
+        );
+    }
+}
+
+#[test]
+fn nexus_atomic_private_settlement_requires_canonical_bounds() {
     use iroha_config::parameters::user::{Nexus, NexusAtomicPrivateSettlement};
     use iroha_config_base::util::Emitter;
 
     let mut emitter = Emitter::<ParseError>::new();
     let private = NexusAtomicPrivateSettlement {
-        enabled: true,
-        activation_height: None,
         capsule_padding_classes_bytes: vec![16_384, 4_096],
         permitted_policy_versions: vec![1, 1],
         ..NexusAtomicPrivateSettlement::default()

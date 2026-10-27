@@ -33,8 +33,6 @@ use iroha_core::{
         QueryProjectionShardArchive,
     },
 };
-#[cfg(all(test, feature = "app_api"))]
-use iroha_crypto::Algorithm;
 use iroha_data_model::{
     HasMetadata, Identifiable,
     account::curve::CurveId,
@@ -1581,6 +1579,7 @@ mod tests {
     use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
+    use iroha_crypto::Algorithm;
 
     #[test]
     fn runtime_upgrade_instruction_drafts_use_canonical_wire_ids_and_frames() {
@@ -1810,10 +1809,14 @@ mod tests {
         let jindo = &manifest.protocols[6];
         assert_eq!(
             jindo.readiness,
-            iroha_data_model::privacy::PrivacyCapabilityReadinessV1::Unavailable(
-                iroha_data_model::privacy::PrivacyCapabilityUnavailableReasonV1::NotRegistered
-            )
+            iroha_data_model::privacy::PrivacyCapabilityReadinessV1::Available
         );
+        assert!(jindo.is_network_available());
+        assert!(jindo.policy.is_none());
+        assert!(matches!(
+            jindo.compiled_profile,
+            iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Available(_)
+        ));
         for row in [&manifest.protocols[3], &manifest.protocols[5]] {
             assert!(matches!(
                 row.readiness,
@@ -1826,7 +1829,7 @@ mod tests {
         let json = norito::json::to_json(&manifest).expect("manifest JSON");
         assert!(json.contains("iroha-bootle-lantern-anoncred-v1"));
         assert!(json.contains("zk_x509_identity_presentation_v1"));
-        assert!(json.contains("not-registered"));
+        assert!(!json.contains("not-registered"));
         assert!(!json.contains("available-experimental"));
         assert!(!json.contains("limitation"));
         assert!(!json.contains("iroha-bootle-genisis-ac-stark-v0"));

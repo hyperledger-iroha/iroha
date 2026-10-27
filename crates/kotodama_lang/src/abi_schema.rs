@@ -86,7 +86,8 @@ pub(crate) fn state_value_kind_for_type(
         | Type::Tuple(_)
         | Type::Struct { .. }
         | Type::NamedStruct(_)
-        | Type::ContractRef(_) => return None,
+        | Type::ContractRef(_)
+        | Type::PendingAction => return None,
     })
 }
 fn state_value_schema_nodes(ty: &Type) -> Option<Vec<ivm_abi::state_value::StateValueNodeV1>> {

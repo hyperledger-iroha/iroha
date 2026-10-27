@@ -3,26 +3,25 @@
 ## Status
 
 `AtomicPrivateSettlementV1` is a first-release, governed, fail-closed protocol
-path. It is separate from transparent Native AMX DvP/PvP. Configuration keeps
-it disabled by default. Enabling the flag is necessary but not sufficient:
-admission also requires a governed activation height, the active compiled
-`IrohaIvmPrivateNoteStarkV1` capability, adequate fixed-slot limits, V1 policy
-permission, and the independent pool-policy governance notice period.
+path. It is separate from transparent Native AMX DvP/PvP. Admission requires the
+available native `IrohaIvmPrivateNoteStarkV1` implementation, adequate fixed-slot
+limits, V1 policy permission, and the independent pool-policy governance notice
+period. No node enable flag, service activation height or service notice period
+is required. Pool authorization and cryptographic verification remain mandatory.
 
-Privacy protocol registration stores only a nonzero proposal execution height.
-The proposal remains pending until `TransitionPrivacyProtocolLifecycleV1`
-explicitly activates the exact compiled profile under governance authority.
-Registration and initial activation may execute in the same transaction,
-including the authorized signed genesis transaction. Both recorded heights
-must equal the executing block height. There is no protocol activation delay,
-automatic height promotion, or compatibility decoding for a scheduled proposal.
-Suspension, resumption and retirement retain strictly increasing lifecycle
-history. Governed consensus-policy and protocol-resource tightening choose an
-explicit effective height strictly after their admission block; the next block is
-allowed. There is no fixed minimum block delay and no wall-time guarantee. Limits
-change at the start of that block only after the scheduling transaction commits.
-Pending lower root-retention limits already constrain new histories, preserving a
-deterministic transition. Pool-policy notice remains an independent constraint.
+Privacy proof admission selects the available native implementation and applies
+its compiled default limits unless an optional committed resource policy supplies
+validated limits. It does not require protocol registration, activation,
+lifecycle history or an all-protocol qualification record. Unfinished native
+implementations remain unavailable. Governance may schedule increases or
+decreases within canonical hard bounds at an exact height strictly after the
+admission block; the next block is allowed. Changes take effect at the start of
+that block after the scheduling transaction commits. Persisted histories are
+validated against the current retention cap and their authenticated attained
+count. New appends use the minimum of the current and pending caps; due pruning
+uses the successor cap. Increasing a cap preserves the existing history and
+grows it only through committed appends. Pool-policy notice remains an
+independent constraint.
 
 The implementation is not production-qualified until every release gate in
 this document and `specs/private_settlement_threat_model.md` is satisfied.
@@ -143,14 +142,15 @@ and sponsor reimbursement; inactive output slots carry zero value.
 `prepare_atomic_private_settlement_funding_note_v1` derives a positive funding
 commitment before a bundle exists. The release harness funds each pool with
 that input and an unspent reserve note, waits for state-resolved Applied
-activation, and only then chooses an observed committed authority height and
+pool activation, and only then chooses an observed committed authority height and
 generates the proof. The virtual dummy remains bound to the resulting bundle;
 its fixed-shape path does not spend the reserve note. Smoke, fault, leakage and
 performance preparation share this ordering. They do not predict how many
 admission blocks precede activation or require a later capability query to
 equal the activation transaction's block height. Exact historical committee
 authorization, governance validity, root membership for positive inputs and
-explicit activation of the exact compiled protocol remain mandatory. Current runtime
+selection of the available native implementation with validated resource limits
+remain mandatory. Current runtime
 qualification of this harness correction is pending.
 
 The required public `audit_input_commitment` binds the exact two ordered input
@@ -403,9 +403,24 @@ rewrapping before those keys are destroyed.
 
 `PrivateSettlementFileSidecarStoreV1` persists provisional and certified
 encrypted records addressed by the committed payload digest. The store enforces
-owner-only directories and files, non-followed single-link regular files,
-same-effective-user ownership, a single-writer process lease, create-new temp
-files, canonical decode/re-encode, fsync before rename, and directory fsync.
+owner-only directories and files through the shared `iroha_fs::PrivateDirectory`
+owner, with retained ancestors, non-followed single-link regular files, a
+single-writer process lease and native exclusive lock. Unix uses owner modes and
+directory fsync; Windows requires local NTFS, protected current-user DACLs,
+reparse rejection, retained non-delete-sharing ancestors and write-through native
+publication. A retained `.staging` child owns the exclusive `.writer.lock` and
+at most one unpublished native temporary file. Canonical decode/re-encode precedes
+same-volume native rename from that child into the committed record directory;
+both original directory owners remain retained and both namespaces are synced.
+Startup cleanup retains only the original lock and temporary file, independently
+of the committed record count (default 256, hard maximum 4,096). It checks committed
+record custody one original at a time and preserves the shared cleanup owner's
+all-originals checks within the staging namespace. Unknown root or staging names,
+unsafe committed records, missing staging custody, flat root locks/temporaries,
+and the retired `.tmp` directory layout are refused without migration. A failed
+publication with uncertain durability poisons the store until restart. These
+source contracts require native platform testing and crash-durability evidence;
+cross-compilation does not establish runtime qualification.
 Startup scanning rejects unknown, noncanonical, substituted, or capacity-
 violating records and reconstructs staged pool/nullifier/output reservations.
 Those locks use exact-route keys: pool heads are reserved by
@@ -643,10 +658,17 @@ receipt queries do not depend on access to restricted verification material.
 ## Configuration
 
 Production behavior is sourced from `[nexus.atomic_private_settlement]`; no
-environment variable enables the feature. The actual configuration includes:
+environment variable enables the feature. Native relation availability and committed
+protocol policy govern admission; no node enable flag, activation height or notice
+period is required. Strict startup constructs both settlement signers from the
+original configured node key and opens the durable encrypted-sidecar store with
+its governed capacity bounds. Missing signers or a failed store open refuse
+Strict startup. Emergency Fast keeps the runtime store and signers absent, so
+settlement routes remain unavailable until a Strict restart. Request admission
+still enforces the native profile and applicable committed and pool policies.
+The remaining configuration includes:
 
-- `enabled` and `activation_height`;
-- `minimum_activation_notice_blocks` and `proof_profile_version`;
+- `proof_profile_version`;
 - `max_participants` (hard V1 maximum 255) and `max_expiry_blocks`;
 - audit, Prepare, and Commit height timeouts;
 - strictly increasing capsule padding classes;
@@ -673,8 +695,7 @@ scoped core binding enforce the exact signed-transaction size. Ordinary network
 transaction bounds remain independent.
 
 Invalid zero values, unsupported V1 versions, duplicate/unsorted padding or
-policy lists, enabled-without-activation configurations, and values above hard
-protocol limits are configuration errors.
+policy lists, and values above hard protocol limits are configuration errors.
 
 ## Determinism and recovery invariants
 
@@ -822,8 +843,8 @@ commitments.
 
 Release execution first requires a completed
 `scripts/private_settlement_smoke_campaign.py` campaign: ten consecutive fresh
-N=3 runs, each with sixteen distinct validators, explicit governed protocol
-activation, continuous financial-state observations, signed RS16
+N=3 runs, each with sixteen distinct validators, governed pool bootstrap and
+activation, native proof admission, continuous financial-state observations, signed RS16
 finality, idempotent acknowledgment of the exact finalized carrier, and restart of every validator. The driver builds
 the exact signed clean source and retains requests, process inventories,
 state/certificate/finality artifacts, command logs, and source/executable

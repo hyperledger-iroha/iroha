@@ -153,7 +153,9 @@ test("checked Exact12 base64 decodes all byte-complete rows and re-encodes ident
   );
   assert.deepEqual(bundle.rows.map((row) => row.protocolId), protocolIdsFromMatrix());
   for (const row of bundle.rows) {
-    assert.equal(row.submitProofWireId, "iroha.privacy.submit_proof.v1");
+    assert.equal(row.submitProofWireId, row.protocolId === "iroha-zk-x509-stark-p256-v1"
+      ? "iroha.privacy.submit_zk_x509_certificate.v1"
+      : "iroha.privacy.submit_proof.v1");
     for (const field of [
       "statementNorito",
       "envelopeNorito",

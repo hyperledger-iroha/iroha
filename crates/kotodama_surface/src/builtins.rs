@@ -384,6 +384,8 @@ pub enum Builtin {
     ExecuteQuery,
     /// Submit the encoded governance ballot instruction.
     ScExecuteSubmitBallot,
+    /// Queue a canonical X509 presentation request against signed attachment custody.
+    PresentX509,
     /// Resolve an account alias to its canonical account identity.
     ResolveAccountAlias,
     /// Bill the active host-managed subscription.
@@ -886,6 +888,7 @@ impl Builtin {
             "query_get_contract_instance" => Self::QueryGetContractInstance,
             "execute_query" => Self::ExecuteQuery,
             "sc_execute_submit_ballot" => Self::ScExecuteSubmitBallot,
+            "present_x509" => Self::PresentX509,
             "resolve_account_alias" => Self::ResolveAccountAlias,
             "subscription_bill" => Self::SubscriptionBill,
             "subscription_record_usage" => Self::SubscriptionRecordUsage,
@@ -1144,6 +1147,7 @@ impl Builtin {
             Self::QueryGetContractInstance => "query_get_contract_instance",
             Self::ExecuteQuery => "execute_query",
             Self::ScExecuteSubmitBallot => "sc_execute_submit_ballot",
+            Self::PresentX509 => "present_x509",
             Self::ResolveAccountAlias => "resolve_account_alias",
             Self::SubscriptionBill => "subscription_bill",
             Self::SubscriptionRecordUsage => "subscription_record_usage",
@@ -1572,6 +1576,7 @@ impl Builtin {
             Self::RegisterSmartContractBytes => "seiyaku::register_bytes",
             Self::ActivateContractInstance => "seiyaku::activate_instance",
             Self::ScExecuteSubmitBallot => "ledger::governance::submit_ballot",
+            Self::PresentX509 => "ledger::credentials::present_x509",
             Self::ZkRootsGet => "crypto::zk::roots",
             Self::ZkVoteGetTally => "ledger::governance::tally",
             Self::ZkVerifyBatch => "crypto::zk::verify_batch",
@@ -1688,7 +1693,7 @@ impl Builtin {
     /// Return the canonical effect classification for this builtin.
     pub const fn effects(self) -> BuiltinEffects {
         match self {
-            Self::ScExecuteSubmitBallot => BuiltinEffects::INSTRUCTION,
+            Self::ScExecuteSubmitBallot | Self::PresentX509 => BuiltinEffects::INSTRUCTION,
             Self::GetOrInsert | Self::StateMapRemove | Self::StateSet | Self::StateDel => {
                 BuiltinEffects::DURABLE_STATE
             }
@@ -2063,7 +2068,9 @@ impl Builtin {
             Self::QueryGetParameter => &[s::SYSCALL_QUERY_GET_PARAMETER],
             Self::QueryGetContractManifest => &[s::SYSCALL_QUERY_GET_CONTRACT_MANIFEST],
             Self::QueryGetContractInstance => &[s::SYSCALL_QUERY_GET_CONTRACT_INSTANCE],
-            Self::ScExecuteSubmitBallot => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION],
+            Self::ScExecuteSubmitBallot | Self::PresentX509 => {
+                &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
+            }
             Self::ExecuteQuery => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY],
             Self::SubscriptionBill => &[s::SYSCALL_SUBSCRIPTION_BILL],
             Self::SubscriptionRecordUsage => &[s::SYSCALL_SUBSCRIPTION_RECORD_USAGE],
@@ -2398,6 +2405,7 @@ impl Builtin {
             | Self::Keccak256Hash
             | Self::IrohaHash => S::new(&["bytes"], "bytes"),
             Self::StateSet => S::new(&["bytes", "bytes"], "()"),
+            Self::PresentX509 => S::new(&["bytes"], "PendingAction"),
             Self::StateDel
             | Self::ScExecuteSubmitBallot
             | Self::DeactivateContractInstance
@@ -2908,6 +2916,7 @@ impl Builtin {
             | Self::SoracloudPublishCheckpoint
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope => signature.with_names(&["request"]),
+            Self::PresentX509 => signature.with_names(&["request"]),
             Self::GetPrivateInput => signature.with_names(&["index"]),
             Self::Path => signature.with_names(&["path", "key"]),
             Self::Sm2Verify => {
@@ -3151,6 +3160,21 @@ mod tests {
         BuiltinLowering, BuiltinMode, BuiltinSurface, PointerConstructor,
     };
     use std::collections::HashSet;
+    #[test]
+    fn x509_presentation_is_a_typed_queued_instruction_with_an_opaque_result() {
+        let builtin = Builtin::from_source_name("ledger::credentials::present_x509").unwrap();
+        assert_eq!(builtin, Builtin::PresentX509);
+        assert_eq!(builtin.signature().parameters, &["bytes"]);
+        assert_eq!(builtin.signature().return_type, "PendingAction");
+        assert_eq!(builtin.effects(), BuiltinEffects::INSTRUCTION);
+        assert_eq!(builtin.access(), BuiltinAccess::LedgerWrite);
+        assert_eq!(
+            builtin.operation_syscalls(),
+            &[ivm_abi::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION]
+        );
+        assert!(Builtin::from_source_name("present_x509").is_none());
+        assert!(Builtin::from_source_name("execute_instruction").is_none());
+    }
     #[test]
     fn release_mutators_are_effectful_in_canonical_registry() {
         for name in [

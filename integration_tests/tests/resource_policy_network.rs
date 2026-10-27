@@ -3,7 +3,8 @@
 //! Every governance proposal that would make the transaction cap, the block payload limit and
 //! the privacy byte budgets incoherent, or exceed the chain transport limit, is committed as a
 //! rejected transaction with the same full result on every validator, and leaves every
-//! parameter unchanged. The exact coherent boundary is accepted in either instruction order. A
+//! parameter unchanged. Signed ordinary updates decrease and increase the privacy budget within
+//! the canonical ceiling. The exact coherent boundary is accepted in either instruction order. A
 //! signed transaction of exactly the 10,485,760-byte cap commits under the tightest coherent
 //! block limit and the first excess byte is refused by every validator before admission.
 //! Protocol byte caps remain unchanged. Signed genesis separately budgets the synthetic `Log` fixture's
@@ -33,7 +34,7 @@ use iroha::{
         asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
         isi::{
             Grant, InstructionBox, Log, Mint, Register, SetParameter,
-            privacy::SchedulePrivacyConsensusPolicyTighteningV1,
+            privacy::SchedulePrivacyConsensusPolicyUpdateV1,
         },
         parameter::{
             CustomParameter, CustomParameterId, Parameter, Parameters, TransactionParameter,
@@ -310,8 +311,8 @@ fn privacy_limits_on_all(clients: &[Client]) -> Result<PrivacyConsensusLimitsV1>
         );
     }
     ensure!(
-        first.pending_tightening.is_none(),
-        "a privacy tightening is still pending: {first:?}"
+        first.pending_update.is_none(),
+        "a privacy resource update is still pending: {first:?}"
     );
     Ok(first.current_limits)
 }
@@ -585,8 +586,11 @@ fn block_bytes(bytes: u32) -> InstructionBox {
     ))
 }
 
-fn tighten(effective_at_height: u64, limits: PrivacyConsensusLimitsV1) -> InstructionBox {
-    SchedulePrivacyConsensusPolicyTighteningV1::new(effective_at_height, limits).into()
+fn update_privacy_limits(
+    effective_at_height: u64,
+    limits: PrivacyConsensusLimitsV1,
+) -> InstructionBox {
+    SchedulePrivacyConsensusPolicyUpdateV1::new(effective_at_height, limits).into()
 }
 
 #[test]
@@ -666,7 +670,7 @@ fn four_validators_agree_on_resource_policy_bounds_and_coherence() -> Result<()>
             assert_identically_rejected(&clients, &proposal, &expected, deadline)?;
         }
 
-        // Exact coherent boundaries, in both instruction orders. The tightening becomes
+        // Exact coherent boundaries, in both instruction orders. The resource update becomes
         // effective with the lag-two block limit, never after it.
         let middle = PrivacyConsensusLimitsV1 {
             max_privacy_bytes_per_block: MIDDLE_BLOCK_PAYLOAD - reserve,
@@ -677,7 +681,7 @@ fn four_validators_agree_on_resource_policy_bounds_and_coherence() -> Result<()>
             &clients[0],
             vec![
                 block_bytes(MIDDLE_BLOCK_PAYLOAD),
-                tighten(height + 3, middle),
+                update_privacy_limits(height + 3, middle),
             ],
             nonces.next(),
         )?;
@@ -692,6 +696,29 @@ fn four_validators_agree_on_resource_policy_bounds_and_coherence() -> Result<()>
         );
         ensure!(privacy_limits_on_all(&clients)? == middle);
 
+        // An ordinary future update can restore the larger canonical budget.
+        // The same signed transaction schedules both bounds; all validators must
+        // apply the increase at the real certified height before the next decrease.
+        let height = status_height(&rt, &network.validators()[0])?;
+        let increase = signed(
+            &clients[0],
+            vec![
+                update_privacy_limits(height + 3, privacy),
+                block_bytes(BLOCK_PAYLOAD_DEFAULT),
+            ],
+            nonces.next(),
+        )?;
+        assert_identically_applied(&clients, &increase, deadline)?;
+        advance_to(&rt, &network, &clients, height + 4, &mut nonces, deadline)?;
+        ensure!(
+            parameters_on_all(&clients)?
+                .sumeragi()
+                .max_block_bytes()
+                .get()
+                == BLOCK_PAYLOAD_DEFAULT
+        );
+        ensure!(privacy_limits_on_all(&clients)? == privacy);
+
         let tight = PrivacyConsensusLimitsV1 {
             max_privacy_bytes_per_block: TIGHT_BLOCK_PAYLOAD - reserve,
             ..middle
@@ -700,7 +727,10 @@ fn four_validators_agree_on_resource_policy_bounds_and_coherence() -> Result<()>
         let height = status_height(&rt, &network.validators()[0])?;
         let second = signed(
             &clients[0],
-            vec![tighten(height + 3, tight), block_bytes(TIGHT_BLOCK_PAYLOAD)],
+            vec![
+                update_privacy_limits(height + 3, tight),
+                block_bytes(TIGHT_BLOCK_PAYLOAD),
+            ],
             nonces.next(),
         )?;
         assert_identically_applied(&clients, &second, deadline)?;

@@ -10,7 +10,9 @@ fn fee_sponsor_program_ids_require_exact_canonical_literals() {
     assert_eq!(parsed.name.as_ref(), "retail");
     assert!(parse_fee_sponsor_program_id(&format!(" {literal}")).is_err());
     assert!(parse_fee_sponsor_program_id(&sponsor_literal).is_err());
-    assert!(parse_fee_sponsor_program_id(&format!("{}/retail", taira_i105_from_seed(0x74))).is_err());
+    assert!(
+        parse_fee_sponsor_program_id(&format!("{}/retail", taira_i105_from_seed(0x74))).is_err()
+    );
 }
 #[test]
 fn i105_discriminant_hint_decodes_valid_literals_only() {
@@ -230,11 +232,31 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
             PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
-        .expect_err("another active protocol row must not authorize Vega");
+        .expect_err("an available PGC relation must not manufacture the unavailable Vega relation");
+    assert!(
+        mismatch.to_string().contains(
+            "privacy protocol vega-existing-credential-zk-v1 is unavailable: engine-unavailable"
+        ),
+        "{mismatch}"
+    );
+    wrong_protocol
+        .require_empty_privacy_action_builder_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1, "PGC")
+        .expect("available selected native PGC uses defaults without registration");
+    let mut wrong_network = new_builder();
+    wrong_network.privacy_capability_manifest = Some(
+        crate::privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            crate::PyNetworkId::from_exact_bytes(&[0xA7; 32]).unwrap().inner,
+        ),
+    );
+    let mismatch = wrong_network
+        .require_empty_privacy_action_builder_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1, "PGC")
+        .expect_err("selected native availability cannot cross the transaction network");
     assert!(
         mismatch
             .to_string()
-            .contains("is not available in the committed")
+            .contains("different transaction network"),
+        "{mismatch}"
     );
 }
 fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -485,7 +507,11 @@ fn sorafs_alias_proof_fixture_rejects_bad_cid_and_expiry_overflow() {
         let overflow = PyDict::new(py);
         overflow.set_item("generated_at_unix", u64::MAX).unwrap();
         let error = sorafs_alias_proof_fixture_py(py, Some(&overflow)).unwrap_err();
-        assert!(error.to_string().contains("overflows the default alias expiry"));
+        assert!(
+            error
+                .to_string()
+                .contains("overflows the default alias expiry")
+        );
     });
 }
 #[test]
@@ -840,19 +866,6 @@ fn component_python_inspectors_reject_empty_and_malformed_signed_wire() {
             );
         }
     });
-}
-#[test]
-fn x509_statement_archive_boundary_is_nonempty_fixed_capacity_and_canonical() {
-    assert!(python_zk_x509_statement_archive_v1(&[]).is_err());
-    assert!(python_zk_x509_statement_archive_v1(&[0xA5]).is_err());
-    assert!(
-        python_zk_x509_statement_archive_v1(&vec![
-            0xA5;
-            crate::privacy_native_actions::PRIVACY_ZK_X509_MAX_STATEMENT_ARCHIVE_BYTES_V1
-                + 1
-        ])
-        .is_err()
-    );
 }
 #[test]
 fn x509_python_result_keeps_exact_action_and_ledger_semantics() {

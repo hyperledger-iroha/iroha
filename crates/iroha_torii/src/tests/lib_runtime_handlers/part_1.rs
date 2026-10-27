@@ -1694,7 +1694,6 @@ fn roundtrip_request_for_test(
     )
     .expect("query request should decode deterministically")
 }
-#[cfg(feature = "app_api")]
 pub fn bind_account_alias_for_test(app: &SharedAppState, account_id: &AccountId, alias: &str) {
     let dataspace_catalog = app.state.nexus_snapshot().dataspace_catalog.clone();
     let label =
@@ -3030,6 +3029,7 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let torii = Torii::new_with_handle(
         ChainId::from("tx-rate-test"),
         signed_query_test_network_id(),
@@ -3043,9 +3043,12 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");
@@ -3103,6 +3106,7 @@ async fn torii_ram_lfe_uses_config_runtime() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let torii = Torii::new_with_handle(
         ChainId::from("identifier-resolver-config-test"),
         signed_query_test_network_id(),
@@ -3116,9 +3120,12 @@ async fn torii_ram_lfe_uses_config_runtime() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");
@@ -3648,6 +3655,7 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let _torii = Torii::new_with_handle(
         ChainId::from("alias-route-registration-test"),
         signed_query_test_network_id(),
@@ -3661,9 +3669,12 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");

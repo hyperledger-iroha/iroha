@@ -46,8 +46,8 @@ fn retained_native_auxiliary_rows_match_original_recurrence_and_bound_terminals(
                     .rfc_union_air_terminals_v1(&binding, (segment + 1) % 4)
                     .is_err()
             );
-            for first in (0..78).step_by(8) {
-                let count = (78 - first).min(8);
+            for first in (0..ZK_X509_SHA_BATCH_AUX_WIDTH_V1).step_by(8) {
+                let count = (ZK_X509_SHA_BATCH_AUX_WIDTH_V1 - first).min(8);
                 let mut columns = PrivateTableV1::new(
                     (0..count)
                         .map(|_| native_column_v1(F(99)))

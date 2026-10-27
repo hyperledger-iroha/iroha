@@ -500,17 +500,13 @@ public static class PrivacyNative
             PrivacyExact12CapabilityManifestCodecV1.Validate(snapshot, catalog);
             return PrivacyExact12CapabilityManifestValidationStatusV1.Valid;
         }
-        catch (PrivacyExact12CapabilityManifestCodecV1.LocalTupleMismatchException)
-        {
-            return PrivacyExact12CapabilityManifestValidationStatusV1.LocalCompiledTupleMismatch;
-        }
         catch (PrivacyExact12CapabilityManifestException)
         {
             return PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest;
         }
     }
 
-    /// <summary>Require Rust's complete release, audit and deployment evidence verification.</summary>
+    /// <summary>Require Rust's canonical runtime manifest and per-protocol governance validation.</summary>
     internal static void RequireValidCapabilityArchive(byte[] archive)
     {
         ArgumentNullException.ThrowIfNull(archive);

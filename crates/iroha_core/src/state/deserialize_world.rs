@@ -8600,13 +8600,10 @@ fn decode_world_fields(
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
-    let privacy_exact12_qualification: Cell<
-        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
-    > = take_required(&mut map, "privacy_exact12_qualification")?;
-    let privacy_activations: Storage<
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
-    > = take_required(&mut map, "privacy_activations")?;
+    let privacy_protocol_policies: Storage<
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyV1,
+    > = take_required(&mut map, "privacy_protocol_policies")?;
     let kagemusha_wallet_ledger: Storage<
         iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1,
         Vec<u8>,
@@ -8724,7 +8721,7 @@ fn decode_world_fields(
     > = take_required(&mut map, "privacy_root_heads")?;
     crate::privacy_state::validate_privacy_persisted_state_v1(
         privacy_consensus_policy.view().get(),
-        &privacy_activations.view(),
+        &privacy_protocol_policies.view(),
         crate::privacy_state::PrivacyPgcStateReadV1 {
             accounts: &privacy_pgc_accounts.view(),
             pool_invariants: &privacy_pgc_pool_invariants.view(),
@@ -8735,14 +8732,7 @@ fn decode_world_fields(
         &privacy_root_heads.view(),
     )
     .map_err(privacy_state_json_error)?;
-    if let Some(qualification) = privacy_exact12_qualification.view().get() {
-        qualification
-            .validate()
-            .map_err(|error| json::Error::InvalidField {
-                field: "world.privacy_exact12_qualification".to_owned(),
-                message: error.to_string(),
-            })?;
-    }
+
     crate::privacy_state::validate_privacy_public_reserve_dependencies_v1(
         &privacy_commitments.view(),
         &accounts.view(),
@@ -9064,8 +9054,7 @@ fn decode_world_fields(
         poseidon_params,
         runtime_upgrades,
         privacy_consensus_policy,
-        privacy_exact12_qualification,
-        privacy_activations,
+        privacy_protocol_policies,
         kagemusha_wallet_ledger,
         private_settlement_governance,
         private_settlement_pools,

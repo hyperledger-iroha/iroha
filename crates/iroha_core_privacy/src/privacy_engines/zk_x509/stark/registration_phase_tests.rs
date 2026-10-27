@@ -3167,7 +3167,7 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
         usize::try_from(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1)
             .expect("profile proof bound fits usize")
     );
-    assert_eq!(maximum_encoded_bytes, 7_908_768);
+    assert_eq!(maximum_encoded_bytes, 7_931_808);
     assert!(
         maximum_encoded_bytes
             < usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),

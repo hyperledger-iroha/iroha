@@ -103,12 +103,12 @@ mod variable_output;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2145:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2145:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x34, 0x1c, 0x8f, 0x9f, 0x2a, 0xb8, 0x46, 0xc1, 0x81, 0x68, 0x73, 0x90, 0x8c, 0x39, 0x68, 0x41,
-    0x3a, 0x76, 0x1e, 0x55, 0x82, 0x38, 0x1a, 0xd3, 0x2e, 0xd7, 0x21, 0x5b, 0x6e, 0x86, 0x75, 0x60,
+    0x1e, 0xe8, 0x65, 0xa4, 0x1b, 0x34, 0x1d, 0x25, 0x4f, 0xdc, 0xeb, 0x66, 0x71, 0x21, 0xbc, 0xe5,
+    0x3b, 0xcf, 0x0c, 0xdf, 0x9a, 0x4d, 0xad, 0xa6, 0x7b, 0xd0, 0x83, 0x0a, 0x14, 0x95, 0x51, 0x59,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -3667,6 +3667,31 @@ pub fn zk_x509_rfc_key_join_rows_v1(
     Ok((rows, channels, BASE_VALUE, BASE_CERT2_ACTIVE))
 }
 
+/// Exact required CRL calendar timestamps in the original RFC base polynomial.
+/// Rows are the final phase of fixed temporal slots six and seven, independent
+/// of private certificate depth, entry counts, or selected date encoding.
+pub(crate) fn zk_x509_rfc_crl_time_join_rows_v1(
+    shape: ZkX509Rfc5280StarkShapeV1,
+) -> Result<([usize; 2], usize), ZkX509Rfc5280StarkErrorV1> {
+    shape.validate()?;
+    let counts = ZkX509Rfc5280StarkShapeV1::family_counts();
+    let family = ZkX509Rfc5280StarkFamilyV1::Calendar as usize;
+    if counts[family] != numeric::TEMPORAL_SLOTS_V1 * numeric::CALENDAR_PHASES_V1
+        || numeric::temporal_slot_v1(6) != Some(numeric::TemporalSlotV1::CrlThisUpdate)
+        || numeric::temporal_slot_v1(7) != Some(numeric::TemporalSlotV1::CrlNextUpdate)
+    {
+        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+    }
+    let start = counts[..family]
+        .iter()
+        .try_fold(0_usize, |sum, count| sum.checked_add(*count))
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let rows = [6_usize, 7].map(|slot| start + (slot + 1) * numeric::CALENDAR_PHASES_V1 - 1);
+    if rows[1] >= ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+    }
+    Ok((rows, BASE_G))
+}
 /// Verifier-owned family ranges. It stores only O(1) boundaries, never `2^18` fixed rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkX509Rfc5280StarkFixedScheduleV1 {
@@ -3935,6 +3960,11 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
                 consumer,
             );
             fixed[FIX_REQUIRED_ACTIVE] = F::ONE;
+            // Both endpoints carry the global certificate-slot activity. Derive the
+            // selector from public topology so the existing AIR equation is active.
+            fixed[FIX_CERT2_OUTPUT] = F(u64::from(
+                entry.role == ZkX509Rfc5280OutputRoleV1::CertificateSlotActive,
+            ));
             fixed[output_role_fixed_selector_column_v1(
                 output_role_index_v1(entry.role),
                 consumer,
@@ -5218,7 +5248,7 @@ fn serial_copy_factor_v1(
     lane: usize,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> F {
-    compress_tuple_v1(
+    F::ONE.add(compress_tuple_v1(
         [
             F(90),
             logical_id,
@@ -5234,14 +5264,16 @@ fn serial_copy_factor_v1(
             F::ZERO,
         ],
         challenges.tuple[lane],
-    )
+    ))
 }
+/// Fixed affine offset prevents proportional factors across the mixed copy domains.
+/// Source and consumer tuple semantics remain challenge independent.
 fn normalized_copy_factor_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> A {
-    compress_tuple_v1(
+    A::ONE.add(compress_tuple_v1(
         [
             current[BASE_COPY_DOMAIN],
             current[BASE_COPY_KEY_1],
@@ -5257,7 +5289,7 @@ fn normalized_copy_factor_v1<A: PolynomialAirFieldV1>(
             A::ZERO,
         ],
         challenges.tuple[lane],
-    )
+    ))
 }
 fn serial_byte_lookup_factor_v1<A: PolynomialAirFieldV1>(
     document: A,
@@ -5284,12 +5316,13 @@ fn serial_byte_lookup_factor_v1<A: PolynomialAirFieldV1>(
         challenges.tuple[lane],
     )
 }
+/// Fixed affine offset normalizes domains96/97 in their shared reciprocal accumulator.
 fn profile_byte_factor_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> A {
-    compress_tuple_v1(
+    A::ONE.add(compress_tuple_v1(
         [
             A::from_base(F(96)),
             current[BASE_ROLE],
@@ -5305,14 +5338,14 @@ fn profile_byte_factor_v1<A: PolynomialAirFieldV1>(
             A::ZERO,
         ],
         challenges.tuple[lane],
-    )
+    ))
 }
 fn profile_topology_source_factor_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> A {
-    compress_tuple_v1(
+    A::ONE.add(compress_tuple_v1(
         [
             A::from_base(F(97)),
             current[BASE_ROLE],
@@ -5328,14 +5361,14 @@ fn profile_topology_source_factor_v1<A: PolynomialAirFieldV1>(
             A::ZERO,
         ],
         challenges.tuple[lane],
-    )
+    ))
 }
 fn profile_topology_query_factor_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: &ZkX509Rfc5280StarkChallengesV1,
 ) -> A {
-    compress_tuple_v1(
+    A::ONE.add(compress_tuple_v1(
         [
             A::from_base(F(97)),
             current[BASE_PARENT],
@@ -5351,7 +5384,7 @@ fn profile_topology_query_factor_v1<A: PolynomialAirFieldV1>(
             A::ZERO,
         ],
         challenges.tuple[lane],
-    )
+    ))
 }
 fn serial_node_lookup_factor_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
@@ -8963,6 +8996,38 @@ mod tests {
     use sha2::{Digest as _, Sha256};
     include!("rfc5280_stark_preflight_tests.rs");
     include!("rfc5280_presentation_interval_tests.rs");
+    #[test]
+    fn authoritative_crl_time_locator_selects_required_original_calendar_slots() {
+        let trace = canonical_trace_v1();
+        let material = build_zk_x509_rfc5280_stark_base_material_v1(&trace).unwrap();
+        for disclosures in 0..=4 {
+            let mut statement = trace.statement.clone();
+            statement.disclosed_attribute_indices = (0..disclosures).collect();
+            let shape = ZkX509Rfc5280StarkShapeV1::from_statement(&statement).unwrap();
+            let (rows, column) = zk_x509_rfc_crl_time_join_rows_v1(shape).unwrap();
+            let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
+            assert_eq!(column, BASE_G);
+            for (i, row) in rows.into_iter().enumerate() {
+                let (family, ordinal) = schedule.family_and_ordinal(row).unwrap();
+                assert_eq!(family, ZkX509Rfc5280StarkFamilyV1::Calendar);
+                assert_eq!(ordinal, (6 + i) * 7 + 6);
+                let fixed = schedule.fixed_row(row).unwrap();
+                assert_eq!(fixed[FIX_CALENDAR_PHASES + 6], F::ONE);
+                assert_eq!(fixed[FIX_TIME_VALUE], F::ONE);
+                assert_eq!(fixed[FIX_NUMERIC_REQUIRED], F::ONE);
+                assert_eq!(fixed[FIX_TEMPORAL_SLOT], F((6 + i) as u64));
+                assert_eq!(
+                    material.base_row(row).unwrap()[column],
+                    F(if i == 0 {
+                        trace.crl.this_update
+                    } else {
+                        trace.crl.next_update
+                    })
+                );
+            }
+        }
+    }
+
     include!("rfc5280_key_output_tests.rs");
     include!("rfc5280_spki_output_tests.rs");
     include!("rfc5280_variable_output_tests.rs");
@@ -10956,6 +11021,157 @@ mod tests {
         );
     }
     #[test]
+    fn mixed_profile_lookup_factors_reject_homogeneous_weight_alias() {
+        // Factor-level controls only: these rows are not a complete RFC witness.
+        // In the old shared lookup, 96/(96*t) - 97/(97*t) was identically zero.
+        let zero = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+        let challenges = challenges_v1();
+        challenges.validate().expect("admitted distinct challenges");
+        let weighted_sums = |byte: F, topology: F| {
+            let reciprocal = F(96)
+                .mul(byte.inv().unwrap_or(F::ZERO))
+                .sub(F(97).mul(topology.inv().unwrap_or(F::ZERO)));
+            let singular = F(96)
+                .mul(F(u64::from(byte == F::ZERO)))
+                .sub(F(97).mul(F(u64::from(topology == F::ZERO))));
+            (reciprocal, singular)
+        };
+        for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
+            let old_byte = F(96).mul(challenges.tuple[lane][0]);
+            let old_topology = F(97).mul(challenges.tuple[lane][0]);
+            assert_eq!(weighted_sums(old_byte, old_topology), (F::ZERO, F::ZERO));
+            let byte = profile_byte_factor_v1(&zero, lane, &challenges);
+            let source = profile_topology_source_factor_v1(&zero, lane, &challenges);
+            let query = profile_topology_query_factor_v1(&zero, lane, &challenges);
+            assert_eq!(source, query);
+            assert_eq!(F(96).mul(source).sub(F(97).mul(byte)), F::ZERO.sub(F::ONE));
+            assert_ne!(weighted_sums(byte, source), (F::ZERO, F::ZERO));
+
+            // Both singular surfaces use the exact zero count, without aborting.
+            for domain in [96_u64, 97] {
+                let mut singular = challenges;
+                singular.tuple[lane][0] = F::ZERO.sub(F(domain).inv().unwrap());
+                singular.validate().expect("admitted forced pole");
+                let byte = profile_byte_factor_v1(&zero, lane, &singular);
+                let source = profile_topology_source_factor_v1(&zero, lane, &singular);
+                let query = profile_topology_query_factor_v1(&zero, lane, &singular);
+                assert_eq!(source, query);
+                assert_eq!(byte == F::ZERO, domain == 96);
+                assert_eq!(source == F::ZERO, domain == 97);
+                let expected = if domain == 96 {
+                    F(96)
+                } else {
+                    F::ZERO.sub(F(97))
+                };
+                assert_eq!(weighted_sums(byte, source).1, expected);
+                assert_ne!(weighted_sums(byte, source), (F::ZERO, F::ZERO));
+            }
+        }
+
+        // Preserve the actual source-to-query coordinate map for domain97.
+        let mut source = zero;
+        let mut query = zero;
+        for (index, (source_column, query_column)) in [
+            (BASE_ROLE, BASE_PARENT),
+            (BASE_DOCUMENT, BASE_DOCUMENT),
+            (BASE_NODE, BASE_NODE),
+            (BASE_START, BASE_CONTENT_START),
+            (BASE_CONTENT_START, BASE_DEPTH),
+            (BASE_CONTENT_END, BASE_TAG_NUMBER),
+            (BASE_INSTANCE, BASE_H),
+            (BASE_TAG_NUMBER, BASE_TAG_CLASS),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let value = F(u64::try_from(index + 2).unwrap());
+            source[source_column] = value;
+            query[query_column] = value;
+        }
+        type Extension = crate::privacy_engines::transparent_stark::GoldilocksFp4V1;
+        for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
+            let expected = profile_topology_source_factor_v1(&source, lane, &challenges);
+            assert_eq!(
+                profile_topology_query_factor_v1(&query, lane, &challenges),
+                expected
+            );
+            let mut wrong = query;
+            wrong[BASE_H] = wrong[BASE_H].add(F::ONE);
+            assert_eq!(
+                profile_topology_query_factor_v1(&wrong, lane, &challenges).sub(expected),
+                challenges.tuple[lane][7]
+            );
+            let source_extension = source.map(Extension::from_base);
+            let query_extension = query.map(Extension::from_base);
+            assert_eq!(
+                profile_topology_source_factor_v1(&source_extension, lane, &challenges),
+                Extension::from_base(expected)
+            );
+            assert_eq!(
+                profile_topology_query_factor_v1(&query_extension, lane, &challenges),
+                Extension::from_base(expected)
+            );
+            assert_eq!(
+                profile_byte_factor_v1(&source_extension, lane, &challenges),
+                Extension::from_base(profile_byte_factor_v1(&source, lane, &challenges))
+            );
+        }
+    }
+    #[test]
+    fn mixed_domain_copy_factors_reject_homogeneous_multiset_alias() {
+        // This is a factor-level regression, not a complete credential witness.
+        // The two sides have identical domain/slot/offset multiplicities but
+        // different byte assignments. Homogeneous typed factors alias exactly.
+        let row = |domain, offset, value| {
+            let mut row = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+            row[BASE_COPY_DOMAIN] = F(domain);
+            row[BASE_COPY_KEY_2] = F(offset);
+            row[BASE_COPY_VALUE] = F(value);
+            row
+        };
+        let left = [row(103, 103, 103), row(104, 104, 208)];
+        let right = [row(103, 103, 206), row(104, 104, 104)];
+        assert_ne!(left, right);
+        let challenges = challenges_v1();
+        challenges.validate().expect("admitted distinct challenges");
+        for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
+            let coefficients = challenges.tuple[lane];
+            let homogeneous = |row: &ZkX509Rfc5280StarkBaseRowV1| {
+                row[BASE_COPY_DOMAIN]
+                    .mul(coefficients[0])
+                    .add(row[BASE_COPY_KEY_1].mul(coefficients[1]))
+                    .add(row[BASE_COPY_KEY_2].mul(coefficients[2]))
+                    .add(row[BASE_COPY_VALUE].mul(coefficients[3]))
+                    .add(row[BASE_COPY_START].mul(coefficients[4]))
+                    .add(row[BASE_COPY_GENERALIZED].mul(coefficients[5]))
+            };
+            assert_eq!(
+                homogeneous(&left[0]).mul(homogeneous(&left[1])),
+                homogeneous(&right[0]).mul(homogeneous(&right[1])),
+                "control must reproduce the removed homogeneous-factor identity"
+            );
+            let affine_product = |rows: &[ZkX509Rfc5280StarkBaseRowV1; 2]| {
+                rows.iter().fold(F::ONE, |product, row| {
+                    product.mul(normalized_copy_factor_v1(row, lane, &challenges))
+                })
+            };
+            assert_eq!(
+                affine_product(&left).sub(affine_product(&right)),
+                coefficients[3],
+                "affine normalization separates this alias for every admitted lane"
+            );
+            assert_ne!(affine_product(&left), affine_product(&right));
+            type Extension = crate::privacy_engines::transparent_stark::GoldilocksFp4V1;
+            for row in left.iter().chain(&right) {
+                let extension_row = row.map(Extension::from_base);
+                assert_eq!(
+                    normalized_copy_factor_v1(&extension_row, lane, &challenges),
+                    Extension::from_base(normalized_copy_factor_v1(row, lane, &challenges))
+                );
+            }
+        }
+    }
+    #[test]
     fn normalized_copy_product_is_total_at_a_forced_zero_factor() {
         let schedule =
             compile_zk_x509_rfc5280_stark_fixed_schedule_v1(ZkX509Rfc5280StarkShapeV1::default())
@@ -10983,8 +11199,11 @@ mod tests {
             .fold(F::ZERO, |sum, (value, coefficient)| {
                 sum.add(value.mul(*coefficient))
             });
-        challenges.tuple[0][0] = F::ZERO
-            .sub(non_domain_sum.mul(tuple[0].inv().expect("copy domain separator is nonzero")));
+        challenges.tuple[0][0] = F::ZERO.sub(
+            F::ONE
+                .add(non_domain_sum)
+                .mul(tuple[0].inv().expect("copy domain separator is nonzero")),
+        );
         challenges.validate().expect("forced-zero copy challenges");
         assert_eq!(normalized_copy_factor_v1(&current, 0, &challenges), F::ZERO);
         let mut current_aux = neutral_aux_v1();
@@ -12017,6 +12236,162 @@ mod tests {
             (285, 280, 147, 19, 4)
         );
     }
+
+    #[test]
+    fn certificate_slot_output_selector_is_compiled_for_exactly_both_endpoints() {
+        for count in 0..=4_u8 {
+            let mut shape = ZkX509Rfc5280StarkShapeV1 {
+                disclosed_attribute_count: count,
+                ..ZkX509Rfc5280StarkShapeV1::default()
+            };
+            for index in 0..usize::from(count) {
+                shape.disclosed_attribute_indices[index] =
+                    u8::try_from(index).expect("fixture index fits u8");
+            }
+            let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
+            for family in [
+                ZkX509Rfc5280StarkFamilyV1::OutputProducer,
+                ZkX509Rfc5280StarkFamilyV1::OutputConsumer,
+            ] {
+                let mut selected = 0;
+                for (ordinal, entry) in schedule.output_topology.iter().enumerate() {
+                    let fixed = schedule
+                        .fixed_row(schedule.starts[family as usize] + ordinal)
+                        .unwrap();
+                    let expected = entry.role == ZkX509Rfc5280OutputRoleV1::CertificateSlotActive;
+                    assert_eq!(fixed[FIX_CERT2_OUTPUT], F(u64::from(expected)));
+                    if expected {
+                        selected += 1;
+                        assert_eq!(entry.channel, 11 + 2 * u32::from(count));
+                        assert_eq!(entry.offset, 0);
+                        assert_eq!(fixed[FIX_REQUIRED_ACTIVE], F::ONE);
+                    }
+                }
+                assert_eq!(selected, 1);
+            }
+            for family in 0..FAMILY_COUNT_V1 {
+                if family == ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize
+                    || family == ZkX509Rfc5280StarkFamilyV1::OutputConsumer as usize
+                    || schedule.counts[family] == 0
+                {
+                    continue;
+                }
+                for row in [
+                    schedule.starts[family],
+                    schedule.starts[family] + schedule.counts[family] - 1,
+                ] {
+                    assert_eq!(schedule.fixed_row(row).unwrap()[FIX_CERT2_OUTPUT], F::ZERO);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compiled_certificate_slot_output_rejects_coherent_byte_alias_in_full_local_air() {
+        use crate::privacy_engines::transparent_stark::GoldilocksFp4V1 as E;
+        let geometry_start = RFC5280_RESIDUE_SECTIONS_V1[..12]
+            .iter()
+            .map(|section| section.1)
+            .sum::<usize>()
+            - (5 + ZK_X509_RFC5280_STARK_BASE_WIDTH_V1);
+        for count in 0..=4_u8 {
+            let mut shape = ZkX509Rfc5280StarkShapeV1 {
+                disclosed_attribute_count: count,
+                ..ZkX509Rfc5280StarkShapeV1::default()
+            };
+            for index in 0..usize::from(count) {
+                shape.disclosed_attribute_indices[index] =
+                    u8::try_from(index).expect("fixture index fits u8");
+            }
+            let schedule = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
+            let ordinal = schedule
+                .output_topology
+                .iter()
+                .position(|entry| entry.role == ZkX509Rfc5280OutputRoleV1::CertificateSlotActive)
+                .unwrap();
+            for consumer in [false, true] {
+                let family = if consumer {
+                    ZkX509Rfc5280StarkFamilyV1::OutputConsumer
+                } else {
+                    ZkX509Rfc5280StarkFamilyV1::OutputProducer
+                };
+                // This is the actual verifier compiler, never a hand-set selector.
+                let fixed = schedule
+                    .fixed_row(schedule.starts[family as usize] + ordinal)
+                    .unwrap();
+                for activity in [0_u8, 1] {
+                    for value in [activity, 1 - activity, 2, 255] {
+                        let mut current = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+                        current[BASE_ACTIVE] = F::ONE;
+                        current[BASE_CERT2_ACTIVE] = F(u64::from(activity));
+                        current[BASE_VALUE] = F(u64::from(value));
+                        write_u8_bits_v1(&mut current, BASE_BYTE_BITS, value);
+                        for (index, column) in metadata_columns_v1().into_iter().enumerate() {
+                            current[column] = fixed[FIX_EXPECTED + index];
+                        }
+                        populate_degree_normalization_helpers_v1(&mut current, &fixed);
+                        let current_aux = neutral_aux_v1();
+                        let mut next_aux = current_aux;
+                        let role =
+                            output_role_index_v1(ZkX509Rfc5280OutputRoleV1::CertificateSlotActive);
+                        // Recompute the matching output-product step, so failure cannot
+                        // be attributed to a stale product after changing the byte/bits.
+                        for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
+                            next_aux[output_role_aux_column_v1(role, consumer, lane)] =
+                                output_role_product_factor_v1(
+                                    &current,
+                                    role,
+                                    consumer,
+                                    lane,
+                                    &challenges_v1(),
+                                );
+                        }
+                        let residues = evaluate_zk_x509_rfc5280_local_residues_v1(
+                            &current,
+                            &current,
+                            &current_aux,
+                            &next_aux,
+                            &fixed,
+                            &der_challenges_v1(),
+                            &challenges_v1(),
+                        )
+                        .unwrap();
+                        let expected = F(u64::from(value)).sub(F(u64::from(activity)));
+                        for (index, residue) in residues.iter().enumerate() {
+                            assert_eq!(
+                                *residue,
+                                if index == geometry_start + 2 {
+                                    expected
+                                } else {
+                                    F::ZERO
+                                },
+                                "disclosures={count}, consumer={consumer}, activity={activity}, value={value}, residue={index}",
+                            );
+                        }
+                        let extension = evaluate_zk_x509_rfc5280_local_residues_v1(
+                            &current.map(E::from_base),
+                            &current.map(E::from_base),
+                            &current_aux.map(E::from_base),
+                            &next_aux.map(E::from_base),
+                            &fixed.map(E::from_base),
+                            &der_challenges_v1(),
+                            &challenges_v1(),
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            extension,
+                            residues
+                                .iter()
+                                .copied()
+                                .map(E::from_base)
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn output_metadata_suppresses_other_families_and_preserves_optional_selector() {
         use crate::privacy_engines::transparent_stark::GoldilocksFp4V1 as E;

@@ -57,7 +57,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
               wireName == wireName.trimmingCharacters(in: .whitespacesAndNewlines) else {
             throw ExecutableBatchInputError.invalidInstructionWireName
         }
-        guard wireName != PrivacyExact12FixtureCodecV1.submitProofWireId else {
+        guard !PrivacyExact12FixtureCodecV1.isPrivacyInstructionWire(wireName) else {
             throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
         }
         guard noritoDecodeFrame(framedPayload) != nil else {
@@ -69,7 +69,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
         privacyAdmission = nil
     }
 
-    /// Construct the sole retained privacy instruction only after fresh
+    /// Construct the protocol's canonical privacy instruction only after fresh
     /// committed/native Exact12 tuple admission. The token is revalidated here;
     /// merely retaining a token from an older binary is insufficient.
     public static func privacyExact12SubmitProof(
@@ -84,7 +84,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
             submitProofInstructionNorito: framedPayload
         )
         return TransactionInstructionFrame(
-            admittedPrivacyWireName: PrivacyExact12FixtureCodecV1.submitProofWireId,
+            admittedPrivacyWireName: PrivacyExact12FixtureCodecV1.instructionWireId(for: protocolId),
             framedPayload: framedPayload,
             protocolId: protocolId,
             admission: admission
@@ -106,12 +106,13 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
     /// Encode the dynamic `InstructionBox` pair under the V1 `COMPACT_LEN` layout.
     /// Privacy frames require the final transaction's explicit expected network.
     func compactInstructionBoxPayload(expectedNetworkId: NetworkId? = nil) throws -> Data {
-        if wireName == PrivacyExact12FixtureCodecV1.submitProofWireId {
-            guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId else {
+        if PrivacyExact12FixtureCodecV1.isPrivacyInstructionWire(wireName) {
+            guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId,
+                  wireName == PrivacyExact12FixtureCodecV1.instructionWireId(for: privacyProtocolId) else {
                 throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
             }
             // Re-run the ABI31 catalog getter+validator and the exact manifest/
-            // envelope tuple comparison at final encoding. A previously issued
+            // request/envelope tuple comparison at final encoding. A previously issued
             // token cannot turn a missing or stale native artifact into authority.
             try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
                 privacyAdmission,

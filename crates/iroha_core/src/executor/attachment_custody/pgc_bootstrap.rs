@@ -19,7 +19,7 @@ use crate::{
     },
     privacy_engines::p256::TranscriptBindingV1,
     privacy_profiles::{
-        CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
+        CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_profile_v1,
     },
     privacy_state::{PrivacyPgcAccountStateRootErrorV1, derive_privacy_pgc_account_state_root_v1},
 };
@@ -27,9 +27,9 @@ use iroha_data_model::{
     NetworkId,
     isi::privacy::BootstrapPrivacyPgcAccountsV1,
     privacy::{
-        PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountBootstrapValidationError,
-        PrivacyPgcBootstrapProofBytesV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPgcBootstrapProofValidationError, PrivacyProtocolActivationRecordV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyPgcAccountBootstrapV1,
+        PrivacyPgcAccountBootstrapValidationError, PrivacyPgcBootstrapProofBytesV1,
+        PrivacyPgcBootstrapProofDigestV1, PrivacyPgcBootstrapProofValidationError,
         PrivacyProtocolIdV1,
     },
     transaction::signed_attachments::{
@@ -39,15 +39,15 @@ use iroha_data_model::{
 };
 
 /// Native relation input supplied by the trusted runtime owner, never the guest.
-/// This borrowed record is not evidence of active lifecycle or authorization.
+/// The enclosing signed invocation owns authority; this borrowed record only binds native semantics.
 #[derive(Clone, Copy)]
 pub(crate) struct BootstrapContext<'a> {
     /// The actual runtime network identity.
     pub(crate) network_id: &'a NetworkId,
     /// The actual committed genesis hash.
     pub(crate) genesis_hash: [u8; 32],
-    /// The selected committed activation's cryptographic bindings.
-    pub(crate) activation: &'a PrivacyProtocolActivationRecordV1,
+    /// The exact selected native profile's cryptographic bindings.
+    pub(crate) profile: &'a PrivacyCompiledProfileSnapshotV1,
 }
 
 /// Original typed causes of this bounded consumer; none is a State verdict.
@@ -210,10 +210,10 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
         {
             return Err(BootstrapError::NetworkMismatch);
         }
-        if context.activation.protocol_id != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+        if context.profile.protocol_id != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
             return Err(BootstrapError::WrongProtocol);
         }
-        validate_compiled_privacy_activation_v1(context.activation)?;
+        validate_compiled_privacy_profile_v1(context.profile)?;
         let root = derive_privacy_pgc_account_state_root_v1(
             bootstrap.namespace,
             bootstrap.initial_epoch,
@@ -258,11 +258,11 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
                 genesis_hash: context.genesis_hash,
                 action_index,
                 statement_digest: *statement.as_bytes(),
-                parameter_id: *context.activation.parameter_id.as_bytes(),
-                parameter_digest: *context.activation.parameter_digest.as_bytes(),
-                verifier_digest: *context.activation.verifier_digest.as_bytes(),
-                statement_schema_digest: *context.activation.statement_schema_digest.as_bytes(),
-                engine_manifest_digest: *context.activation.engine_manifest_digest.as_bytes(),
+                parameter_id: *context.profile.parameter_id.as_bytes(),
+                parameter_digest: *context.profile.parameter_digest.as_bytes(),
+                verifier_digest: *context.profile.verifier_digest.as_bytes(),
+                statement_schema_digest: *context.profile.statement_schema_digest.as_bytes(),
+                engine_manifest_digest: *context.profile.engine_manifest_digest.as_bytes(),
                 generator_digest: parameters.generator_digest(),
             },
         )?;

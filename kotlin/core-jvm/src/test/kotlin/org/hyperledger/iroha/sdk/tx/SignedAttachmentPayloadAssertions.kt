@@ -9,6 +9,8 @@ import org.hyperledger.iroha.sdk.core.model.ActionInvocationBindingV1
 import org.hyperledger.iroha.sdk.core.model.ActionOperationV1
 import org.hyperledger.iroha.sdk.core.model.SignedAttachmentsV1
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 import org.hyperledger.iroha.sdk.tx.norito.InstructionWireIdsV1
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -185,11 +187,28 @@ internal object SignedAttachmentPayloadAssertions {
             assertContentEquals(expected, adapter.orderedIntentProjection(payload))
             assertContentEquals(hex(row.text("ordered_intent_digest_hex")), adapter.orderedIntentDigest(payload).bytes)
             val instructionFrame = hex(row.text("instruction_frame_hex"))
-            assertContentEquals(hex(row.text("instruction_projection_hex")),
-                org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge.submitProofIntentProjectionV1(instructionFrame).bytes())
+            val executingInstructions = when (val executable = payload.executable) {
+                is org.hyperledger.iroha.sdk.core.model.Executable.Instructions -> executable.instructions
+                is org.hyperledger.iroha.sdk.core.model.Executable.Batch -> executable.entries.mapNotNull {
+                    (it as? org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem.Instruction)?.instruction
+                }
+                else -> error("privacy fixture must be direct or batch")
+            }
+            val executingWire = executingInstructions.map { it.payload as WirePayload }.single {
+                it.wireName == "iroha.privacy.submit_proof.v1" || it.wireName == SubmitPrivacyZkX509CertificateV1.WIRE_ID
+            }
+            assertContentEquals(instructionFrame, executingWire.payloadBytes)
+            fun projected(frame: ByteArray): ByteArray = when (executingWire.wireName) {
+                SubmitPrivacyZkX509CertificateV1.WIRE_ID ->
+                    SubmitPrivacyZkX509CertificateV1.fromCanonicalRequestV1(frame).canonicalRequestBytes()
+                "iroha.privacy.submit_proof.v1" ->
+                    org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge.submitProofIntentProjectionV1(frame).bytes()
+                else -> error("unregistered privacy fixture instruction route")
+            }
+            assertContentEquals(hex(row.text("instruction_projection_hex")), projected(instructionFrame))
             fun replacing(frame: ByteArray): org.hyperledger.iroha.sdk.core.model.TransactionPayload {
                 fun instruction(value: org.hyperledger.iroha.sdk.core.model.InstructionBox): org.hyperledger.iroha.sdk.core.model.InstructionBox =
-                    if (value.name == "iroha.privacy.submit_proof.v1")
+                    if ((value.payload as? WirePayload)?.wireName == executingWire.wireName)
                         org.hyperledger.iroha.sdk.core.model.InstructionBox.fromWirePayload(value.name, frame) else value
                 val executable = when (val original = payload.executable) {
                     is org.hyperledger.iroha.sdk.core.model.Executable.Instructions ->
@@ -214,7 +233,7 @@ internal object SignedAttachmentPayloadAssertions {
             for (bad in listOf(byteArrayOf(), instructionFrame.copyOf(instructionFrame.size - 1),
                                instructionFrame + byteArrayOf(0), wrongSchema, checksumDamage)) {
                 refused = false
-                try { org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge.submitProofIntentProjectionV1(bad) }
+                try { projected(bad) }
                 catch (_: IllegalArgumentException) { refused = true }
                 check(refused) { "malformed typed instruction projected successfully" }
             }
@@ -224,6 +243,11 @@ internal object SignedAttachmentPayloadAssertions {
             ByteArray(org.hyperledger.iroha.sdk.privacy.PRIVACY_SUBMIT_PROOF_FRAME_MAX_BYTES_V1 + 1)) }
         catch (_: IllegalArgumentException) { oversized = true }
         check(oversized) { "oversized typed instruction entered the codec" }
+        oversized = false
+        try { SubmitPrivacyZkX509CertificateV1.fromCanonicalRequestV1(
+            ByteArray(org.hyperledger.iroha.sdk.privacy.PRIVACY_X509_REQUEST_BRIDGE_MAX_BYTES_V1 + 1)) }
+        catch (_: IllegalArgumentException) { oversized = true }
+        check(oversized) { "oversized X509 request entered the codec" }
     }
 
     fun nativeRegistryMatches() {

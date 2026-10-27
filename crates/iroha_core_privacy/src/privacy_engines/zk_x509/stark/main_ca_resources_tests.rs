@@ -10,7 +10,7 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
         plan.common,
         MainProverBufferPlanV1::new_v1(&layout).unwrap()
     );
-    assert_eq!(plan.common.maximum_live_buffers, 3_697_993_184);
+    assert_eq!(plan.common.maximum_live_buffers, 3_698_327_264);
     assert_eq!(
         plan.ca_originals,
         823 * (6196 * core::mem::size_of::<F>() + core::mem::size_of::<Vec<F>>())
@@ -188,7 +188,7 @@ fn phase_ownership_requires_actual_capacity_and_disallows_early_main24() {
 fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
-    assert_eq!(plan.common.maximum_live_buffers, 3_697_993_184);
+    assert_eq!(plan.common.maximum_live_buffers, 3_698_327_264);
     assert_eq!(plan.common.retained_cuts, 25_165_984);
     // Independent floor arithmetic is constant throughout this inline-owner
     // interval. The native type must remain in that interval for these pins.
@@ -258,15 +258,15 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
         quotient_rows += m;
     }
     assert_eq!(layout.registered_segments.len(), 49);
-    assert_eq!(columns, 5_811);
-    assert_eq!(native_cells, 2_116_723_200);
-    assert_eq!(masked_cells, 2_127_275_976);
+    assert_eq!(columns, 5_831);
+    assert_eq!(native_cells, 2_125_242_880);
+    assert_eq!(masked_cells, 2_135_831_976);
     assert_eq!(quotient_rows, 53_215_232);
-    assert_eq!(ordinary_cached_columns, 3_428);
+    assert_eq!(ordinary_cached_columns, 3_444);
     assert_eq!(changed, 1);
     // The five arithmetic registrations retain all their columns. Only RFC
     // loses ten cache columns, adding 10 * (4 - 1) = 30 native IFFTs.
-    assert_eq!(cached_columns, 3_418);
-    assert_eq!(native_iffts, 7_458);
-    assert_eq!(native_butterflies, 28_220_568_064);
+    assert_eq!(cached_columns, 3_434);
+    assert_eq!(native_iffts, 7_478);
+    assert_eq!(native_butterflies, 28_301_242_880);
 }

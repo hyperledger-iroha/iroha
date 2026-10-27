@@ -5,7 +5,9 @@ use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
 use crate::privacy_engines::zk_x509::private_table::inspection;
 
 fn row(index: usize) -> Row {
-    core::array::from_fn(|column| F(u64::try_from(index * 79 + column + 1).unwrap()))
+    core::array::from_fn(|column| {
+        F(u64::try_from(index * (ZK_X509_SHA_BATCH_AUX_WIDTH_V1 + 1) + column + 1).unwrap())
+    })
 }
 
 fn terminals(segment: usize) -> ZkX509ShaSegmentAirTerminalsV1 {
@@ -57,8 +59,8 @@ fn native_aux_cache_exact_forecast_and_all_column_batch_projections() {
         assert!(cache.heap_bytes_v1() <= ShaNativeAuxCacheV1::heap_forecast_v1(9).unwrap());
         assert_eq!(cache.copy_terminals_v1().unwrap(), terminals(segment));
         for width in [1, 3, 8] {
-            for first in (0..78).step_by(width) {
-                let count = width.min(78 - first);
+            for first in (0..ZK_X509_SHA_BATCH_AUX_WIDTH_V1).step_by(width) {
+                let count = width.min(ZK_X509_SHA_BATCH_AUX_WIDTH_V1 - first);
                 let mut columns = vec![vec![F(99); 9]; count];
                 let mut targets = columns
                     .iter_mut()
@@ -149,7 +151,7 @@ fn native_aux_cache_late_invalid_column_clears_the_entire_batch() {
     assert!(finish_sha_column_fill_batch_v1(fills).is_err());
     assert!(columns.iter().flatten().all(|value| *value == F::ZERO));
     for (first, count, rows) in [
-        (78, 1, 3),
+        (ZK_X509_SHA_BATCH_AUX_WIDTH_V1, 1, 3),
         (77, 2, 3),
         (usize::MAX, 1, 3),
         (0, 9, 3),
@@ -192,11 +194,9 @@ fn native_aux_cache_clears_full_rows_and_terminals_on_drop_error_and_unwind() {
                 }
             }
         });
-        assert!(
-            observations
-                .iter()
-                .any(|item| item.cells == 3 * 78 && item.nonzero_before > 0)
-        );
+        assert!(observations.iter().any(
+            |item| item.cells == 3 * ZK_X509_SHA_BATCH_AUX_WIDTH_V1 && item.nonzero_before > 0
+        ));
         assert!(observations.iter().all(|item| item.nonzero_after == 0));
         if mode == 0 {
             assert!(

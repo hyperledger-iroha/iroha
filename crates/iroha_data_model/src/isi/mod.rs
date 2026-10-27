@@ -216,11 +216,8 @@ macro_rules! impl_direct_instruction_box {
 impl_direct_instruction_box!(crate::isi::zk::VerifyProof);
 impl_direct_instruction_box!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1);
 impl_direct_instruction_box!(crate::isi::zk::PruneProofs);
-impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyProtocolActivationV1);
-impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyExact12QualificationV1);
-impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1);
-impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1);
-impl_direct_instruction_box!(crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1);
+impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1);
+impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1);
 impl_direct_instruction_box!(crate::isi::privacy::PublishPrivacyRootV1);
 impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyOrchardPoolV1);
 impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1);
@@ -245,6 +242,7 @@ impl_direct_instruction_box!(crate::isi::privacy::RegisterPrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RotatePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
+impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyZkX509CertificateV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1);
 impl_direct_instruction_box!(
@@ -2877,16 +2875,15 @@ pub mod prelude {
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
             PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
-            RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
-            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyBootleLanternIssuerPolicyV1,
-            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
-            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
-            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
-            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkAcePolicyV1,
+            RevokePrivacyZkX509CertificatePolicyV1, RevokePrivacyZkX509CrlV1,
+            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyBootleLanternIssuerPolicyV1,
+            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
+            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyUpdateV1, SchedulePrivacyProtocolLimitsUpdateV1,
+            SubmitPrivacyProofV1, SubmitPrivacyZkX509CertificateV1,
         },
         private_settlement::{
             AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,

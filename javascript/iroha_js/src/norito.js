@@ -1,3 +1,4 @@
+import { PRIVACY_X509_WIRE_ID_V1, validatePrivacyX509FixtureBindingsV1 } from "./privacyX509Wire.js";
 import { contractDeclarationCodecsV1 } from "./noritoContractMetadata.js";
 import {
   TEXT_MUST_BE_AN_OBJECT_2,
@@ -1825,8 +1826,9 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   if (row.protocolId !== PRIVACY_EXACT12_PROTOCOL_IDS_V1[rowIndex]) {
     rejectType(`${context}.protocolId is unknown, duplicated, or out of order`);
   }
-  if (row.submitProofWireId !== PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1) {
-    rejectType(`${context}${TEXT_SUBMIT_PROOF_WIRE_ID_MUST_BE}exactly ${PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1}`);
+  const expectedWireId = rowIndex === 5 ? PRIVACY_X509_WIRE_ID_V1 : PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1;
+  if (row.submitProofWireId !== expectedWireId) {
+    rejectType(`${context}${TEXT_SUBMIT_PROOF_WIRE_ID_MUST_BE}exactly ${expectedWireId}`);
   }
 
   const statementFrame = validatePrivacyExact12NestedFrameV1(
@@ -1893,55 +1895,10 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     rejectType(`${context}.envelopeNorito proof${TEXT_CARRIES_A_SUBSTITUTED}protocol`);
   }
 
-  const instructionFrame = validatePrivacyExact12NestedFrameV1(
-    row.submitProofInstructionNorito,
-    PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1,
-    PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
-    `${context}.${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_2}`,
-  );
-  const instructionFields = withNoritoCompactLengths(() =>
-    decodeStructFields(
-      instructionFrame.payload,
-      `${context}${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD}`,
-      ["envelope"],
-    ),
-  );
-  assertPrivacyExact12CanonicalStructPayloadV1(
-    instructionFrame.payload,
-    instructionFields,
-    ["envelope"],
-    `${context}${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD}`,
-  );
-  if (!instructionFields.envelope.equals(envelopeFrame.payload)) {
-    rejectType(`${context}.submitProofInstructionNorito does not contain envelopeNorito`);
-  }
-
-  const projectionFrame = validatePrivacyExact12NestedFrameV1(
-    row.transactionIntentProjectionNorito,
-    PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1,
-    PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1,
-    `${context}.${TEXT_TRANSACTION_INTENT_PROJECTION_NORITO_2}`,
-  );
-  const projectionFields = decodePrivacyExact12TransactionPayloadV1(
-    projectionFrame.payload,
-    `${context}.transactionIntentProjectionNorito.payload`,
-  );
   const unsignedFields = decodePrivacyExact12TransactionPayloadV1(
     row.unsignedTransactionPayloadNorito,
     `${context}.${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_3}`,
   );
-  validatePrivacyExact12NetworkBindingsV1({
-    statementTag: statement.tag,
-    statementContent: statement.content,
-    projectionDomain: projectionFields.domain,
-    unsignedDomain: unsignedFields.domain,
-    context,
-  });
-  for (const field of PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1) {
-    if (field !== "instructions" && !projectionFields[field].equals(unsignedFields[field])) {
-      rejectType(`${context}.transaction intent projection changed independent field ${field}`);
-    }
-  }
   const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
   if (
     decodeU64Value(
@@ -1959,40 +1916,90 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   if (nonce !== rowIndex + 1) {
     rejectType(`${context}${TEXT_CARRIES_A_SUBSTITUTED}transaction nonce`);
   }
-  const attachments = decodeOptionValue(
-    unsignedFields.attachments,
-    (payload) => payload,
-    `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}attachments`,
-  );
-  if (attachments !== null) {
-    rejectType(`${context} must not carry transaction attachments`);
-  }
+  if (rowIndex === 5) {
+    validatePrivacyX509FixtureBindingsV1(row);
+  } else {
+    const instructionFrame = validatePrivacyExact12NestedFrameV1(
+      row.submitProofInstructionNorito,
+      PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1,
+      PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
+      `${context}.${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_2}`,
+    );
+    const instructionFields = withNoritoCompactLengths(() =>
+      decodeStructFields(
+        instructionFrame.payload,
+        `${context}${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD}`,
+        ["envelope"],
+      ),
+    );
+    assertPrivacyExact12CanonicalStructPayloadV1(
+      instructionFrame.payload,
+      instructionFields,
+      ["envelope"],
+      `${context}${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD}`,
+    );
+    if (!instructionFields.envelope.equals(envelopeFrame.payload)) {
+      rejectType(`${context}.submitProofInstructionNorito does not contain envelopeNorito`);
+    }
 
-  const instructionOffset = row.unsignedTransactionPayloadNorito.indexOf(
-    row.submitProofInstructionNorito,
-  );
-  if (instructionOffset < 0) {
-    rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE}byte-complete instruction`);
-  }
-  if (
-    row.unsignedTransactionPayloadNorito.indexOf(
-      Buffer.from(PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1, UTF8_ENCODING),
-    ) < 0
-  ) {
-    rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE}exact submission wire id`);
-  }
+    const projectionFrame = validatePrivacyExact12NestedFrameV1(
+      row.transactionIntentProjectionNorito,
+      PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1,
+      PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1,
+      `${context}.${TEXT_TRANSACTION_INTENT_PROJECTION_NORITO_2}`,
+    );
+    const projectionFields = decodePrivacyExact12TransactionPayloadV1(
+      projectionFrame.payload,
+      `${context}.transactionIntentProjectionNorito.payload`,
+    );
+    validatePrivacyExact12NetworkBindingsV1({
+      statementTag: statement.tag,
+      statementContent: statement.content,
+      projectionDomain: projectionFields.domain,
+      unsignedDomain: unsignedFields.domain,
+      context,
+    });
+    for (const field of PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1) {
+      if (field !== "instructions" && !projectionFields[field].equals(unsignedFields[field])) {
+        rejectType(`${context}.transaction intent projection changed independent field ${field}`);
+      }
+    }
+    const attachments = decodeOptionValue(
+      unsignedFields.attachments,
+      (payload) => payload,
+      `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}attachments`,
+    );
+    if (attachments !== null) {
+      rejectType(`${context} must not carry transaction attachments`);
+    }
 
-  const expectedIntentDigest = Buffer.from(
-    blake3(
-      Buffer.concat([
-        PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1,
-        u64ToLittleEndianBuffer(row.transactionIntentProjectionNorito.length),
-        row.transactionIntentProjectionNorito,
-      ]),
-    ),
-  );
-  if (!expectedIntentDigest.equals(row.transactionIntentDigest)) {
-    rejectType(`${context}.transactionIntentDigest does not match its projection`);
+    const instructionOffset = row.unsignedTransactionPayloadNorito.indexOf(
+      row.submitProofInstructionNorito,
+    );
+    if (instructionOffset < 0) {
+      rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE}byte-complete instruction`);
+    }
+    if (
+      row.unsignedTransactionPayloadNorito.indexOf(
+        Buffer.from(PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1, UTF8_ENCODING),
+      ) < 0
+    ) {
+      rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE}exact submission wire id`);
+    }
+
+    const expectedIntentDigest = Buffer.from(
+      blake3(
+        Buffer.concat([
+          PRIVACY_EXACT12_INTENT_DIGEST_DOMAIN_V1,
+          u64ToLittleEndianBuffer(row.transactionIntentProjectionNorito.length),
+          row.transactionIntentProjectionNorito,
+        ]),
+      ),
+    );
+    if (!expectedIntentDigest.equals(row.transactionIntentDigest)) {
+      rejectType(`${context}.transactionIntentDigest does not match its projection`);
+    }
+
   }
 
   validatePrivacyExact12SignedTransactionV1(row, context);

@@ -73,6 +73,7 @@ fn materialized(schema: &CallSchemaV1) -> Vec<u8> {
                 bytes.extend(encoded);
             }
             N::StateRoot => bytes.push(9),
+            N::PendingAction => bytes.push(13),
             N::Pointer(id) | N::SecretNumeric(id) => {
                 bytes.push(if matches!(node, N::Pointer(_)) {
                     10
@@ -188,7 +189,7 @@ fn compact_decoder_rejects_every_truncated_prefix_unknown_tags_counts_and_traili
         bytes[4..12].copy_from_slice(&count.to_le_bytes());
         assert!(decode_payload(&bytes).is_err());
     }
-    for tag in [13, 127, 255] {
+    for tag in [14, 127, 255] {
         let mut bytes = payload(&CallSchemaV1::unit());
         bytes[12] = tag;
         assert!(
@@ -407,6 +408,7 @@ fn original_materialized_payload(schema: &CallSchemaV1) -> Vec<u8> {
                 N::Pointer(id) => OriginalNode::Pointer(*id),
                 N::SecretNumeric(id) => OriginalNode::SecretNumeric(*id),
                 N::Enum(enumeration) => OriginalNode::Enum(enumeration.clone()),
+                N::PendingAction => panic!("the historical framing has no pending-action node"),
             }
         })
         .collect();
@@ -432,4 +434,42 @@ fn compact_full_schema_has_a_real_wire_reduction_against_original_complete_enum_
         decode_payload(&original_materialized_payload(&all)),
         Err(Error::InvalidMagic)
     ));
+}
+
+#[test]
+fn pending_action_uses_one_distinct_internal_word_and_has_no_public_schema() {
+    let schema = CallSchemaV1 {
+        nodes: vec![CallTypeNodeV1::PendingAction],
+    };
+    assert_eq!(payload(&schema), b"CS1\0\x01\0\0\0\0\0\0\0\x0d");
+    assert_eq!(decode_payload(&payload(&schema)).unwrap(), schema);
+    assert_eq!(schema.word_count(), Some(1));
+    assert!(!schema.contains_private());
+    assert_eq!(CallTypeNodeV1::PendingAction.pointer_type(), None);
+    for node in [
+        crate::entrypoint::EntrypointValueTypeNodeV1::Unit,
+        crate::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool),
+        crate::entrypoint::EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int),
+    ] {
+        assert!(
+            !schema.matches_entrypoint_type(&crate::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![node]
+            })
+        );
+    }
+    for end in 0..payload(&schema).len() {
+        assert!(decode_payload(&payload(&schema)[..end]).is_err());
+    }
+    let mut trailing = payload(&schema);
+    trailing.push(0);
+    assert!(decode_payload(&trailing).is_err());
+    let nested = CallSchemaV1 {
+        nodes: vec![
+            CallTypeNodeV1::Tuple(2),
+            CallTypeNodeV1::PendingAction,
+            CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool),
+        ],
+    };
+    assert_eq!(nested.word_count(), Some(2));
+    assert_eq!(decode_payload(&payload(&nested)).unwrap(), nested);
 }

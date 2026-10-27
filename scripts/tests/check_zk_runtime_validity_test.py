@@ -722,7 +722,8 @@ def test_entries_read_in_repair_round_two_state_what_the_code_does() -> None:
     assert by_id["voting.qualification"]["status"] == "open"
     assert "release-audit reviewer" in by_id["voting.qualification"]["note"]
     assert by_id["ivm_proof.qualification"]["status"] == "open"
-    assert by_id["zk_x509.digest_identity"]["status"] == "open"
+    assert by_id["zk_x509.digest_identity"]["status"] == "not_a_gate"
+    assert by_id["zk_x509.unavailable"]["status"] == "unsupported"
     assert "build_sha256_word_circuit_v1" != by_id["zk_x509.digest_identity"]["symbol"]
     # The process-wide verification gas schedule is gone.
     gas = by_id["gas.process_wide_schedule"]
@@ -909,7 +910,11 @@ def test_every_gate_or_unfinished_entry_was_read_site_by_site() -> None:
     assert "zk_ace.activation" not in by_id
     assert by_id["zk_ace.revocation_state"]["status"] == "not_a_gate"
     assert by_id["vega.revocation_state"]["status"] == "not_a_gate"
-    assert "PrivacyProtocolLifecycleV1" in by_id["vega.activation"]["note"]
+    assert "vega.activation" not in by_id
+    assert "privacy.activation" not in by_id
+    assert by_id["privacy.profile_validation"]["status"] == "not_a_gate"
+    assert by_id["gate.privacy.activation_registry"]["status"] == "done"
+    assert by_id["gate.privacy.exact12_qualification"]["status"] == "done"
     # A constant that is `true` gates nothing; one that is `false` is unfinished work.
     assert "zk_ams.activation" not in by_id
     assert by_id["zk_ams.constant_true"]["status"] == "not_a_gate"
@@ -929,7 +934,7 @@ def test_every_gate_or_unfinished_entry_was_read_site_by_site() -> None:
     assert by_id["wall.core.execution_timing"]["attribution"] == "read"
     # SDK rows are split by what the file and the class name.
     for sdk in ("swift", "csharp", "javascript", "python", "kotlin"):
-        assert by_id[f"sdk_{sdk}.exact12_capability"]["status"] == "open", sdk
+        assert by_id[f"sdk_{sdk}.exact12_capability"]["status"] == "not_a_gate", sdk
         # Retired release DTOs are not retained as fictitious SDK source owners.
         assert f"sdk_{sdk}.kagemusha_release" not in by_id, sdk
         assert by_id[f"sdk_{sdk}.names"]["status"] == "not_a_gate", sdk
@@ -1066,17 +1071,80 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
     assert all("kagemusha" in caller for caller in callers), sorted(callers)
 
 
-def test_slash_reads_of_the_node_local_staking_projection_stay_open() -> None:
-    """The slash path compares node-local staking fields: an open F.4 dependence."""
+def test_staking_monetary_owner_migrates_without_hiding_remaining_nexus_readers(tree_scan) -> None:
+    """Only monetary terms moved; validator capacity and other local policy stay open."""
     nexus = entry(CENSUS, "cfg.nexus.policy")
     assert nexus["status"] == "open" and nexus["owner"] == "F.4"
     staking = "crates/iroha_core/src/smartcontracts/isi/staking.rs"
     rows = {site[2] for site in nexus["sites"] if site[0] == staking and site[1] == "node_policy_read"}
-    assert {"staking.max_slash_bps", "staking.max_stake_shares_per_validator",
-            "staking.slash_sink_account_id"} <= rows
-    source = (ROOT / staking).read_text(encoding="utf-8")
-    assert "let max_slash_bps = state_transaction.nexus.staking.max_slash_bps;" in source
-    assert "slash_within_limit(amount, &slashable_exposure, max_slash_bps)?" in source
+    assert rows == {"staking.max_validators"}
+    source = tree_scan.text(staking)
+    assert ".staking_monetary_policy()" in source
+    assert "let allowed = slash_within_limit(amount, &slashable_exposure, max_slash_bps);" in source
+    assert "state_transaction.nexus.staking.max_validators.get()" in source
+    assert entry(CENSUS, "cfg.root_fees.committed_policy")["status"] == "open"
+
+
+@pytest.mark.parametrize("owner,path,function,needle", [
+    ("cfg.nexus.policy", "crates/iroha_core/src/state.rs", "staking_monetary_policy", ".get_before_block()"),
+    ("cfg.root_fees.committed_policy", "crates/iroha_core/src/state.rs", "root_fee_policy", ".get_before_block()"),
+    ("cfg.root_fees.committed_policy", "crates/iroha_core/src/executor/root_fees.rs", "execution_parameters", "transaction.world.parameters.get_before_block()"),
+])
+@pytest.mark.parametrize("decoy", ["comment", "unrelated_function"])
+def test_original_policy_owner_rejects_current_cut_and_decoy(
+    tree_scan, owner, path, function, needle, decoy,
+) -> None:
+    """A current transaction value cannot replace the actual predecessor owner."""
+    source = tree_scan.text(path)
+    code, _ = CHECKER["mask_rust"](source)
+    match = re.search(r"\bfn\s+" + function + r"\b", code)
+    assert match is not None
+    opening = code.index("{", match.end())
+    closing = CHECKER["_matching_brace"](code, opening)
+    body = source[opening:closing]
+    assert body.count(needle) == 1
+    changed = source[:opening] + body.replace(needle, needle.replace("get_before_block", "get")) + source[closing:]
+    changed += ("\n// " + needle if decoy == "comment" else "\nfn unused_original_policy() { " + needle + "; }\n")
+    scan = copy.copy(tree_scan)
+    scan._text = {**tree_scan._text, path: changed}
+    assert_fails(scan, CENSUS, "entry " + owner + ": anchor")
+
+
+@pytest.mark.parametrize("statement,token", [
+    ("state_transaction.nexus.staking.max_slash_bps", "staking.max_slash_bps"),
+    ("state_transaction.nexus.staking.slash_sink_account_id", "staking.slash_sink_account_id"),
+    ("state_transaction.nexus.fees", "fees"),
+])
+def test_retired_monetary_node_policy_reads_cannot_return(tmp_path, statement, token) -> None:
+    """Removing stale rows strengthens the unlisted-site check for a reintroduced read."""
+    path = "crates/iroha_core/src/smartcontracts/isi/staking.rs"
+    write(tmp_path, path, "fn regress() { let _ = " + statement + "; }")
+    write(tmp_path, CHECKER["RESOURCE_CONTRACT"], json.dumps(CONTRACT))
+    scan = Scan(tmp_path)
+    assert scan.rows[(path, "node_policy_read", token)] == 1
+    assert_fails(scan, CENSUS, f"unlisted site: {path} detector node_policy_read token {token!r}")
+
+
+def test_sccp_fixture_rows_are_excluded_only_by_actual_test_declaration(tree_scan) -> None:
+    path = "crates/iroha_core/src/smartcontracts/isi/sccp/reference_fixture_support.rs"
+    assert path in tree_scan.test_only
+    for key in ("sccp.activation", "sccp.time_budget"):
+        assert not any(site[0] == path for site in entry(CENSUS, key)["sites"])
+    declaration = tree_scan.text("crates/iroha_core/src/smartcontracts/isi/sccp/mod.rs")
+    assert "#[cfg(test)]\nmod reference_fixture_support;" in declaration
+
+
+def test_function_anchor_rejects_duplicate_owner_and_comment_only(tmp_path) -> None:
+    path = "crates/iroha_core/src/zk_gate.rs"
+    source = "fn owner() { actual(); }\nfn unrelated() { expected(); }"
+    write(tmp_path, path, source)
+    checker = CensusChecker(Scan(tmp_path), {}, {}, {})
+    assert checker._occurrences(path, "actual()", "owner") == 1
+    assert checker._occurrences(path, "expected()", "owner") == 0
+    checker.scan._text[path] = "fn owner() { /* expected(); */ }"
+    assert checker._occurrences(path, "expected()", "owner") == 0
+    checker.scan._text[path] = "fn owner() {}\nfn owner() { expected(); }"
+    assert checker._occurrences(path, "expected()", "owner") == 0
 
 
 def test_refresh_rewrites_counts_only(tmp_path: Path) -> None:

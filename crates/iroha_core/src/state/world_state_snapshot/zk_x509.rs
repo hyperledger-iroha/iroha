@@ -149,7 +149,7 @@ impl State {
             let authoritative = load_privacy_zk_x509_authoritative_state_v1(
                 trust_anchor_id,
                 policy_id,
-                policy.admission_retained_root_count(),
+                policy.current_limits.retained_root_count,
                 &world.privacy_commitments,
                 &world.privacy_roots,
                 &world.privacy_root_heads,

@@ -6346,6 +6346,14 @@
       }
     ]
   },
+  "CryptoAdmissionPolicyV1": {
+    "Struct": [
+      {
+        "name": "allowed_algorithms",
+        "type": "Vec<Algorithm>"
+      }
+    ]
+  },
   "CryptoStatus": {
     "Struct": [
       {
@@ -6375,6 +6383,12 @@
     ]
   },
   "CustomParameterId": "Name",
+  "CustomParameters": {
+    "Map": {
+      "key": "CustomParameterId",
+      "value": "CustomParameter"
+    }
+  },
   "DaCommitmentBundle": {
     "Struct": [
       {
@@ -8556,7 +8570,7 @@
     "Struct": [
       {
         "name": "parameters",
-        "type": "SortedMap<CustomParameterId, CustomParameter>"
+        "type": "CustomParameters"
       },
       {
         "name": "instructions",
@@ -21115,7 +21129,7 @@
       },
       {
         "name": "custom",
-        "type": "SortedMap<CustomParameterId, CustomParameter>"
+        "type": "CustomParameters"
       }
     ]
   },
@@ -22613,18 +22627,6 @@
     ]
   },
   "PrivacyAuditBundleDigestV1": "Array<u8, 32>",
-  "PrivacyDeploymentActivationV1": {
-    "Struct": [
-      {
-        "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
-      },
-      {
-        "name": "activation_height",
-        "type": "u64"
-      }
-    ]
-  },
   "PrivacyDeploymentValidatorCanaryV1": {
     "Struct": [
       {
@@ -22722,7 +22724,7 @@
     ]
   },
   "PrivacyEngineManifestDigestV1": "Array<u8, 32>",
-  "PrivacyExact12CatalogCommitmentV1": "GoldilocksDigest384V1",
+  "PrivacyExact12CatalogCommitmentV1": "Array<u8, 32>",
   "PrivacyExact12DeploymentQualificationDigestV1": "Array<u8, 32>",
   "PrivacyExact12DeploymentQualificationV1": {
     "Struct": [
@@ -22745,14 +22747,6 @@
       {
         "name": "release_manifest_digest",
         "type": "PrivacyExact12ReleaseManifestDigestV1"
-      },
-      {
-        "name": "activation_transaction_digest",
-        "type": "PrivacyReleaseArtifactDigestV1"
-      },
-      {
-        "name": "activations",
-        "type": "Vec<PrivacyDeploymentActivationV1>"
       },
       {
         "name": "validator_roster_digest",
@@ -26825,6 +26819,7 @@
       }
     ]
   },
+  "RootFeeExemptions": "Vec<AccountId>",
   "RootFeePolicy": {
     "Struct": [
       {
@@ -26841,7 +26836,7 @@
       },
       {
         "name": "successful_claim_fee_exempt_authorities",
-        "type": "SortedVec<AccountId>"
+        "type": "RootFeeExemptions"
       },
       {
         "name": "base_fee",
@@ -31756,12 +31751,6 @@
     "Map": {
       "key": "AccountId",
       "value": "u8"
-    }
-  },
-  "SortedMap<CustomParameterId, CustomParameter>": {
-    "Map": {
-      "key": "CustomParameterId",
-      "value": "CustomParameter"
     }
   },
   "SortedMap<Hash, Vec<TransferTranscript>>": {
@@ -36775,9 +36764,6 @@
   },
   "Vec<PrivacyAcceptedMediumDispositionV1>": {
     "Vec": "PrivacyAcceptedMediumDispositionV1"
-  },
-  "Vec<PrivacyDeploymentActivationV1>": {
-    "Vec": "PrivacyDeploymentActivationV1"
   },
   "Vec<PrivacyDeploymentValidatorCanaryV1>": {
     "Vec": "PrivacyDeploymentValidatorCanaryV1"

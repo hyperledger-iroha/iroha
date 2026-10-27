@@ -139,7 +139,7 @@ def _load_native_free_tx_module() -> types.ModuleType:
             "Ed25519KeyPair",
             "Instruction",
             "PrivacyExact12CapabilityManifestV1",
-            "PrivacyNativeActionBuildResultV1",
+            "PrivacyX509PreparedTransactionV1",
             "SignedTransactionEnvelope",
             "TransactionBuilder",
             "TransactionExecutableEntry",

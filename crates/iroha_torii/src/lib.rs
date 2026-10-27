@@ -16860,6 +16860,7 @@ mod direct_dataspace_definition_query_scope_tests {
     use super::*;
 
     use iroha_data_model::Registrable as _;
+    use iroha_model_base::domain::DomainId;
 
     #[test]
     fn direct_definition_query_uses_exact_home_and_unknown_id_stays_unclassified() {
@@ -38763,47 +38764,11 @@ impl Torii {
         );
         Ok(())
     }
-    /// Construct `Torii` with telemetry disabled.
+    /// Construct `Torii` with explicit runtime capabilities.
     ///
-    /// Embeddings that provide telemetry must use [`Self::new_with_handle`] and
-    /// pass an explicit [`routing::MaybeTelemetry`] profile.
-    ///
-    /// # Errors
-    ///
-    /// Returns a component-qualified error if configuration, runtime dependencies,
-    /// or durable component initialization fails; see [`Self::new_with_handle`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        build_identity: iroha_core::release_identity::BuildIdentity,
-        chain_id: ChainId,
-        network_id: NetworkId,
-        kiso: KisoHandle,
-        config: Config,
-        queue: Arc<Queue>,
-        events: EventsSender,
-        query_service: LiveQueryStoreHandle,
-        kura: Arc<Kura>,
-        state: Arc<CoreState>,
-        da_receipt_signer: KeyPair,
-        online_peers: OnlinePeersProvider,
-    ) -> Result<Self, ToriiBuildError> {
-        Self::new_with_handle(
-            chain_id,
-            network_id,
-            kiso,
-            config,
-            queue,
-            events,
-            query_service,
-            kura,
-            state,
-            da_receipt_signer,
-            online_peers,
-            None,
-            ToriiRuntimeDeps::new(build_identity, routing::MaybeTelemetry::disabled()),
-        )
-    }
-    /// Construct `Torii`.
+    /// With `app_api`, Strict startup requires the node-owned bounded private-settlement
+    /// availability and phase signers in `runtime_deps`. The receipt signer does not
+    /// supply these capabilities. Emergency Fast withholds them until a Strict restart.
     ///
     /// # Errors
     ///

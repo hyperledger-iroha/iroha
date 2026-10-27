@@ -2416,6 +2416,7 @@ fn interface_type(transcript: &mut Vec<u8>, ty: &Type) {
                 interface_type(transcript, ty);
             }
         }
+        Type::PendingAction => transcript.push(33),
         Type::ContractRef(contract) => {
             transcript.push(32);
             interface_field(transcript, contract.code_hash.as_ref());

@@ -142,7 +142,7 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
-    /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+    /// Inspect native privacy profiles and prepare reviewed Taira release inputs
     PrivacyBootstrap(privacy_bootstrap::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
@@ -221,22 +221,9 @@ mod tests {
     }
     #[test]
     fn privacy_bootstrap_commands_require_complete_exact_v1_artifact_paths() {
-        assert!(
-            parse(
-                "kagami privacy-bootstrap emit-taira-v1 \
-                 --instructions-output ./privacy-instructions.json \
-                 --report-output ./privacy-report.json"
-            )
-            .is_ok()
-        );
-        assert!(
-            parse(
-                "kagami privacy-bootstrap validate-taira-v1 \
-                 --instructions ./privacy-instructions.json \
-                 --report ./privacy-report.json"
-            )
-            .is_ok()
-        );
+        assert!(parse("kagami privacy-bootstrap catalog").is_ok());
+        assert!(parse("kagami privacy-bootstrap emit-taira-v1").is_err());
+        assert!(parse("kagami privacy-bootstrap validate-taira-v1").is_err());
         assert!(
             parse(
                 "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
@@ -248,8 +235,6 @@ mod tests {
         assert!(
             parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
-                 --activation-instructions ./privacy-instructions.json \
-                 --activation-report ./privacy-report.json \
                  --broker-public-export ./broker-public.json \
                  --plan-template ./privacy-plan.staging.json \
                  --config-template ./config.staging.toml \
@@ -262,11 +247,21 @@ mod tests {
             )
             .is_ok()
         );
+        for retired_flag in [
+            "--activation-instructions ./old.json",
+            "--activation-report ./old-report.json",
+        ] {
+            let command = format!(
+                "kagami privacy-bootstrap render-taira-release-v1 --broker-public-export ./broker.json --plan-template ./plan.json --config-template ./config.toml --genesis-template ./genesis.template.json --nevo-review ./review.json --plan-output ./out-plan.json --config-output ./out-config.toml --genesis-output ./out-genesis.template.json --broker-public-output ./out-broker.json {retired_flag}"
+            );
+            assert!(
+                parse(&command).is_err(),
+                "retired activation flags must not be accepted"
+            );
+        }
         assert!(
             parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
-                 --activation-instructions ./privacy-instructions.json \
-                 --activation-report ./privacy-report.json \
                  --broker-public-export ./broker-public.json"
             )
             .is_err(),
@@ -286,7 +281,7 @@ mod tests {
                  --instructions-output ./privacy-instructions.json"
             )
             .is_err(),
-            "emission without its digest inventory must remain unavailable"
+            "retired activation emission commands must be rejected"
         );
         assert!(
             parse("kagami privacy-bootstrap emit --output ./legacy.json").is_err(),

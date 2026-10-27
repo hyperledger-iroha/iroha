@@ -95,7 +95,7 @@
    },
    {
     "id": "REQ-011",
-    "addressed_by": ["guarantee_selection", "exact12/admission_gate"],
+    "addressed_by": ["guarantee_selection", "exact12/roles"],
     "note": "Source-hash and catalog-membership identities are enumerated with their tests or owning tasks."
    },
    {
@@ -166,10 +166,10 @@
   },
   {
    "id": "exact12_admission",
-   "title": "Exact12 shared admission, activation records and roots",
+   "title": "Exact12 native admission, resource policies and roots",
    "requirements": ["REQ-017", "REQ-062", "REQ-086", "REQ-002"],
    "owner_tasks": ["P.1", "P.5", "I.1"],
-   "summary": "`SubmitPrivacyProofV1` is the one envelope, handler, dispatch and state executor for the thirteen roles of the twelve protocols; builders bind envelopes through one assembler. Admission today also requires a registered activation and the all-twelve qualification record."
+   "summary": "X509 has one dedicated original signed-attachment request and State owner; other roles share SubmitPrivacyProofV1. Native implementation selection, exact semantic context and optional bounded policy remain mandatory, with no protocol activation or documentary qualification prerequisite."
   },
   {
    "id": "zk_ace",
@@ -570,7 +570,7 @@
    "family": "native STARK (privacy substrate)",
    "status": "implemented",
    "guarantee": "Leg proof of an atomic private settlement. Committee validators verify it against a restricted sidecar before they sign a Prepare vote; the global ledger never sees the proof.",
-   "verifier": {"path": "crates/iroha_core/src/private_settlement/state.rs", "symbol": "pub(crate) fn validate_private_settlement_leg_v1("},
+   "verifier": {"path": "crates/iroha_core/src/private_settlement/state.rs", "symbol": "pub fn validate_private_settlement_leg_v1("},
    "tests": [
     {
      "path": "crates/iroha_core/src/private_settlement/committee.rs",
@@ -595,7 +595,7 @@
    "family": "committee quorum signatures",
    "status": "signature_only",
    "guarantee": "Quorum certificates of the registered lane committees over the purpose-separated Prepare and Commit bodies. The instruction handlers check these certificates (through the Prepare barrier and the receipt), not the leg proofs.",
-   "verifier": {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn verify_private_settlement_phase_certificate_v1("},
+   "verifier": {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_phase_certificate_v1("},
    "tests": [
     {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "test": "quorum_and_substitution_fail_closed"},
     {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "test": "prepare_barrier_rejects_incomplete_and_cross_leg_substitution"}
@@ -2001,198 +2001,57 @@
    "native_bridges": []
   },
   {
-   "id": "privacy::RegisterPrivacyProtocolActivationV1",
+   "id": "privacy::SchedulePrivacyConsensusPolicyUpdateV1",
    "product": "exact12_admission",
    "role": "administrative",
    "isi": {
-    "type": "privacy::RegisterPrivacyProtocolActivationV1",
-    "wire_id": "iroha.privacy.register_protocol_activation.v1",
-    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RegisterPrivacyProtocolActivationV1"}
+    "type": "privacy::SchedulePrivacyConsensusPolicyUpdateV1",
+    "wire_id": "iroha.privacy.schedule_consensus_policy_update.v1",
+    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct SchedulePrivacyConsensusPolicyUpdateV1"}
    },
-   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RegisterPrivacyProtocolActivationV1"},
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SchedulePrivacyConsensusPolicyUpdateV1"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
    "kotodama": {"binding": "none"},
    "routes": [],
-   "sdk": {
-    "rust": [],
-    "kotlin_java_android": [
-     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
-    ],
-    "swift": [],
-    "javascript": [],
-    "python": [],
-    "csharp": []
-   },
-   "tests": [
-    {
-     "path": "crates/iroha_core_privacy/src/privacy_profiles_tests.rs",
-     "test": "local_compiled_profile_catalog_archive_rejects_canonical_substitution"
-    }
-   ],
+   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
    "status": {
     "presence": "registered",
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.1", "P.5", "I.1"],
-   "retire": {
-    "owner_task": "P.5",
-    "why": "Activation, qualification and lifecycle records gate availability. The plan removes them; ordinary deployment makes a completed capability usable."
-   },
+   "note": "Optional committed resource policy: governance schedules increases or decreases within canonical hard bounds for an exact future block. An absent row uses compiled defaults.",
    "native_bridges": []
   },
   {
-   "id": "privacy::RegisterPrivacyExact12QualificationV1",
+   "id": "privacy::SchedulePrivacyProtocolLimitsUpdateV1",
    "product": "exact12_admission",
    "role": "administrative",
    "isi": {
-    "type": "privacy::RegisterPrivacyExact12QualificationV1",
-    "wire_id": "iroha.privacy.register_exact12_qualification.v1",
-    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RegisterPrivacyExact12QualificationV1"}
+    "type": "privacy::SchedulePrivacyProtocolLimitsUpdateV1",
+    "wire_id": "iroha.privacy.schedule_protocol_limits_update.v1",
+    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct SchedulePrivacyProtocolLimitsUpdateV1"}
    },
-   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RegisterPrivacyExact12QualificationV1"},
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SchedulePrivacyProtocolLimitsUpdateV1"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
    "kotodama": {"binding": "none"},
    "routes": [],
-   "sdk": {
-    "rust": [],
-    "kotlin_java_android": [
-     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
-    ],
-    "swift": [],
-    "javascript": [],
-    "python": [],
-    "csharp": []
-   },
+   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
    "status": {
     "presence": "registered",
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.1", "P.5", "I.1"],
-   "retire": {
-    "owner_task": "P.5",
-    "why": "Activation, qualification and lifecycle records gate availability. The plan removes them; ordinary deployment makes a completed capability usable."
-   },
-   "native_bridges": []
-  },
-  {
-   "id": "privacy::SchedulePrivacyConsensusPolicyTighteningV1",
-   "product": "exact12_admission",
-   "role": "administrative",
-   "isi": {
-    "type": "privacy::SchedulePrivacyConsensusPolicyTighteningV1",
-    "wire_id": "iroha.privacy.schedule_consensus_policy_tightening.v1",
-    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct SchedulePrivacyConsensusPolicyTighteningV1"}
-   },
-   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SchedulePrivacyConsensusPolicyTighteningV1"},
-   "authority": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
-   ],
-   "kotodama": {"binding": "none"},
-   "routes": [],
-   "sdk": {
-    "rust": [],
-    "kotlin_java_android": [
-     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
-    ],
-    "swift": [],
-    "javascript": [],
-    "python": [],
-    "csharp": []
-   },
-   "status": {
-    "presence": "registered",
-    "verification": "not_applicable",
-    "state_effects": "implemented",
-    "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
-   },
-   "owner_tasks": ["P.1", "P.5", "I.1"],
-   "note": "Committed consensus limits of the privacy family; tightening only.",
-   "native_bridges": []
-  },
-  {
-   "id": "privacy::SchedulePrivacyProtocolLimitsTighteningV1",
-   "product": "exact12_admission",
-   "role": "administrative",
-   "isi": {
-    "type": "privacy::SchedulePrivacyProtocolLimitsTighteningV1",
-    "wire_id": "iroha.privacy.schedule_protocol_limits_tightening.v1",
-    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct SchedulePrivacyProtocolLimitsTighteningV1"}
-   },
-   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SchedulePrivacyProtocolLimitsTighteningV1"},
-   "authority": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
-   ],
-   "kotodama": {"binding": "none"},
-   "routes": [],
-   "sdk": {
-    "rust": [],
-    "kotlin_java_android": [
-     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
-    ],
-    "swift": [],
-    "javascript": [],
-    "python": [],
-    "csharp": []
-   },
-   "status": {
-    "presence": "registered",
-    "verification": "not_applicable",
-    "state_effects": "implemented",
-    "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
-   },
-   "owner_tasks": ["P.1", "P.5", "I.1"],
-   "note": "Committed per-protocol limits; tightening only.",
-   "native_bridges": []
-  },
-  {
-   "id": "privacy::TransitionPrivacyProtocolLifecycleV1",
-   "product": "exact12_admission",
-   "role": "administrative",
-   "isi": {
-    "type": "privacy::TransitionPrivacyProtocolLifecycleV1",
-    "wire_id": "iroha.privacy.transition_protocol_lifecycle.v1",
-    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct TransitionPrivacyProtocolLifecycleV1"}
-   },
-   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for TransitionPrivacyProtocolLifecycleV1"},
-   "authority": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
-   ],
-   "kotodama": {"binding": "none"},
-   "routes": [],
-   "sdk": {
-    "rust": [],
-    "kotlin_java_android": [
-     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
-    ],
-    "swift": [],
-    "javascript": [],
-    "python": [],
-    "csharp": []
-   },
-   "status": {
-    "presence": "registered",
-    "verification": "not_applicable",
-    "state_effects": "implemented",
-    "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
-   },
-   "owner_tasks": ["P.1", "P.5", "I.1"],
-   "retire": {
-    "owner_task": "P.5",
-    "why": "Activation, qualification and lifecycle records gate availability. The plan removes them; ordinary deployment makes a completed capability usable."
-   },
+   "note": "Optional committed resource policy: governance schedules increases or decreases within canonical hard bounds for an exact future block. An absent row uses compiled defaults.",
    "native_bridges": []
   },
   {
@@ -2225,10 +2084,10 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.1", "P.5", "I.1"],
-   "note": "Publishes a governance-managed pool root into the committed root history. Requires the protocol's registered activation.",
+   "note": "Publishes a governance-managed pool root into the committed root history. Requires its actual native implementation and current bounded resource policy.",
    "native_bridges": []
   },
   {
@@ -2259,12 +2118,12 @@
    "status": {
     "presence": "registered",
     "verification": "not_applicable",
-    "state_effects": "gated",
+    "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.16"],
-   "note": "Requires a registered Orchard activation equal to the compiled profile.",
+   "note": "Selects the actual compiled Orchard implementation and current resource limits.",
    "native_bridges": []
   },
   {
@@ -2295,12 +2154,12 @@
    "status": {
     "presence": "registered",
     "verification": "not_applicable",
-    "state_effects": "gated",
+    "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Removal of the activation and qualification prerequisites (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.1", "P.5", "I.1"],
-   "note": "Bootstraps one proof-managed pool (FCMP++, IVM private note or PQ-MASP). Requires a registered activation equal to the compiled profile.",
+   "note": "Bootstraps one proof-managed pool (FCMP++, IVM private note or PQ-MASP). Selects the actual native implementation and current bounded resource policy.",
    "native_bridges": []
   },
   {
@@ -2352,17 +2211,17 @@
    "status": {
     "presence": "registered",
     "verification": "implemented",
-    "state_effects": "gated",
+    "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.10"],
-   "note": "The instruction contains the canonical bootstrap request and an attachment reference. The original signed invocation owns the only proof bytes. The sole State handler enforces governance, lifecycle, resource and State rules, then its bounded attachment consumer calls the existing Anonymous PGC bootstrap verifier. A detached Execute call always refuses; no embedded-proof alternative exists.",
+   "note": "The instruction contains the canonical bootstrap request and an attachment reference. The original signed invocation owns the only proof bytes. The sole State handler enforces governance, selected native implementation, resource and State rules, then its bounded attachment consumer calls the existing Anonymous PGC bootstrap verifier. A detached Execute call always refuses; no embedded-proof alternative exists.",
    "native_bridges": [],
    "invocation": {
     "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "pub(crate) fn execute_pgc_bootstrap("},
     "dispatch": {"path": "crates/iroha_core/src/executor/attachment_direct.rs", "symbol": "pub(super) fn apply_authorized_instruction("},
-    "dispatch_guard": "if let Some(invocation) = invocation { return privacy::execute_pgc_bootstrap(bootstrap, authority, state, invocation); }",
+    "dispatch_guard": "Some(AttachmentExecution::Direct(invocation)) => { if let Some(bootstrap) = instruction .as_any() .downcast_ref::<BootstrapPrivacyPgcAccountsV1>() { return privacy::execute_pgc_bootstrap(bootstrap, authority, state, invocation); } }",
     "context_parameter": "invocation: &mut crate::executor::attachment_custody::Invocation<'_, '_>,",
     "detached_body": "Err(invalid_privacy_parameter( \"PGC bootstrap requires its original signed invocation context\", ))",
     "what": "The registry Execute implementation always refuses a detached request. After executor authorization, the dispatcher supplies the original signed invocation to the sole State handler; its bounded consumer verifies the original attachment. This textual inventory records the linkage; custody and State tests establish runtime behavior."
@@ -2382,7 +2241,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct BootstrapPrivacyZkAmsRegistryV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for BootstrapPrivacyZkAmsRegistryV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "registered ZK-AMS activation is not executable"},
+   "refusal": {"path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs", "symbol": "pub fn resolve_admitted_privacy_protocol_v1("},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2406,7 +2265,7 @@
     "missing": "MKHE readiness gates and the production composite verifier (C.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["C.5"],
-   "note": "Requires a registered ZK-AMS activation equal to the compiled profile, which is refused.",
+   "note": "The selected ZK-AMS native implementation remains unavailable while its composite verifier is incomplete; an ordinary policy cannot make it executable.",
    "native_bridges": []
   },
   {
@@ -2419,7 +2278,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RegisterPrivacyZkAcePolicyV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RegisterPrivacyZkAcePolicyV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_registered_zk_ace_protocol"},
+   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_admitted_zk_ace_protocol"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2436,7 +2295,10 @@
     "csharp": []
    },
    "tests": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "test": "zk_ace_policy_governance_has_no_compiled_activation_to_substitute"}
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "test": "zk_ace_policy_governance_has_no_compiled_implementation_to_substitute"
+    }
    ],
    "status": {
     "presence": "registered",
@@ -2446,7 +2308,7 @@
     "missing": "A compiled profile that is not refused; FASTPQ adapter and qROM derivation (P.15); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.15"],
-   "note": "Requires a registered ZK-ACE activation, which cannot exist while the compiled profile is refused.",
+   "note": "The selected ZK-ACE native implementation remains unavailable while its security derivation is incomplete. Issuer policy governance preserves that actual refusal.",
    "native_bridges": []
   },
   {
@@ -2459,7 +2321,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RotatePrivacyZkAcePolicyV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RotatePrivacyZkAcePolicyV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_registered_zk_ace_protocol"},
+   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_admitted_zk_ace_protocol"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2476,7 +2338,10 @@
     "csharp": []
    },
    "tests": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "test": "zk_ace_policy_governance_has_no_compiled_activation_to_substitute"}
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "test": "zk_ace_policy_governance_has_no_compiled_implementation_to_substitute"
+    }
    ],
    "status": {
     "presence": "registered",
@@ -2486,7 +2351,7 @@
     "missing": "A compiled profile that is not refused; FASTPQ adapter and qROM derivation (P.15); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.15"],
-   "note": "Requires a registered ZK-ACE activation, which cannot exist while the compiled profile is refused.",
+   "note": "The selected ZK-ACE native implementation remains unavailable while its security derivation is incomplete. Issuer policy governance preserves that actual refusal.",
    "native_bridges": []
   },
   {
@@ -2499,7 +2364,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RevokePrivacyZkAcePolicyV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RevokePrivacyZkAcePolicyV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_registered_zk_ace_protocol"},
+   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_admitted_zk_ace_protocol"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2516,7 +2381,10 @@
     "csharp": []
    },
    "tests": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "test": "zk_ace_policy_governance_has_no_compiled_activation_to_substitute"}
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "test": "zk_ace_policy_governance_has_no_compiled_implementation_to_substitute"
+    }
    ],
    "status": {
     "presence": "registered",
@@ -2526,7 +2394,7 @@
     "missing": "A compiled profile that is not refused; FASTPQ adapter and qROM derivation (P.15); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.15"],
-   "note": "Requires a registered ZK-ACE activation, which cannot exist while the compiled profile is refused.",
+   "note": "The selected ZK-ACE native implementation remains unavailable while its security derivation is incomplete. Issuer policy governance preserves that actual refusal.",
    "native_bridges": []
   },
   {
@@ -2565,10 +2433,10 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.13"],
-   "note": "Requires the registered Bootle/Lantern activation (`require_registered_bootle_lantern_protocol`).",
+   "note": "Requires the actual compiled Bootle/Lantern implementation through require_admitted_bootle_lantern_protocol; issuer/key lifecycle checks remain independent.",
    "native_bridges": []
   },
   {
@@ -2607,10 +2475,10 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.13"],
-   "note": "Requires the registered Bootle/Lantern activation (`require_registered_bootle_lantern_protocol`).",
+   "note": "Requires the actual compiled Bootle/Lantern implementation through require_admitted_bootle_lantern_protocol; issuer/key lifecycle checks remain independent.",
    "native_bridges": []
   },
   {
@@ -2649,10 +2517,10 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.13"],
-   "note": "Requires the registered Bootle/Lantern activation (`require_registered_bootle_lantern_protocol`).",
+   "note": "Requires the actual compiled Bootle/Lantern implementation through require_admitted_bootle_lantern_protocol; issuer/key lifecycle checks remain independent.",
    "native_bridges": []
   },
   {
@@ -2665,7 +2533,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RegisterPrivacyVegaIssuerV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RegisterPrivacyVegaIssuerV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_registered_vega_protocol"},
+   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_admitted_vega_protocol"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2689,7 +2557,7 @@
     "missing": "A compiled Vega profile with governed keys (P.14); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.14"],
-   "note": "Requires a registered Vega activation, which cannot exist while the compiled profile arm is an error.",
+   "note": "The selected Vega native implementation remains unavailable while its Figure 9 relation is incomplete. Issuer policy governance preserves that actual refusal.",
    "native_bridges": []
   },
   {
@@ -2702,7 +2570,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RotatePrivacyVegaIssuerV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RotatePrivacyVegaIssuerV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_registered_vega_protocol"},
+   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_admitted_vega_protocol"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2726,7 +2594,7 @@
     "missing": "A compiled Vega profile with governed keys (P.14); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.14"],
-   "note": "Requires a registered Vega activation, which cannot exist while the compiled profile arm is an error.",
+   "note": "The selected Vega native implementation remains unavailable while its Figure 9 relation is incomplete. Issuer policy governance preserves that actual refusal.",
    "native_bridges": []
   },
   {
@@ -2739,7 +2607,7 @@
     "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct RevokePrivacyVegaIssuerV1"}
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for RevokePrivacyVegaIssuerV1"},
-   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_registered_vega_protocol"},
+   "refusal": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn require_admitted_vega_protocol"},
    "authority": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
    ],
@@ -2763,7 +2631,7 @@
     "missing": "A compiled Vega profile with governed keys (P.14); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.14"],
-   "note": "Requires a registered Vega activation, which cannot exist while the compiled profile arm is an error.",
+   "note": "The selected Vega native implementation remains unavailable while its Figure 9 relation is incomplete. Issuer policy governance preserves that actual refusal.",
    "native_bridges": []
   },
   {
@@ -3113,7 +2981,7 @@
      "what": "Delegate to the effect executor, which requires the signer to be the wallet account a statement names and refuses the pool reserve account as signer."
     },
     {
-     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
      "symbol": "if authority != &statement.wallet_account {",
      "scope": "file",
      "what": "Inside the effect executor: the signer must be the wallet account the statement names."
@@ -3135,7 +3003,8 @@
      {"path": "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java", "via": ["wire_id"]},
      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt", "via": ["wire_id"]},
      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt", "via": ["type_name"]},
-     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt", "via": ["wire_id"]},
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "via": ["type_name"]},
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt", "via": ["type_name", "wire_id"]},
      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]},
      {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt", "via": ["wire_id"]}
     ],
@@ -3152,8 +3021,7 @@
      {"path": "python/iroha_python/src/iroha_python/privacy_exact12.py", "via": ["type_name", "wire_id"]}
     ],
     "csharp": [
-     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.cs", "via": ["wire_id"]},
-     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureModelsV1.cs", "via": ["type_name"]}
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.cs", "via": ["wire_id"]}
     ]
    },
    "tests": [
@@ -3171,32 +3039,145 @@
       {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn valid_payment_instruction("}
      ]
     },
+    {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "test": "admission_failure_precedence_is_profile_then_envelope_then_context"},
+    {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "test": "altered_profile_statement_and_proof_are_rejected"},
     {
-     "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
-     "test": "admission_failure_precedence_is_activation_then_envelope_then_context"
-    },
-    {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "test": "altered_activation_statement_and_proof_are_rejected"},
-    {
-     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-     "test": "qualified_activation_resolver_rejects_missing_singleton_evidence",
-     "covers": "The all-twelve qualification gate in front of the dispatch."
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "test": "admission_uses_compiled_defaults_without_registration_at_any_height",
+     "covers": "Selected native implementation admission uses compiled defaults without a registered protocol policy."
     }
    ],
    "test_evidence": "default",
    "status": {
     "presence": "registered",
     "verification": "implemented",
-    "state_effects": "gated",
+    "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Admission without the qualification singleton (P.5); ordered intent and signed attachment carrier for ceiling-sized proofs (I.1, X.2); per-protocol one-call SDK operations; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "ordered intent and signed attachment carrier for ceiling-sized proofs (I.1, X.2); per-protocol one-call SDK operations; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.1", "P.5", "I.1"],
-   "note": "One envelope, one handler, one dispatch and one state executor for the thirteen roles of the twelve protocols (exact12.roles, exact12.single_route). The handler first requires a registered activation and the all-twelve qualification record, so no role's effects are reachable on a chain without that record. Five roles of four protocols are refused by the typed dispatch registry.",
+   "note": "The generic envelope handler selects its actual native implementation and optional ordinary resource policy. X509 presentation uses the dedicated original-attachment request owner; the generic X509 submission route refuses. Native dispatch limitations remain recorded separately and no role is delivered by this inventory.",
    "native_bridges": [
     {"path": "crates/connect_norito_bridge/src/platform_jni.rs", "via": ["type_name"]},
-    {"path": "crates/connect_norito_bridge/src/platform_jni/part_2.rs", "via": ["type_name"]},
-    {"path": "crates/connect_norito_bridge/src/platform_jni/privacy_intent.rs", "via": ["type_name"]}
+    {"path": "crates/connect_norito_bridge/src/platform_jni/privacy_intent.rs", "via": ["type_name"]},
+    {"path": "crates/connect_norito_bridge/src/privacy_construction.rs", "via": ["type_name"]}
    ]
+  },
+  {
+   "id": "privacy::SubmitPrivacyZkX509CertificateV1",
+   "product": "zk_x509",
+   "role": "proof_effect",
+   "isi": {
+    "type": "privacy::SubmitPrivacyZkX509CertificateV1",
+    "wire_id": "iroha.privacy.submit_zk_x509_certificate.v1",
+    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy_x509_request.rs", "symbol": "pub struct SubmitPrivacyZkX509CertificateV1"}
+   },
+   "handler": {
+    "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+    "symbol": "impl Execute for SubmitPrivacyZkX509CertificateV1"
+   },
+   "invocation": {
+    "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "symbol": "pub(crate) fn execute_x509_submission("},
+    "dispatch": {"path": "crates/iroha_core/src/executor/attachment_direct.rs", "symbol": "pub(super) fn apply_authorized_instruction("},
+    "dispatch_guard": "Some(AttachmentExecution::QueuedX509 { binding, proof }) => { privacy::execute_x509_submission(request, binding, proof, authority, state) }",
+    "context_parameter": "binding: &X509Binding,",
+    "detached_body": "Err(invalid_privacy_parameter( \"X.509 request requires its original signed attachment owner\", ))",
+    "what": "Direct or deployed-contract execution obtains the move-only original signed attachment binding after executor authorization. Both dispatch to one State/verification/effect owner. A detached registry invocation refuses."
+   },
+   "relation_ref": "exact12/protocols/IrohaZkX509StarkP256V1",
+   "refusal": {"path": "crates/iroha_core_privacy/src/privacy_profiles.rs", "symbol": "match require_consensus_security_v1() {"},
+   "authority": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+     "symbol": "require_original_execution",
+     "what": "Owner checks original signed source, request, proof, authority and execution context."
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+     "symbol": "execute_x509_after_admission",
+     "what": "Performs current State selection, wallet authority checks, native verification and exact verified-effect binding."
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+     "symbol": "if authority != &statement.wallet_account {",
+     "scope": "file",
+     "what": "Selected credential wallet must be the executing authority."
+    }
+   ],
+   "kotodama": {
+    "builtins": ["PresentX509"],
+    "syscall": "SMARTCONTRACT_EXECUTE_INSTRUCTION",
+    "operation_tag": "PRESENT_X509",
+    "evidence": [
+     {
+      "path": "crates/kotodama_surface/src/builtins.rs",
+      "symbol": "Self::ScExecuteSubmitBallot | Self::PresentX509 => { &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION] }"
+     },
+     {
+      "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+      "symbol": "if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509 {"
+     }
+    ]
+   },
+   "routes": [],
+   "sdk": {
+    "rust": [],
+    "kotlin_java_android": [
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt", "via": ["type_name"]},
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "via": ["type_name"]},
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt", "via": ["type_name"]},
+     {
+      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/SubmitPrivacyZkX509CertificateV1.kt",
+      "via": ["type_name", "wire_id"]
+     },
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]},
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapter.kt", "via": ["type_name"]},
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt", "via": ["type_name"]}
+    ],
+    "swift": [
+     {"path": "IrohaSwift/Sources/IrohaSwift/PrivacyX509TransactionV1.swift", "via": ["type_name", "wire_id"]}
+    ],
+    "javascript": [
+     {"path": "javascript/iroha_js/index.d.ts", "via": ["wire_id"]},
+     {"path": "javascript/iroha_js/src/privacyX509Wire.js", "via": ["type_name", "wire_id"]}
+    ],
+    "python": [
+     {"path": "python/iroha_python/src/iroha_python/privacy_exact12.py", "via": ["type_name", "wire_id"]}
+    ],
+    "csharp": [
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.X509.cs", "via": ["type_name"]},
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.cs", "via": ["wire_id"]}
+    ]
+   },
+   "native_bridges": [
+    {"path": "crates/connect_norito_bridge/src/platform_jni.rs", "via": ["type_name"]},
+    {"path": "crates/connect_norito_bridge/src/platform_jni/privacy_intent.rs", "via": ["type_name"]},
+    {"path": "crates/connect_norito_bridge/src/platform_jni/privacy_x509_request.rs", "via": ["type_name"]},
+    {"path": "crates/connect_norito_bridge/src/privacy_construction.rs", "via": ["type_name"]},
+    {"path": "crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs", "via": ["type_name"]},
+    {"path": "crates/iroha_js_host/src/privacy_x509_transaction.rs", "via": ["type_name"]}
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_core/src/executor_tests.rs",
+     "test": "installed_executor_denies_original_x509_request_before_native_or_state_effects",
+     "covers": "Installed executor authorization refuses before the original request reaches native verification or State effects."
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_profiles_tests.rs",
+     "test": "zk_x509_construction_refusal_preserves_exact_immutable_profile_binding",
+     "covers": "The missing joint security reduction remains a native construction refusal even though the semantic profile is immutable."
+    }
+   ],
+   "status": {
+    "presence": "registered",
+    "verification": "refused",
+    "state_effects": "unreachable",
+    "delivery": "not_delivered",
+    "missing": "Complete joint security reduction and full local proof performance targets; native final-union SDK/owner validation, four-validator execution and restart evidence."
+   },
+   "owner_tasks": ["I.3", "X.3", "X.4"],
+   "note": "This is the sole X509 request carrier. Generic SubmitPrivacyProofV1 rejects this protocol and effect. Signed original-source custody and current issuer/CRL/replay state remain mandatory; source inventory is not native or release qualification."
   },
   {
    "id": "private_settlement::ActivatePrivateSettlementPoolV1",
@@ -3231,7 +3212,7 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Committed activation instead of a node-configured height (F.4); complete settlement flow (P.20); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Migrate remaining node-configured validity limits and profile-policy selection into committed ownership (F.4); validate the current gate-removal candidate; complete settlement flow (P.20); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.20"],
    "native_bridges": []
@@ -3266,7 +3247,7 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Committed activation instead of a node-configured height (F.4); complete settlement flow (P.20); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Migrate remaining node-configured validity limits and profile-policy selection into committed ownership (F.4); validate the current gate-removal candidate; complete settlement flow (P.20); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.20"],
    "native_bridges": []
@@ -3290,8 +3271,8 @@
      "symbol": "impl Execute for RegisterAtomicPrivateSettlementPrepareV1"
     },
     {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_prepare_locks_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_prepare_locks_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn validate_private_settlement_prepare_barrier_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_prepare_locks_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn validate_private_settlement_prepare_barrier_v1("}
    ],
    "relation": "settlement.committee_certificates",
    "authority": [
@@ -3321,10 +3302,10 @@
     "verification": "signature_only",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Committed activation instead of a node-configured height (F.4); complete settlement flow (P.20); Rust has a prepared-artifact workflow (`AccountClient::private_settlement`, a durable operation over caller-retained leg proofs and capsules that submits Register and Finalize and verifies finality itself); it produces no leg proof and builds no Abort. Kotlin/Java, Swift, JavaScript and Python have route-level clients only, and C# has none; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Migrate remaining node-configured validity limits and profile-policy selection into committed ownership (F.4); validate the current gate-removal candidate; complete settlement flow (P.20); Rust has a prepared-artifact workflow (`AccountClient::private_settlement`, a durable operation over caller-retained leg proofs and capsules that submits Register and Finalize and verifies finality itself); it produces no leg proof and builds no Abort. Kotlin/Java, Swift, JavaScript and Python have route-level clients only, and C# has none; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.20"],
-   "note": "Registers a complete all-Prepare barrier as global control locks. The handler checks the committee authority and Prepare certificates of every leg; it does not see the leg proofs, which committee validators verify before signing (operation private_settlement.committee_leg_validation). Requires the node-configured enable switch and activation height.",
+   "note": "Registers a complete all-Prepare barrier as global control locks. The handler checks the committee authority and Prepare certificates of every leg; it does not see the leg proofs, which committee validators verify before signing (operation private_settlement.committee_leg_validation). Native implementation admission, the complete APS relation, committed resource policy, exact committee authority and certificate checks remain mandatory. The node enable and activation prerequisites are retired; remaining node-configured settlement validity bounds and profile-policy selection stay open F.4 work.",
    "native_bridges": [],
    "torii": ["crates/iroha_torii/src/private_settlement.rs"]
   },
@@ -3360,7 +3341,7 @@
     "verification": "not_applicable",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Committed activation instead of a node-configured height (F.4); complete settlement flow (P.20); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Migrate remaining node-configured validity limits and profile-policy selection into committed ownership (F.4); validate the current gate-removal candidate; complete settlement flow (P.20); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.20"],
    "native_bridges": [],
@@ -3379,8 +3360,8 @@
    "verifier_path": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/private_settlement.rs", "symbol": "impl Execute for FinalizeAtomicPrivateSettlementV1"},
     {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_receipt_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_receipt_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn verify_private_settlement_receipt_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_receipt_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_receipt_v1("}
    ],
    "relation": "settlement.committee_certificates",
    "authority": [
@@ -3412,7 +3393,7 @@
     "verification": "signature_only",
     "state_effects": "gated",
     "delivery": "not_delivered",
-    "missing": "Committed activation instead of a node-configured height (F.4); complete settlement flow (P.20); Rust has a prepared-artifact workflow (`AccountClient::private_settlement`, a durable operation over caller-retained leg proofs and capsules that submits Register and Finalize and verifies finality itself); it produces no leg proof and builds no Abort. Kotlin/Java, Swift, JavaScript and Python have route-level clients only, and C# has none; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Migrate remaining node-configured validity limits and profile-policy selection into committed ownership (F.4); validate the current gate-removal candidate; complete settlement flow (P.20); Rust has a prepared-artifact workflow (`AccountClient::private_settlement`, a durable operation over caller-retained leg proofs and capsules that submits Register and Finalize and verifies finality itself); it produces no leg proof and builds no Abort. Kotlin/Java, Swift, JavaScript and Python have route-level clients only, and C# has none; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.20"],
    "note": "Applies the finalized receipt and its phase certificates.",
@@ -4426,7 +4407,7 @@
     "evidence": [
      {
       "path": "crates/kotodama_surface/src/builtins.rs",
-      "symbol": "Self::ScExecuteSubmitBallot => &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION],"
+      "symbol": "Self::ScExecuteSubmitBallot | Self::PresentX509 => { &[s::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION] }"
      },
      {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {"}
     ]
@@ -5425,7 +5406,7 @@
    "carrier": {
     "kind": "torii_route",
     "evidence": [
-     {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub(crate) fn prepare_private_settlement_leg_v1("},
+     {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub fn prepare_private_settlement_leg_v1("},
      {
       "path": "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/facade.rs",
       "symbol": "pub fn verify_atomic_private_settlement_v1("
@@ -5459,7 +5440,7 @@
    "owner_tasks": ["P.20"],
    "note": "A committee validator verifies an uploaded leg (proof, audit approvals, availability) against its restricted sidecar and committed State, then signs a Prepare body. This is off the instruction path: the result reaches the ledger only as committee certificates.",
    "verifier_path": [
-    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub(crate) fn prepare_private_settlement_leg_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub fn prepare_private_settlement_leg_v1("}
    ]
   },
   {
@@ -5552,13 +5533,13 @@
   }
  ],
  "exact12": {
-  "what": "The closed twelve-protocol list. `registered` means the enum variant, its label and a dispatch arm exist. `compiled_profile.state` says whether this binary constructs the protocol's compiled profile or refuses it; it is build metadata and not availability. Every protocol's effects are behind the activation and all-twelve qualification records today. `roles` lists the thirteen typed roles of the twelve protocols with the four facts kept apart, and `single_route` is the guard that there is one envelope assembler, one instruction, one verifier dispatch and one state executor.",
+  "what": "The closed twelve-protocol list. registered means the enum variant, canonical label and dispatch arm exist. compiled_profile.state records whether the actual native construction is available or refused. Admission selects that implementation and optional bounded current policy; there are no protocol activation or all-protocol qualification records. The thirteen roles keep presence, verification, effects and delivery distinct. Each role has one original-source owner: X509 uses its dedicated signed-attachment request; other roles use the generic proof envelope and shared typed verifier. Source implementation is not cryptographic, platform, network or release qualification.",
   "count": 12,
   "source": {"path": "crates/iroha_data_model/src/privacy.rs", "enum": "PrivacyProtocolIdV1"},
   "instruction": "privacy::SubmitPrivacyProofV1",
   "dispatch": {
    "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
-   "function": "verify_privacy_envelope_after_compiled_activation_v1",
+   "function": "verify_privacy_envelope_after_compiled_profile_v1",
    "statement_enum": "PrivacyStatementV1",
    "entry": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "pub fn verify_privacy_envelope_v1("},
    "note": "One closed match on the statement enum; adding a protocol does not compile without an arm. The dispatch resolves the one role of the envelope, asks the typed registry (`roles.registry`) whether that role is verified, and seals only an effect of that role."
@@ -5579,18 +5560,6 @@
    "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
    "enum": "VerifiedPrivacyLedgerEffectsV1",
    "applied_in": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "fn execute_after_admission("}
-  },
-  "admission_gate": {
-   "site": {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn resolve_qualified_privacy_activation_v1<'a>("},
-   "refusal": {
-    "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-    "symbol": "\"privacy Exact12 production qualification is not registered\".to_owned()"
-   },
-   "tests": [
-    {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "test": "qualified_activation_resolver_rejects_missing_singleton_evidence"}
-   ],
-   "owner_task": "P.5",
-   "note": "Admission couples every protocol to one all-twelve qualification record. P.5 removes it. P.1 made the dispatch refuse an unverified role by itself (`roles.registry.typed_error`), so removing the record cannot turn a refused role into an accepted one."
   },
   "protocols": [
    {
@@ -5670,9 +5639,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.10"],
     "relation_ref": "exact12/dispatch"
@@ -5698,9 +5667,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "none",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.11"],
     "relation_ref": "exact12/dispatch"
@@ -5814,30 +5783,30 @@
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_zk_x509_certificate_v1("},
     "ledger_effect": ["ZkX509Certificate"],
     "effect_executor": [
-     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(effect) => {"}
+     {
+      "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+      "symbol": "let VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(effect) = effects.into_ledger() else {"
+     }
     ],
     "compiled_profile": {
      "arm": "compiled_zk_x509_profile_v1",
      "state": "refused",
-     "gate": {
-      "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-      "symbol": "match require_activation_readiness_v1(zk_x509_activation_readiness_v1()) {"
-     },
+     "gate": {"path": "crates/iroha_core_privacy/src/privacy_profiles.rs", "symbol": "match require_consensus_security_v1() {"},
      "tests": [
       {
        "path": "crates/iroha_core_privacy/src/privacy_profiles_tests.rs",
-       "test": "zk_x509_compiled_activation_is_fail_closed_or_complete_and_immutable"
+       "test": "zk_x509_construction_refusal_preserves_exact_immutable_profile_binding"
       }
      ]
     },
     "tests": [
      {
       "path": "crates/iroha_core_privacy/src/privacy_profiles_tests.rs",
-      "test": "zk_x509_compiled_activation_is_fail_closed_or_complete_and_immutable"
+      "test": "zk_x509_construction_refusal_preserves_exact_immutable_profile_binding"
      },
      {
       "path": "crates/iroha_core/src/privacy_release_evidence/tests.rs",
-      "test": "zk_x509_profile_is_unavailable_until_qualification_and_resource_facts_are_total",
+      "test": "zk_x509_profile_refuses_missing_joint_reduction_while_resource_facts_are_total",
       "feature": "privacy-release-evidence"
      }
     ],
@@ -5846,13 +5815,10 @@
      "verification": "refused",
      "state_effects": "unreachable",
      "delivery": "not_delivered",
-     "missing": "Canonical maximum-proof transport (X.2), the complete bounded construction (X.3); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "Complete original cross-adapter semantic H-cover, concrete joint security reduction, Fiat–Shamir and zero-knowledge argument; current full-proof performance target; authentic native SDK, network, restart and replay delivery checks. Canonical dedicated attachment transport exists in source but does not enable the missing construction."
     },
     "owner_tasks": ["X.2", "X.3", "X.4"],
-    "refusal": {
-     "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-     "symbol": "match require_activation_readiness_v1(zk_x509_activation_readiness_v1()) {"
-    },
+    "refusal": {"path": "crates/iroha_core_privacy/src/privacy_profiles.rs", "symbol": "match require_consensus_security_v1() {"},
     "relation_ref": "exact12/compiled_profiles",
     "references": [
      {"inventory": "fastpq", "key": "consumers/x509-main-ca"}
@@ -5886,9 +5852,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "none",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.12"],
     "relation_ref": "exact12/dispatch"
@@ -5928,9 +5894,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "none",
      "delivery": "not_delivered",
-     "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.13"],
     "relation_ref": "exact12/dispatch"
@@ -5963,9 +5929,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the qualification singleton (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.16"],
     "relation_ref": "exact12/dispatch"
@@ -5992,9 +5958,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.17"],
     "relation_ref": "exact12/dispatch"
@@ -6036,9 +6002,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.18"],
     "relation_ref": "exact12/dispatch",
@@ -6076,9 +6042,9 @@
     "status": {
      "presence": "registered",
      "verification": "implemented",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
     },
     "owner_tasks": ["P.19"],
     "relation_ref": "exact12/dispatch",
@@ -6088,7 +6054,7 @@
    }
   ],
   "roles": {
-   "what": "The thirteen roles of the twelve protocols (ZK-AMS has two actions). A role is one statement shape, one proof shape, one native verifier and one ledger-effect class. Four facts are separate: the role is a variant of the closed enum (presence); `verification` says whether the dispatch runs a native verifier for it or returns the typed refusal with `limitation`; `state_effects` says whether its effect is applied (`gated`: behind the admission gate P.5 removes), absent because the role only verifies (`none`), or `unreachable`; `delivery` is `not_delivered` for all. `implemented` means a compiled verifier is dispatched; it is not a soundness or deployment claim.",
+   "what": "The thirteen roles of the twelve protocols (ZK-AMS has two actions). A role is one statement shape, one proof shape, one native verifier and one ledger-effect class. Four facts are separate: the role is a variant of the closed enum (presence); `verification` says whether the dispatch runs a native verifier for it or returns the typed refusal with `limitation`; `state_effects` says whether its effect is applied, absent because the role only verifies (`none`), or `unreachable`; `delivery` is `not_delivered` for all. `implemented` means a compiled verifier is dispatched; it is not a soundness or deployment claim.",
    "count": 13,
    "source": {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "enum": "PrivacyActionRoleV1"},
    "protocol_of": {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "symbol": "pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {"},
@@ -6113,11 +6079,6 @@
     "json_view_test": {"path": "crates/iroha_core_privacy/src/privacy_dispatch.rs", "test": "operation_inventory_roles_match_the_typed_dispatch_registry"},
     "profile_agreement_test": {"path": "crates/iroha_core_privacy/src/privacy_dispatch.rs", "test": "registry_support_matches_the_current_compiled_profile_refusals"},
     "note": "The typed table in code is authoritative; this list is its checked view. The registry is not derived from the compiled-profile catalog, which also carries release-readiness and initialization results; a default test pins that both refuse the same protocols today."
-   },
-   "gate_site": {
-    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-    "symbol": "let activation = *resolve_qualified_privacy_activation_v1(",
-    "what": "While the handler calls this, an applied effect is recorded `gated`; when P.5 deletes the call the checker requires `implemented`."
    },
    "tests": [
     {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "test": "roles_are_closed_ordered_and_cover_every_protocol"},
@@ -6175,9 +6136,9 @@
      "verification": "implemented",
      "effect_class": "AnonymousPgcPayment",
      "ledger_effect": "AnonymousPgcPayment",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::AnonymousPgcKOutOfNV1("},
      "native_verifiers": [
       {"name": "verify_payment_encoded", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/anonymous_pgc/"}
@@ -6197,7 +6158,7 @@
      "ledger_effect": "None",
      "state_effects": "none",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); ledger composition (P.11); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "ledger composition (P.11); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::VeRangeTransparentRangeV1("},
      "native_verifiers": [
       {"name": "verify_batch_encoded", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/verange.rs"}
@@ -6270,7 +6231,7 @@
      "role": "ZkX509CertificatePresentation",
      "protocol": "IrohaZkX509StarkP256V1",
      "verification": "refused",
-     "limitation": "ZkX509JointRelationIncomplete",
+     "limitation": "ZkX509JointSecurityReductionIncomplete",
      "effect_class": "ZkX509Certificate",
      "ledger_effect": "ZkX509Certificate",
      "state_effects": "unreachable",
@@ -6280,7 +6241,10 @@
      "native_verifiers": [
       {"name": "verify_zk_x509_credential_proof_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/"}
      ],
-     "executor_arm": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(effect) => {"},
+     "executor_arm": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+      "symbol": "let VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(effect) = effects.into_ledger() else {"
+     },
      "driver_operation": null,
      "owner_tasks": ["X.2", "X.3", "X.4"]
     },
@@ -6292,7 +6256,7 @@
      "ledger_effect": "None",
      "state_effects": "none",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); ledger composition (P.12); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "ledger composition (P.12); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1("},
      "native_verifiers": [
       {"name": "verify_batched_evaluation_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/jindo"}
@@ -6309,7 +6273,7 @@
      "ledger_effect": "None",
      "state_effects": "none",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); issuer lifecycle (P.13); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "issuer lifecycle (P.13); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaBootleLanternAnoncredV1("},
      "native_verifiers": [
       {"name": "verify_bound_presentation_encoded_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/"}
@@ -6324,9 +6288,9 @@
      "verification": "implemented",
      "effect_class": "OrchardActions",
      "ledger_effect": "OrchardActions",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::OrchardHalo2ActionsV1("},
      "native_verifiers": [
       {"name": "verify_orchard_bundle_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/orchard.rs"}
@@ -6341,9 +6305,9 @@
      "verification": "implemented",
      "effect_class": "ProofManagedPool",
      "ledger_effect": "ProofManagedPool",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::MoneroFcmpPlusPlusV1("},
      "native_verifiers": [
       {"name": "verify_fcmp_transaction_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/"}
@@ -6358,9 +6322,9 @@
      "verification": "implemented",
      "effect_class": "ProofManagedPool",
      "ledger_effect": "ProofManagedPool",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); a default test that calls the verifier (P.18); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "a default test that calls the verifier (P.18); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1("},
      "native_verifiers": [
       {"name": "verify_private_note_stark_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/"}
@@ -6375,9 +6339,9 @@
      "verification": "implemented",
      "effect_class": "ProofManagedPool",
      "ledger_effect": "ProofManagedPool",
-     "state_effects": "gated",
+     "state_effects": "implemented",
      "delivery": "not_delivered",
-     "missing": "Admission without the activation and all-twelve qualification records (P.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
+     "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
      "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::PqMaspStarkV1("},
      "native_verifiers": [
       {"name": "verify_pq_masp_stark_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/"},
@@ -6390,7 +6354,7 @@
    ]
   },
   "single_route": {
-   "what": "The guard of the single Exact12 path. It fails when a second authoritative route for a role appears: an envelope assembled outside the one assembler, an envelope identity assigned outside the recorded sites, a second instruction that carries an envelope, statement or proof, a second call of the handler stages or of the dispatch in the handler, a native verifier of a role called outside its engine, the dispatch and the recorded non-admission tooling, a verified effect consumed or matched outside the recorded sites, or a driver operation that names no role.",
+   "what": "The guard of the single Exact12 path. It fails when an unrecorded or duplicate authoritative route for a role appears: an envelope assembled outside the one assembler, an envelope identity assigned outside the recorded sites, a second generic instruction that carries an envelope, statement or proof, a second call of the handler stages or of the dispatch in the handler, a native verifier of a role called outside its engine, the dispatch and the recorded non-admission tooling, a verified effect consumed or matched outside the recorded sites, or a driver operation that names no role.",
    "scan": {
     "roots": ["crates", "python/iroha_python/iroha_python_rs/src"],
     "exclude": ["(^|/)tests?(/|\\.rs$)", "_tests?\\.rs$", "/tests/", "/benches/", "/examples/", "(^|/)fuzz/"],
@@ -6421,7 +6385,10 @@
       "test": "bind_v1_binds_the_empty_intent_projection_without_making_it_admissible"
      },
      {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "test": "role_resolution_rejects_protocol_statement_and_proof_substitution"},
-     {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "test": "role_samples_cover_every_role_and_pass_activation_validation"},
+     {
+      "path": "crates/iroha_data_model/src/privacy/action_role.rs",
+      "test": "role_samples_cover_every_role_and_pass_canonical_profile_validation"
+     },
      {
       "path": "crates/iroha_core_privacy/src/privacy_verifier/role_dispatch_tests.rs",
       "test": "compiled_profile_matches_only_envelopes_bound_from_its_own_statements"
@@ -6447,12 +6414,13 @@
     ],
     "role_resolution": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "let role = self.envelope.action_role_v1().map_err(|error| {"},
     "effect_role_check": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "if effects.role() != role"},
-    "what": "`execute` prepares the submission (intent binding, byte charge, budget preflight), resolves the admission gate and calls `execute_after_admission`, which resolves the role once, loads the trusted state of that role, calls the dispatch once and applies the sealed effect once."
+    "what": "The generic handler binds intent/bytes, selects its native implementation and optional ordinary policy, resolves the role, loads State, dispatches once and applies the sealed effect once. X509 preparation and generic effect application refuse; its dedicated owner is recorded separately."
    },
    "effects": {
     "enum": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "enum": "VerifiedPrivacyLedgerEffectsV1"},
     "ledger_consumers": [
      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "count": 1, "use": "ledger_application"},
+     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "count": 1, "use": "ledger_application"},
      {
       "path": "crates/iroha_core/src/privacy_release_evidence.rs",
       "count": 1,
@@ -6468,11 +6436,12 @@
     ],
     "matchers": [
      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "use": "ledger_application"},
+     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "use": "ledger_application"},
      {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "use": "construction"},
      {"path": "crates/iroha_core/src/privacy_release_evidence.rs", "use": "read_only_evidence"},
      {"path": "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "use": "read_only_evidence"}
     ],
-    "what": "`into_ledger` is consumed for ledger application once, in the handler. Each effect variant has exactly one arm there. The other sites compare effects and write nothing."
+    "what": "Each role has one State effect owner. X509 uses its original-attachment request owner and is refused by the generic envelope owner. Other roles use the generic owner. Read-only evidence sites compare effects without writing State."
    },
    "native_verifiers": {
     "dispatch": "crates/iroha_core_privacy/src/privacy_verifier.rs",
@@ -6650,7 +6619,7 @@
      "id": "handler_protocol_routing",
      "what": "Trusted-state loading routed on the envelope's `protocol_id`, the verifier on the statement variant and the executor on the effect variant, reconciled by seven `... protocol envelope carries a different statement type` branches. An Anonymous PGC protocol identity over a foreign statement loaded pool state before it was refused.",
      "replaced_by": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "let role = self.envelope.action_role_v1().map_err(|error| {"},
-     "equivalence": "Every envelope the removed branches refused is refused by the role resolver at the same place in the handler (after the admission gate and the genesis check, before any state read); an envelope that resolves to a role takes the branch it took before.",
+     "equivalence": "Every envelope the removed branches refused is refused by the role resolver at the same place in the handler (after selected native implementation/policy admission and the genesis check, before any state read); an envelope that resolves to a role takes the branch it took before.",
      "absent": [
       {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "pattern": "protocol envelope carries a different statement type"},
       {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "pattern": "self\\.envelope\\.protocol_id\\s*=="}
@@ -6693,6 +6662,14 @@
      "tests": [
       {"path": "crates/iroha_core_privacy/src/privacy_dispatch.rs", "test": "unsupported_roles_return_their_typed_limitation"}
      ]
+    }
+   ],
+   "dedicated_requests": [
+    {
+     "role": "ZkX509CertificatePresentation",
+     "operation": "privacy::SubmitPrivacyZkX509CertificateV1",
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+     "what": "Request-only X509 carrier bound to its original signed attachment; generic envelope/effect paths refuse this role."
     }
    ]
   }
@@ -7293,7 +7270,7 @@
     "number": "0xA0",
     "product": "exact12_admission",
     "does": "The instruction bridge: queue one operation-tagged instruction. Only the SubmitBallot tag is accepted by the host.",
-    "kotodama_builtins": ["ScExecuteSubmitBallot"],
+    "kotodama_builtins": ["PresentX509", "ScExecuteSubmitBallot"],
     "host": {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {"},
     "coverage": {"inventory": "ivm_proof", "key": "syscalls/SMARTCONTRACT_EXECUTE_INSTRUCTION"}
    },
@@ -7331,7 +7308,7 @@
   "excluded": [],
   "instruction_bridge": {
    "syscall": "SMARTCONTRACT_EXECUTE_INSTRUCTION",
-   "what": "The development operation-tag bridge. I.3 replaces it with typed operation tags that route every declared instruction through its executor.",
+   "what": "Typed operation-tag bridge: each accepted tag reaches its canonical executor, including the original-attachment X509 request owner.",
    "tags": [
     {
      "name": "SUBMIT_BALLOT",
@@ -7341,9 +7318,21 @@
      "evidence": [
       {"path": "crates/iroha_core/src/smartcontracts/ivm/host.rs", "symbol": "ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {"}
      ]
+    },
+    {
+     "name": "PRESENT_X509",
+     "value": 2,
+     "instruction": "privacy::SubmitPrivacyZkX509CertificateV1",
+     "host": "accepted",
+     "evidence": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+       "symbol": "if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509 {"
+      }
+     ]
     }
    ],
-   "unbound": "Apart from this bridge, the only operations with a Kotodama binding are the three AXT carriers (`axt.envelope`, `axt.ds_proof`, `axt.anchored_spend`, through the AXT builtins). Every other operation of this inventory has none (`kotodama.binding: none`).",
+   "unbound": "The listed typed bridge operations and three AXT carriers have Kotodama bindings. Other operations remain explicitly unbound.",
    "owner_tasks": ["I.3", "I.5"]
   }
  },
@@ -8918,7 +8907,7 @@
     "effect": "read",
     "sdk": "true",
     "product": "exact12_admission",
-    "does": "Read the committed capability snapshot: compiled profile, activation and qualification per protocol.",
+    "does": "Read the canonical capability manifest: actual compiled result and optional current policy per protocol, with network/genesis identity.",
     "operations": ["privacy::SubmitPrivacyProofV1"],
     "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_privacy_capabilities("},
     "sdk_literal": "/v1/privacy/capabilities",
@@ -9216,7 +9205,7 @@
     "product": "atomic_settlement",
     "does": "Read the pool, native assignment and key originals of the selected settlement pools at a certified current global cut, authenticated by complete World hashes. Requires a canonical account signature and all-ledger read permission, checked again before disclosure. Builds no instruction and verifies no proof (TODO in the source: scoped keyed-State inclusion and absence proofs). The Rust client `Client::get_private_settlement_context_async` (crates/iroha/src/client/private_settlement_context.rs) builds the path from the route-catalog constant `CONTEXT`, which the literal-based SDK scan does not see.",
     "operations": [],
-    "handler": {"path": "crates/iroha_torii/src/private_settlement_context.rs", "symbol": "pub(crate) async fn handler("},
+    "handler": {"path": "crates/iroha_torii/src/private_settlement_context.rs", "symbol": "pub async fn handler("},
     "sdk_literal": "/v1/nexus/private-settlements/context/",
     "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
     "catalog_row": {"path": "crates/iroha_torii_shared/src/route_catalog/private_settlement.rs", "symbol": "private_settlement.context"}
@@ -9838,7 +9827,7 @@
     {"path": "crates/iroha_torii/src/lib.rs", "symbol": "async fn handler_zk_verify_batch("},
     {"path": "crates/iroha_torii/src/lib.rs", "symbol": "async fn handler_post_vk_register("},
     {"path": "crates/iroha_torii/src/lib.rs", "symbol": "async fn handler_ram_lfe_execute("},
-    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub(crate) fn prepare_private_settlement_leg_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/committee.rs", "symbol": "pub fn prepare_private_settlement_leg_v1("},
     {"path": "crates/iroha_torii/src/zk_prover.rs", "symbol": "verifying_keys.get(&attachment.vk_ref),"},
     {"path": "crates/iroha_core/src/private_settlement/coordinator.rs", "symbol": "pub(crate) fn record_prepare("},
     {"path": "crates/iroha_core/src/private_settlement/sidecar_store.rs", "symbol": "fn record_phase_certificate_v1("},
@@ -9948,8 +9937,8 @@
     {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi.rs", "symbol": "impl Execute for RecordKaigiUsage"},
     {"path": "crates/iroha_core/src/smartcontracts/isi/kaigi.rs", "symbol": "fn process_join("},
     {"path": "crates/iroha_core/src/smartcontracts/isi/identifier.rs", "symbol": "fn validate_program_receipt("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn validate_private_settlement_prepare_barrier_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub(crate) fn verify_private_settlement_receipt_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn validate_private_settlement_prepare_barrier_v1("},
+    {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_receipt_v1("},
     {"path": "crates/iroha_core_timed_ovn/src/evidence.rs", "symbol": "pub fn finalize_release("},
     {"path": "crates/iroha_core/src/pipeline/overlay.rs", "symbol": "pub(crate) fn verify_ivm_proved_execution<R>("},
     {"path": "crates/iroha_core/src/executor.rs", "symbol": "let replay_result = crate::pipeline::overlay::verify_ivm_proved_execution("},
@@ -9984,7 +9973,7 @@
    ]
   },
   "restore": {
-   "what": "World restore re-validates, for the products of this plan: RAM-LFE program policies; the six AXT counter, incarnation, budget and replay ledgers; the privacy consensus policy at the committed height; the privacy activations and the all-twelve qualification record; the persisted privacy state (PGC accounts, nullifiers, commitments, roots) and its public reserve dependencies; the persisted atomic-settlement state; the canonical current/predecessor proof-tag lists and their rebuilt inverse index, and the verifying-key index; identifier claims; the timed-OVN and Parliament records; and the SoraCloud service history, which pins FHE policy records to their admission events. State construction rebuilds the proof-status index and validates standalone election state and the rebuilt Kaigi indexes. Restore verifies no proof. A verifying-key record's content is validated when a proof is dispatched or the host hydrates it; restore validates only the circuit-and-version index over the records. Authenticated checkpoint restore does not exist (plan: first-release rules).",
+   "what": "World restore re-validates, for the products of this plan: RAM-LFE program policies; the six AXT counter, incarnation, budget and replay ledgers; the privacy consensus policy at the committed height; the optional per-protocol resource policies at the committed height; the persisted privacy state (PGC accounts, nullifiers, commitments, roots) and its public reserve dependencies; the persisted atomic-settlement state; the canonical current/predecessor proof-tag lists and their rebuilt inverse index, and the verifying-key index; identifier claims; the timed-OVN and Parliament records; and the SoraCloud service history, which pins FHE policy records to their admission events. State construction rebuilds the proof-status index and validates standalone election state and the rebuilt Kaigi indexes. Restore verifies no proof. A verifying-key record's content is validated when a proof is dispatched or the host hydrates it; restore validates only the circuit-and-version index over the records. Authenticated checkpoint restore does not exist (plan: first-release rules).",
    "sites": [
     {"path": "crates/iroha_core/src/state/deserialize_core.rs", "symbol": "pub(super) fn validate_ram_lfe_program_policies("},
     {
@@ -9994,11 +9983,9 @@
     {"path": "crates/iroha_core/src/state/deserialize_world.rs", "symbol": "validate_ram_lfe_program_policies(&ram_lfe_program_policies)?;"},
     {
      "path": "crates/iroha_core/src/state/deserialize_core.rs",
-     "symbol": "crate::privacy_state::validate_privacy_exact12_qualification_registration_v1("
-    },
-    {
-     "path": "crates/iroha_core/src/state/deserialize_core.rs",
-     "symbol": "crate::privacy_state::validate_privacy_activations_at_committed_height_v1("
+     "symbol": "crate::privacy_state::validate_privacy_protocol_policies_at_committed_height_v1(",
+     "what": "Validate optional ordinary resource policies at the exact committed height, including pending updates.",
+     "state_field": "world.privacy_protocol_policies"
     },
     {"path": "crates/iroha_core/src/state/deserialize_world.rs", "symbol": "crate::privacy_state::validate_privacy_persisted_state_v1("},
     {
@@ -10213,14 +10200,6 @@
    ],
    "gaps": [
     {
-     "what": "Restore re-checks the all-twelve qualification record and the activations, which the plan removes.",
-     "site": {
-      "path": "crates/iroha_core/src/state/deserialize_core.rs",
-      "symbol": "crate::privacy_state::validate_privacy_exact12_qualification_registration_v1("
-     },
-     "owner_task": "P.5"
-    },
-    {
      "what": "The content of a verifying-key record (strict key validation) is not checked at restore, only at use; restore validates the circuit-and-version index over the records.",
      "site": {"path": "crates/iroha_core/src/state/deserialize_world.rs", "symbol": "verifying_key_index::validate_verifying_key_index(&world)?;"},
      "owner_task": "F.4"
@@ -10234,7 +10213,8 @@
     {"inventory": "state", "key": "fields/world.axt_replay_ledger"},
     {"inventory": "state", "key": "fields/world.axt_handle_budget_ledger"},
     {"inventory": "state", "key": "fields/world.axt_spend_nonce_ledger"},
-    {"inventory": "state", "key": "fields/world.privacy_consensus_policy"}
+    {"inventory": "state", "key": "fields/world.privacy_consensus_policy"},
+    {"inventory": "state", "key": "fields/world.privacy_protocol_policies"}
    ]
   },
   "excluded": [
@@ -10569,10 +10549,10 @@
     {"token": "proof_status_rebuild", "path": "crates/iroha_core/src/state.rs", "count": 1, "route": "restore"},
     {
      "token": "proof_tag_rebuild",
+     "name": "proof_tag_index::rebuild",
      "path": "crates/iroha_core/src/state/deserialize_world.rs",
      "count": 1,
-     "route": "restore",
-     "name": "proof_tag_index::rebuild"
+     "route": "restore"
     },
     {
      "token": "purpose_bound",
@@ -10675,24 +10655,18 @@
     },
     {
      "token": "restore_validator",
-     "name": "validate_privacy_activations_at_committed_height_v1",
-     "path": "crates/iroha_core/src/state/deserialize_core.rs",
-     "count": 1,
-     "route": "restore"
-    },
-    {
-     "token": "restore_validator",
-     "name": "validate_privacy_exact12_qualification_registration_v1",
-     "path": "crates/iroha_core/src/state/deserialize_core.rs",
-     "count": 1,
-     "route": "restore"
-    },
-    {
-     "token": "restore_validator",
      "name": "validate_privacy_persisted_state_v1",
      "path": "crates/iroha_core/src/state/deserialize_world.rs",
      "count": 1,
      "route": "restore"
+    },
+    {
+     "token": "restore_validator",
+     "name": "validate_privacy_protocol_policies_at_committed_height_v1",
+     "path": "crates/iroha_core/src/state/deserialize_core.rs",
+     "count": 1,
+     "route": "restore",
+     "note": "Current-height validation of the optional committed resource-policy map."
     },
     {
      "token": "restore_validator",
@@ -11161,7 +11135,7 @@
    {
     "product": "zk_x509",
     "owner_paths": ["crates/iroha_core_privacy/src/privacy_engines/zk_x509", "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs"],
-    "census": {"poseidon": 1, "sha2_256": 39, "sha3_384": 5},
+    "census": {"poseidon": 1, "sha2_256": 43, "sha3_384": 5},
     "native": [
      {
       "role": "hash frames and CRL digests",
@@ -11174,8 +11148,8 @@
      {
       "role": "certificate and CRL hashing",
       "algorithm": "SHA-256 AIR",
-      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
-      "symbol": "sha256_air: true,"
+      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs",
+      "symbol": "pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>("
      }
     ],
     "primitive_roles": [
@@ -11732,16 +11706,16 @@
     "id": "exact12.envelope_digests",
     "selector": "source_hash",
     "chooses_guarantee": false,
-    "what": "A privacy envelope carries parameter, verifier, statement-schema and engine-manifest digests. Each must equal the committed activation, and the activation must equal this binary's compiled profile; a substituted digest is rejected. The compiled digests bind implementation-provenance and source-profile labels, so the identity is partly a statement about the build.",
+    "what": "The envelope parameter, verifier, statement-schema and engine-manifest identities must match the selected immutable compiled semantic profile. Optional resource policy does not replace any cryptographic identity.",
     "site": {
      "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-     "symbol": "if activation.engine_manifest_digest != compiled.engine_manifest_digest {"
+     "symbol": "if profile.engine_manifest_digest != compiled.engine_manifest_digest {"
     },
     "guards": [
-     {"path": "crates/iroha_core_privacy/src/privacy_profiles.rs", "symbol": "pub fn validate_compiled_privacy_activation_v1("},
+     {"path": "crates/iroha_core_privacy/src/privacy_profiles.rs", "symbol": "pub fn validate_compiled_privacy_profile_v1("},
      {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "pub fn verify_privacy_envelope_v1("}
     ],
-    "operations": ["privacy::SubmitPrivacyProofV1", "privacy::RegisterPrivacyProtocolActivationV1"],
+    "operations": ["privacy::SubmitPrivacyProofV1"],
     "rejection_tests": [
      {
       "path": "crates/iroha_core_privacy/src/privacy_verifier/governed_binding_tests.rs",
@@ -11757,7 +11731,7 @@
        {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn assert_rejected("}
       ]
      },
-     {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "test": "altered_activation_statement_and_proof_are_rejected"},
+     {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "test": "altered_profile_statement_and_proof_are_rejected"},
      {
       "path": "crates/iroha_core_privacy/src/privacy_profiles_tests.rs",
       "test": "local_compiled_profile_catalog_archive_rejects_canonical_substitution",
@@ -11767,43 +11741,10 @@
     "test_evidence": "default",
     "open_defect": {
      "owner_task": "P.5",
-     "what": "Verifier and engine-manifest digests include implementation-provenance labels, and an activation is compared with the running binary's compiled catalog; the plan requires semantic relation and parameter identities, with build and source hashes kept as evidence metadata (REQ-011). P.1 regenerates the descriptors."
+     "what": "The audit must distinguish semantic relation/parameter identities from implementation-provenance metadata (REQ-011). Documentary qualification and lifecycle records are absent; source-profile derivations remain subject to source census."
     },
     "references": [
      {"inventory": "runtime_validity", "key": "entries/gate.privacy.compiled_profile_activation"}
-    ]
-   },
-   {
-    "id": "exact12.qualification_singleton",
-    "selector": "catalog_membership",
-    "chooses_guarantee": true,
-    "what": "Admission of any protocol requires the all-twelve qualification record and that protocol's row in it. Membership in a global catalog decides whether a valid proof of one protocol is accepted. Registration of the record further requires its ABI hash and syscall-list digest to equal those of the running binary, its chain id to equal the chain, and its four canary validators to be the current validator roster with their current consensus keys.",
-    "site": {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn resolve_qualified_privacy_activation_v1<'a>("},
-    "registration": {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn validate_privacy_exact12_qualification_registration_v1("},
-    "registration_conditions": [
-     {
-      "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-      "symbol": "return Err(\"Exact12 qualification chain identifier differs from this chain\".to_owned());"
-     },
-     {
-      "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-      "symbol": "\"Exact12 qualification validator roster differs from the four-validator topology\""
-     },
-     {
-      "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-      "symbol": "return Err(\"Exact12 qualification ABI-v1 binding differs from this binary\".to_owned());"
-     }
-    ],
-    "operations": ["privacy::SubmitPrivacyProofV1", "privacy::RegisterPrivacyExact12QualificationV1"],
-    "rejection_tests": [
-     {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "test": "qualified_activation_resolver_rejects_missing_singleton_evidence"}
-    ],
-    "open_defect": {
-     "owner_task": "P.5",
-     "what": "The all-twelve qualification singleton couples each protocol's availability to the others (REQ-011, REQ-062, REQ-086). It does not change which relation a proof establishes; it decides whether the proof is admitted at all."
-    },
-    "references": [
-     {"inventory": "runtime_validity", "key": "entries/gate.privacy.exact12_qualification"}
     ]
    },
    {
@@ -11818,7 +11759,7 @@
     "guards": [
      {"path": "crates/iroha_data_model/src/privacy.rs", "symbol": "impl PrivacyExact12CatalogCommitmentV1"}
     ],
-    "operations": ["privacy::RegisterPrivacyExact12QualificationV1"],
+    "operations": ["privacy::SubmitPrivacyProofV1"],
     "rejection_tests": [
      {
       "path": "crates/iroha_data_model/src/privacy/tests/release_manifest.rs",
@@ -11835,10 +11776,6 @@
      }
     ],
     "test_evidence": "default",
-    "open_defect": {
-     "owner_task": "P.5",
-     "what": "The release manifest and the security claim that carry the commitment exist only to support the qualification record the plan removes."
-    },
     "references": [
      {"inventory": "runtime_validity", "key": "entries/privacy.global_manifest"},
      {"inventory": "primitive", "key": "digest_roles/catalog.exact12-commitment"}
@@ -11997,16 +11934,20 @@
       "covers": "The backend label allowlist of the worker, in front of the registry read."
      }
     ],
-    "test_evidence": "default"
+    "test_evidence": "default",
+    "operations": []
    },
    {
     "id": "settlement.pool_activation",
     "selector": "node_configuration",
     "chooses_guarantee": true,
-    "what": "Atomic private settlement requires a node-configured enable switch and activation height and the IVM private-note activation record before a leg proof is considered.",
+    "what": "Atomic private settlement has no node enable or activation prerequisite. The native IVM private-note implementation and current committed protocol limits are enforced, but the remaining node-configured profile-policy version selection and settlement bounds still affect admission.",
     "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "let config = &self.nexus.atomic_private_settlement;"},
     "operations": ["private_settlement::RegisterAtomicPrivateSettlementPrepareV1", "private_settlement::FinalizeAtomicPrivateSettlementV1"],
-    "open_defect": {"owner_task": "P.5", "what": "A node-local activation switch and height decide whether a settlement proof is admitted (REQ-002, REQ-061)."},
+    "open_defect": {
+     "owner_task": "F.4",
+     "what": "Migrate remaining node-configured profile-policy selection, windows and settlement bounds into their committed owner; the retired enable flag and activation height are absent."
+    },
     "references": [
      {"inventory": "runtime_validity", "key": "entries/cfg.nexus.settlement_activation"}
     ]
@@ -12034,16 +11975,10 @@
      "pattern": "kaigi_(?:authorization|usage)_vk\\b",
      "what": "The Kaigi verifying-key references of the committed ZK validity policy."
     },
-    {"id": "exact12_qualification", "pattern": "privacy_exact12_qualification\\b", "what": "The all-twelve qualification record."},
     {
-     "id": "qualified_activation",
-     "pattern": "resolve_qualified_privacy_activation_v1\\(",
-     "what": "Resolution of an activation through the qualification record."
-    },
-    {
-     "id": "compiled_activation_check",
-     "pattern": "validate_compiled_privacy_activation_v1\\(",
-     "what": "Comparison of an activation with this binary's compiled profile."
+     "id": "compiled_profile_check",
+     "pattern": "validate_compiled_privacy_profile_v1\\(",
+     "what": "Comparison of the selected semantic context with this binary's compiled profile."
     },
     {"id": "ram_lfe_uploaded_verifier", "pattern": "\\bproof_verifier\\b", "what": "The verifier description a RAM-LFE policy publishes."},
     {
@@ -12070,61 +12005,28 @@
    ],
    "occurrences": [
     {
-     "token": "compiled_activation_check",
+     "token": "compiled_profile_check",
      "path": "crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap.rs",
      "count": 1,
      "site": "exact12.envelope_digests"
     },
-    {"token": "compiled_activation_check", "path": "crates/iroha_core/src/privacy.rs", "count": 2, "site": "exact12.envelope_digests"},
     {
-     "token": "compiled_activation_check",
-     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-     "count": 8,
-     "site": "exact12.envelope_digests"
-    },
-    {"token": "compiled_activation_check", "path": "crates/iroha_core/src/state.rs", "count": 1, "site": "settlement.pool_activation"},
-    {
-     "token": "compiled_activation_check",
+     "token": "compiled_profile_check",
      "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
      "count": 1,
      "site": "exact12.envelope_digests"
     },
     {
-     "token": "compiled_activation_check",
-     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-     "count": 3,
-     "site": "exact12.envelope_digests"
-    },
-    {
-     "token": "compiled_activation_check",
+     "token": "compiled_profile_check",
      "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
      "count": 1,
      "site": "exact12.envelope_digests"
     },
     {
-     "token": "exact12_qualification",
-     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-     "count": 3,
-     "site": "exact12.qualification_singleton"
-    },
-    {"token": "exact12_qualification", "path": "crates/iroha_core/src/state.rs", "count": 11, "site": "exact12.qualification_singleton"},
-    {
-     "token": "exact12_qualification",
-     "path": "crates/iroha_core/src/state/authority_registry/world.rs",
-     "count": 3,
-     "site": "exact12.qualification_singleton"
-    },
-    {
-     "token": "exact12_qualification",
-     "path": "crates/iroha_core/src/state/deserialize_core.rs",
-     "count": 2,
-     "site": "exact12.qualification_singleton"
-    },
-    {
-     "token": "exact12_qualification",
-     "path": "crates/iroha_core/src/state/deserialize_world.rs",
-     "count": 5,
-     "site": "exact12.qualification_singleton"
+     "token": "compiled_profile_check",
+     "path": "crates/iroha_core_privacy/src/privacy_verifier/x509_attachment.rs",
+     "count": 1,
+     "site": "exact12.envelope_digests"
     },
     {
      "token": "execution_profile_registry",
@@ -12192,13 +12094,6 @@
     {"token": "purpose_bound_verify", "path": "crates/iroha_core_zk/src/confidential_v2.rs", "count": 1, "site": "generic.native_uploaded_key"},
     {"token": "purpose_bound_verify", "path": "crates/iroha_core_zk/src/verification.rs", "count": 2, "site": "generic.stark_uploaded_key"},
     {"token": "purpose_bound_verify", "path": "crates/iroha_torii/src/zk_prover.rs", "count": 1, "site": "torii.attachment_report_worker"},
-    {
-     "token": "qualified_activation",
-     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-     "count": 1,
-     "site": "exact12.qualification_singleton"
-    },
-    {"token": "qualified_activation", "path": "crates/iroha_core/src/state.rs", "count": 1, "site": "exact12.qualification_singleton"},
     {"token": "ram_lfe_uploaded_verifier", "path": "crates/iroha_torii/src/lib.rs", "count": 4, "site": "ram_lfe.uploaded_verifier_metadata"},
     {
      "token": "ram_lfe_uploaded_verifier",
@@ -12918,6 +12813,12 @@
    },
    {
     "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt",
+    "product": "zk_x509",
+    "symbols": ["fromPrivacyZkX509CertificateV1"]
+   },
+   {
+    "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/CastZkBallotInstruction.kt",
     "product": "voting",
     "symbols": ["electionId", "setElectionId"]
@@ -13029,15 +12930,40 @@
    },
    {
     "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
+    "product": "zk_x509",
+    "symbols": [
+     "createZkX509RequestV1",
+     "inspectZkX509RequestV1",
+     "materializeZkX509StatementV1",
+     "nativeCreateZkX509RequestV1",
+     "nativeInspectZkX509RequestV1",
+     "nativeMaterializeZkX509StatementV1"
+    ]
+   },
+   {
+    "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapter.kt",
     "product": "generic_proof",
     "symbols": ["withProofAttachments"]
    },
    {
     "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/NoritoJavaCodecAdapter.kt",
+    "product": "zk_x509",
+    "symbols": ["materializeZkX509StatementV1"]
+   },
+   {
+    "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt",
     "product": "generic_proof",
     "symbols": ["decodeProofAttachmentPayload", "encodeProofAttachmentPayload", "preflightProofAttachments", "withProofAttachments"]
+   },
+   {
+    "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt",
+    "product": "zk_x509",
+    "symbols": ["materializeZkX509StatementV1", "requireDirectZkX509Requests"]
    },
    {
     "family": "swift",
@@ -13105,6 +13031,7 @@
      "privacyExact12CapabilityManifestValidationStatusV1",
      "privacyExact12FixtureBundleV1",
      "privacyExact12FixtureValidationStatusV1",
+     "privacyExact12SubmitProofConstructionValidationStatusV1",
      "probePrivacyArchiveFunction",
      "probePrivacyNativeAvailability",
      "readPrivacyNativeOutput"
@@ -13122,6 +13049,18 @@
     "path": "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "product": "voting",
     "symbols": ["encodeGovernanceCastPlainBallot", "encodeGovernanceCastZkBallot"]
+   },
+   {
+    "family": "swift",
+    "path": "IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift",
+    "product": "zk_x509",
+    "symbols": ["requireX509ConstructionV1"]
+   },
+   {
+    "family": "swift",
+    "path": "IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift",
+    "product": "exact12_admission",
+    "symbols": ["isPrivacyInstructionWire"]
    },
    {
     "family": "swift",
@@ -13447,6 +13386,12 @@
    },
    {
     "family": "javascript",
+    "path": "javascript/iroha_js/privacy-x509.d.ts",
+    "product": "zk_x509",
+    "symbols": ["buildPrivacyX509DirectTransactionV1", "preparePrivacyX509DirectTransactionV1"]
+   },
+   {
+    "family": "javascript",
     "path": "javascript/iroha_js/src/axt.js",
     "product": "axt",
     "symbols": ["buildAxtDescriptor", "computeAxtBinding", "normalizeAxtRejectContext", "resolveAxtNative"]
@@ -13758,8 +13703,8 @@
      "decodePrivacyExact12CapabilityManifestV1",
      "getPrivacyExact12CapabilityManifestV1",
      "parsePrivacyExact12ManifestProjectionV1",
-     "parsePrivacyExact12QualificationV1",
      "parsePrivacyExact12ReadinessV1",
+     "privacyExact12AuthenticatedConstructionArchiveV1",
      "requirePrivacyExact12NativeV1",
      "requirePrivacyExact12ProtocolIdV1"
     ]
@@ -13785,6 +13730,18 @@
     "path": "javascript/iroha_js/src/privacyExact12Network.js",
     "product": "exact12_admission",
     "symbols": ["validatePrivacyExact12NetworkBindingsV1"]
+   },
+   {
+    "family": "javascript",
+    "path": "javascript/iroha_js/src/privacyX509Transaction.js",
+    "product": "zk_x509",
+    "symbols": ["buildPrivacyX509DirectTransactionV1", "preparePrivacyX509DirectTransactionV1"]
+   },
+   {
+    "family": "javascript",
+    "path": "javascript/iroha_js/src/privacyX509Wire.js",
+    "product": "zk_x509",
+    "symbols": ["parsePrivacyX509RequestV1", "preparePrivacyX509DirectBytesV1", "validatePrivacyX509FixtureBindingsV1"]
    },
    {
     "family": "javascript",
@@ -14307,6 +14264,12 @@
    },
    {
     "family": "python",
+    "path": "python/iroha_python/src/iroha_python/privacy_exact12.py",
+    "product": "zk_x509",
+    "symbols": ["_validate_x509_row_v1"]
+   },
+   {
+    "family": "python",
     "path": "python/iroha_python/src/iroha_python/privacy_wallet_worker.py",
     "product": "atomic_settlement",
     "symbols": [
@@ -14356,7 +14319,7 @@
     "family": "python",
     "path": "python/iroha_python/src/iroha_python/tx.py",
     "product": "zk_x509",
-    "symbols": ["prepare_privacy_zk_x509_identity_presentation_action_v1", "sign_privacy_zk_x509_identity_presentation_action_v1"]
+    "symbols": ["prepare_privacy_zk_x509_identity_presentation_action_v1"]
    },
    {
     "family": "python",
@@ -14478,9 +14441,9 @@
    {"family": "python", "path": "python/iroha_torii_client/runtime_governance_auth.py", "product": "voting", "symbols": ["get_election_tally"]},
    {
     "family": "csharp",
-    "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs",
-    "product": "exact12_admission",
-    "symbols": ["PrivacyDeploymentActivationV1", "PrivacyExact12QualificationRecordV1"]
+    "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.X509.cs",
+    "product": "zk_x509",
+    "symbols": ["ValidateX509Bindings"]
    },
    {
     "family": "csharp",
@@ -14529,6 +14492,12 @@
     "path": "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs",
     "product": "ram_lfe",
     "symbols": ["GetIdentifierPoliciesAsync"]
+   },
+   {
+    "family": "csharp",
+    "path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+    "product": "zk_x509",
+    "symbols": ["PrepareX509Transaction"]
    },
    {
     "family": "csharp",

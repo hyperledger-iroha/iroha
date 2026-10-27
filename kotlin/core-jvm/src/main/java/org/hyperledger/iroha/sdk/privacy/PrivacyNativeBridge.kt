@@ -8,7 +8,7 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
  *
  * The bridge exposes this binary's typed Norito compiled-profile catalog, validates Torii's
  * canonical Exact12 capability manifest, and exposes the Rust-derived byte-complete fixture
- * bundle. The local catalog never establishes network activation or readiness.
+ * bundle. Local catalog inspection never grants authenticated network admission.
  */
 class PrivacyNativeBridge private constructor() {
     enum class CompiledProfileCatalogValidationStatusV1(val code: Int) {
@@ -459,7 +459,7 @@ class PrivacyNativeBridge private constructor() {
             val snapshot = archive.copyOf()
             try {
                 check(nativeRequireExact12CapabilityTupleForNetworkV1(snapshot, protocolId.ordinal, expectedNetworkId.bytes())) {
-                    "Exact12 protocol is not active, ready, and byte-identical to the local profile"
+                    "Exact12 protocol implementation is unavailable or does not match the local canonical profile"
                 }
             } finally {
                 snapshot.fill(0)
@@ -533,11 +533,73 @@ class PrivacyNativeBridge private constructor() {
             return PrivacySubmitProofIntentProjectionV1(requireNotNull(projected))
         }
 
+        /** Construct only the model-owned X509 request from an independent tagged statement. */
+        internal fun createZkX509RequestV1(statementArchive: ByteArray, attachmentActionIndex: Long): ByteArray {
+            require(statementArchive.isNotEmpty() && statementArchive.size <= PrivacyExact12FixtureCodecV1.MAX_STATEMENT_BYTES) {
+                "invalid independent X509 statement length"
+            }
+            require(attachmentActionIndex in 0..0xffff_ffffL) { "attachment action index must fit u32" }
+            check(nativeAvailable) { "native X509 request construction is unavailable" }
+            val snapshot = statementArchive.copyOf()
+            try {
+                val request = nativeCreateZkX509RequestV1(snapshot, attachmentActionIndex)
+                require(request != null && request.isNotEmpty() && request.size <= PRIVACY_X509_REQUEST_BRIDGE_MAX_BYTES_V1) {
+                    "X509 construction requires an independent canonical statement with zero intent"
+                }
+                return request.copyOf()
+            } finally { snapshot.fill(0) }
+        }
+
+        /** Inspect one proof-free X509 request using the native model's canonical owner. */
+        internal fun inspectZkX509RequestV1(archive: ByteArray): PrivacyZkX509RequestInspectionV1 {
+            require(archive.isNotEmpty() && archive.size <= PRIVACY_X509_REQUEST_BRIDGE_MAX_BYTES_V1) {
+                "X509 request exceeds its bridge byte bound"
+            }
+            check(nativeAvailable) { "native X509 request inspection is unavailable" }
+            val snapshot = archive.copyOf()
+            try {
+                return PrivacyZkX509RequestInspectionV1.fromNative(
+                    snapshot, nativeInspectZkX509RequestV1(snapshot),
+                )
+            } finally { snapshot.fill(0) }
+        }
+
+        /** Derive a tagged statement from the original action and independently computed intent. */
+        internal fun materializeZkX509StatementV1(
+            requestArchive: ByteArray,
+            actionFrame: ByteArray,
+            originalOrderedIntent: ByteArray,
+        ): ByteArray {
+            require(requestArchive.isNotEmpty() &&
+                requestArchive.size <= PRIVACY_X509_REQUEST_BRIDGE_MAX_BYTES_V1) { "invalid X509 request length" }
+            require(actionFrame.isNotEmpty() && actionFrame.size <= 64 * 1024) { "invalid action frame length" }
+            require(originalOrderedIntent.size == 32 && originalOrderedIntent.any { it != 0.toByte() }) {
+                "X509 materialization requires the nonzero original ordered intent"
+            }
+            check(nativeAvailable) { "native X509 statement materialization is unavailable" }
+            val request = requestArchive.copyOf()
+            val action = actionFrame.copyOf()
+            val intent = originalOrderedIntent.copyOf()
+            try {
+                val statement = nativeMaterializeZkX509StatementV1(request, action, intent)
+                require(statement != null && statement.isNotEmpty() &&
+                    statement.size <= PrivacyExact12FixtureCodecV1.MAX_STATEMENT_BYTES) {
+                    "X509 request does not bind the original action and intent"
+                }
+                return statement.copyOf()
+            } finally {
+                request.fill(0); action.fill(0); intent.fill(0)
+            }
+        }
+
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
                 nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
                     nativeSubmitProofIntentProjectionV1(null) == null &&
+                    nativeCreateZkX509RequestV1(null, -1L) == null &&
+                    nativeInspectZkX509RequestV1(null) == null &&
+                    nativeMaterializeZkX509StatementV1(null, null, null) == null &&
                     nativeConfidentialDerivationContractRevisionV3() ==
                     CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3 &&
                     nativeValidateExact12CapabilityManifestForNetworkV1(null, null) ==
@@ -554,6 +616,11 @@ class PrivacyNativeBridge private constructor() {
             }
 
         @JvmStatic private external fun nativeSubmitProofIntentProjectionV1(archive: ByteArray?): ByteArray?
+        @JvmStatic private external fun nativeCreateZkX509RequestV1(statementArchive: ByteArray?, attachmentActionIndex: Long): ByteArray?
+        @JvmStatic private external fun nativeInspectZkX509RequestV1(archive: ByteArray?): Array<ByteArray?>?
+        @JvmStatic private external fun nativeMaterializeZkX509StatementV1(
+            requestArchive: ByteArray?, actionFrame: ByteArray?, originalOrderedIntent: ByteArray?,
+        ): ByteArray?
 
         @JvmStatic private external fun nativeBridgeAbiVersion(): Int
 

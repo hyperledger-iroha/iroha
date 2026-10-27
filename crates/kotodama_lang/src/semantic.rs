@@ -239,6 +239,8 @@ pub enum Type {
     Name,
     Json,
     Unit,
+    /// Opaque local queue token; never proof success or an authoritative effect.
+    PendingAction,
     /// A closed nominal error type with an authenticated variant schema.
     ErrorEnum(Arc<ContractErrorTypeDescriptor>),
     /// A closed nominal ordinary enum, distinct from raisable errors.
@@ -832,6 +834,9 @@ impl SemanticContext {
                 params.push(parse_declared_param_type(self, param, &function.modifiers)?);
             }
             let return_type = parse_declared_type(self, &function.ret_ty)?.unwrap_or(Type::Unit);
+            if function.modifiers.kind != FunctionKind::Private {
+                reject_pending_action_boundary(&return_type)?;
+            }
             signatures.insert(
                 function.name.clone(),
                 FunctionSignature {
@@ -2066,7 +2071,8 @@ fn collect_struct_dependencies(
                 pending.push(ok);
             }
             Type::Tuple(items) => pending.extend(items.iter().rev()),
-            Type::ContractRef(_)
+            Type::PendingAction
+            | Type::ContractRef(_)
             | Type::Int
             | Type::Decimal
             | Type::Quantity
@@ -2255,7 +2261,8 @@ fn measure_expanded_type(
                         .map(|(_, field)| (field, depth.saturating_add(1))),
                 );
             }
-            Type::ContractRef(_)
+            Type::PendingAction
+            | Type::ContractRef(_)
             | Type::Int
             | Type::Decimal
             | Type::Quantity
@@ -3605,6 +3612,12 @@ fn analyze_with_context(
             let ty = resolve_struct_type_with_context(context, &ty).inspect_err(|_| {
                 context.capture_diagnostic(fn_return_sources.get(&name).copied().flatten(), None);
             })?;
+            if fn_modifiers
+                .get(&name)
+                .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private)
+            {
+                reject_pending_action_boundary(&ty)?;
+            }
             Ok((name, ty))
         })
         .collect::<Result<HashMap<_, _>, SemanticError>>()?;
@@ -4984,6 +4997,25 @@ fn coerce_contextual_numeric_literals(
     }
     Ok(())
 }
+/// Queue tokens may propagate internally, but cannot cross an invocation boundary.
+fn reject_pending_action_boundary(root: &Type) -> Result<(), SemanticError> {
+    let mut pending = vec![root];
+    let mut visited = HashSet::new();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty as *const Type) {
+            continue;
+        }
+        match ty {
+            Type::PendingAction => return Err(sem_err("K2003", "PendingAction is an execution-local queue token and cannot cross a public or cross-contract parameter or return boundary".into())),
+            Type::Secret(inner) | Type::Option(inner) | Type::StateCursor(inner) | Type::List(inner, _) => pending.push(inner),
+            Type::Result(left, right) | Type::StateMap(left, right) => { pending.push(right); pending.push(left); }
+            Type::Tuple(items) => pending.extend(items),
+            Type::Struct { fields, .. } => pending.extend(fields.iter().map(|(_, ty)| ty)),
+            _ => {}
+        }
+    }
+    Ok(())
+}
 fn list_element_contains_resource_handle(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Secret(_)
@@ -5097,7 +5129,8 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
         | Type::SoracloudRequest
         | Type::SoracloudResponse
         | Type::NamedStruct(_)
-        | Type::ContractRef(_) => false,
+        | Type::ContractRef(_)
+        | Type::PendingAction => false,
     }
 }
 pub(crate) fn is_supported_durable_key_type(ty: &Type) -> bool {
@@ -5534,6 +5567,9 @@ fn analyze_function(
         param_types.push(typed_param);
     }
     let expected_ret = Some(parse_declared_type(context, &func.ret_ty)?.unwrap_or(Type::Unit));
+    if func.modifiers.kind != FunctionKind::Private {
+        reject_pending_action_boundary(expected_ret.as_ref().expect("return type is present"))?;
+    }
     if func.modifiers.kind != FunctionKind::Private
         && expected_ret
             .as_ref()
@@ -8075,6 +8111,7 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
         ),
         Builtin::ScExecuteSubmitBallot
+        | Builtin::PresentX509
         | Builtin::ZkVerifyBatch
         | Builtin::ZkVoteVerifyBallot
         | Builtin::ZkVoteVerifyTally => M::NameSuffix(
@@ -8337,6 +8374,7 @@ fn fixed_builtin_result_type(descriptor: &str) -> Type {
     match descriptor {
         "AssetUidHoldingQuote" => asset_uid_holding_quote_type(),
         "()" => Type::Unit,
+        "PendingAction" => Type::PendingAction,
         "AccountId" => Type::AccountId,
         "Json" => Type::Json,
         "Name" => Type::Name,
@@ -10352,7 +10390,8 @@ fn is_native_json_value_type(ty: &Type) -> bool {
         | Type::Tuple(_)
         | Type::Struct { .. }
         | Type::NamedStruct(_)
-        | Type::ContractRef(_) => false,
+        | Type::ContractRef(_)
+        | Type::PendingAction => false,
     }
 }
 fn analyze_native_json_value(
@@ -11195,7 +11234,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&payload) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Option<T> V1 payloads must be durable-value types".into(),
+                    message: "Option<T> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11230,7 +11269,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&payload) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Option<T> V1 payloads must be durable-value types".into(),
+                    message: "Option<T> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11262,7 +11301,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&error) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Result<T, E> V1 payloads must be durable-value types".into(),
+                    message: "Result<T, E> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11296,7 +11335,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&error_ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Result<T, E> V1 payloads must be durable-value types".into(),
+                    message: "Result<T, E> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -12858,7 +12897,16 @@ fn analyze_sum_type_call(
     })
 }
 fn is_supported_sum_payload(ty: &Type) -> bool {
-    is_supported_durable_value_type(ty)
+    match resolve_struct_type(ty) {
+        Type::PendingAction => true,
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, field)| is_supported_sum_payload(field)),
+        Type::Tuple(items) => items.iter().all(is_supported_sum_payload),
+        Type::Option(inner) | Type::List(inner, _) => is_supported_sum_payload(&inner),
+        Type::Result(ok, err) => is_supported_sum_payload(&ok) && is_supported_sum_payload(&err),
+        other => is_supported_durable_value_type(&other),
+    }
 }
 fn parse_declared_type(
     context: &SemanticContext,
@@ -13164,6 +13212,9 @@ fn parse_declared_param_type(
         );
     })?;
 
+    if modifiers.kind != FunctionKind::Private {
+        reject_pending_action_boundary(&ty)?;
+    }
     if modifiers.kind != FunctionKind::Private && crate::secret::type_contains_secret(&ty) {
         context.capture_diagnostic(
             param.ty.as_ref().and_then(|ty| context.type_source(ty)),
@@ -13285,6 +13336,7 @@ fn convert_type_expr_inner(
                 name if declared_enum_type(context, name).is_some() => {
                     declared_enum_type(context, name).expect("declared enum type")
                 }
+                "PendingAction" => Type::PendingAction,
                 "bool" => Type::Bool,
                 "string" => Type::String,
                 "bytes" => Type::Bytes,

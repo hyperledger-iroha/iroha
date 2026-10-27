@@ -18,6 +18,16 @@ fn project_instruction(archive: &[u8]) -> Option<Vec<u8>> {
     );
     let instruction =
         norito::decode_canonical_with_limits::<SubmitPrivacyProofV1>(archive, limits).ok()?;
+    if instruction.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || instruction.envelope.proof.protocol_id()
+            == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || matches!(
+            &instruction.envelope.statement,
+            iroha_data_model::privacy::PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
+        )
+    {
+        return None;
+    }
     let projection = instruction.ordered_intent_projection_bytes_v1().ok()?;
     (projection.len() <= maximum).then_some(projection)
 }
@@ -65,24 +75,41 @@ mod tests {
             iroha_data_model::privacy::privacy_exact12_fixture_bundle_v1().expect("fixtures");
         for row in fixtures.rows {
             let input = row.submit_proof_instruction_norito;
-            let typed = norito::decode_canonical::<SubmitPrivacyProofV1>(&input)
-                .expect("typed instruction");
-            assert_eq!(
-                project_instruction(&input),
-                Some(
-                    typed
-                        .ordered_intent_projection_bytes_v1()
-                        .expect("projection")
-                )
-            );
-            assert!(project_instruction(&input[..input.len() - 1]).is_none());
+            let x509 = row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+            let project = |archive: &[u8]| {
+                if x509 {
+                    privacy_x509_request::inspect_request(archive).map(|fields| fields[0].clone())
+                } else {
+                    project_instruction(archive)
+                }
+            };
+            if x509 {
+                let typed = norito::decode_canonical::<SubmitPrivacyZkX509CertificateV1>(&input)
+                    .expect("typed proof-free X509 request");
+                assert_eq!(
+                    project(&input),
+                    Some(norito::encode_canonical(&typed).unwrap())
+                );
+                assert!(project_instruction(&input).is_none());
+                let envelope = norito::decode_canonical(&row.envelope_norito).unwrap();
+                let retired = norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope)).unwrap();
+                assert!(project_instruction(&retired).is_none());
+            } else {
+                let typed = norito::decode_canonical::<SubmitPrivacyProofV1>(&input)
+                    .expect("typed instruction");
+                assert_eq!(
+                    project(&input),
+                    Some(typed.ordered_intent_projection_bytes_v1().expect("projection"))
+                );
+            }
+            assert!(project(&input[..input.len() - 1]).is_none());
             let mut trailing = input.clone();
             trailing.push(0);
-            assert!(project_instruction(&trailing).is_none());
+            assert!(project(&trailing).is_none());
             let mut damaged = input;
             *damaged.last_mut().expect("frame") ^= 1;
-            assert!(project_instruction(&damaged).is_none());
-            assert!(project_instruction(&row.envelope_norito).is_none());
+            assert!(project(&damaged).is_none());
+            assert!(project(&row.envelope_norito).is_none());
         }
         assert!(project_instruction(&[]).is_none());
         assert!(
@@ -93,6 +120,33 @@ mod tests {
             ])
             .is_none()
         );
+    }
+
+    #[test]
+    fn generic_projection_refuses_x509_in_each_typed_envelope_component() {
+        let fixtures =
+            iroha_data_model::privacy::privacy_exact12_fixture_bundle_v1().expect("fixtures");
+        let x509 = fixtures
+            .rows
+            .iter()
+            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .unwrap();
+        let x509: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
+            norito::decode_canonical(&x509.envelope_norito).unwrap();
+        let generic: SubmitPrivacyProofV1 =
+            norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito)
+                .unwrap();
+        for component in 0..3 {
+            let mut mixed = generic.clone();
+            match component {
+                0 => mixed.envelope.protocol_id = x509.protocol_id,
+                1 => mixed.envelope.proof = x509.proof.clone(),
+                _ => mixed.envelope.statement = x509.statement.clone(),
+            }
+            assert!(
+                project_instruction(&norito::encode_canonical(&mixed).unwrap()).is_none()
+            );
+        }
     }
 
     #[test]

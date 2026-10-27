@@ -591,5 +591,8 @@ pub(crate) use host::ContractCustody;
 /// Bounded native PGC relation consumer; no executor or State authority.
 pub(crate) mod pgc_bootstrap;
 
+/// Original signed X.509 request and proof custody for direct and queued application.
+pub(crate) mod x509;
+
 #[cfg(test)]
 mod tests;

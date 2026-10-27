@@ -36,7 +36,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{AccountId, MultisigMember, MultisigPolicy},
     asset::AssetDefinitionId,
-    isi::privacy::SubmitPrivacyProofV1,
+    isi::privacy::{SubmitPrivacyProofV1, SubmitPrivacyZkX509CertificateV1},
     parameter::{
         Parameters,
         system::resource_coherence::{
@@ -139,6 +139,64 @@ fn num_bigint_max_mantissa() -> String {
         .collect()
 }
 
+/// Build the single canonical execution carrier for this protocol; synthetic bytes remain signed.
+fn transport_builder(
+    envelope: &PrivacyProofEnvelopeV1,
+    authority: AccountId,
+) -> (TransactionBuilder, usize) {
+    use iroha_data_model::transaction::signed_attachments::*;
+    let builder = TransactionBuilder::new(
+        envelope.statement.context().network_id,
+        authority.clone(),
+        maximal_fee_intent(),
+    )
+    .with_metadata(flag_required_metadata());
+    if let PrivacyStatementV1::IrohaZkX509StarkP256V1(inputs) = &envelope.statement {
+        let mut inputs = inputs.clone();
+        inputs.wallet_account = authority;
+        inputs.context.transaction_intent_digest =
+            iroha_data_model::privacy::PrivacyTransactionIntentDigestV1::new([0; 32]);
+        let request = SubmitPrivacyZkX509CertificateV1::new(
+            inputs,
+            ActionAttachmentRefV1 {
+                action_index: 0,
+                slot_index: 0,
+            },
+        );
+        let request_bytes = norito::canonical_frame_len(&request).unwrap();
+        assert!(request_bytes <= SubmitPrivacyZkX509CertificateV1::canonical_frame_byte_limit_v1());
+        let mut plan = SignedAttachmentPlanV1::new();
+        plan.push_action(PlannedActionV1 {
+            operation: ActionOperationV1::NativeInstruction(
+                SubmitPrivacyZkX509CertificateV1::WIRE_ID.into(),
+            ),
+            role: ActionRoleV1::ProofEffect,
+            authority: ActionAuthorityBindingV1::TransactionAuthority,
+            invocation: ActionInvocationBindingV1::Direct {
+                instruction_index: 0,
+            },
+            public_inputs_digest: request.public_inputs_digest_v1().unwrap(),
+            attachments: vec![PlannedAttachmentV1 {
+                kind: AttachmentKindV1::Proof,
+                role: AttachmentRoleV1::ActionProof,
+                bytes: envelope.proof.bytes().as_bytes().to_vec(),
+            }],
+        });
+        (
+            builder
+                .with_instructions([request])
+                .with_signed_attachments(plan.declare()),
+            request_bytes
+                .checked_add(envelope.proof.bytes().as_bytes().len())
+                .unwrap(),
+        )
+    } else {
+        let instruction = SubmitPrivacyProofV1::new(envelope.clone());
+        let bytes = norito::canonical_frame_len(&instruction).unwrap();
+        (builder.with_instructions([instruction]), bytes)
+    }
+}
+
 /// A complete signed transaction carrying `envelope` from `count` signers of `algorithm`,
 /// with the maximal admissible fee intent, lifetime and nonce.
 fn signed_with_required_context(
@@ -162,14 +220,7 @@ fn signed_with_required_context(
             .collect(),
     )
     .expect("signature policy");
-    let instruction = SubmitPrivacyProofV1::new(envelope.clone());
-    let mut builder = TransactionBuilder::new(
-        instruction.envelope().statement.context().network_id,
-        AccountId::new_multisig(policy),
-        maximal_fee_intent(),
-    )
-    .with_instructions([instruction])
-    .with_metadata(flag_required_metadata());
+    let (mut builder, _) = transport_builder(envelope, AccountId::new_multisig(policy));
     builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
     builder.set_nonce(NonZeroU32::MAX);
     builder.set_ttl(admissible_ttl());
@@ -194,14 +245,7 @@ fn signed_by_single_key(
         [0x01, 0x00].iter().copied().chain([0x7a; 30]).collect(),
         algorithm,
     );
-    let instruction = SubmitPrivacyProofV1::new(envelope.clone());
-    let mut builder = TransactionBuilder::new(
-        instruction.envelope().statement.context().network_id,
-        AccountId::new(key.public_key().clone()),
-        maximal_fee_intent(),
-    )
-    .with_instructions([instruction])
-    .with_metadata(flag_required_metadata());
+    let (mut builder, _) = transport_builder(envelope, AccountId::new(key.public_key().clone()));
     builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
     builder.set_nonce(NonZeroU32::MAX);
     builder.set_ttl(admissible_ttl());
@@ -224,13 +268,9 @@ fn full_statement_envelope(limits: &PrivacyConsensusLimitsV1) -> PrivacyProofEnv
         .rows
         .iter()
         .find_map(|row| {
-            let instruction: SubmitPrivacyProofV1 =
-                norito::decode_canonical(&row.submit_proof_instruction_norito).expect("fixture");
-            matches!(
-                instruction.envelope().statement,
-                PrivacyStatementV1::PqMaspStarkV1(_)
-            )
-            .then(|| instruction.envelope().clone())
+            let envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+            matches!(envelope.statement, PrivacyStatementV1::PqMaspStarkV1(_)).then_some(envelope)
         })
         .expect("PQ-MASP fixture");
     let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
@@ -316,10 +356,12 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
         .expect("sixteen-member signature policy");
         let authority = AccountId::new_multisig(policy);
         for row in &fixtures.rows {
-            let instruction: SubmitPrivacyProofV1 =
-                norito::decode_canonical(&row.submit_proof_instruction_norito)
-                    .expect("fixture instruction");
-            let mut envelope = instruction.envelope().clone();
+            let mut envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+            if let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &mut envelope.statement {
+                statement.wallet_account = authority.clone();
+                envelope.statement_digest = envelope.statement.digest().unwrap();
+            }
             envelope.proof.bytes_mut().bytes = vec![0x5a; proof_bytes];
             let statement_bytes = norito::canonical_frame_len(&envelope.statement)
                 .expect("canonical statement frame");
@@ -352,22 +394,20 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
             envelope
                 .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
                 .expect("intrinsic envelope bounds and bindings, not native proof validity");
-            let instruction = SubmitPrivacyProofV1::new(envelope);
-            let action_bytes = norito::encode_canonical(&instruction)
-                .expect("complete action frame")
-                .len();
-            assert_eq!(
-                action_bytes - envelope_bytes,
-                4,
-                "one canonical compact V1 field length"
+            let x509 = matches!(
+                envelope.statement,
+                PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
             );
-            let mut builder = TransactionBuilder::new(
-                instruction.envelope().statement.context().network_id,
-                authority.clone(),
-                maximal_fee_intent(),
-            )
-            .with_instructions([instruction])
-            .with_metadata(flag_required_metadata());
+            let (mut builder, action_bytes) = transport_builder(&envelope, authority.clone());
+            if !x509 {
+                assert_eq!(
+                    action_bytes - envelope_bytes,
+                    4,
+                    "one canonical compact V1 field length"
+                );
+            } else {
+                assert!(action_bytes <= TAIRA_PRIVACY_MAX_ACTION_BYTES_V1 as usize);
+            }
             builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
             builder.set_nonce(NonZeroU32::MAX);
             builder.set_ttl(admissible_ttl());
@@ -401,9 +441,31 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
                 statement_bytes,
                 envelope_bytes,
                 action_bytes,
-                action_bytes - envelope_bytes,
+                if x509 {
+                    0
+                } else {
+                    action_bytes - envelope_bytes
+                },
             );
-            assert!(action_bytes <= SubmitPrivacyProofV1::canonical_frame_byte_limit_v1());
+            if x509 {
+                signed
+                    .validate_signed_attachments_v1()
+                    .expect("exact signed X509 occurrence");
+                assert_eq!(
+                    signed
+                        .payload()
+                        .attachments
+                        .as_ref()
+                        .unwrap()
+                        .occurrence(0)
+                        .unwrap()
+                        .bytes
+                        .len(),
+                    proof_bytes
+                );
+            } else {
+                assert!(action_bytes <= SubmitPrivacyProofV1::canonical_frame_byte_limit_v1());
+            }
         }
     }
 }
@@ -423,13 +485,9 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
         .rows
         .iter()
         .find_map(|row| {
-            let instruction: SubmitPrivacyProofV1 =
-                norito::decode_canonical(&row.submit_proof_instruction_norito).expect("fixture");
-            matches!(
-                instruction.envelope().statement,
-                PrivacyStatementV1::PqMaspStarkV1(_)
-            )
-            .then(|| instruction.envelope().clone())
+            let envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+            matches!(envelope.statement, PrivacyStatementV1::PqMaspStarkV1(_)).then_some(envelope)
         })
         .expect("PQ-MASP fixture");
     let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {

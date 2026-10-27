@@ -406,8 +406,7 @@ fn build_faucet_test_context_with_authority(
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = Torii::new(
-        build_identity_test_fixture::build_identity(),
+    let torii = Torii::new_with_handle(
         chain_id.clone(),
         network_id,
         kiso,
@@ -419,6 +418,14 @@ fn build_faucet_test_context_with_authority(
         state.clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
+        None,
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
+        ),
     )
     .expect("valid Torii faucet fixture");
     let torii = if authoritative {

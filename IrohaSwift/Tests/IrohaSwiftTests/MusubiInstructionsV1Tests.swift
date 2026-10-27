@@ -295,7 +295,7 @@ final class MusubiInstructionsV1Tests: XCTestCase {
     }
 
     func testBlake3SpansManyChunks() throws {
-        let digest = try XCTUnwrap(MusubiBlake3V1.hash(Data(repeating: 0, count: 100_000)))
+        let digest = try XCTUnwrap(Blake3.hash(Data(repeating: 0, count: 100_000)))
         XCTAssertEqual(
             digest.hexEncodedString(),
             "b1fc3c3bf473596bc8ac1f5c86f77c2fc0e0186a872b88adf841716fe9140a50"

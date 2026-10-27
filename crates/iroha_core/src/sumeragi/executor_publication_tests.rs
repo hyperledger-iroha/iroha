@@ -4144,7 +4144,7 @@ fn global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve() {
             world.privacy_consensus_policy =
                 mv::cell::Cell::new(iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
                     current_limits: limits,
-                    pending_tightening: None,
+                    pending_update: None,
                 });
             let mut config = TestChainConfig::new(world, 1_000);
             config

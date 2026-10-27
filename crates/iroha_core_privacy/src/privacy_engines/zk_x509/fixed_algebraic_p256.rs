@@ -85,9 +85,9 @@ const P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [usize; 6] =
 // The pin also binds the canonical 32-byte native BLAKE3 catalog in every
 // child and the composite SHA3-384 frame.
 const P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1: [u8; 48] = [
-    0xce, 0xee, 0x30, 0xc4, 0x3a, 0x1f, 0x13, 0xbd, 0xcd, 0xdb, 0x9e, 0xf6, 0x9d, 0xa5, 0x29, 0xb5,
-    0x73, 0x3f, 0x47, 0x14, 0xa9, 0xb8, 0x7b, 0x0e, 0x3d, 0x79, 0x2e, 0xa5, 0xd6, 0x63, 0x9f, 0x39,
-    0x98, 0x99, 0xcb, 0xea, 0x68, 0xf6, 0x07, 0xc2, 0xf5, 0x80, 0xc0, 0xf8, 0xe3, 0x0e, 0x23, 0xcd,
+    0x5c, 0x38, 0x40, 0x4f, 0x5c, 0x8f, 0x41, 0xf0, 0x5e, 0x41, 0xa7, 0x38, 0xfe, 0x12, 0x56, 0x81,
+    0x97, 0xad, 0xb0, 0xf7, 0xd9, 0xb4, 0x4b, 0x35, 0x5b, 0x30, 0x28, 0x3a, 0x31, 0x5e, 0x68, 0x46,
+    0x94, 0xcc, 0x67, 0x33, 0x2d, 0x0e, 0x8a, 0xae, 0x30, 0x05, 0x0f, 0x60, 0xd7, 0x5f, 0x48, 0x52,
 ];
 const CERTIFICATE_ARITHMETIC_START_V1: usize = 0;
 const WALLET_ARITHMETIC_START_V1: usize =
@@ -2877,9 +2877,10 @@ fn compile_p256_fixed_child_v1(
     compile(&mut builder)?;
     builder.finish_v1().map_err(Into::into)
 }
-/// Compile the exact six-schedule, 404-column verifier-owned P-256 schedule.
-pub fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
--> Result<ZkX509P256FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
+fn compile_p256_fixed_algebraic_children_v1() -> Result<
+    [ZkX509FixedAlgebraicScheduleV1; ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_COUNT_V1],
+    ZkX509P256FixedAlgebraicErrorV1,
+> {
     let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
         ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
         ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
@@ -2930,7 +2931,12 @@ pub fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
         .map_err(|_: Vec<ZkX509FixedAlgebraicScheduleV1>| {
             ZkX509P256FixedAlgebraicErrorV1::Topology
         })?;
-    ZkX509P256FixedAlgebraicScheduleV1::new_v1(children)
+    Ok(children)
+}
+/// Compile the exact six-schedule, 404-column verifier-owned P-256 schedule.
+pub fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
+-> Result<ZkX509P256FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
+    ZkX509P256FixedAlgebraicScheduleV1::new_v1(compile_p256_fixed_algebraic_children_v1()?)
 }
 static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509P256FixedAlgebraicScheduleV1> =
     OnceLock::new();
@@ -3087,6 +3093,101 @@ mod tests {
             frame.extend_from_slice(field);
         }
         Sha3_384::digest(frame).into()
+    }
+
+    #[test]
+    #[ignore = "explicit native P256 descriptor capture after a reviewed generic-descriptor change; preserves production pins"]
+    fn capture_p256_descriptor_inputs_from_actual_children() {
+        use sha2::{Digest as _, Sha256};
+        let children = compile_p256_fixed_algebraic_children_v1()
+            .expect("actual six production child compilers");
+        let catalog = iroha_data_model::privacy::PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1;
+        let generic = super::super::fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1;
+        // Historical framing control only; it never constructs an admitted schedule.
+        let predecessor_generic = std::str::from_utf8(generic).unwrap().replace(
+            "width548-atoms65536-queries272-output-fields149056",
+            "width472-atoms65536-queries272-output-fields128384",
+        );
+        assert_ne!(predecessor_generic.as_bytes(), generic);
+        let mut widths = Vec::new();
+        let mut current_digests = Vec::new();
+        let mut predecessor_digests = Vec::new();
+        for (index, child) in children.iter().enumerate() {
+            assert_eq!(child.domain_v1(), children[0].domain_v1());
+            assert_eq!(
+                usize::from(child.width_v1()),
+                P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1[index]
+            );
+            assert_eq!(
+                child.atoms_v1().len(),
+                P256_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1[index]
+            );
+            let descriptor = child.canonical_descriptor_v1().unwrap();
+            let role = b"iroha:privacy:zk-x509:fixed-algebraic:schedule:v1";
+            let phase = b"verifier-fixed-algebraic-schedule";
+            let current = independent_current_catalog_frame_v1(
+                &catalog,
+                role,
+                phase,
+                &[generic, descriptor.as_slice()],
+            );
+            assert_eq!(current, child.descriptor_digest_v1().to_bytes());
+            let previous = independent_current_catalog_frame_v1(
+                &catalog,
+                role,
+                phase,
+                &[predecessor_generic.as_bytes(), descriptor.as_slice()],
+            );
+            assert_ne!(current, previous);
+            widths.extend_from_slice(&child.width_v1().to_be_bytes());
+            current_digests.extend_from_slice(&current);
+            predecessor_digests.extend_from_slice(&previous);
+            eprintln!(
+                "P256_ACTUAL_CHILD index={index} width={} atoms={} canonical_sha256={} current={} predecessor={}",
+                child.width_v1(),
+                child.atoms_v1().len(),
+                hex::encode(Sha256::digest(&descriptor)),
+                hex::encode(current),
+                hex::encode(previous),
+            );
+        }
+        let frame = |digests: &[u8]| {
+            independent_current_catalog_frame_v1(
+                &catalog,
+                P256_COMPOSITE_DESCRIPTOR_DIGEST_DOMAIN_V1,
+                b"p256-fixed-algebraic-composite",
+                &[
+                    ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+                    widths.as_slice(),
+                    digests,
+                ],
+            )
+        };
+        let current = frame(&current_digests);
+        let previous = frame(&predecessor_digests);
+        assert_eq!(
+            hex::encode(previous),
+            "ceee30c43a1f13bdcddb9ef69da529b5733f4714a9b87b0e3d792ea5d6639f399899cbea68f607c2f580c0f8e30e23cd"
+        );
+        assert_ne!(current, previous);
+        eprintln!("P256_ACTUAL_CATALOG={}", hex::encode(catalog));
+        eprintln!("P256_ACTUAL_WIDTHS={}", hex::encode(widths));
+        eprintln!("P256_ACTUAL_COMPOSITE={}", hex::encode(current));
+        eprintln!("P256_PRE_FRAME_COMPOSITE_CONTROL={}", hex::encode(previous));
+        if current == P256_FIXED_ALGEBRAIC_COMPOSITE_DIGEST_V1 {
+            assert_eq!(
+                ZkX509P256FixedAlgebraicScheduleV1::new_v1(children)
+                    .unwrap()
+                    .descriptor_digest_v1()
+                    .to_bytes(),
+                current,
+            );
+        } else {
+            assert_eq!(
+                ZkX509P256FixedAlgebraicScheduleV1::new_v1(children),
+                Err(ZkX509P256FixedAlgebraicErrorV1::Topology),
+            );
+        }
     }
 
     #[test]

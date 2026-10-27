@@ -62,7 +62,7 @@ use super::{
     stark::{
         ZkX509MainVerifierProfileV1, ZkX509StarkErrorV1, construct_zk_x509_main_verifier_profile_v1,
     },
-    verifier_profile::rfc_statement_with_crl_number_v1,
+    verifier_profile::{ZkX509CrlPublicInputsV1, rfc_statement_with_crl_number_v1},
 };
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
@@ -127,6 +127,8 @@ impl Drop for ZkX509MainIoBaseMaterialV1 {
 }
 /// Complete challenge-independent native material for one MAIN proof.
 pub struct ZkX509MainTraceAssemblyV1 {
+    /// Public digest and timestamp endpoints selected from the governed CRL revision.
+    pub(crate) crl_public_inputs: ZkX509CrlPublicInputsV1,
     /// Successful native differential projection.
     pub(crate) relation_output: ZkX509RelationOutputV1,
     /// Strict DER/RFC owner trace.
@@ -818,6 +820,7 @@ pub fn build_zk_x509_main_trace_assembly_v1(
         statement.disclosed_attributes.len(),
     )?;
     Ok(ZkX509MainTraceAssemblyV1 {
+        crl_public_inputs: ZkX509CrlPublicInputsV1::from_record_v1(governance.crl),
         relation_output,
         rfc_trace,
         der_base,
@@ -1064,6 +1067,7 @@ mod tests {
             .each_ref()
             .map(|material| (material.role, material.assigned));
         let verifier_profile = assembly.verifier_profile;
+        let crl_public_inputs = assembly.crl_public_inputs;
         let io_logical_active_rows = assembly.io.logical_active_rows;
         assembly.zeroize_private_v1();
         assert!(assembly.private_is_zeroized_v1());
@@ -1089,6 +1093,7 @@ mod tests {
             p256_topology
         );
         assert_eq!(assembly.verifier_profile, verifier_profile);
+        assert_eq!(assembly.crl_public_inputs, crl_public_inputs);
         assert_eq!(assembly.io.logical_active_rows, io_logical_active_rows);
         assert_eq!(
             construct_zk_x509_main_verifier_profile_v1()

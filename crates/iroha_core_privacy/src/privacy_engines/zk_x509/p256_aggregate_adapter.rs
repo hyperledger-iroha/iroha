@@ -483,6 +483,7 @@ fn p256_value_aux_replay_scratch_v1() -> usize {
     let sorted = core::mem::size_of::<P256ValueBusStarkAuxSourceV1<'static>>()
         + core::mem::size_of::<P256AggregateAuxRowScratchV1<P256_VALUE_BUS_STARK_AUX_WIDTH_V1>>();
     execution.max(sorted)
+        + core::mem::size_of::<P256ValueAuxSelectionV1>()
         + core::mem::size_of::<P256AggregateColumnsDestinationGuardV1<'static, 'static>>()
         + crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
             * core::mem::size_of::<&mut [F]>()
@@ -1296,6 +1297,32 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
         )
     }
 }
+/// Public column families required by one bounded value-execution replay.
+/// The selection is derived only from registration offsets, never witness values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct P256ValueAuxSelectionV1 {
+    native: bool,
+    writer: bool,
+    arithmetic_copy: bool,
+}
+impl P256ValueAuxSelectionV1 {
+    fn new_v1(first: usize, width: usize) -> Result<Self, P256AggregateAdapterErrorV1> {
+        let end = first
+            .checked_add(width)
+            .filter(|&end| end <= P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1)
+            .filter(|_| {
+                width > 0
+                    && width
+                        <= crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            })
+            .ok_or(P256AggregateAdapterErrorV1::Topology)?;
+        Ok(Self {
+            native: first < VALUE_WRITER_AUX,
+            writer: first < VALUE_ARITHMETIC_COPY_AUX && end > VALUE_WRITER_AUX,
+            arithmetic_copy: end > VALUE_ARITHMETIC_COPY_AUX,
+        })
+    }
+}
 /// Constant-memory integrated value-execution base/aux stream.
 pub struct P256ValueExecutionAggregateStreamV1<'a> {
     base: P256ValueBusStarkBaseRowProviderV1<'a>,
@@ -1406,6 +1433,66 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             return Err(P256AggregateAdapterErrorV1::Constraint);
         }
         Ok(Some(*aux))
+    }
+    /// Replay the requested public families from this same immutable bound owner.
+    /// Each selected product still traverses every native row and checks its
+    /// original terminal. Unselected fields are not exported; their zero scratch
+    /// is discarded by the bounded destination projection. The dense stream
+    /// above remains the independent oracle and terminal-construction path.
+    fn next_selected_aux_row_v1(
+        &mut self,
+        selection: P256ValueAuxSelectionV1,
+    ) -> Result<Option<[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1]>, P256AggregateAdapterErrorV1>
+    {
+        if self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1 {
+            return Ok(None);
+        }
+        if self.next_row > P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1 {
+            return Err(P256AggregateAdapterErrorV1::Topology);
+        }
+        let mut aux =
+            P256AggregateAuxRowScratchV1([F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1]);
+        if selection.native {
+            aux.0[VALUE_NATIVE_AUX..VALUE_WRITER_AUX].copy_from_slice(
+                &self
+                    .value_aux
+                    .as_mut()
+                    .ok_or(P256AggregateAdapterErrorV1::Challenge)?
+                    .next_aux_row_v1()?
+                    .ok_or(P256AggregateAdapterErrorV1::Topology)?,
+            );
+        }
+        if selection.writer {
+            let writer = self
+                .writer
+                .as_mut()
+                .ok_or(P256AggregateAdapterErrorV1::Challenge)?
+                .next_row_v1()?
+                .ok_or(P256AggregateAdapterErrorV1::Topology)?;
+            aux.0[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX]
+                .copy_from_slice(&flatten_writer_aux_v1(&writer));
+        }
+        if selection.arithmetic_copy {
+            let events =
+                value_arithmetic_copy_events_v1(self.next_row, self.arithmetic_operations)?;
+            let sources = p256_value_bus_opened_values_v1(&self.base.base_row_v1(self.next_row)?);
+            self.arithmetic_copy_running = build_compact_arithmetic_copy_aux_row_v1(
+                &events,
+                &sources,
+                self.arithmetic_copy_running,
+                self.arithmetic_copy_terminal,
+                self.arithmetic_copy_challenges,
+                &mut aux.0[VALUE_ARITHMETIC_COPY_AUX..],
+            )?;
+        }
+        self.next_row += 1;
+        if selection.arithmetic_copy
+            && self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
+            && self.arithmetic_copy_running != self.arithmetic_copy_terminal
+        {
+            return Err(P256AggregateAdapterErrorV1::Constraint);
+        }
+        Ok(Some(aux.0))
     }
     /// Replay this deterministic stream into one challenge-dependent native
     /// auxiliary column, then drop all row-local state.
@@ -6526,12 +6613,13 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?;
         match registration.local_instance_v1() {
             0 => {
+                let selection = P256ValueAuxSelectionV1::new_v1(first, outputs.len())?;
                 let mut stream = self.value_execution_aux_stream_v1(registration)?;
                 fill_aggregate_aux_columns_v1::<P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1>(
                     shape.trace_size,
                     first,
                     outputs,
-                    || stream.next_aux_row_v1(),
+                    || stream.next_selected_aux_row_v1(selection),
                 )
             }
             1 => {

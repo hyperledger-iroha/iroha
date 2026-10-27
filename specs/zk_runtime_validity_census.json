@@ -117,7 +117,7 @@
    "gates": "Every limit, window, verifier switch, relation-selecting verifying-key identity (Kaigi authorization and usage) and verification gas charge bound by compute_zk_consensus_policy_hash: Native PIPA-R and STARK proof and envelope sizes, batch, SCCP proof and verifier-work limits, proof retention, bridge-proof windows, confidential anchor age and policy-transition windows, registry caps and the confidential gas schedule.",
    "decided_by": "The committed custom parameter `zk_validity_policy_v1` (type, protocol default and canonical structural and coherence validation in iroha_data_model; application to State in iroha_core::zk_validity_policy). An ordinary authorized `SetParameter` installs or changes it, in genesis or later; block construction freezes the policy of the predecessor's committed parameters, so a change governs the next block and the genesis block runs under the protocol default. Executor data-model reconciliation never writes it. A node installs local resources only (State::install_node_zk) and its configuration schema has no validity field (cfg.zk.node_schema).",
    "attribution": "read",
-   "note": "Verification gas is metered with the schedule frozen in each block's settings; no process-wide schedule exists (gas.process_wide_schedule, done). The two enable switches are committed fields that the plan author decided to delete (switch.zk.backend_enabled). Two more rows read or write the committed policy, not node configuration: state/authority_registry/zk_policy.rs `borrowed` projects `policy.pipa_r.enabled` and `policy.stark.enabled` of the ZkValidityPolicyV1 held by the current and predecessor committed parameters into the authority registry cell `state.zk`, and pipeline_gas_policy.rs assigns StateParameters.zk (the typed projection of the same original parameter MV value) the validated committed payload on SetParameter and the protocol default when the custom parameter is removed, as StateParameters.pipeline does for cfg.pipeline.settings_writes.",
+   "note": "Verification gas is metered with the schedule frozen in each block's settings; no process-wide schedule exists (gas.process_wide_schedule, done). The two enable switches are committed fields that the plan author decided to delete (switch.zk.backend_enabled). Two more rows read or write the committed policy, not node configuration: state/authority_registry/zk_policy.rs `borrowed` projects `policy.pipa_r.enabled` and `policy.stark.enabled` of the ZkValidityPolicyV1 held by the current and predecessor committed parameters into the authority registry cell `state.zk`, and pipeline_gas_policy.rs assigns StateParameters.zk (the typed projection of the same original parameter MV value) the validated committed payload on SetParameter and the protocol default when the custom parameter is removed, as StateParameters.pipeline does for cfg.pipeline.settings_writes. SetParameter now admits the typed ZK policy through StateParameters::set_parameter_validated: canonical decode and policy validation complete before the original parameter and derived projection change together; the old world.rs validation call is retired.",
    "anchors": [
     {
      "path": "crates/iroha_core/src/state.rs",
@@ -141,8 +141,9 @@
      "contains": "crate::zk_validity_policy::effective_zk(self.zk.clone(), acquired.world.parameters())"
     },
     {
-     "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
-     "contains": "crate::zk_validity_policy::validate_set_parameter("
+     "path": "crates/iroha_core/src/pipeline_gas_policy.rs",
+     "contains": "let zk = zk_policy(custom.payload())?;",
+     "function": "set_parameter_validated"
     },
     {
      "path": "crates/irohad/src/main.rs",
@@ -1256,38 +1257,86 @@
   {
    "id": "gate.privacy.activation_registry",
    "kind": "activation_lifecycle",
-   "status": "open",
+   "status": "done",
    "owner": "P.5",
-   "path": "crates/iroha_core/src/privacy.rs",
-   "symbol": "active_record",
-   "gates": "Every Exact12 privacy submission: PrivacyProtocolRegistryV1::active_record returns a protocol only when its PrivacyProtocolActivationRecordV1 is in lifecycle state Active, which requires an explicit governed activation transition.",
-   "decided_by": "Remove the activation record and lifecycle. A supported canonical profile with valid cryptography, permissions, committed key policy, replay and resource limits is usable once registered.",
+   "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+   "symbol": "resolve_admitted_privacy_protocol_v1",
+   "gates": "Selected native implementation availability and optional committed resource policy; no documentary activation or all-protocol qualification prerequisite.",
+   "decided_by": "Actual selected native implementation, canonical profile, committed issuer/key/replay state and bounded resource policy at the execution height.",
    "attribution": "read",
    "anchors": [
     {
-     "path": "crates/iroha_core/src/privacy.rs",
-     "contains": "let PrivacyProtocolLifecycleV1::Active(active) = record.lifecycle else {"
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "contains": "pub fn resolve_admitted_privacy_protocol_v1("
     }
    ],
-   "sites": []
+   "sites": [],
+   "tests": [
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "name": "admission_uses_compiled_defaults_without_registration_at_any_height"
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "name": "admission_selects_only_its_ordinary_policy_and_keeps_snapshot_immutable"
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "name": "x509_policy_cannot_replace_missing_joint_security_construction"
+    }
+   ],
+   "removed": [
+    {
+     "path": "crates/iroha_data_model/src/privacy/protocol.rs",
+     "contains": "pub enum PrivacyProtocolLifecycleV1"
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+     "contains": "resolve_qualified_privacy_activation_v1"
+    }
+   ]
   },
   {
    "id": "gate.privacy.exact12_qualification",
    "kind": "readiness_qualification",
-   "status": "open",
+   "status": "done",
    "owner": "P.5",
-   "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-   "symbol": "resolve_qualified_privacy_activation_v1",
-   "gates": "Privacy proof admission resolves a protocol only through the singleton PrivacyExact12QualificationRecordV1 (World cell privacy_exact12_qualification): an all-twelve qualification record signed for a release.",
-   "decided_by": "Remove. No all-protocol qualification record; each implemented protocol is valid independently by its own committed relation and keys.",
+   "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+   "symbol": "resolve_admitted_privacy_protocol_v1",
+   "gates": "Selected native implementation availability and optional committed resource policy; no documentary activation or all-protocol qualification prerequisite.",
+   "decided_by": "Actual selected native implementation, canonical profile, committed issuer/key/replay state and bounded resource policy at the execution height.",
    "attribution": "read",
    "anchors": [
     {
-     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-     "contains": "pub fn resolve_qualified_privacy_activation_v1<'a>("
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "contains": "pub fn resolve_admitted_privacy_protocol_v1("
     }
    ],
-   "sites": []
+   "sites": [],
+   "tests": [
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "name": "admission_uses_compiled_defaults_without_registration_at_any_height"
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "name": "admission_selects_only_its_ordinary_policy_and_keeps_snapshot_immutable"
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state/protocol_policy.rs",
+     "name": "x509_policy_cannot_replace_missing_joint_security_construction"
+    }
+   ],
+   "removed": [
+    {
+     "path": "crates/iroha_data_model/src/privacy/protocol.rs",
+     "contains": "pub enum PrivacyProtocolLifecycleV1"
+    },
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+     "contains": "resolve_qualified_privacy_activation_v1"
+    }
+   ]
   },
   {
    "id": "gate.privacy.compiled_profile_activation",
@@ -1295,35 +1344,47 @@
    "status": "open",
    "owner": "P.5",
    "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-   "symbol": "validate_compiled_privacy_activation_v1",
-   "gates": "Privacy protocol activation is validated against the compiled-profile catalog of the running binary (artifact and profile digests compiled into privacy_profiles.rs).",
-   "decided_by": "A semantic relation and parameter identity in committed State. P.1 makes the native dispatch the single owner; compiled digests stay build metadata.",
+   "symbol": "validate_compiled_privacy_profile_v1",
+   "gates": "Native profile admission requires exact semantic parameter, verifier, statement-schema and engine-manifest identities. Optional resource limits cannot replace cryptographic bindings.",
+   "decided_by": "Canonical native relation and parameter identities. Any remaining use of build or source provenance as consensus identity must remain an explicit open derivation audit.",
    "attribution": "read",
    "anchors": [
     {
      "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-     "contains": "pub fn validate_compiled_privacy_activation_v1("
+     "contains": "pub fn validate_compiled_privacy_profile_v1("
     }
    ],
    "sites": []
   },
   {
    "id": "gate.zk_x509.activation_readiness",
-   "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "X.4",
+   "kind": "activation_lifecycle",
+   "status": "unsupported",
+   "owner": "X.3",
    "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
-   "symbol": "require_activation_readiness_v1",
-   "gates": "ZK-X509 activation requires compiled readiness (zk_x509_activation_readiness_v1 and the readiness certificates of profile/readiness_certificates.rs).",
-   "decided_by": "Per-proof relation, parameter and resource validity of the completed maximum transport (X.2 to X.4); no readiness certificate.",
+   "symbol": "require_consensus_security_v1",
+   "gates": "X509 consensus use reports JointSecurityReductionIncomplete for the missing joint round-by-round/Fiat–Shamir construction.",
+   "decided_by": "Complete the two-domain joint reduction and its exact implementation correspondence. Review/resource certificates are not inputs to this refusal.",
    "attribution": "read",
    "anchors": [
     {
      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
-     "contains": "pub(crate) fn require_activation_readiness_v1("
+     "contains": "pub(crate) fn require_consensus_security_v1()"
     }
    ],
-   "sites": []
+   "sites": [],
+   "tests": [
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
+     "name": "documentary_evidence_cannot_supply_the_missing_joint_security_construction"
+    }
+   ],
+   "removed": [
+    {
+     "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
+     "contains": "require_activation_readiness_v1"
+    }
+   ]
   },
   {
    "id": "unsupported.voting.standalone_zk_relation",
@@ -1887,10 +1948,10 @@
     ["crates/iroha_core/src/state.rs", "node_policy_read", "governance.min_turnout", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "governance.voting_asset_id", 1],
     ["crates/iroha_core/src/state/authority_registry/lane_manifest_policy.rs", "node_policy_read", "governance.*", 2],
+    ["crates/iroha_core/src/sumeragi/node/replay.rs", "node_policy_read", "governance.*", 1],
     ["crates/iroha_core/src/tx.rs", "node_policy_read", "governance.*", 1],
     ["crates/iroha_torii/src/torii_app_routed_read_source.rs", "node_policy_read", "governance.bond_escrow_account", 1],
-    ["crates/iroha_torii/src/torii_app_routed_read_source.rs", "node_policy_read", "governance.voting_asset_id", 1],
-    ["crates/iroha_core/src/sumeragi/node/replay.rs", "node_policy_read", "governance.*", 1]
+    ["crates/iroha_torii/src/torii_app_routed_read_source.rs", "node_policy_read", "governance.voting_asset_id", 1]
    ]
   },
   {
@@ -1960,11 +2021,25 @@
    "status": "open",
    "owner": "P.5",
    "path": "crates/iroha_config/src/parameters/actual.rs",
-   "symbol": "minimum_activation_notice_blocks",
-   "gates": "`nexus.atomic_private_settlement.enabled`, activation_height and minimum_activation_notice_blocks: an activation switch with a notice period.",
+   "symbol": "pub struct NexusAtomicPrivateSettlement",
+   "gates": "Retired node-local private-settlement enable, activation-height and notice prerequisites; source removal is staged, current native and generated-owner validation remain pending.",
    "decided_by": "Remove: atomic private settlement is usable when its relation and keys are committed.",
    "attribution": "read",
-   "sites": []
+   "sites": [],
+   "removed": [
+    {
+     "path": "crates/iroha_config/src/parameters/actual.rs",
+     "contains": "pub minimum_activation_notice_blocks:"
+    },
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "contains": "ensure_private_settlement_feature_active_v1"
+    },
+    {
+     "path": "crates/iroha_torii/src/private_settlement.rs",
+     "contains": "config.activation_height"
+    }
+   ]
   },
   {
    "id": "cfg.nexus.axt_windows",
@@ -1997,32 +2072,18 @@
    "owner": "F.4",
    "path": "crates/iroha_config/src/parameters/actual.rs",
    "symbol": "NexusConsensusPolicyPreimageV1",
-   "gates": "The remaining Nexus consensus-policy preimage fields: lane, dataspace and routing identities, staking policy, lease and endorsement timing, settlement relation identity and windows, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version.",
+   "gates": "The remaining Nexus consensus-policy preimage fields and recorded readers: lane, data space and routing identities, validator activation/capacity, lease and endorsement timing, settlement relation identity and windows, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version. Staking monetary terms have a separate original committed owner.",
    "decided_by": "Committed State (the Nexus runtime catalog and lane policy already are; these values follow them).",
    "attribution": "read",
-   "open_reason": "The committed-parameter mechanism exists (zk_validity_policy_v1). This family still reaches validation through the State copy installed from node configuration at startup; moving it needs its own typed committed parameter, the staged-genesis and deployment generators that author it, and regenerated deployment configurations. Native SCCP L1 additionally consumes the original pinned Nexus staking projection at parameter checking/genesis/startup (governance delegates to init::check_parameters); these reads do not close the broader family migration or authenticate unpinned restore inputs.",
+   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement, autoscale and private-settlement settings. PublicLaneStakingPolicy now owns monetary terms in original committed Parameters; that migration does not close these separate validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
    "sites": [
     ["crates/iroha_core/src/block.rs", "node_policy_read", "da.*", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs", "node_policy_read", "staking.slash_sink_account_id", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs", "node_policy_read", "staking.stake_asset_id", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs", "node_policy_read", "staking.stake_escrow_account_id", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/init.rs", "node_policy_read", "staking.max_slash_bps", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/init.rs", "node_policy_read", "staking.unbonding_delay.*", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/read/coalition.rs", "node_policy_read", "staking.max_slash_bps", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sns.rs", "node_policy_read", "endorsement.quorum", 1],
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "hf_shared_leases.drain_grace.*", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.*", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.max_pending_unbonds_per_share", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.max_slash_bps", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.max_stake_shares_per_validator", 2],
     ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.max_validators", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.slash_sink_account_id", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/staking.rs", "node_policy_read", "staking.unbonding_delay.*", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/staking_preparation.rs", "node_policy_read", "staking.*", 2],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "dataspace_fee_sponsor_program_ids", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.committee_keys", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.quorum", 3],
-    ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "staking.stake_asset_id", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.*", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_expiry_blocks", 2],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.*", 1],
@@ -2031,14 +2092,27 @@
     ["crates/iroha_core/src/state.rs", "node_policy_read", "staking.*", 2],
     ["crates/iroha_core/src/state/output_publication.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state/runtime_catalog_commit.rs", "node_policy_read", "autoscale.*", 1],
-    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_pending_unbonds_per_share", 1],
-    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_slash_bps", 1],
-    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_stake_shares_per_validator", 1],
     ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_validators", 1],
-    ["crates/iroha_torii/src/private_settlement.rs", "node_policy_read", "atomic_private_settlement.*", 1],
-    ["crates/irohad/src/main.rs", "node_policy_read", "staking.*", 1]
+    ["crates/iroha_torii/src/private_settlement.rs", "node_policy_read", "atomic_private_settlement.*", 1]
    ],
-   "note": "apply_slash_to_validator_inner (smartcontracts/isi/staking.rs) now reads max_slash_bps, max_stake_shares_per_validator and slash_sink_account_id of state_transaction.nexus.staking as field paths instead of through a local clone of the whole staking value (counted as `staking.*` before). The slash ratio cap, the stake-share cap and the slash sink still come from the node-local staking projection and decide whether a slash is applied: the same open dependence of this entry, now visible field by field, not a new decision. Validator registration now reads min_validator_stake through the committed staking_monetary_policy() projection. Only that old node-policy reader is removed; the listed max_slash_bps, stake-share cap and slash-sink readers remain open."
+   "note": "The 18 retired node-policy rows were read against their replacement owners. Transaction execution borrows StateTransaction::staking_monetary_policy from original block Parameters (or the authenticated original genesis policy); slash caps, share/unbond bounds, currency and custody use this owner. Read-only preparation, coalition collateral and parent penalty planning borrow their captured World Parameters; absence refuses. SCCP checks both original and current committed monetary policy for retained-liability coherence. No transaction-local update substitutes original execution policy. max_validators still reads nexus.staking and remains recorded/open. Source reconciliation is not staking or whole-node qualification.",
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "function": "staking_monetary_policy",
+     "contains": ".get_before_block()"
+    },
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "function": "staking_monetary_policy",
+     "contains": ".require_staking_policy()"
+    },
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "function": "staking_monetary_policy",
+     "contains": "original.policy_for_parameters(&self._curr_block, self.world.parameters.get())"
+    }
+   ]
   },
   {
    "id": "cfg.root_fees.committed_policy",
@@ -2046,21 +2120,13 @@
    "status": "open",
    "owner": "F.4",
    "path": "crates/iroha_core/src/pipeline_gas_policy.rs",
-   "symbol": "with_root_fees",
+   "symbol": "pub fn root_fees(&self) -> Option<&RootFeePolicy>",
    "gates": "The complete root monetary schedule, exact currency, sink, sponsor custody and Global claim exemptions.",
    "decided_by": "The mandatory root_fees_v1 parameter, validated and atomically projected by StateParameters. Each block freezes its predecessor projection; restore rebuilds it from original canonical Parameters. H1 authors exactly one original policy and retains both signed policy digest checks. Currency and sponsor custody are immutable after H1; other authorized terms apply next block. Node fee and fee-relay worker configuration are removed.",
    "attribution": "read",
-   "open_reason": "Causal original execution dependence was reproduced after identical H1 (two failures). Source migration, replay/update controls, deployment and SDK conversions are staged; current-candidate Rust compilation, generated digests/fixtures and combined network qualification remain pending. The regression does not establish divergent admissible fresh-node configurations, whose signed-genesis digest checks already refused mismatch.",
+   "open_reason": "The moved execution readers now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Three remaining detector rows retain fee projection consumers in SoraCloud and Torii. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
    "sites": [
-    ["crates/iroha_core/src/executor.rs", "node_policy_read", "fees", 9],
-    ["crates/iroha_core/src/executor/root_fees.rs", "node_policy_read", "fees", 1],
-    ["crates/iroha_core/src/executor_execution_fee.rs", "node_policy_read", "fees", 5],
-    ["crates/iroha_core/src/executor_fastpq_rejection_tail.rs", "node_policy_read", "fees", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs", "node_policy_read", "fees", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/settle.rs", "node_policy_read", "fees", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sns.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "fees", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/game.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/lib.rs", "node_policy_read", "fees", 2]
    ],
@@ -2080,9 +2146,67 @@
     {
      "path": "crates/iroha_genesis/src/root_fee_policy_tests.rs",
      "name": "authenticated_signed_policy_has_one_exact_original_owner"
+    },
+    {
+     "path": "crates/iroha_core/src/executor/root_fees.rs",
+     "name": "execution_custody_policy_refuses_original_absence_despite_pending_policy"
+    },
+    {
+     "path": "crates/iroha_core/src/executor_fastpq_rejection_tail/sponsored_alias_tests.rs",
+     "name": "sponsored_tail_sizes_original_custody_across_local_and_pending_substitution"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/sns.rs",
+     "name": "alias_payment_uses_original_fee_policy_despite_recipe_and_pending_sibling_changes"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/sns.rs",
+     "name": "alias_payment_rejects_fake_genesis_custody_and_matching_local_recipe"
     }
    ],
-   "note": "executor::root_fees::sponsor_vault_custody replaced five sponsor-custody reads of `nexus.fees` in smartcontracts/isi/asset.rs and three in smartcontracts/isi/world.rs; it reads the authored root fee policy of the World during initial genesis and the frozen predecessor projection `state_transaction.nexus.fees` otherwise; world.rs keeps one read (the root fee currency checked when a domain is unregistered)."
+   "note": "Six retired node-policy rows now route through retained original parameter owners. execution_parameters selects get_before_block, execution_policy requires that original owner, and a current write cannot repair original absence. StateTransaction::root_fee_policy likewise borrows get_before_block for SCCP and asset-scope custody. H1 sponsor funding uses the explicit installed original policy. Remaining fee detector rows and this open status are preserved; they require their own source/qualification review. SNS EnsureAlias and RenewAlias now use the shared execution_custody_policy owner: explicit installed policy only in initial genesis, otherwise exact predecessor Parameters. Divergent authoring recipes, current writes and applied siblings cannot replace it; a fabricated height-one header over committed history cannot gain genesis custody. Remaining fee recipe readers and native qualification remain open. FASTPQ sponsored rejection-tail sizing also borrows original sponsor_vault_custody after validating the signed program selection. Exact-size native regressions distinguish smaller local, original, and larger pending accounts while preserving pre-work source refusal and zero effects; native execution remains pending.",
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/executor/root_fees.rs",
+     "function": "execution_parameters",
+     "contains": "transaction.world.parameters.get_before_block()"
+    },
+    {
+     "path": "crates/iroha_core/src/executor/root_fees.rs",
+     "function": "execution_policy",
+     "contains": "execution_parameters(transaction)"
+    },
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "function": "root_fee_policy",
+     "contains": ".get_before_block()"
+    },
+    {
+     "path": "crates/iroha_core/src/executor_fastpq_rejection_tail.rs",
+     "function": "check",
+     "contains": "crate::executor::root_fees::sponsor_vault_custody(state)"
+    },
+    {
+     "path": "crates/iroha_core/src/executor.rs",
+     "function": "is_initial_genesis_context",
+     "contains": "state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()"
+    },
+    {
+     "path": "crates/iroha_core/src/executor/root_fees.rs",
+     "function": "execution_custody_policy",
+     "contains": "is_initial_genesis_context(state_transaction)"
+    },
+    {
+     "path": "crates/iroha_core/src/executor/root_fees.rs",
+     "function": "execution_custody_policy",
+     "contains": "execution_policy(state_transaction)"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/sns.rs",
+     "function": "ensure_original_policy_payment_asset",
+     "contains": "crate::executor::root_fees::execution_custody_policy(state_transaction)?"
+    }
+   ]
   },
   {
    "id": "feature.zk_stark",
@@ -2479,8 +2603,8 @@
     ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal.rs", "unavailable", "unsupported", 11],
     ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source.rs", "unavailable", "unsupported", 4],
     ["crates/iroha_core/src/state/fastpq_quantity_capture/source_census.rs", "unavailable", "unsupported", 4],
-    ["crates/iroha_data_model/src/fastpq/source_statement.rs", "unavailable", "unsupported", 1],
-    ["crates/iroha_data_model/src/fastpq/execution_effect/admitted/fixed.rs", "unavailable", "unsupported", 1]
+    ["crates/iroha_data_model/src/fastpq/execution_effect/admitted/fixed.rs", "unavailable", "unsupported", 1],
+    ["crates/iroha_data_model/src/fastpq/source_statement.rs", "unavailable", "unsupported", 1]
    ]
   },
   {
@@ -2504,13 +2628,13 @@
     ["crates/fastpq_prover/src/metal_exact_root.rs", "unavailable", "unsupported", 1],
     ["crates/fastpq_prover/src/metal_keccak256.rs", "unavailable", "unsupported", 1],
     ["crates/iroha_core/src/fastpq/lane.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_core/src/fastpq/lane/producer.rs", "unavailable", "local_resource", 2],
     ["crates/iroha_core/src/fastpq/source_reservation/admission.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/kura/fastpq_artifact_store.rs", "unavailable", "unsupported", 1],
     ["crates/iroha_core/src/state/fastpq_quantity_capture.rs", "unavailable", "local_resource", 1],
     ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal.rs", "unavailable", "local_resource", 1],
     ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source.rs", "unavailable", "local_resource", 3],
-    ["crates/iroha_core/src/state/fastpq_quantity_write_plan.rs", "unavailable", "local_resource", 4],
-    ["crates/iroha_core/src/fastpq/lane/producer.rs", "unavailable", "local_resource", 2]
+    ["crates/iroha_core/src/state/fastpq_quantity_write_plan.rs", "unavailable", "local_resource", 4]
    ],
    "note": "The autonomous producer classifies original typed capacity, allocator, Interrupted/WouldBlock and missing optional transport causes; fixed bounds, malformed proofs, identity mismatches and invariants remain terminal. Retrying retains the exact source, statement index and original error. Neither retry nor terminal local proof-production failure rejects or credits a ledger payment. Missing source transport invokes the isolated original-seed executor; no live State or settlement status is published.",
    "tests": [
@@ -3135,9 +3259,9 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/counters.rs", "wall_clock", "instant", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/opening_metrics.rs", "wall_clock", "instant", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics.rs", "wall_clock", "instant", 3],
-    ["crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/policy.rs", "time_budget", "deadline", 5],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics/bridge.rs", "wall_clock", "elapsed", 1],
-    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics/bridge.rs", "wall_clock", "instant", 1]
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics/bridge.rs", "wall_clock", "instant", 1],
+    ["crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/policy.rs", "time_budget", "deadline", 5]
    ]
   },
   {
@@ -3404,52 +3528,18 @@
    ]
   },
   {
-   "id": "privacy.activation",
+   "id": "privacy.profile_validation",
    "kind": "activation_lifecycle",
-   "status": "open",
-   "owner": "P.5",
-   "path": "crates/iroha_data_model/src/privacy/protocol.rs",
-   "symbol": "PrivacyActivationLimitFieldV1",
-   "gates": "Exact12 privacy protocol registry: code that names an activation or a lifecycle state.",
-   "decided_by": "The protocol's own committed key and policy State. Registration creates usable state; there is no separate activation step or lifecycle availability switch.",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_data_model/src/privacy/statements.rs",
+   "symbol": "impl PrivacyProtocolLimitsV1",
+   "gates": "Statement shape and counts validated against bounded per-protocol resource limits.",
+   "decided_by": "The native compiled profile and committed resource policy.",
    "attribution": "read",
-   "note": "The protocol activation machinery of the twelve registered privacy protocols: the World map `privacy_activations` keyed by `PrivacyActivationKeyV1`, the record `PrivacyProtocolActivationRecordV1` with `PrivacyProtocolLifecycleV1` (Proposed, Active, Suspended, Retired) and its heights, the instructions `RegisterPrivacyProtocolActivationV1` and `TransitionPrivacyProtocolLifecycleV1`, the checks `validate_compiled_privacy_activation_v1`, `ensure_protocol_activation` and `resolve_qualified_privacy_activation_v1`, and the per-protocol limits the record carries (`PrivacyProtocolActivationLimitsV1`, `...ActivationLimitsV1`, `PrivacyActivationLimitFieldV1`, `validate_activation_statement_len`). A proof of a registered protocol is refused until an activation record is Active at the block height. The limits are resource bounds and stay as committed policy when P.5 removes the lifecycle. Revocation of issuer, credential and policy records is entry privacy.revocation_state. The direct PGC bootstrap native consumer now reads and validates its original PrivacyProtocolActivationRecordV1 in executor/attachment_custody/pgc_bootstrap.rs; moving those occurrences does not remove the lifecycle dependency.",
+   "note": "Remaining local identifiers containing activation in statement validation name the selected protocol limits, not a stored activation or lifecycle record. They validate exact protocol limits and statement shape. Issuer, credential and CRL lifecycle checks are separately attributed to privacy.revocation_state.",
    "sites": [
-    ["crates/iroha_core/src/privacy.rs", "activation", "activation", 17],
-    ["crates/iroha_core/src/privacy.rs", "activation", "lifecycle", 25],
-    ["crates/iroha_core/src/privacy_release_evidence.rs", "activation", "activation", 12],
-    ["crates/iroha_core/src/privacy_release_evidence.rs", "activation", "lifecycle", 6],
-    ["crates/iroha_core/src/privacy_release_evidence/network_actions.rs", "activation", "activation", 14],
-    ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "activation", "activation", 97],
-    ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "activation", "lifecycle", 25],
-    ["crates/iroha_core/src/smartcontracts/isi/privacy/active_lifecycle_helper.rs", "activation", "activation", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/privacy/active_lifecycle_helper.rs", "activation", "lifecycle", 4],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "activation", "activation", 59],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "activation", "lifecycle", 4],
-    ["crates/iroha_core_privacy/src/privacy_state.rs", "activation", "activation", 84],
-    ["crates/iroha_core_privacy/src/privacy_state.rs", "activation", "lifecycle", 23],
-    ["crates/iroha_core_privacy/src/privacy_verifier.rs", "activation", "activation", 15],
-    ["crates/iroha_core_privacy/src/privacy_verifier.rs", "activation", "lifecycle", 2],
-    ["crates/iroha_data_model/src/isi/privacy.rs", "activation", "activation", 16],
-    ["crates/iroha_data_model/src/isi/privacy.rs", "activation", "lifecycle", 12],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "activation", "activation", 14],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "activation", "lifecycle", 9],
-    ["crates/iroha_data_model/src/privacy/policy.rs", "activation", "activation", 1],
-    ["crates/iroha_data_model/src/privacy/proofs.rs", "activation", "activation", 51],
-    ["crates/iroha_data_model/src/privacy/proofs.rs", "activation", "lifecycle", 2],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "activation", "activation", 171],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "activation", "lifecycle", 66],
-    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "activation", "activation", 40],
-    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "activation", "lifecycle", 5],
-    ["crates/iroha_data_model/src/privacy/statements.rs", "activation", "activation", 61],
-    ["crates/iroha_data_model/src/privacy/statements.rs", "activation", "lifecycle", 7],
-    ["crates/iroha_kagami/src/privacy_bootstrap.rs", "activation", "activation", 19],
-    ["crates/iroha_kagami/src/privacy_bootstrap.rs", "activation", "lifecycle", 25],
-    ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "activation", "activation", 23],
-    ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "activation", "lifecycle", 3],
-    ["crates/iroha_torii/src/privacy_issuance_api.rs", "activation", "activation", 7],
-    ["crates/iroha_torii/src/privacy_issuance_api.rs", "activation", "lifecycle", 1],
-    ["crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap.rs", "activation", "activation", 12]
+    ["crates/iroha_data_model/src/privacy/statements.rs", "activation", "activation", 27]
    ]
   },
   {
@@ -3462,17 +3552,27 @@
    "gates": "Exact12 privacy protocol registry: the in-force state of a committed record, a lifecycle enum whose variants are exactly Active and Revoked (or Active, Superseded and Revoked), and the record field that holds it.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Revocation of a committed issuer, credential or policy record. The checker derives the class from the source: the identifier is the name of an enum whose variants are exactly `Active` and `Revoked`, with or without `Superseded` (census `scan.revocation_enums`). The record is usable from the transaction that registers it; nothing is activated. The task acceptance requires key and policy revocation to be preserved, so these checks stay.",
+   "note": "Revocation of a committed issuer, credential or policy record. The checker derives the class from the source: the identifier is the name of an enum whose variants are exactly `Active` and `Revoked`, with or without `Superseded` (census `scan.revocation_enums`). The record is usable from the transaction that registers it; nothing is activated. The task acceptance requires key and policy revocation to be preserved, so these checks stay. Remaining field reads named lifecycle in Core, verifier, statement, issuance and release composition code inspect these issuer, credential, CRL or policy records; they are not protocol availability lifecycle records.",
    "sites": [
     ["crates/iroha_core/src/privacy_release_evidence.rs", "activation", "revocation_state", 1],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions/retained.rs", "activation", "revocation_state", 2],
+    ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "activation", "lifecycle", 7],
     ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "activation", "revocation_state", 10],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/merkle.rs", "activation", "lifecycle", 15],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/merkle.rs", "activation", "revocation_state", 4],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs", "activation", "lifecycle", 3],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/relation.rs", "activation", "revocation_state", 4],
+    ["crates/iroha_core_privacy/src/privacy_state.rs", "activation", "lifecycle", 17],
     ["crates/iroha_core_privacy/src/privacy_state.rs", "activation", "revocation_state", 22],
+    ["crates/iroha_core_privacy/src/privacy_verifier.rs", "activation", "lifecycle", 2],
     ["crates/iroha_core_privacy/src/privacy_verifier.rs", "activation", "revocation_state", 4],
     ["crates/iroha_data_model/src/privacy/credentials.rs", "activation", "lifecycle", 65],
     ["crates/iroha_data_model/src/privacy/credentials.rs", "activation", "revocation_state", 42],
+    ["crates/iroha_data_model/src/privacy/statements.rs", "activation", "lifecycle", 7],
     ["crates/iroha_data_model/src/privacy/statements.rs", "activation", "revocation_state", 6],
+    ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "activation", "lifecycle", 1],
     ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "activation", "revocation_state", 2],
+    ["crates/iroha_torii/src/privacy_issuance_api.rs", "activation", "lifecycle", 1],
     ["crates/iroha_torii/src/privacy_issuance_api.rs", "activation", "revocation_state", 2]
    ]
   },
@@ -3494,32 +3594,27 @@
   {
    "id": "privacy.global_manifest",
    "kind": "global_manifest",
-   "status": "open",
-   "owner": "P.5",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "crates/iroha_data_model/src/privacy/release_manifest.rs",
    "symbol": "PrivacyExact12ReleaseManifestValidationErrorV1",
-   "gates": "Exact12 privacy protocol registry: code that names the Exact12 catalog, a capability or release manifest or an availability pin.",
-   "decided_by": "Remove. Each protocol is valid by its own committed relation identity and keys; no all-protocol manifest or zero pin decides availability.",
+   "gates": "Canonical wire catalog tags, public capability snapshots and retained release/deployment diagnostic evidence.",
+   "decided_by": "A selected native implementation and its semantic profile; documentary release/deployment evidence does not authorize transactions.",
    "attribution": "read",
-   "note": "The Exact12 catalog and its manifests: the catalog identifier and commitment (`PRIVACY_EXACT12_CATALOG_ID_V1`, `PrivacyExact12CatalogCommitmentV1`), the release manifest and deployment qualification (`PrivacyExact12ReleaseManifestV1`, `PrivacyExact12DeploymentQualificationV1`), the qualification record and its instruction (`PrivacyExact12QualificationRecordV1`, `RegisterPrivacyExact12QualificationV1`), the capability manifest Torii serves (`PrivacyExact12CapabilityManifestV1`) and the capability archive limits. One record covers all twelve protocols and a protocol is usable only when the record lists it as qualified. The catalog commitment is written into every proof envelope by the one assembler `PrivacyProofEnvelopeV1::bind_v1` (crates/iroha_data_model/src/privacy/action_role.rs); the protocol builders, the ZK-ACE prover among them, no longer write it themselves, so the former entry zk_ace.global_manifest is this site (P.1). A catalog membership hash used as identity; F.5 and P.15 replace it for ZK-ACE. privacy_bootstrap/release.rs now carries PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1 alongside privacy_exact12_matrix_bytes_v1; the native byte representation remains an all-protocol identity dependency.",
+   "note": "The fixed Exact12 catalog commitment identifies the canonical wire layout. Torii projects actual native availability and optional ordinary policy for each row; admission does not require a qualification singleton or membership in a release receipt. Retained release/deployment manifests remain signed diagnostic records with restart/canary/convergence evidence. Native implementation incompleteness and semantic identity derivations remain explicit in their own entries.",
    "sites": [
     ["crates/iroha_core/src/privacy_release_evidence.rs", "global_manifest", "exact12", 4],
-    ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "global_manifest", "exact12", 7],
     ["crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs", "global_manifest", "exact12", 4],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "global_manifest", "exact12", 2],
-    ["crates/iroha_core_privacy/src/privacy_state.rs", "global_manifest", "exact12", 8],
-    ["crates/iroha_core_privacy/src/privacy_state.rs", "global_manifest", "release_manifest", 1],
     ["crates/iroha_crypto/src/privacy.rs", "global_manifest", "exact12", 1],
-    ["crates/iroha_data_model/src/isi/privacy.rs", "global_manifest", "exact12", 8],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "capability_manifest", 2],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "exact12", 22],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "release_manifest", 2],
     ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 2],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 56],
+    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 50],
     ["crates/iroha_data_model/src/privacy/proofs.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 20],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 5],
-    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 134],
+    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 3],
+    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 130],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "release_manifest", 13],
     ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "global_manifest", "exact12", 4]
    ]
@@ -3527,25 +3622,19 @@
   {
    "id": "privacy.qualification",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "P.5",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "crates/iroha_data_model/src/privacy/release_manifest.rs",
    "symbol": "PrivacyExact12QualificationRecordValidationErrorV1",
-   "gates": "Exact12 privacy protocol registry: code that names a qualification, a readiness record or a reviewer.",
-   "decided_by": "Remove as a prerequisite of use. Proof validity under the committed relation, key and policy State decides; qualification and review records stay evidence outside consensus.",
+   "gates": "Portable release and deployment evidence, plus actual implementation-readiness metadata.",
+   "decided_by": "Actual native implementation and optional bounded resource policy decide admission; documentary evidence does not.",
    "attribution": "read",
-   "note": "The qualification and readiness records of the privacy protocols: `PrivacyExact12QualificationRecordV1` and `PrivacyExact12DeploymentQualificationV1` with their digests and signatures, `PrivacyCapabilityReadinessV1` (ProductionQualified, Unavailable), `QualifiedPrivacyActivationV1` and `resolve_qualified_privacy_activation_v1`, which require a qualification before an activation counts, and the compiled readiness checks `require_activation_readiness_v1`, `zk_x509_activation_readiness_v1` and `zk_ams_mkhe_readiness_v1` (crates/iroha_core_privacy/src/privacy_profiles.rs). Kagami's release tool writes the qualification policy digest of the issuance broker (privacy_bootstrap/release.rs; entry bootle_lantern.qualification).",
+   "note": "Release/deployment records remain portable diagnostic evidence with authentic signatures, restart/canary/convergence checks and canonical tuples. Their committed World storage and registration instruction are removed. Capability readiness is the actual native Available/Unavailable result; neither a qualification record nor an all-protocol release manifest authorizes proof submission.",
    "sites": [
-    ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "qualification", "qualification", 11],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "qualification", "qualification", 4],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "qualification", "readiness", 8],
-    ["crates/iroha_core_privacy/src/privacy_state.rs", "qualification", "qualification", 19],
-    ["crates/iroha_data_model/src/isi/privacy.rs", "qualification", "qualification", 12],
+    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "qualification", "readiness", 4],
     ["crates/iroha_data_model/src/privacy.rs", "qualification", "qualification", 1],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "qualification", "qualification", 28],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "qualification", "readiness", 23],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "qualification", "qualification", 8],
-    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "qualification", "qualification", 72],
+    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "qualification", "readiness", 17],
+    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "qualification", "qualification", 67],
     ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "qualification", "qualification", 10]
    ]
   },
@@ -3559,9 +3648,9 @@
    "gates": "Exact12 privacy protocol registry: the registry of custody providers Torii's credential-issuance route may use.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`QualifiedProviderRegistryV1`, `BootleLanternIssuanceRuntimeProviderQualificationV1`, `qualified` and `qualified_privacy_activation_v1` in crates/iroha_torii/src/privacy_issuance_api.rs: the issuing node binds its issuance key to a custody provider and checks the binding before it signs. Issuer-side key custody outside consensus; the one read of the protocol activation record in this file belongs to entry privacy.activation.",
+   "note": "QualifiedProviderRegistryV1 and BootleLanternIssuanceRuntimeProviderQualificationV1 bind the issuing key to its actual custody provider and verify that binding before signing. Issuer-side custody remains outside consensus. The route resolves the selected implemented protocol and ordinary policy; there is no protocol activation-record dependency.",
    "sites": [
-    ["crates/iroha_torii/src/privacy_issuance_api.rs", "qualification", "qualification", 26]
+    ["crates/iroha_torii/src/privacy_issuance_api.rs", "qualification", "qualification", 25]
    ]
   },
   {
@@ -3574,23 +3663,19 @@
    "gates": "Exact12 privacy protocol registry: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "For the first group: an unfinished operation keeps an accurate typed error that no configuration, feature or environment changes, and stays mandatory work of the owner; a finished operation removes it. For the second group nothing changes: it is ordinary validation of carried bytes, identical on every validator.",
    "attribution": "read",
-   "note": "Two groups. The accurate errors of an engine or profile this binary does not complete: `EngineUnavailable`, `ProtocolUnavailable`, `CompiledProfileUnavailable`, `PrivacyCompiledProfileUnavailableReasonV1` and `UnsupportedCompression`, and the typed refusal of the single Exact12 dispatch, `PrivacyVerificationErrorV1::UnsupportedOperation` carrying `PrivacyUnsupportedOperationV1` (crates/iroha_core_privacy/src/privacy_dispatch.rs, privacy_verifier.rs; mapped to an instruction error in crates/iroha_core/src/smartcontracts/isi/privacy.rs). That refusal names the role and one concrete limitation of the typed dispatch registry, is returned before any proof byte is read, depends on no activation record, configuration or feature, and replaced the variant that existed only without the `zk-stark` feature, `PrivacyEngineUnavailableFailureV1` (P.1); the owners of the five refused roles are P.15, C.5, P.14 and X.3. Names of the activation lifecycle, which are a gate and belong to entry privacy.activation: `Suspended`, `PrivacySuspendedLifecycleV1`, `UnavailableActivation` and the reasons `NotRegistered`, `Proposed` and `Suspended` of `PrivacyCapabilityUnavailableReasonV1` (crates/iroha_data_model/src/privacy/capability_manifest.rs, protocol.rs). Issuance-service answers, statement validation and local entropy have their own entries (privacy.issuance_service, privacy.statement_validation, privacy.local_resource). The privacy.rs unsupported-class row aggregates two different identifiers: UnsupportedOperation is the unfinished dispatch refusal above, while TransactionSignatureError::UnsupportedImplementation preserves the original build-dependent crypto implementation cause as CryptoImplementationUnavailable/ExecutionAttemptError::Deferred. The latter is not an invalid-signature verdict; its unavailable-class hit is crypto.implementation_unavailable. The row remains conservatively unsupported because it still includes the unfinished dispatch.",
+   "note": "Two groups. The accurate errors of an engine or profile this binary does not complete: `EngineUnavailable`, `ProtocolUnavailable`, `CompiledProfileUnavailable`, `PrivacyCompiledProfileUnavailableReasonV1` and `UnsupportedCompression`, and the typed refusal of the single Exact12 dispatch, `PrivacyVerificationErrorV1::UnsupportedOperation` carrying `PrivacyUnsupportedOperationV1` (crates/iroha_core_privacy/src/privacy_dispatch.rs, privacy_verifier.rs; mapped to an instruction error in crates/iroha_core/src/smartcontracts/isi/privacy.rs). That refusal names the role and one concrete limitation of the typed dispatch registry, is returned before any proof byte is read, depends on no activation record, configuration or feature, and replaced the variant that existed only without the `zk-stark` feature, `PrivacyEngineUnavailableFailureV1` (P.1); the owners of the five refused roles are P.15, C.5, P.14 and X.3. Retired protocol lifecycle reasons and activation records are removed; remaining unavailable outcomes represent actual missing native constructions or invalid carried parameters. Issuance-service answers, statement validation and local entropy have their own entries (privacy.issuance_service, privacy.statement_validation, privacy.local_resource). The privacy.rs unsupported-class row aggregates two different identifiers: UnsupportedOperation is the unfinished dispatch refusal above, while TransactionSignatureError::UnsupportedImplementation preserves the original build-dependent crypto implementation cause as CryptoImplementationUnavailable/ExecutionAttemptError::Deferred. The latter is not an invalid-signature verdict; its unavailable-class hit is crypto.implementation_unavailable. The row remains conservatively unsupported because it still includes the unfinished dispatch.",
    "sites": [
-    ["crates/iroha_core/src/privacy.rs", "unavailable", "suspended", 1],
     ["crates/iroha_core/src/privacy_release_evidence.rs", "unavailable", "unavailable", 4],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions/retained.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "unavailable", "unsupported", 2],
     ["crates/iroha_core_privacy/src/privacy_dispatch.rs", "unavailable", "unsupported", 14],
     ["crates/iroha_core_privacy/src/privacy_engines/p256.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "unavailable", "unavailable", 17],
-    ["crates/iroha_core_privacy/src/privacy_state.rs", "unavailable", "suspended", 1],
+    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "unavailable", "unavailable", 18],
     ["crates/iroha_core_privacy/src/privacy_verifier.rs", "unavailable", "unavailable", 3],
     ["crates/iroha_core_privacy/src/privacy_verifier.rs", "unavailable", "unsupported", 6],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "unavailable", "suspended", 3],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "unavailable", "unavailable", 20],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "unavailable", "suspended", 8],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "unavailable", "unavailable", 7],
+    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "unavailable", "unavailable", 8],
+    ["crates/iroha_data_model/src/privacy/protocol.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "unavailable", "unsupported", 2]
    ]
   },
@@ -3669,35 +3754,28 @@
    "kind": "activation_lifecycle",
    "status": "open",
    "owner": "P.5",
-   "path": "crates/iroha_core/src/state.rs",
-   "symbol": "privacy_activations",
+   "path": "crates/iroha_core/src/executor_initial_permission_authority.rs",
+   "symbol": "ActivateRamLfeProgramPolicy",
    "gates": "privacy, voting, RAM-LFE and SoraCloud names in shared State, instruction and Torii code: code that names an activation or a lifecycle state.",
    "decided_by": "The protocol's own committed key and policy State. Registration creates usable state; there is no separate activation step or lifecycle availability switch.",
    "attribution": "read",
-   "note": "Shared State, codec, registry and executor files name four different things. The gate: storage and wire registration of the protocol activation records of entry privacy.activation (the World map `privacy_activations`, `PrivacyActivationKeyV1`, `PrivacyProtocolActivationRecordV1`, `RegisterPrivacyProtocolActivationV1`, `TransitionPrivacyProtocolLifecycleV1`, their wire identifiers and the tiered-storage names `PrivacyActivation(s)`), read by `resolve_qualified_privacy_activation_v1` in state.rs. Also a gate: `ActivateRamLfeProgramPolicy` and `DeactivateRamLfeProgramPolicy` in the executor's initial permission table and the instruction inventory (entry ram_lfe.activation). Not gates: the phases of one timed-OVN ballot (`TimedOvnLifecycleStateV1`, `timed_ovn_lifecycle`, `put_timed_ovn_lifecycle`; entry voting.activation), the inventory names of the confidential parameter-set instructions (entry confidential.activation) and `activation_proof` / `retail_activation_proof`, the retail daily-limit proofs of committed State.",
+   "note": "The protocol activation and qualification records and their World cells are retired. Remaining shared activation names cover RAM-LFE program-policy activation/deactivation (still the open ram_lfe.activation item), timed OVN ballot state, confidential parameter-set instructions and committed retail activation proofs. Remaining lifecycle reads in shared World/authority/restore code include committed contract and authority state; this entry does not certify their separate audits. There is no Exact12 protocol-registration prerequisite.",
    "sites": [
     ["crates/iroha_core/src/executor_initial_permission_authority.rs", "activation", "activation", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/mod.rs", "activation", "activation", 3],
-    ["crates/iroha_core/src/smartcontracts/isi/mod.rs", "activation", "lifecycle", 1],
+    ["crates/iroha_core/src/smartcontracts/isi/mod.rs", "activation", "activation", 2],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "activation", "lifecycle", 28],
-    ["crates/iroha_core/src/state.rs", "activation", "activation", 38],
-    ["crates/iroha_core/src/state.rs", "activation", "lifecycle", 11],
-    ["crates/iroha_core/src/state/authority_registry/complete/table_capture.rs", "activation", "activation", 3],
-    ["crates/iroha_core/src/state/authority_registry/world.rs", "activation", "activation", 8],
+    ["crates/iroha_core/src/state.rs", "activation", "activation", 5],
+    ["crates/iroha_core/src/state.rs", "activation", "lifecycle", 10],
+    ["crates/iroha_core/src/state/authority_registry/world.rs", "activation", "activation", 2],
     ["crates/iroha_core/src/state/authority_registry/world.rs", "activation", "lifecycle", 2],
-    ["crates/iroha_core/src/state/deserialize_core.rs", "activation", "activation", 3],
-    ["crates/iroha_core/src/state/deserialize_world.rs", "activation", "activation", 5],
     ["crates/iroha_core/src/state/deserialize_world.rs", "activation", "lifecycle", 7],
-    ["crates/iroha_core/src/state/tiered.rs", "activation", "activation", 10],
     ["crates/iroha_core/src/state/tiered.rs", "activation", "lifecycle", 3],
     ["crates/iroha_data_model/src/block/mod.rs", "activation", "activation", 1],
     ["crates/iroha_data_model/src/block/retail_state_map_inclusion.rs", "activation", "activation", 3],
-    ["crates/iroha_data_model/src/isi/generated_record_inventory.rs", "activation", "activation", 6],
-    ["crates/iroha_data_model/src/isi/generated_record_inventory.rs", "activation", "lifecycle", 4],
-    ["crates/iroha_data_model/src/isi/mod.rs", "activation", "activation", 4],
-    ["crates/iroha_data_model/src/isi/mod.rs", "activation", "lifecycle", 2],
-    ["crates/iroha_data_model/src/isi/registry/wire_ids.rs", "activation", "activation", 3],
-    ["crates/iroha_data_model/src/isi/registry/wire_ids.rs", "activation", "lifecycle", 1]
+    ["crates/iroha_data_model/src/isi/generated_record_inventory.rs", "activation", "activation", 4],
+    ["crates/iroha_data_model/src/isi/generated_record_inventory.rs", "activation", "lifecycle", 2],
+    ["crates/iroha_data_model/src/isi/mod.rs", "activation", "activation", 2],
+    ["crates/iroha_data_model/src/isi/registry/wire_ids.rs", "activation", "activation", 2]
    ]
   },
   {
@@ -3718,23 +3796,15 @@
   {
    "id": "privacy_shared.global_manifest",
    "kind": "global_manifest",
-   "status": "open",
-   "owner": "P.5",
-   "path": "crates/iroha_core/src/state.rs",
-   "symbol": "privacy_exact12_qualification",
-   "gates": "privacy, voting, RAM-LFE and SoraCloud names in shared State, instruction and Torii code: code that names the Exact12 catalog, a capability or release manifest or an availability pin.",
-   "decided_by": "Remove. Each protocol is valid by its own committed relation identity and keys; no all-protocol manifest or zero pin decides availability.",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_torii/src/runtime.rs",
+   "symbol": "exact12_capability_manifest_v1",
+   "gates": "Canonical public capability projection and closed protocol catalog identifiers.",
+   "decided_by": "Selected implemented protocol and its optional bounded committed policy; metadata does not enable an implementation.",
    "attribution": "read",
-   "note": "The Exact12 qualification cell in World and its codecs (`privacy_exact12_qualification`, `PrivacyExact12QualificationRecordV1`, `RegisterPrivacyExact12QualificationV1`), the capability manifest Torii serves (`PrivacyExact12CapabilityManifestV1`, `exact12_capability_manifest_v1` in crates/iroha_torii/src/runtime.rs), and the catalog identifier with its label predicate (`PRIVACY_EXACT12_CATALOG_ID_V1`, `privacy_protocol_label_is_exact12_v1` in crates/iroha_data_model/src/zk.rs).",
+   "note": "World qualification storage and its instruction are removed. Torii projects PrivacyExact12CapabilityManifestV1 from actual native profile results and current optional policies; catalog labels are canonical wire identifiers, not an all-protocol qualification requirement.",
    "sites": [
-    ["crates/iroha_core/src/smartcontracts/isi/mod.rs", "global_manifest", "exact12", 1],
-    ["crates/iroha_core/src/state.rs", "global_manifest", "exact12", 16],
-    ["crates/iroha_core/src/state/authority_registry/world.rs", "global_manifest", "exact12", 4],
-    ["crates/iroha_core/src/state/deserialize_core.rs", "global_manifest", "exact12", 2],
-    ["crates/iroha_core/src/state/deserialize_world.rs", "global_manifest", "exact12", 4],
-    ["crates/iroha_data_model/src/isi/generated_record_inventory.rs", "global_manifest", "exact12", 2],
-    ["crates/iroha_data_model/src/isi/mod.rs", "global_manifest", "exact12", 1],
-    ["crates/iroha_data_model/src/isi/registry/wire_ids.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_data_model/src/zk.rs", "global_manifest", "exact12", 4],
     ["crates/iroha_torii/src/runtime.rs", "global_manifest", "exact12", 2]
    ]
@@ -3742,24 +3812,16 @@
   {
    "id": "privacy_shared.qualification",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "P.5",
-   "path": "crates/iroha_core/src/state.rs",
-   "symbol": "privacy_exact12_qualification",
-   "gates": "privacy, voting, RAM-LFE and SoraCloud names in shared State, instruction and Torii code: code that names a qualification, a readiness record or a reviewer.",
-   "decided_by": "Remove as a prerequisite of use. Proof validity under the committed relation, key and policy State decides; qualification and review records stay evidence outside consensus.",
+   "status": "unsupported",
+   "owner": "P.8",
+   "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+   "symbol": "ensure_qualified_standalone_zk_relation_v1",
+   "gates": "Standalone ballot/tally relation is not implemented.",
+   "decided_by": "The missing relation must be implemented; documentary qualification cannot enable it.",
    "attribution": "read",
-   "note": "The World cell `privacy_exact12_qualification` with its record `PrivacyExact12QualificationRecordV1`, its instruction `RegisterPrivacyExact12QualificationV1`, its restore validation and its wire identifier; `qualified_privacy_activation_v1` and `resolve_qualified_privacy_activation_v1` in state.rs, which accept an activation only with that record (P.5); and the name of `ensure_qualified_standalone_zk_relation_v1` in isi/world.rs, a guard that refuses every standalone ballot and tally proof with the unsupported-operation error `STANDALONE_ZK_RELATION_UNSUPPORTED_V1` because no relation binds credential, bond and corpus yet (the accurate refusal of an unfinished relation, P.8; only the guard's name still says qualified).",
+   "note": "The old protocol qualification World cell, instruction and restore dependency are removed. The remaining ensure_qualified_standalone_zk_relation_v1 returns STANDALONE_ZK_RELATION_UNSUPPORTED_V1 because no relation binds the standalone credential, bond and corpus. The unfinished native relation remains explicit.",
    "sites": [
-    ["crates/iroha_core/src/smartcontracts/isi/mod.rs", "qualification", "qualification", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/world.rs", "qualification", "qualification", 4],
-    ["crates/iroha_core/src/state.rs", "qualification", "qualification", 18],
-    ["crates/iroha_core/src/state/authority_registry/world.rs", "qualification", "qualification", 4],
-    ["crates/iroha_core/src/state/deserialize_core.rs", "qualification", "qualification", 2],
-    ["crates/iroha_core/src/state/deserialize_world.rs", "qualification", "qualification", 4],
-    ["crates/iroha_data_model/src/isi/generated_record_inventory.rs", "qualification", "qualification", 2],
-    ["crates/iroha_data_model/src/isi/mod.rs", "qualification", "qualification", 1],
-    ["crates/iroha_data_model/src/isi/registry/wire_ids.rs", "qualification", "qualification", 1]
+    ["crates/iroha_core/src/smartcontracts/isi/world.rs", "qualification", "qualification", 4]
    ]
   },
   {
@@ -3798,22 +3860,6 @@
     ["crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/facade.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/wallet.rs", "unavailable", "local_resource", 7],
     ["crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs", "unavailable", "local_resource", 2]
-   ]
-  },
-  {
-   "id": "private_settlement.activation",
-   "kind": "activation_lifecycle",
-   "status": "open",
-   "owner": "P.20",
-   "path": "crates/iroha_torii/src/private_settlement.rs",
-   "symbol": "PrivacyProtocolActivationLimitsV1",
-   "gates": "atomic private settlement: code that names an activation or a lifecycle state.",
-   "decided_by": "The protocol's own committed key and policy State. Registration creates usable state; there is no separate activation step or lifecycle availability switch.",
-   "attribution": "read",
-   "note": "crates/iroha_torii/src/private_settlement.rs reads the activation record of the IVM private-note protocol (`PrivacyProtocolActivationLimitsV1`, `PrivacyProtocolLifecycleV1::Active`) before it serves a settlement route; Core does the same in `ensure_private_settlement_feature_active_v1`. The node-configured switch and height of the same routes are entry cfg.nexus.settlement_activation.",
-   "sites": [
-    ["crates/iroha_torii/src/private_settlement.rs", "activation", "activation", 1],
-    ["crates/iroha_torii/src/private_settlement.rs", "activation", "lifecycle", 1]
    ]
   },
   {
@@ -3905,7 +3951,7 @@
    "gates": "SCCP proofs: code that names an activation or a lifecycle state.",
    "decided_by": "Outside the ZK delivery plan; recorded for visibility only.",
    "attribution": "path_rule",
-   "note": "SCCP bridge proofs and governed routes are outside the products of the ZK delivery plan. Proof-admission limits remain the committed ZK validity policy (cfg.zk.validity_policy). Route activation, suspension deadlines and generation membership are committed bridge State. Individually read forgery execution/restoration, liability, evidence and penalty rows use activation_height as the original validator-registration coordinate: captured lane, account, key and activation must agree with retained generation membership; current committee membership cannot substitute. These rows do not establish complete SCCP launch or retirement qualification (sccp.qualification and sccp.unavailable). Persisting a suspension table and cleaning expired rows alone does not establish pause-panel or selective-lift behavior. The forgery offender registration coordinate (`activation_height: offender.activation_height`) moved from forgery/execution.rs into forgery/execution/event_graph.rs. smartcontracts/isi/sccp/reference_fixture_support.rs holds test-only fixture DATA (its own header says so): it is reached only through `#[path]` declarations inside the `#[cfg(test)] mod reference_fixtures;` modules of forgery.rs, governance/registration.rs and liability/tests.rs, which the scan cannot follow because the inner declarations carry no cfg(test) of their own. Its rows are fixture field values, no production gate.",
+   "note": "SCCP bridge proofs and governed routes are outside the products of the ZK delivery plan. Proof-admission limits remain the committed ZK validity policy (cfg.zk.validity_policy). Route activation, suspension deadlines and generation membership are committed bridge State. Individually read forgery execution/restoration, liability, evidence and penalty rows use activation_height as the original validator-registration coordinate: captured lane, account, key and activation must agree with retained generation membership; current committee membership cannot substitute. These rows do not establish complete SCCP launch or retirement qualification (sccp.qualification and sccp.unavailable). Persisting a suspension table and cleaning expired rows alone does not establish pause-panel or selective-lift behavior. The forgery offender registration coordinate (`activation_height: offender.activation_height`) moved from forgery/execution.rs into forgery/execution/event_graph.rs. Shared reference_fixture_support.rs is now declared directly under #[cfg(test)] in sccp/mod.rs. Its fixture-only activation and deadline fields are excluded by the existing scanner; production route activation, committed deadlines and remaining SCCP limitations remain recorded unchanged.",
    "sites": [
     ["crates/iroha_cli/src/sccp/governance.rs", "activation", "lifecycle", 10],
     ["crates/iroha_cli/src/sccp/mod.rs", "activation", "activation", 5],
@@ -3934,7 +3980,6 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/fast_pause.rs", "unavailable", "suspended", 13],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/governance_metadata.rs", "activation", "activation", 9],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/governance_metadata/diagnostics.rs", "activation", "activation", 23],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/reference_fixture_support.rs", "activation", "activation", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/registry.rs", "activation", "activation", 20],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/self_claim.rs", "activation", "activation", 3],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/settle.rs", "activation", "activation", 10],
@@ -3970,7 +4015,7 @@
    "gates": "SCCP carried message and retained generation deadlines, including the native registration pin margin.",
    "decided_by": "Committed bridge State and canonical executing block time, rather than a node elapsed-time budget.",
    "attribution": "path_rule",
-   "note": "SCCP is outside the products of the ZK delivery plan. These deadlines are committed coordinates: generation/read projections retain immutable trust deadlines. registration::retained_pin binds until_ms to the exact retained generation and checks the canonical block timestamp plus committed committee_heartbeat_ms and the fixed protocol PIN_MARGIN_MS against every retained successor. The moved native message projection and its separate local request deadlines are distinguished in sccp.native_read_controls. No Instant-based request timeout is classified as a committed route deadline here. smartcontracts/isi/sccp/reference_fixture_support.rs holds test-only fixture DATA (its own header says so): it is reached only through `#[path]` declarations inside the `#[cfg(test)] mod reference_fixtures;` modules of forgery.rs, governance/registration.rs and liability/tests.rs, which the scan cannot follow because the inner declarations carry no cfg(test) of their own. Its rows are fixture field values, no production gate.",
+   "note": "SCCP is outside the products of the ZK delivery plan. These deadlines are committed coordinates: generation/read projections retain immutable trust deadlines. registration::retained_pin binds until_ms to the exact retained generation and checks the canonical block timestamp plus committed committee_heartbeat_ms and the fixed protocol PIN_MARGIN_MS against every retained successor. The moved native message projection and its separate local request deadlines are distinguished in sccp.native_read_controls. No Instant-based request timeout is classified as a committed route deadline here. Shared reference_fixture_support.rs is now declared directly under #[cfg(test)] in sccp/mod.rs. Its fixture-only activation and deadline fields are excluded by the existing scanner; production route activation, committed deadlines and remaining SCCP limitations remain recorded unchanged.",
    "sites": [
     ["crates/iroha_core/src/smartcontracts/isi/sccp/generation_record.rs", "time_budget", "deadline", 5],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/generations.rs", "time_budget", "deadline", 4],
@@ -3980,7 +4025,6 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read.rs", "time_budget", "deadline", 2],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/committee.rs", "time_budget", "deadline", 3],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/views.rs", "time_budget", "deadline", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/reference_fixture_support.rs", "time_budget", "deadline", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/self_claim.rs", "time_budget", "deadline", 1],
     ["crates/iroha_data_model/src/sccp/events.rs", "time_budget", "deadline", 2],
     ["crates/iroha_data_model/src/sccp/generation.rs", "time_budget", "deadline", 2],
@@ -4046,24 +4090,30 @@
   {
    "id": "sdk_bridge.global_manifest",
    "kind": "global_manifest",
-   "status": "open",
-   "owner": "P.5",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "crates/connect_norito_bridge/src/platform_jni/part_2.rs",
    "symbol": "PrivacyExact12FixtureBundleValidationStatusV1",
-   "gates": "native SDK bridges (Swift and Kotlin through connect_norito_bridge, JavaScript through iroha_js_host): code that names the Exact12 catalog, a capability or release manifest or an availability pin.",
-   "decided_by": "Remove. Each protocol is valid by its own committed relation identity and keys; no all-protocol manifest or zero pin decides availability.",
+   "gates": "Native canonical capability decoding, expected network, selected tuple and final construction checks.",
+   "decided_by": "Actual selected implementation and current bounded policy; no documentary activation or qualification record.",
    "attribution": "read",
-   "note": "The native bridges of the Swift, Kotlin and JavaScript SDKs export the Exact12 capability checks: `validate_privacy_capability_archive_v1`, `PrivacyExact12CapabilityManifestV1` decoding, `privacy_require_exact12_capability_tuple_v1`, the submit-proof construction admission and the JNI functions built on them (crates/connect_norito_bridge, crates/iroha_js_host). An SDK refuses to build a privacy transaction unless the capability manifest of the connected network lists the protocol. The fixture-bundle codecs in the same files (`privacy_exact12_fixture_bundle_bytes_v1`) are test data transport.",
+   "note": "Native C/JNI/N-API consumers validate canonical archives and network/genesis, compare the selected remote/local semantic tuple and enforce effective resource limits. privacy_construction.rs owns shared final-construction validation; the dedicated X509 owner retains the original prepared transaction. Missing native security construction remains a typed refusal, not a flag or release receipt. The fixture codecs transport diagnostic data.",
    "sites": [
     ["crates/connect_norito_bridge/src/lib.rs", "global_manifest", "capability_manifest", 8],
     ["crates/connect_norito_bridge/src/lib.rs", "global_manifest", "exact12", 17],
     ["crates/connect_norito_bridge/src/platform_jni.rs", "global_manifest", "capability_manifest", 3],
     ["crates/connect_norito_bridge/src/platform_jni.rs", "global_manifest", "exact12", 1],
-    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "capability_manifest", 15],
-    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "exact12", 35],
+    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "capability_manifest", 14],
+    ["crates/connect_norito_bridge/src/platform_jni/part_2.rs", "global_manifest", "exact12", 32],
     ["crates/connect_norito_bridge/src/platform_jni/part_3.rs", "global_manifest", "exact12", 12],
+    ["crates/connect_norito_bridge/src/privacy_construction.rs", "global_manifest", "capability_manifest", 6],
+    ["crates/connect_norito_bridge/src/privacy_construction.rs", "global_manifest", "exact12", 4],
+    ["crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs", "global_manifest", "capability_manifest", 2],
+    ["crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs", "global_manifest", "exact12", 3],
+    ["crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs", "qualification", "readiness", 2],
     ["crates/iroha_js_host/src/lib.rs", "global_manifest", "capability_manifest", 3],
-    ["crates/iroha_js_host/src/lib.rs", "global_manifest", "exact12", 11]
+    ["crates/iroha_js_host/src/lib.rs", "global_manifest", "exact12", 11],
+    ["crates/iroha_js_host/src/privacy_x509_transaction.rs", "global_manifest", "exact12", 5]
    ]
   },
   {
@@ -4542,22 +4592,6 @@
    ]
   },
   {
-   "id": "vega.activation",
-   "kind": "activation_lifecycle",
-   "status": "open",
-   "owner": "P.14",
-   "path": "crates/iroha_core/src/privacy_release_evidence/vega.rs",
-   "symbol": "activation",
-   "gates": "Vega credentials: code that names an activation or a lifecycle state.",
-   "decided_by": "The protocol's own committed key and policy State. Registration creates usable state; there is no separate activation step or lifecycle availability switch.",
-   "attribution": "read",
-   "note": "crates/iroha_core/src/privacy_release_evidence/vega.rs builds the protocol activation record of the Vega protocol for release evidence: `profile.activation_record(PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 { proposed_at_height, activated_at_height, .. }))`. That record is the lifecycle switch of entry privacy.activation. Issuer revocation (`PrivacyVegaIssuerRecordLifecycleV1`) is entry vega.revocation_state.",
-   "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence/vega.rs", "activation", "activation", 5],
-    ["crates/iroha_core/src/privacy_release_evidence/vega.rs", "activation", "lifecycle", 2]
-   ]
-  },
-  {
    "id": "vega.revocation_state",
    "kind": "activation_lifecycle",
    "status": "not_a_gate",
@@ -5019,9 +5053,9 @@
     ["crates/iroha_core_privacy/src/privacy_engines/zk_ams.rs", "unavailable", "unavailable", 4],
     ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/manifest.rs", "unavailable", "unavailable", 1],
+    ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/noise_feasibility.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_inverse_product_sumcheck.rs", "unavailable", "unavailable", 2],
-    ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_membership_direct.rs", "unavailable", "unavailable", 3],
-    ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/noise_feasibility.rs", "unavailable", "unavailable", 2]
+    ["crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/rns_native_global_membership_direct.rs", "unavailable", "unavailable", 3]
    ]
   },
   {
@@ -5080,23 +5114,6 @@
    ]
   },
   {
-   "id": "zk_x509.activation",
-   "kind": "activation_lifecycle",
-   "status": "open",
-   "owner": "X.4",
-   "path": "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs",
-   "symbol": "activation",
-   "gates": "ZK-X509: code that names an activation or a lifecycle state.",
-   "decided_by": "The protocol's own committed key and policy State. Registration creates usable state; there is no separate activation step or lifecycle availability switch.",
-   "attribution": "read",
-   "note": "`require_activation_readiness_v1` and `zk_x509_activation_readiness_v1` (crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs) make activation of the ZK-X509 protocol depend on a compiled readiness certificate, and crates/iroha_core/src/privacy_release_evidence/zk_x509.rs builds and mutates the protocol activation record for release evidence (`activation`, `mutate_activation`, `PrivacyProtocolActivationRecordV1`). The AIR selector names in the relation files are entry zk_x509.air_selector.",
-   "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "activation", "activation", 33],
-    ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "activation", "lifecycle", 2],
-    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs", "activation", "activation", 3]
-   ]
-  },
-  {
    "id": "zk_x509.air_selector",
    "kind": "activation_lifecycle",
    "status": "not_a_gate",
@@ -5106,7 +5123,7 @@
    "gates": "ZK-X509: selector and role names of the STARK relation that contain the word `activation`.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`ZkX509ShaCallActivationV1` (Required, OptionalPrivate, Inactive), `role_activation_v1`, `expected_activation` and the fixed column `FIX_ACTIVATION_CONTINUE` in the ZK-X509 accumulator, SHA call-bus and RFC 5280 AIR files: whether a row of the trace calls the hash bus. Constraint terms of the relation, identical for every verifier; nothing is switched on at run time.",
+   "note": "`ZkX509ShaCallActivationV1` (Required, OptionalPrivate, Inactive), `role_activation_v1`, `expected_activation` and the fixed column `FIX_ACTIVATION_CONTINUE` in the ZK-X509 accumulator, SHA call-bus and RFC 5280 AIR files: whether a row of the trace calls the hash bus. Constraint terms of the relation, identical for every verifier; nothing is switched on at run time. The verifier-owned sha_frame_byte_v1 uses the same schedule selector: a publicly inactive disclosure slot hashes the canonical empty message and has no frame-prefix bytes. Required and privately optional slots retain their message-frame constraints. This classifies the source term only; it does not certify remaining SHA source-linkage or joint-security work.",
    "sites": [
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_private_links.rs", "activation", "activation", 2],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs", "activation", "activation", 7],
@@ -5115,39 +5132,39 @@
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_name_policy.rs", "activation", "activation", 1],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_name_values.rs", "activation", "activation", 1],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark.rs", "activation", "activation", 5],
-    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs", "activation", "activation", 11],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs", "activation", "activation", 16],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_frame_prefix.rs", "activation", "activation", 3],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_digest_joins.rs", "activation", "activation", 6]
    ]
   },
   {
    "id": "zk_x509.digest_identity",
    "kind": "digest",
-   "status": "open",
-   "owner": "X.4",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs",
    "symbol": "rustc_commit_hash",
    "gates": "ZK-X509: code that names a source, binary, build, catalog or release digest.",
    "decided_by": "A semantic relation and parameter identity in committed State. Source, build and executable digests remain evidence metadata and select no proof guarantee.",
    "attribution": "read",
-   "note": "`rustc_commit_hash` and `ZK_X509_RESOURCE_RUSTC_COMMIT_HASH_V1`: the compiler commit a readiness and resource certificate binds (profile/readiness_certificates.rs, privacy_release_evidence/zk_x509.rs). The certificate is consulted by `require_activation_readiness_v1` (entry zk_x509.qualification); removed with it.",
+   "note": "Compiler/resource capture identities remain diagnostic evidence only. Ordinary runtime admission does not compile or inspect these certificate fields.",
    "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "digest_identity", "build", 5],
-    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile/readiness_certificates.rs", "digest_identity", "build", 5]
+    ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "digest_identity", "build", 5]
    ]
   },
   {
    "id": "zk_x509.qualification",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "X.4",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
-   "symbol": "ZkX509ReadinessV1",
-   "gates": "ZK-X509: code that names a qualification, a readiness record or a reviewer.",
-   "decided_by": "Remove as a prerequisite of use. Proof validity under the committed relation, key and policy State decides; qualification and review records stay evidence outside consensus.",
+   "symbol": "readiness_certificates",
+   "gates": "Retained X509 diagnostic evidence validators and capture-only/test-only bookkeeping.",
+   "decided_by": "No diagnostic certificate decides runtime validity; the concrete missing joint security construction is reported separately.",
    "attribution": "read",
-   "note": "`ZkX509ReadinessV1`, `readiness_certificates`, `zk_x509_activation_readiness_v1` and `require_activation_readiness_v1` (crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs): a readiness certificate compiled into the binary decides whether the protocol may be activated.",
+   "note": "The old checklist is now test-only diagnostic evidence. The soundness arithmetic is conditional and cannot establish the missing joint reduction. Resource certificate validation is confined to diagnostic capture/test builds.",
    "sites": [
-    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs", "qualification", "readiness", 14]
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs", "qualification", "readiness", 1]
    ]
   },
   {
@@ -5160,9 +5177,10 @@
    "gates": "ZK-X509: a timeout, deadline or millisecond budget on the proof path.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`presentation_deadline_unix_ms` (crates/iroha_data_model/src/privacy/zk_x509_interval.rs) is a const function of the signed certificate and CRL intervals and the presentation window (X.1); `deadline_exclusive_millis` in crates/iroha_core/src/privacy_release_evidence/zk_x509.rs compares measured prover finish times of release evidence with that statement deadline, in a tool that no validator runs. No local clock decides validity. PrivacyZkX509HolderScheduleV1::assess in the same file is a holder-side estimate that compares its own planned completion with that statement deadline and answers WithinBudget or Reprepare; it never accepts or extends the deadline and no validator runs it.",
+   "note": "`presentation_deadline_unix_ms` (crates/iroha_data_model/src/privacy/zk_x509_interval.rs) is a const function of the signed certificate and CRL intervals and the presentation window (X.1); `deadline_exclusive_millis` in crates/iroha_core/src/privacy_release_evidence/zk_x509.rs compares measured prover finish times of release evidence with that statement deadline, in a tool that no validator runs. No local clock decides validity. PrivacyZkX509HolderScheduleV1::assess in the same file is a holder-side estimate that compares its own planned completion with that statement deadline and answers WithinBudget or Reprepare; it never accepts or extends the deadline and no validator runs it. Holder lifecycle prepare/release budget checks preserve the original signed deadline; those local scheduling decisions cannot extend a statement or alter validator validity.",
    "sites": [
     ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "time_budget", "deadline", 3],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder/lifecycle.rs", "time_budget", "deadline", 2],
     ["crates/iroha_data_model/src/privacy/zk_x509_interval.rs", "time_budget", "deadline", 4]
    ]
   },
@@ -5176,9 +5194,10 @@
    "gates": "ZK-X509: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "For the first group: an unfinished operation keeps an accurate typed error that no configuration, feature or environment changes, and stays mandatory work of the owner; a finished operation removes it. For the second group nothing changes: it is ordinary validation of carried bytes, identical on every validator.",
    "attribution": "read",
-   "note": "`ProtocolUnavailable`, `EngineUnavailable` and `unavailable` in crates/iroha_core/src/privacy_release_evidence/zk_x509.rs: the outcomes the release-evidence builder records for a protocol whose engine or activation is missing. Accurate typed errors of an unfinished delivery (X.4).",
+   "note": "Release capture and native X509 consumers report an unavailable selected construction. JointSecurityReductionIncomplete remains an explicit runtime refusal until the missing joint security reduction is established; no activation or qualification receipt can substitute.",
    "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "unavailable", "unavailable", 7]
+    ["crates/iroha_core/src/privacy_release_evidence/zk_x509.rs", "unavailable", "unavailable", 6],
+    ["crates/iroha_core_privacy/src/privacy_verifier/x509_attachment.rs", "unavailable", "unsupported", 1]
    ]
   },
   {
@@ -5192,9 +5211,12 @@
    "decided_by": "Nothing in committed State: the failure is local. In a prover, wallet or key-generation call it fails that local call and nothing is submitted. On the validation path it defers the local attempt without a rejection or a vote (resource contract behavior `missing_local_resource_defers`) and never changes an accepted effect, gas or root; a validation site that turns it into a rejection is a defect of the owner.",
    "attribution": "path_rule",
    "sites": [
+    ["crates/iroha_core/src/executor/attachment_custody/x509.rs", "unavailable", "local_resource", 1],
+    ["crates/iroha_core/src/smartcontracts/ivm/host/x509_attachment.rs", "unavailable", "local_resource", 6],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/accumulator_stark.rs", "unavailable", "local_resource", 5],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs", "unavailable", "local_resource", 5]
-   ]
+   ],
+   "note": "X509 attachment custody keeps original decode/allocation refusal typed through SignedAttachmentErrorV1::LocalResource. The IVM owner maps original local failures to AllocationDeferred or ExecutionDeferred, preserving charged ownership through queue application; they do not become proof-invalidity verdicts. This source census is not whole-node local-resource qualification."
   },
   {
    "id": "zk_x509.wall_clock",
@@ -5216,28 +5238,28 @@
   {
    "id": "sdk_csharp.exact12_capability",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "S.4",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs",
-   "symbol": "Qualif",
-   "gates": "C# SDK: the Exact12 capability manifest, its qualification and readiness rows, and the admission checks built on it.",
-   "decided_by": "Remove availability checks that wait for a qualification or manifest. An SDK reports the capability the connected node implements and surfaces its typed errors (P.5; S.3 to S.5 reconcile the ports).",
+   "symbol": "PrivacyExact12CapabilityManifestV1",
+   "gates": "Canonical network capability metadata, actual native implementation availability and selected resource limits.",
+   "decided_by": "The selected actual local/remote compiled tuple and bounded current policy; an absent optional policy uses compiled defaults.",
    "attribution": "read",
-   "note": "The SDK decodes `PrivacyExact12CapabilityManifestV1` from Torii, with its production-qualification and readiness fields and release-manifest digest, and requires a capability admission (`PrivacyExact12CapabilityAdmissionV1`, `requirePrivacyExact12CapabilityAdmission` and their ports) before it builds a privacy transaction; the native bridge validates the manifest archive. The fixture-bundle codecs in the same files carry test data.",
+   "note": "The SDK verifies canonical capability bytes, expected network/genesis, actual native implementation availability, the exact selected compiled semantic tuple and effective resource limits. Protocol lifecycle, activation and deployment qualification prerequisites are removed. Native/archive and final proof-construction checks remain mandatory. Fixture bundles are data transport. This records source behavior, not complete SDK, network, cryptographic or platform qualification.",
    "sites": [
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "capability_manifest", 20],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "exact12", 130],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "qualification", 174],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "readiness", 63],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "release_manifest", 21],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "capability_manifest", 22],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "exact12", 79],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "sdk_availability", "readiness", 49],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.X509.cs", "sdk_availability", "exact12", 2],
     ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.cs", "sdk_availability", "exact12", 12],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureModelsV1.cs", "sdk_availability", "exact12", 31],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs", "sdk_availability", "capability_manifest", 20],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs", "sdk_availability", "exact12", 57],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureModelsV1.cs", "sdk_availability", "exact12", 32],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs", "sdk_availability", "capability_manifest", 18],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs", "sdk_availability", "exact12", 55],
     ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs", "sdk_availability", "readiness", 1],
+    ["csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyX509PreparedTransactionV1.cs", "sdk_availability", "exact12", 5],
     ["csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.PrivacyCapabilities.cs", "sdk_availability", "capability_manifest", 3],
     ["csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.PrivacyCapabilities.cs", "sdk_availability", "exact12", 4],
-    ["csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs", "sdk_availability", "exact12", 4]
+    ["csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs", "sdk_availability", "exact12", 5]
    ]
   },
   {
@@ -5259,29 +5281,28 @@
   {
    "id": "sdk_javascript.exact12_capability",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "S.5",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "javascript/iroha_js/src/norito.js",
    "symbol": "EXACT12",
-   "gates": "JavaScript SDK: the Exact12 capability manifest, its qualification and readiness rows, and the admission checks built on it.",
-   "decided_by": "Remove availability checks that wait for a qualification or manifest. An SDK reports the capability the connected node implements and surfaces its typed errors (P.5; S.3 to S.5 reconcile the ports).",
+   "gates": "Canonical network capability metadata, actual native implementation availability and selected resource limits.",
+   "decided_by": "The selected actual local/remote compiled tuple and bounded current policy; an absent optional policy uses compiled defaults.",
    "attribution": "read",
-   "note": "The SDK decodes `PrivacyExact12CapabilityManifestV1` from Torii, with its production-qualification and readiness fields and release-manifest digest, and requires a capability admission (`PrivacyExact12CapabilityAdmissionV1`, `requirePrivacyExact12CapabilityAdmission` and their ports) before it builds a privacy transaction; the native bridge validates the manifest archive. The fixture-bundle codecs in the same files carry test data.",
+   "note": "The SDK verifies canonical capability bytes, expected network/genesis, actual native implementation availability, the exact selected compiled semantic tuple and effective resource limits. Protocol lifecycle, activation and deployment qualification prerequisites are removed. Native/archive and final proof-construction checks remain mandatory. Fixture bundles are data transport. This records source behavior, not complete SDK, network, cryptographic or platform qualification.",
    "sites": [
     ["javascript/iroha_js/src/crypto.js", "sdk_availability", "capability_manifest", 1],
     ["javascript/iroha_js/src/crypto.js", "sdk_availability", "exact12", 1],
     ["javascript/iroha_js/src/index.js", "sdk_availability", "exact12", 6],
-    ["javascript/iroha_js/src/norito.js", "sdk_availability", "exact12", 160],
-    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "capability_manifest", 31],
-    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "exact12", 103],
-    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "qualification", 46],
-    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "readiness", 32],
-    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "release_manifest", 14],
+    ["javascript/iroha_js/src/norito.js", "sdk_availability", "exact12", 159],
+    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "capability_manifest", 32],
+    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "exact12", 95],
+    ["javascript/iroha_js/src/privacyCapabilities.js", "sdk_availability", "readiness", 27],
     ["javascript/iroha_js/src/privacyCapabilityAdmission.js", "sdk_availability", "capability_manifest", 1],
     ["javascript/iroha_js/src/privacyCapabilityAdmission.js", "sdk_availability", "exact12", 11],
     ["javascript/iroha_js/src/privacyCapabilityTransport.js", "sdk_availability", "capability_manifest", 3],
     ["javascript/iroha_js/src/privacyCapabilityTransport.js", "sdk_availability", "exact12", 6],
     ["javascript/iroha_js/src/privacyExact12Network.js", "sdk_availability", "exact12", 4],
+    ["javascript/iroha_js/src/privacyX509Transaction.js", "sdk_availability", "exact12", 3],
     ["javascript/iroha_js/src/public/norito.js", "sdk_availability", "exact12", 6],
     ["javascript/iroha_js/src/toriiClient.js", "sdk_availability", "capability_manifest", 7],
     ["javascript/iroha_js/src/toriiClient.js", "sdk_availability", "exact12", 10],
@@ -5338,28 +5359,28 @@
   {
    "id": "sdk_kotlin.exact12_capability",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "S.3",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt",
    "symbol": "Exact12",
-   "gates": "Kotlin/Java/Android SDK: the Exact12 capability manifest, its qualification and readiness rows, and the admission checks built on it.",
-   "decided_by": "Remove availability checks that wait for a qualification or manifest. An SDK reports the capability the connected node implements and surfaces its typed errors (P.5; S.3 to S.5 reconcile the ports).",
+   "gates": "Canonical network capability metadata, actual native implementation availability and selected resource limits.",
+   "decided_by": "The selected actual local/remote compiled tuple and bounded current policy; an absent optional policy uses compiled defaults.",
    "attribution": "read",
-   "note": "The SDK decodes `PrivacyExact12CapabilityManifestV1` from Torii, with its production-qualification and readiness fields and release-manifest digest, and requires a capability admission (`PrivacyExact12CapabilityAdmissionV1`, `requirePrivacyExact12CapabilityAdmission` and their ports) before it builds a privacy transaction; the native bridge validates the manifest archive. The fixture-bundle codecs in the same files carry test data.",
+   "note": "The SDK verifies canonical capability bytes, expected network/genesis, actual native implementation availability, the exact selected compiled semantic tuple and effective resource limits. Protocol lifecycle, activation and deployment qualification prerequisites are removed. Native/archive and final proof-construction checks remain mandatory. Fixture bundles are data transport. This records source behavior, not complete SDK, network, cryptographic or platform qualification.",
    "sites": [
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt", "sdk_availability", "capability_manifest", 4],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt", "sdk_availability", "exact12", 12],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt", "sdk_availability", "exact12", 15],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/InstructionBox.kt", "sdk_availability", "exact12", 17],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt", "sdk_availability", "exact12", 5],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "capability_manifest", 13],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "exact12", 110],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "qualification", 72],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "readiness", 46],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "release_manifest", 18],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "exact12", 80],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt", "sdk_availability", "readiness", 39],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt", "sdk_availability", "exact12", 41],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "capability_manifest", 28],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "exact12", 75],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "readiness", 2],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "exact12", 77],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "readiness", 1],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/SubmitPrivacyZkX509CertificateV1.kt", "sdk_availability", "exact12", 1],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkX509SigningPreparationV1.kt", "sdk_availability", "readiness", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "exact12", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "qualification", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "release_manifest", 1],
@@ -5429,24 +5450,24 @@
   {
    "id": "sdk_python.exact12_capability",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "S.5",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "python/iroha_python/src/iroha_python/privacy_exact12.py",
    "symbol": "Exact12",
-   "gates": "Python SDK: the Exact12 capability manifest, its qualification and readiness rows, and the admission checks built on it.",
-   "decided_by": "Remove availability checks that wait for a qualification or manifest. An SDK reports the capability the connected node implements and surfaces its typed errors (P.5; S.3 to S.5 reconcile the ports).",
+   "gates": "Canonical network capability metadata, actual native implementation availability and selected resource limits.",
+   "decided_by": "The selected actual local/remote compiled tuple and bounded current policy; an absent optional policy uses compiled defaults.",
    "attribution": "read",
-   "note": "The SDK decodes `PrivacyExact12CapabilityManifestV1` from Torii, with its production-qualification and readiness fields and release-manifest digest, and requires a capability admission (`PrivacyExact12CapabilityAdmissionV1`, `requirePrivacyExact12CapabilityAdmission` and their ports) before it builds a privacy transaction; the native bridge validates the manifest archive. The fixture-bundle codecs in the same files carry test data.",
+   "note": "The SDK verifies canonical capability bytes, expected network/genesis, actual native implementation availability, the exact selected compiled semantic tuple and effective resource limits. Protocol lifecycle, activation and deployment qualification prerequisites are removed. Native/archive and final proof-construction checks remain mandatory. Fixture bundles are data transport. This records source behavior, not complete SDK, network, cryptographic or platform qualification.",
    "sites": [
     ["python/iroha_python/src/iroha_python/__init__.py", "sdk_availability", "capability_manifest", 10],
-    ["python/iroha_python/src/iroha_python/__init__.py", "sdk_availability", "exact12", 45],
+    ["python/iroha_python/src/iroha_python/__init__.py", "sdk_availability", "exact12", 47],
     ["python/iroha_python/src/iroha_python/client.py", "sdk_availability", "capability_manifest", 4],
     ["python/iroha_python/src/iroha_python/client.py", "sdk_availability", "exact12", 13],
     ["python/iroha_python/src/iroha_python/crypto.py", "sdk_availability", "capability_manifest", 31],
     ["python/iroha_python/src/iroha_python/crypto.py", "sdk_availability", "exact12", 49],
     ["python/iroha_python/src/iroha_python/privacy_catalog.py", "sdk_availability", "capability_manifest", 1],
     ["python/iroha_python/src/iroha_python/privacy_catalog.py", "sdk_availability", "exact12", 2],
-    ["python/iroha_python/src/iroha_python/privacy_exact12.py", "sdk_availability", "exact12", 267],
+    ["python/iroha_python/src/iroha_python/privacy_exact12.py", "sdk_availability", "exact12", 277],
     ["python/iroha_python/src/iroha_python/tx.py", "sdk_availability", "capability_manifest", 12],
     ["python/iroha_python/src/iroha_python/tx.py", "sdk_availability", "exact12", 8]
    ]
@@ -5474,7 +5495,6 @@
     ["python/iroha_python/src/iroha_python/kaigi.py", "sdk_availability", "qualification", 6],
     ["python/iroha_python/src/iroha_python/privacy_wallet_worker.py", "sdk_availability", "qualification", 1],
     ["python/iroha_python/src/iroha_python/sorafs.py", "sdk_availability", "qualification", 2],
-    ["python/iroha_python/src/iroha_python/tx.py", "sdk_availability", "readiness", 1],
     ["python/iroha_torii_client/client.py", "sdk_availability", "qualification", 4],
     ["python/iroha_torii_client/native_sumeragi.py", "sdk_availability", "readiness", 2]
    ]
@@ -5498,29 +5518,29 @@
   {
    "id": "sdk_swift.exact12_capability",
    "kind": "readiness_qualification",
-   "status": "open",
-   "owner": "S.4",
+   "status": "not_a_gate",
+   "owner": null,
    "path": "IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift",
    "symbol": "Exact12",
-   "gates": "Swift SDK: the Exact12 capability manifest, its qualification and readiness rows, and the admission checks built on it.",
-   "decided_by": "Remove availability checks that wait for a qualification or manifest. An SDK reports the capability the connected node implements and surfaces its typed errors (P.5; S.3 to S.5 reconcile the ports).",
+   "gates": "Canonical network capability metadata, actual native implementation availability and selected resource limits.",
+   "decided_by": "The selected actual local/remote compiled tuple and bounded current policy; an absent optional policy uses compiled defaults.",
    "attribution": "read",
-   "note": "The SDK decodes `PrivacyExact12CapabilityManifestV1` from Torii, with its production-qualification and readiness fields and release-manifest digest, and requires a capability admission (`PrivacyExact12CapabilityAdmissionV1`, `requirePrivacyExact12CapabilityAdmission` and their ports) before it builds a privacy transaction; the native bridge validates the manifest archive. The fixture-bundle codecs in the same files carry test data.",
+   "note": "The SDK verifies canonical capability bytes, expected network/genesis, actual native implementation availability, the exact selected compiled semantic tuple and effective resource limits. Protocol lifecycle, activation and deployment qualification prerequisites are removed. Native/archive and final proof-construction checks remain mandatory. Fixture bundles are data transport. This records source behavior, not complete SDK, network, cryptographic or platform qualification.",
    "sites": [
-    ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "capability_manifest", 13],
-    ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "exact12", 51],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "capability_manifest", 32],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "exact12", 81],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "qualification", 72],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "readiness", 29],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "release_manifest", 14],
+    ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "capability_manifest", 14],
+    ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "exact12", 66],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "capability_manifest", 33],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "exact12", 63],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "qualification", 1],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "readiness", 23],
     ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift", "sdk_availability", "exact12", 145],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift", "sdk_availability", "capability_manifest", 12],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift", "sdk_availability", "exact12", 25],
-    ["IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift", "sdk_availability", "readiness", 1],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift", "sdk_availability", "capability_manifest", 16],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift", "sdk_availability", "exact12", 31],
+    ["IrohaSwift/Sources/IrohaSwift/PrivacyX509TransactionV1.swift", "sdk_availability", "exact12", 8],
     ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "capability_manifest", 5],
     ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "exact12", 14],
-    ["IrohaSwift/Sources/IrohaSwift/TxBuilder.swift", "sdk_availability", "exact12", 16]
+    ["IrohaSwift/Sources/IrohaSwift/TxBuilder.swift", "sdk_availability", "exact12", 17],
+    ["IrohaSwift/Sources/IrohaSwift/ZkX509SigningPreparationV1.swift", "sdk_availability", "readiness", 1]
    ]
   },
   {
@@ -5590,11 +5610,11 @@
    "status": "out_of_plan",
    "owner": null,
    "path": "crates/iroha_torii/src/sccp/native.rs",
-   "symbol": "fn source_error(error: SccpNativeReadError) -> Response {",
+   "symbol": "pub(super) fn source_error(error: &SccpNativeReadError) -> Response {",
    "gates": "SCCP original source and restoration custody, native-only decoder boundaries, compiled light-client profile availability, pending settlement reasons and incomplete destination operations.",
    "decided_by": "Outside the ZK delivery plan; native SCCP source and operation requirements remain independently enforced.",
    "attribution": "read",
-   "note": "Native committee, rotation, finality, message and control HTTP reads now invoke the admitted original native reader. Missing or inconsistent original source/rotation custody remains unavailable, not authenticated absence; actual Pruned has its own response. UnsupportedScope requires the actual Global root. Request deadline/cancellation is 408 and local capacity or source refusal is 503, with no-store responses. Forgery synchronous execution rechecks the original parent and uses a sticky local storage refusal for missing/inconsistent source or resource failure before any deterministic result can publish; bad signed evidence remains a separate protocol rejection. Native evidence-record and funded-attribution decoders explicitly refuse SCCP data: they are not the independent SccpRestore archive reauthentication owner selected by sumeragi/evidence/restoration.rs. Missing required original anchors refuse that SCCP restoration; decoded snapshot claims are not authority. Light-client profile absence still arms VerifierArtifactsUnavailable during execution, and fee-sink absence remains a deterministic pending reason. RegisterRoute launch gaps remain sccp.qualification. The block hook now calls generation/anchor pruning, which preserves pending forgery penalties and retained generation boundaries. Generation/anchor allocation failure remains Deferred rather than deterministic Degraded. This inventory does not qualify complete SCCP delivery. The CLI TON evidence helper (iroha_cli sccp/ton.rs) turns BuildError::Unavailable of the account-state proof builder into no evidence (`Ok(None)`): a local client outcome, not authenticated absence. Current forgery/read proofs preserve UnsupportedGeometry and the original physical pairing/allocation refusal; neither is authenticated absence. ForgeryLocalRefusal now distinguishes Storage(original), armed on State, from Execution(original), retained in World as execution deferral. Count changes do not qualify SCCP delivery.",
+   "note": "Native committee, rotation, finality, message and control HTTP reads now invoke the admitted original native reader. Missing or inconsistent original source/rotation custody remains unavailable, not authenticated absence; actual Pruned has its own response. UnsupportedScope requires the actual Global root. Request deadline/cancellation is 408 and local capacity or source refusal is 503, with no-store responses. Forgery synchronous execution rechecks the original parent and uses a sticky local storage refusal for missing/inconsistent source or resource failure before any deterministic result can publish; bad signed evidence remains a separate protocol rejection. Native evidence-record and funded-attribution decoders explicitly refuse SCCP data: they are not the independent SccpRestore archive reauthentication owner selected by sumeragi/evidence/restoration.rs. Missing required original anchors refuse that SCCP restoration; decoded snapshot claims are not authority. Light-client profile absence still arms VerifierArtifactsUnavailable during execution, and fee-sink absence remains a deterministic pending reason. RegisterRoute launch gaps remain sccp.qualification. The block hook now calls generation/anchor pruning, which preserves pending forgery penalties and retained generation boundaries. Generation/anchor allocation failure remains Deferred rather than deterministic Degraded. This inventory does not qualify complete SCCP delivery. The CLI TON evidence helper (iroha_cli sccp/ton.rs) turns BuildError::Unavailable of the account-state proof builder into no evidence (`Ok(None)`): a local client outcome, not authenticated absence. Current forgery/read proofs preserve UnsupportedGeometry and the original physical pairing/allocation refusal; neither is authenticated absence. ForgeryLocalRefusal now distinguishes Storage(original), armed on State, from Execution(original), retained in World as execution deferral. Count changes do not qualify SCCP delivery. The borrowed source_error signature preserves original refusal classification. Coalition collateral additionally refuses missing committed staking policy explicitly; this new unavailable occurrence is not a readiness gate.",
    "sites": [
     ["crates/iroha_cli/src/sccp/mod.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_cli/src/sccp/recipient_claim.rs", "unavailable", "unavailable", 1],
@@ -5614,7 +5634,7 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/keepalive.rs", "unavailable", "unavailable", 8],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/light_clients.rs", "unavailable", "unavailable", 14],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/parliament_iface.rs", "unavailable", "unavailable", 16],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/read/coalition.rs", "unavailable", "unavailable", 22],
+    ["crates/iroha_core/src/smartcontracts/isi/sccp/read/coalition.rs", "unavailable", "unavailable", 23],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native.rs", "unavailable", "unavailable", 25],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native.rs", "unavailable", "unsupported", 3],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/fast_pause.rs", "unavailable", "unavailable", 3],
@@ -5641,7 +5661,7 @@
     },
     {
      "path": "crates/iroha_torii/src/sccp/native.rs",
-     "contains": "fn source_error(error: SccpNativeReadError) -> Response {"
+     "contains": "pub(super) fn source_error(error: &SccpNativeReadError) -> Response {"
     },
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/sccp/forgery/execution.rs",
@@ -5871,8 +5891,8 @@
     ["crates/iroha_core/src/sumeragi/lanes/merge.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_core/src/sumeragi/lanes/routing.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/tx.rs", "unavailable", "unavailable", 10],
-    ["crates/iroha_torii/src/lib_pipeline_handlers.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 4]
+    ["crates/iroha_torii/src/lib.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_torii/src/lib_pipeline_handlers.rs", "unavailable", "unavailable", 1]
    ]
   },
   {
@@ -5933,6 +5953,52 @@
     ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/recipients.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/recipients.rs", "unavailable", "unsupported", 1]
+   ]
+  },
+  {
+   "id": "zk_x509.der_profile",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/der.rs",
+   "symbol": "UnsupportedNamedCurve",
+   "gates": "The canonical DER profile rejects unsupported signature/public-key algorithms, named curves and universal tags. These are deterministic carried-byte/profile restrictions, not switches that enable a native implementation.",
+   "decided_by": "Exact carried bytes and selected actual implementation; no documentary runtime prerequisite.",
+   "attribution": "read",
+   "note": "The canonical DER profile rejects unsupported signature/public-key algorithms, named curves and universal tags. These are deterministic carried-byte/profile restrictions, not switches that enable a native implementation.",
+   "sites": [
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/der.rs", "unavailable", "unsupported", 4],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/errors.rs", "unavailable", "unsupported", 4]
+   ]
+  },
+  {
+   "id": "zk_x509.holder_lifecycle",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder.rs",
+   "symbol": "mod lifecycle;",
+   "gates": "Holder lifecycle is the prepare/prove/release ownership sequence. Its committed trust-anchor/CRL checks and original deadline remain binding; the module name is not protocol activation.",
+   "decided_by": "Exact carried bytes and selected actual implementation; no documentary runtime prerequisite.",
+   "attribution": "read",
+   "note": "Holder lifecycle is the prepare/prove/release ownership sequence. Its committed trust-anchor/CRL checks and original deadline remain binding; the module name is not protocol activation.",
+   "sites": [
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/holder.rs", "activation", "lifecycle", 2]
+   ]
+  },
+  {
+   "id": "sdk_bridge.x509_unavailable",
+   "kind": "activation_lifecycle",
+   "status": "unsupported",
+   "owner": "X.4",
+   "path": "crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs",
+   "symbol": "JointSecurityReductionIncomplete",
+   "gates": "The C X509 constructor reports the actual selected native missing-construction reason, including JointSecurityReductionIncomplete. A remote manifest or ordinary policy cannot make the local construction available.",
+   "decided_by": "Exact carried bytes and selected actual implementation; no documentary runtime prerequisite.",
+   "attribution": "read",
+   "note": "The C X509 constructor reports the actual selected native missing-construction reason, including JointSecurityReductionIncomplete. A remote manifest or ordinary policy cannot make the local construction available.",
+   "sites": [
+    ["crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs", "unavailable", "unavailable", 13]
    ]
   }
  ],
@@ -6325,11 +6391,7 @@
     },
     {
      "entry": "cfg.nexus.settlement_activation",
-     "fields": [
-      "atomic_private_settlement.enabled",
-      "atomic_private_settlement.activation_height",
-      "atomic_private_settlement.minimum_activation_notice_blocks"
-     ]
+     "fields": []
     },
     {
      "entry": "cfg.root_fees.committed_policy",
@@ -6414,7 +6476,7 @@
   "iroha_core_privacy": {
    "default": {"class": "packaging", "reason": "The default feature set of the crate."},
    "fastpq-replay-measurement": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
-   "privacy-release-evidence": {"class": "availability_gate", "entry": "feature.privacy_release_evidence", "cfg_sites": 12},
+   "privacy-release-evidence": {"class": "availability_gate", "entry": "feature.privacy_release_evidence", "cfg_sites": 14},
    "simd": {"class": "acceleration", "reason": "Hardware acceleration or parallelism with a deterministic scalar fallback."},
    "test-utils": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 18}
@@ -6581,8 +6643,8 @@
  },
  "summary": {
   "entries": 232,
-  "sites": 1576,
-  "by_status": {"done": 11, "local_resource": 24, "not_a_gate": 101, "open": 59, "out_of_plan": 21, "unsupported": 16},
-  "by_owner": {"-": 122, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 4, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 3, "P.5": 16, "P.8": 6, "P.9": 3, "R.12": 3, "S.1": 1, "S.3": 1, "S.4": 2, "S.5": 2, "X.4": 6}
+  "sites": 1491,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }
