@@ -595,16 +595,7 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
             .execution_outputs()
             .iter()
             .enumerate()
-            .filter_map(|(output_index, output)| {
-                use iroha_data_model::block::execution_output::ExecutionOutputV1;
-                let reason = output.result().as_ref().err()?;
-                let source = match output {
-                    ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
-                    ExecutionOutputV1::Pipeline(_) => format!("pipeline output[{output_index}]"),
-                    ExecutionOutputV1::Time(_) => format!("time output[{output_index}]"),
-                };
-                Some(format!("{source}: {reason:?}"))
-            })
+            .filter_map(|(output_index, output)| staged_genesis_output_error(output_index, output))
             .collect::<Vec<_>>();
         if transaction_errors.is_empty() {
             color_eyre::Report::new(error).wrap_err(format!(
@@ -635,6 +626,30 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
         projection,
     })
 }
+// Diagnostics retain the concrete rejection and source position without changing
+// the lifecycle carrier or treating its presence as execution authority.
+fn staged_genesis_output_error(
+    output_index: usize,
+    output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
+) -> Option<String> {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+
+    let reason = output.result().as_ref().err()?;
+    let source = match output {
+        ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
+        ExecutionOutputV1::NetworkWithLifecycle(row) => {
+            format!("transaction[{}]", row.execution.input_index)
+        }
+        ExecutionOutputV1::Pipeline(_) | ExecutionOutputV1::PipelineWithLifecycle(_) => {
+            format!("pipeline output[{output_index}]")
+        }
+        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
+            format!("time output[{output_index}]")
+        }
+    };
+    Some(format!("{source}: {reason:?}"))
+}
+
 /// Build the original fresh-node State once, before any genesis instruction executes.
 /// Both normal staging and the genuine native execution fixture use this configuration owner.
 ///
@@ -905,6 +920,91 @@ fn install_staged_nexus_policies(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn staged_output_diagnostics_preserve_lifecycle_sources_and_rejections() {
+        use iroha_data_model::{
+            block::execution_output::{
+                EXECUTION_OUTPUT_LIMIT_REASON, ExecutionOutputV1, NetworkExecutionOutputV1,
+                NetworkExecutionOutputV2, PipelineEventPositionV1, PipelineInvocationV1,
+                TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
+            },
+            events::time::{TimeEvent, TimeInterval},
+            prelude::Hash,
+            transaction::signed::TransactionResult,
+        };
+
+        let trigger = TriggerUseV1 {
+            trigger_id: "diagnostic_trigger".parse().unwrap(),
+            registered_at_height: 0,
+            action_hash: Hash::new(b"diagnostic action"),
+        };
+        let pipeline = PipelineInvocationV1 {
+            event: PipelineEventPositionV1::Network(37),
+            candidate_index: 4,
+            trigger: trigger.clone(),
+        };
+        let time = TimeInvocationV1 {
+            schedule_index: 9,
+            event: TimeEvent::new(TimeInterval::new(
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(2),
+            )),
+            trigger,
+        };
+        for (output, source) in [
+            (
+                ExecutionOutputV1::network_output_limit_rejection(37),
+                "transaction[37]",
+            ),
+            (
+                ExecutionOutputV1::network_lifecycle_output_limit_rejection(37),
+                "transaction[37]",
+            ),
+            (
+                ExecutionOutputV1::pipeline_output_limit_rejection(pipeline.clone()),
+                "pipeline output[2]",
+            ),
+            (
+                ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline),
+                "pipeline output[2]",
+            ),
+            (
+                ExecutionOutputV1::time_output_limit_rejection(time.clone()),
+                "time output[2]",
+            ),
+            (
+                ExecutionOutputV1::time_lifecycle_output_limit_rejection(time),
+                "time output[2]",
+            ),
+        ] {
+            let original = output.clone();
+            let reason = output.result().as_ref().unwrap_err();
+            let diagnostic = super::staged_genesis_output_error(2, &output).unwrap();
+            assert_eq!(diagnostic, format!("{source}: {reason:?}"));
+            assert!(diagnostic.contains(EXECUTION_OUTPUT_LIMIT_REASON));
+            assert_eq!(
+                output, original,
+                "diagnostics must not change lifecycle evidence"
+            );
+        }
+        let success = NetworkExecutionOutputV1 {
+            input_index: 37,
+            result: TransactionResult::new(Ok(Default::default())),
+            completions: Vec::new(),
+        };
+        for output in [
+            ExecutionOutputV1::Network(success.clone()),
+            ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                execution: success,
+                trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                    effects: Vec::new(),
+                },
+            }),
+        ] {
+            assert_eq!(super::staged_genesis_output_error(2, &output), None);
+        }
+    }
+
     fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
         let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         iroha_genesis::default_staking_policy(
