@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_data_model::{
+    isi::privacy::SubmitPrivacyProofV1,
     privacy::*,
     transaction::{TransactionBuilder, TransactionPayload, signed_attachments::*},
 };
