@@ -436,11 +436,7 @@ fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
+    left.file_size() == right.file_size()
         && left.file_attributes() == right.file_attributes()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
