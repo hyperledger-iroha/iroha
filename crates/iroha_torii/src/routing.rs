@@ -24823,6 +24823,11 @@ pub async fn handle_get_contract_deploy_bundle_status(
     kura: Arc<Kura>,
     axum::extract::Path(bundle_digest): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse> {
+    // Bundle digests are hex-encoded 32-byte hashes (see `contract_bundle_digest`);
+    // anything else must not reach the filesystem path built from it.
+    if bundle_digest.len() != 64 || !bundle_digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    }
     let chain_fingerprint = current_chain_fingerprint(&chain_id, &kura);
     let Some(receipt) = load_contract_bundle_receipt(&bundle_digest, &chain_fingerprint)? else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -25104,6 +25109,48 @@ mod contract_bundle_tests {
             sample_alias("greeter::universal")
         );
         assert_eq!(loaded.assertions[0].status, "passed");
+    }
+
+    #[tokio::test]
+    async fn bundle_status_rejects_digest_outside_receipt_root() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let receipt = DeployContractBundleReceiptDto {
+            ok: true,
+            bundle_name: "planted".to_owned(),
+            bundle_digest: "planted".to_owned(),
+            chain_fingerprint: "chain@block1".to_owned(),
+            dry_run: false,
+            completed_stages: Vec::new(),
+            failure_point: None,
+            contracts: Vec::new(),
+            init_calls: Vec::new(),
+            assertions: Vec::new(),
+        };
+        let body = norito::json::to_json_pretty(&receipt).expect("encode receipt");
+        let planted = dir.path().join("planted.json");
+        std::fs::write(&planted, body).expect("plant receipt");
+
+        let creds = crate::test_utils::random_authority();
+        let (_state, kura, _queue, chain_id) = contract_test_state(&creds.account);
+        // A legitimate receipt for the current chain creates the per-chain directory.
+        let mut existing = receipt.clone();
+        existing.bundle_digest = "ab".repeat(32);
+        existing.chain_fingerprint = current_chain_fingerprint(&chain_id, &kura);
+        persist_contract_bundle_receipt(&existing).expect("persist receipt");
+
+        let absolute = planted.with_extension("").display().to_string();
+        for digest in ["../../planted", absolute.as_str(), "..", "digest-1"] {
+            let resp = handle_get_contract_deploy_bundle_status(
+                chain_id.clone(),
+                kura.clone(),
+                axum::extract::Path(digest.to_owned()),
+            )
+            .await
+            .expect("handler response")
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "digest {digest:?}");
+        }
     }
 
     #[test]
