@@ -108,7 +108,7 @@ types, source path, sorted features, and the complete Cargo profile, and fails
 closed when any identity field is missing. A baseline is usable only when its
 scope, manifest, packages, target selection, workspace/locked mode, budget
 policy, and exact Rust release match the current command. The PR affected lane
-therefore runs the guard with Rust 1.93.1.
+therefore runs the guard with Rust 1.99.1.
 
 ## Build-efficiency lineage provenance
 

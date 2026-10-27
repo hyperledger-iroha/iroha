@@ -123,6 +123,7 @@
 #![forbid(unsafe_code)]
 
 pub mod check;
+pub mod contract;
 pub mod cs;
 pub mod frontend;
 pub mod keys;

@@ -23,11 +23,12 @@ fn retained_archive(
     sources: &Sources,
     fixture: &Fixture,
     frames: &[Vec<u8>; 4],
+    send: &[u8; 32],
     evidence: &[u8],
     credit_id: [u8; 32],
 ) -> Vec<u8> {
     let before = wallet.snapshot().unwrap();
-    let original = complete(wallet.accept_credited(evidence).unwrap());
+    let original = archive::completed(wallet, send, evidence);
     let package: KagemushaWalletPackageV1 = decode(&original);
     let credential = KagemushaWalletCredentialV1::decode_canonical(
         &frames[0],
@@ -243,7 +244,15 @@ fn continue_retained_archives_then_unload_without_repeating_transfers() {
         [&credited_ab, &credited_bc],
     );
     // Recover the current Archive through the same exact-replay verifier used after interruption.
-    let archived_ab = retained_archive(&mut a, &sources, &f, &frames_a, &credited_ab, credit_ab);
+    let archived_ab = retained_archive(
+        &mut a,
+        &sources,
+        &f,
+        &frames_a,
+        &[212; 32],
+        &credited_ab,
+        credit_ab,
+    );
     for (name, bytes, pin) in [
         ("retained-payment.norito", &payment_ab, "payment_sha256"),
         ("retained-archive.norito", &archived_ab, "archive_sha256"),
@@ -299,7 +308,7 @@ fn continue_retained_archives_then_unload_without_repeating_transfers() {
     let mut a = sources.open(&device_a, &f, &frames_a);
     assert_eq!(a.snapshot().unwrap(), folded);
     assert_eq!(
-        complete(a.accept_credited(&credited_ab).unwrap()),
+        archive::completed(&mut a, &[212; 32], &credited_ab),
         archived_ab
     );
     assert_eq!(a.snapshot().unwrap(), folded);
@@ -319,7 +328,15 @@ fn continue_retained_archives_then_unload_without_repeating_transfers() {
     // Only the remaining original B Archive and C Unload are now allowed to sign.
     device_b.platform.with(|state| state.sign_fault_at = None);
     device_c.platform.with(|state| state.sign_fault_at = None);
-    let (b, archived_bc) = archive::exercise(b, &device_b, &sources, &f_b, &frames_b, &credited_bc);
+    let (b, archived_bc) = archive::exercise(
+        b,
+        &device_b,
+        &sources,
+        &f_b,
+        &frames_b,
+        &[222; 32],
+        &credited_bc,
+    );
     finish_unload(
         &output,
         &sources,

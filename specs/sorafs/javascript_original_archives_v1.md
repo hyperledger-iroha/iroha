@@ -2,7 +2,7 @@
 
 `scripts/sorafs_javascript_archive.py` is the shared content parser for the
 pending installed SoraFS JavaScript producer and original-index adapter.
-`scripts/sorafs_javascript_dependencies.py` joins the nine original production
+`scripts/sorafs_javascript_dependencies.py` joins the seven original production
 dependency tarballs to the independently selected candidate lock.
 `scripts/sorafs_javascript_package_source.py` joins package content to captured
 source and checksum bytes. These are pure byte consumers. They perform no
@@ -51,9 +51,9 @@ counts are bounded before UTF-8 encoding or prefix allocation.
 
 The lock is exact original `package-lock.json` V3 with a separately supplied
 SHA-256 identity and the reviewed root dependency declarations. The closure is
-the nine current production locations: ciphers 1.3.0, curves 1.9.7, hashes 1.8.0,
-base 2.2.0, bip39 2.2.0, bip39's nested hashes 2.2.0, base64-js 1.5.1, buffer 6.0.3
-and ieee754 1.2.1. Package names alone cannot replace placement. Version,
+the seven current production locations: ciphers, curves, hashes and bip39
+2.4.0, base64-js 1.5.1, buffer 6.0.3 and ieee754 1.2.1. Curves and bip39 share
+the sole root hashes owner. Package names alone cannot replace placement. Version,
 registry URL, canonical single SHA-512 integrity and dependency edges are exact;
 metadata projections must rederive the original lock bytes.
 
@@ -76,16 +76,18 @@ The source owner must supply a complete authenticated candidate census: every
 lock, `scripts/build-dist.mjs` and the unpublished prepack dependency/runtime
 guard `scripts/check-node-engine.mjs` plus its pure `node-engine-contract.mjs`
 sibling. Exact package/build/engine recipe
-SHA-256 pins identify the reviewed selection. All 23 mandatory build outputs and
+SHA-256 pins identify the reviewed selection. All 27 mandatory build outputs and
 six consumer entrypoints are required. Source paths follow the reviewed flat,
-`public/` or `kotodamaCompiler/` layout with ordinary ASCII module basenames,
+`public/`, `kotodamaCompiler/`, `petal/` or `query/` layout with ordinary ASCII module basenames,
 optional `.browser`, and `.js`/`.d.ts` suffixes. Selector files, unreviewed
 directories and names that npm would silently omit reject; this owner does not
 reimplement npm ignore rules.
 
 The recipe copies each source byte unchanged to `dist/`; literal members retain
 their bytes, and npm's implicit recipe README is included. Current source has
-202 census inputs and 199 package members. Complete member names, content and
+263 census inputs and 260 package members, including 221 copied source
+modules. The reviewed expansion from the prior 234-input census comprises
+28 source modules and the literal `recipes/iso_bridge_context.mjs` member. Complete member names, content and
 0644 permissions must match, with no extra native addon or test payload. The
 checksum manifest is a separately held original, never selected from a stale
 dist tree. Its public staged copy uses 0644; original custody permissions do not
@@ -102,7 +104,7 @@ and physical input custody remain producer/index-adapter responsibilities.
 `scripts/sorafs_javascript_installed.py` consumes the same original package,
 source and dependency owners to derive exact node_modules paths, bytes and
 modes. `sorafs_javascript_install_metadata.py` requires the generated hidden
-lock's exact ten-package graph, SDK SHA-512, original dependency integrity and
+lock's exact eight-package graph, SDK SHA-512, original dependency integrity and
 fixed private consumer metadata. Missing or foreign generated metadata rejects.
 The native artifact stays separately admitted outside the portable package.
 
@@ -151,6 +153,10 @@ controls; orchestrator local-fixture providers do not qualify deployment.
 
 The source contract fixture and TypeScript AST controls enforce unchanged
 statements, assertions, names, callback bodies, helpers and closed imports.
+TypeScript 7 parses the captured text; each digest binds the node kind and
+complete original source text instead of depending on printer normalization.
+The migration preserves the original six suite bodies, 172 assertions and
+46 top-level plus nine nested cases.
 Registration controls do not execute native assertion bodies and cannot supply
 an installed execution report. The final observer must verify actual complete
 case results, with no missing, extra, duplicate, failed, skipped or todo cases.

@@ -1,12 +1,3 @@
-const EXPLORER_HASH_A: &str = "abababababababababababababababababababababababababababababababab";
-const EXPLORER_HASH_B: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
-const EXPLORER_DEFINITION: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
-const EXPLORER_ACCOUNT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-
-fn explorer_asset_literal(account: &str) -> String {
-    format!("{EXPLORER_DEFINITION}#{account}")
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn managed_status_stream_throttles_metrics_requests() {
     let Some(server) = try_start_mock_server() else {
@@ -483,9 +474,12 @@ async fn execute_query_decodes_response() {
         0,
         None,
     );
-    let encoded = norito::to_bytes(&query_output).expect("encode query output");
+    let encoded =
+        norito::to_bytes(&QueryResponse::Iterable(query_output)).expect("encode query response");
     let mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/query");
+        when.method(POST)
+            .path("/v1/query")
+            .header("accept", NORITO_MIME_TYPE);
         then.status(200).body(encoded.clone());
     });
     let keypair = KeyPair::random();
@@ -1138,114 +1132,6 @@ state_tiered_hot_entries 10
     assert_eq!(snapshot.sumeragi_tx_queue_depth, Some(5.0));
     assert_eq!(snapshot.state_tiered_hot_entries, Some(10.0));
 }
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_blocks_page_supports_query_params() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = format!(
-        r#"{{
-  "pagination":{{"page":1,"per_page":2,"total_pages":2,"total_items":4}},
-  "items":[
-{{
-  "hash":"{EXPLORER_HASH_A}",
-  "height":5,
-  "created_at":"2026-01-01T00:00:00Z",
-  "prev_block_hash":null,
-  "transactions_hash":null,
-  "transactions_rejected":0,
-  "transactions_total":1
-}},
-{{
-  "hash":"{EXPLORER_HASH_B}",
-  "height":6,
-  "created_at":"2026-01-01T01:00:00Z",
-  "prev_block_hash":"{EXPLORER_HASH_A}",
-  "transactions_hash":null,
-  "transactions_rejected":1,
-  "transactions_total":3
-}}
-  ]
-}}"#
-    );
-    let mock = server.mock(move |when, then| {
-        when.method(GET)
-            .path("/v1/explorer/blocks")
-            .query_param("page", "1")
-            .query_param("per_page", "2");
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(body.clone());
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_blocks_page(ExplorerBlocksQuery {
-            page: Some(1),
-            per_page: Some(2),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert_eq!(page.pagination.per_page, 2);
-    assert_eq!(page.items.len(), 2);
-    assert_eq!(page.items[0].hash, EXPLORER_HASH_A);
-    assert_eq!(page.items[1].hash, EXPLORER_HASH_B);
-    assert_eq!(page.items[1].transactions_rejected, 1);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_blocks_page_binds_default_pagination() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/blocks")
-            .query_param("page", "1")
-            .query_param("per_page", "10");
-        then.status(200).body(
-            r#"{
-  "pagination":{"page":1,"per_page":10,"total_pages":0,"total_items":0},
-  "items":[]
-}"#,
-        );
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_blocks_page(ExplorerBlocksQuery::default())
-        .await
-        .expect("default page");
-    mock.assert();
-    assert_eq!(page.pagination.page, 1);
-    assert_eq!(page.pagination.per_page, 10);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_blocks_page_rejects_mismatched_pagination() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/blocks")
-            .query_param("page", "2")
-            .query_param("per_page", "5");
-        then.status(200).body(
-            r#"{
-  "pagination":{"page":1,"per_page":5,"total_pages":0,"total_items":0},
-  "items":[]
-}"#,
-        );
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let error = client
-        .fetch_blocks_page(ExplorerBlocksQuery {
-            page: Some(2),
-            per_page: Some(5),
-        })
-        .await
-        .expect_err("response pagination must remain bound to the request");
-    mock.assert();
-    assert!(error.to_string().contains("requested page"));
-}
 #[test]
 fn metrics_parser_ignores_comments_and_labels() {
     let body = r#"
@@ -1391,584 +1277,6 @@ fn metrics_snapshot_cold_entry_ratio_handles_missing_totals() {
     );
 }
 #[test]
-fn explorer_block_record_accepts_canonical_fields() {
-    let value = norito::json!({
-        "hash":EXPLORER_HASH_A,
-        "height":9,
-        "created_at":"2026-02-10T00:00:00Z",
-        "prev_block_hash":null,
-        "transactions_hash":null,
-        "transactions_rejected":0,
-        "transactions_total":3
-    });
-    let record = ExplorerBlockRecord::from_json(&value).expect("record");
-    assert_eq!(record.hash, EXPLORER_HASH_A);
-    assert_eq!(record.height, 9);
-    assert_eq!(record.created_at.as_deref(), Some("2026-02-10T00:00:00Z"));
-    assert!(record.prev_block_hash.is_none());
-    assert_eq!(record.transactions_total, 3);
-}
-#[test]
-fn explorer_block_record_accepts_missing_journal_timestamp_marker() {
-    let value = norito::json!({
-        "hash":EXPLORER_HASH_A,
-        "height":9,
-        "created_at":"",
-        "prev_block_hash":null,
-        "transactions_hash":null,
-        "transactions_rejected":0,
-        "transactions_total":0
-    });
-    let record = ExplorerBlockRecord::from_json(&value).expect("hash-only journal record");
-    assert!(record.created_at.is_none());
-}
-#[test]
-fn explorer_block_record_rejects_noncanonical_timestamps_and_counts() {
-    for timestamp in [
-        "2026-02-30T00:00:00Z",
-        "2026-02-10 00:00:00Z",
-        "2026-02-10T00:00:00+00:00",
-        "2026-02-10T00:00:00.1234567890Z",
-        "2026-02-10T00:00:60Z",
-    ] {
-        let value = norito::json!({
-            "hash":EXPLORER_HASH_A,
-            "height":9,
-            "created_at":timestamp,
-            "prev_block_hash":null,
-            "transactions_hash":null,
-            "transactions_rejected":0,
-            "transactions_total":0
-        });
-        let error = ExplorerBlockRecord::from_json(&value)
-            .expect_err("noncanonical Explorer timestamps must fail closed");
-        assert!(error.to_string().contains("canonical UTC RFC3339"));
-    }
-
-    let invalid_counts = norito::json!({
-        "hash":EXPLORER_HASH_A,
-        "height":9,
-        "created_at":"2024-02-29T00:00:00.123456789Z",
-        "prev_block_hash":null,
-        "transactions_hash":null,
-        "transactions_rejected":2,
-        "transactions_total":1
-    });
-    let error = ExplorerBlockRecord::from_json(&invalid_counts)
-        .expect_err("rejected transaction count must fit the total");
-    assert!(error.to_string().contains("must not exceed"));
-}
-#[test]
-fn explorer_block_record_rejects_aliases_and_string_numerics() {
-    let aliased = norito::json!({
-        "block_hash":EXPLORER_HASH_A,
-        "height":9,
-        "createdAt":"2026-02-10T00:00:00Z",
-        "transactionsRejected":0,
-        "transactionsTotal":3
-    });
-    let error = ExplorerBlockRecord::from_json(&aliased)
-        .expect_err("noncanonical field aliases must be rejected");
-    assert!(error.to_string().contains("must contain exactly"));
-
-    let string_numeric = norito::json!({
-        "hash":EXPLORER_HASH_A,
-        "height":"9",
-        "created_at":"2026-02-10T00:00:00Z",
-        "prev_block_hash":null,
-        "transactions_hash":null,
-        "transactions_rejected":0,
-        "transactions_total":3
-    });
-    let error = ExplorerBlockRecord::from_json(&string_numeric)
-        .expect_err("string-encoded numbers must be rejected");
-    assert!(error.to_string().contains("unsigned integer"));
-}
-#[test]
-fn explorer_block_record_requires_explicit_nullable_hash_fields() {
-    let missing = norito::json!({
-        "hash":EXPLORER_HASH_A,
-        "height":9,
-        "created_at":"2026-02-10T00:00:00Z",
-        "transactions_rejected":0,
-        "transactions_total":3
-    });
-    let error = ExplorerBlockRecord::from_json(&missing)
-        .expect_err("canonical nullable hash fields must be explicit");
-    assert!(error.to_string().contains("must contain exactly"));
-
-    for field in ["prev_block_hash", "transactions_hash"] {
-        let mut value = norito::json!({
-            "hash":EXPLORER_HASH_A,
-            "height":9,
-            "created_at":"2026-02-10T00:00:00Z",
-            "prev_block_hash":null,
-            "transactions_hash":null,
-            "transactions_rejected":0,
-            "transactions_total":3
-        });
-        value
-            .as_object_mut()
-            .expect("block object")
-            .insert(field.to_owned(), norito::json::Value::String(String::new()));
-        let error = ExplorerBlockRecord::from_json(&value)
-            .expect_err("an empty optional hash is not canonical null");
-        assert!(error.to_string().contains("value cannot be empty"));
-    }
-}
-#[test]
-fn explorer_block_record_rejects_surrounding_whitespace() {
-    for (field, padded) in [
-        (
-            "hash",
-            " abababababababababababababababababababababababababababababababab",
-        ),
-        ("created_at", "2026-02-10T00:00:00Z "),
-        (
-            "prev_block_hash",
-            " abababababababababababababababababababababababababababababababab ",
-        ),
-    ] {
-        let mut value = norito::json!({
-            "hash":EXPLORER_HASH_A,
-            "height":9,
-            "created_at":"2026-02-10T00:00:00Z",
-            "prev_block_hash":null,
-            "transactions_hash":null,
-            "transactions_rejected":0,
-            "transactions_total":3
-        });
-        value.as_object_mut().expect("block object").insert(
-            field.to_owned(),
-            norito::json::Value::String(padded.to_owned()),
-        );
-        let error = ExplorerBlockRecord::from_json(&value)
-            .expect_err("padded Explorer values must not be normalized");
-        assert!(error.to_string().contains("surrounding whitespace"));
-    }
-}
-#[test]
-fn explorer_blocks_page_rejects_noncanonical_pagination() {
-    let item = norito::json!({
-        "hash":EXPLORER_HASH_A,
-        "height":9,
-        "created_at":"2026-02-10T00:00:00Z",
-        "prev_block_hash":null,
-        "transactions_hash":null,
-        "transactions_rejected":0,
-        "transactions_total":3
-    });
-    let aliased = norito::json!({
-        "pagination":{"page":1,"perPage":1,"totalPages":1,"totalItems":1},
-        "items":[(item.clone())]
-    });
-    let error =
-        ExplorerBlocksPage::from_json(&aliased).expect_err("pagination aliases must be rejected");
-    assert!(error.to_string().contains("must contain exactly"));
-
-    let string_numeric = norito::json!({
-        "pagination":{"page":"1","per_page":1,"total_pages":1,"total_items":1},
-        "items":[item]
-    });
-    let error = ExplorerBlocksPage::from_json(&string_numeric)
-        .expect_err("string-encoded pagination numbers must be rejected");
-    assert!(error.to_string().contains("unsigned integer"));
-
-    let incoherent = norito::json!({
-        "pagination":{"page":1,"per_page":2,"total_pages":1,"total_items":3},
-        "items":[]
-    });
-    let error = ExplorerBlocksPage::from_json(&incoherent)
-        .expect_err("pagination totals must describe one coherent page count");
-    assert!(error.to_string().contains("ceil(total_items / per_page)"));
-}
-#[test]
-fn explorer_blocks_page_errors_when_items_invalid() {
-    let value = norito::json!({
-        "pagination":{"page":1,"per_page":1,"total_pages":0,"total_items":0},
-        "items":{"block_hash":"aa"}
-    });
-    let err = ExplorerBlocksPage::from_json(&value).expect_err("expected failure");
-    assert!(matches!(err, ToriiError::Decode(_)));
-}
-#[test]
-fn explorer_blocks_page_enforces_the_first_release_page_bound() {
-    let oversized_page = norito::json!({
-        "pagination":{"page":1,"per_page":101,"total_pages":0,"total_items":0},
-        "items":[]
-    });
-    let error = ExplorerBlocksPage::from_json(&oversized_page)
-        .expect_err("oversized pagination must be rejected");
-    assert!(error.to_string().contains("between 1 and 100"));
-
-    let too_many_items = norito::json!({
-        "pagination":{"page":1,"per_page":1,"total_pages":2,"total_items":2},
-        "items":[
-            {"hash":EXPLORER_HASH_A,"height":1,"created_at":"","prev_block_hash":null,"transactions_hash":null,"transactions_rejected":0,"transactions_total":0},
-            {"hash":EXPLORER_HASH_B,"height":2,"created_at":"","prev_block_hash":EXPLORER_HASH_A,"transactions_hash":null,"transactions_rejected":0,"transactions_total":0}
-        ]
-    });
-    let error = ExplorerBlocksPage::from_json(&too_many_items)
-        .expect_err("response items must fit pagination.per_page");
-    assert!(error.to_string().contains("at most 1 entries"));
-
-    let too_few_items = norito::json!({
-        "pagination":{"page":1,"per_page":2,"total_pages":1,"total_items":2},
-        "items":[
-            {"hash":EXPLORER_HASH_A,"height":2,"created_at":"","prev_block_hash":null,"transactions_hash":null,"transactions_rejected":0,"transactions_total":0}
-        ]
-    });
-    let error = ExplorerBlocksPage::from_json(&too_few_items)
-        .expect_err("response items must exactly match declared pagination");
-    assert!(error.to_string().contains("exactly 2 entries"));
-}
-#[tokio::test(flavor = "current_thread")]
-async fn explorer_blocks_query_rejects_invalid_bounds_before_http() {
-    let client = ToriiClient::new("http://127.0.0.1:9").expect("client");
-    for query in [
-        ExplorerBlocksQuery {
-            page: Some(0),
-            per_page: Some(1),
-        },
-        ExplorerBlocksQuery {
-            page: Some(1),
-            per_page: Some(0),
-        },
-        ExplorerBlocksQuery {
-            page: Some(1),
-            per_page: Some(101),
-        },
-    ] {
-        let error = client
-            .fetch_blocks_page(query)
-            .await
-            .expect_err("invalid block pagination must fail locally");
-        assert!(matches!(error, ToriiError::Decode(_)));
-    }
-}
-#[test]
-fn explorer_asset_record_decodes_payload() {
-    let asset_id = explorer_asset_literal(EXPLORER_ACCOUNT);
-    let value = norito::json!({
-        "id": asset_id,
-        "definition_id": EXPLORER_DEFINITION,
-        "account_id": EXPLORER_ACCOUNT,
-        "value": "10"
-    });
-    let record = ExplorerAssetRecord::from_json(&value).expect("record");
-    assert_eq!(record.id, explorer_asset_literal(EXPLORER_ACCOUNT));
-    assert_eq!(record.account_id, EXPLORER_ACCOUNT);
-    assert_eq!(record.value, "10");
-}
-#[test]
-fn explorer_asset_record_rejects_unknown_fields() {
-    let value = norito::json!({
-        "id": (explorer_asset_literal(EXPLORER_ACCOUNT)),
-        "definition_id": EXPLORER_DEFINITION,
-        "account_id": EXPLORER_ACCOUNT,
-        "value": "10",
-        "legacy_value": "10"
-    });
-    let error = ExplorerAssetRecord::from_json(&value)
-        .expect_err("unknown Explorer fields must fail closed");
-    assert!(error.to_string().contains("must contain exactly"));
-}
-#[test]
-fn explorer_asset_record_rejects_padded_strings() {
-    let value = norito::json!({
-        "id": (format!(" {}", explorer_asset_literal(EXPLORER_ACCOUNT))),
-        "definition_id": EXPLORER_DEFINITION,
-        "account_id": EXPLORER_ACCOUNT,
-        "value": "10"
-    });
-    let error = ExplorerAssetRecord::from_json(&value)
-        .expect_err("padded Explorer identifiers must not be normalized");
-    assert!(error.to_string().contains("surrounding whitespace"));
-}
-#[test]
-fn explorer_asset_record_rejects_noncanonical_or_unbound_fields() {
-    let canonical_id = explorer_asset_literal(EXPLORER_ACCOUNT);
-    let other_definition = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("other", "universal").expect("domain"),
-        "other".parse().expect("name"),
-    )
-    .to_string();
-    for (value, needle) in [
-        (
-            norito::json!({
-                "id": EXPLORER_DEFINITION,
-                "definition_id": EXPLORER_DEFINITION,
-                "account_id": EXPLORER_ACCOUNT,
-                "value": "10"
-            }),
-            "canonical asset id",
-        ),
-        (
-            norito::json!({
-                "id": (canonical_id.clone()),
-                "definition_id": other_definition,
-                "account_id": EXPLORER_ACCOUNT,
-                "value": "10"
-            }),
-            "definition_id",
-        ),
-        (
-            norito::json!({
-                "id": (canonical_id.clone()),
-                "definition_id": EXPLORER_DEFINITION,
-                "account_id": (BOB_ID.to_string()),
-                "value": "10"
-            }),
-            "account_id",
-        ),
-        (
-            norito::json!({
-                "id": canonical_id,
-                "definition_id": EXPLORER_DEFINITION,
-                "account_id": EXPLORER_ACCOUNT,
-                "value": "10.0"
-            }),
-            "canonical quantity spelling",
-        ),
-    ] {
-        let error = ExplorerAssetRecord::from_json(&value)
-            .expect_err("inconsistent Explorer asset fields must fail closed");
-        assert!(error.to_string().contains(needle), "{error}");
-    }
-}
-#[test]
-fn explorer_assets_page_validates_entries() {
-    let value = norito::json!({
-        "pagination":{"limit":10,"next_cursor":null,"has_more":false},
-        "items":[
-            {"id":(explorer_asset_literal(EXPLORER_ACCOUNT)),"definition_id":EXPLORER_DEFINITION,"account_id":EXPLORER_ACCOUNT,"value":"10"}
-        ]
-    });
-    let page = ExplorerAssetsPage::from_json(&value).expect("page");
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].definition_id, EXPLORER_DEFINITION);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_assets_page_applies_filters() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let body = norito::json!({
-        "pagination":{"limit":50,"next_cursor":null,"has_more":false},
-        "items":[{"id":(explorer_asset_literal(EXPLORER_ACCOUNT)),"definition_id":EXPLORER_DEFINITION,"account_id":EXPLORER_ACCOUNT,"value":"10"}]
-    });
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/assets")
-            .query_param("limit", "50")
-            .query_param("owned_by", EXPLORER_ACCOUNT)
-            .query_param("definition", EXPLORER_DEFINITION);
-        then.status(200)
-            .body(norito::json::to_string(&body).expect("serialize"));
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_assets_page(ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(50),
-            owned_by: Some(EXPLORER_ACCOUNT.into()),
-            definition: Some(EXPLORER_DEFINITION.into()),
-        })
-        .await
-        .expect("page");
-    mock.assert();
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].account_id, EXPLORER_ACCOUNT);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_assets_page_binds_default_limit() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/assets")
-            .query_param("limit", "25");
-        then.status(200).body(
-            r#"{
-  "pagination":{"limit":25,"next_cursor":null,"has_more":false},
-  "items":[]
-}"#,
-        );
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let page = client
-        .fetch_explorer_assets_page(ExplorerAssetsQuery::default())
-        .await
-        .expect("default asset page");
-    mock.assert();
-    assert_eq!(page.pagination.limit, 25);
-}
-#[tokio::test(flavor = "current_thread")]
-async fn fetch_explorer_assets_page_rejects_mismatched_limit() {
-    let Some(server) = try_start_mock_server() else {
-        return;
-    };
-    let mock = server.mock(|when, then| {
-        when.method(GET)
-            .path("/v1/explorer/assets")
-            .query_param("limit", "5");
-        then.status(200).body(
-            r#"{
-  "pagination":{"limit":4,"next_cursor":null,"has_more":false},
-  "items":[]
-}"#,
-        );
-    });
-    let client = ToriiClient::new(server.url("/")).expect("client");
-    let error = client
-        .fetch_explorer_assets_page(ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(5),
-            owned_by: None,
-            definition: None,
-        })
-        .await
-        .expect_err("response limit must remain bound to the request");
-    mock.assert();
-    assert!(error.to_string().contains("requested limit"));
-}
-#[test]
-fn explorer_cursor_metadata_rejects_inconsistent_continuation() {
-    let value = norito::json!({
-        "limit": 25,
-        "next_cursor": null,
-        "has_more": true
-    });
-    let error = ExplorerCursorMeta::from_json(&value, "cursor metadata")
-        .expect_err("inconsistent metadata must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("has_more must match next_cursor")
-    );
-}
-#[test]
-fn explorer_cursor_rejects_noncanonical_trailing_bits() {
-    assert_eq!(
-        validate_explorer_cursor("AA", "cursor").expect("canonical cursor"),
-        "AA"
-    );
-    let error = validate_explorer_cursor("AB", "cursor")
-        .expect_err("non-zero unused base64url bits must fail");
-    assert!(error.to_string().contains("canonical base64url"));
-}
-#[test]
-fn explorer_assets_page_rejects_unknown_fields_and_oversized_items() {
-    fn assert_rejected(value: &norito::json::Value, needle: &str) {
-        let error = ExplorerAssetsPage::from_json(value).expect_err("assets page must fail closed");
-        assert!(error.to_string().contains(needle));
-    }
-    let unexpected_page_field = norito::json!({
-        "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
-        "items": [],
-        "page": 1
-    });
-    assert_rejected(&unexpected_page_field, "must contain exactly");
-    let unexpected_metadata_field = norito::json!({
-        "pagination": {
-            "limit": 1,
-            "next_cursor": null,
-            "has_more": false,
-            "total_items": 0
-        },
-        "items": []
-    });
-    assert_rejected(&unexpected_metadata_field, "must contain exactly");
-    let oversized_items = norito::json!({
-        "pagination": {"limit": 1, "next_cursor": null, "has_more": false},
-        "items": [{}, {}]
-    });
-    assert_rejected(&oversized_items, "must contain at most 1 entries");
-}
-#[tokio::test(flavor = "current_thread")]
-async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
-    let client = ToriiClient::new("http://127.0.0.1:9").expect("client");
-    let limit_error = client
-        .fetch_explorer_assets_page(ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(101),
-            owned_by: None,
-            definition: None,
-        })
-        .await
-        .expect_err("oversized limit must fail locally");
-    assert!(limit_error.to_string().contains("between 1 and 100"));
-    let cursor_error = client
-        .fetch_explorer_assets_page(ExplorerAssetsQuery {
-            cursor: Some("padded==".to_owned()),
-            limit: Some(25),
-            owned_by: None,
-            definition: None,
-        })
-        .await
-        .expect_err("padded cursor must fail locally");
-    assert!(cursor_error.to_string().contains("canonical base64url"));
-    let trailing_bits_error = client
-        .fetch_explorer_assets_page(ExplorerAssetsQuery {
-            cursor: Some("AB".to_owned()),
-            limit: Some(25),
-            owned_by: None,
-            definition: None,
-        })
-        .await
-        .expect_err("cursor with non-zero unused bits must fail locally");
-    assert!(
-        trailing_bits_error
-            .to_string()
-            .contains("canonical base64url")
-    );
-    for query in [
-        ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(25),
-            owned_by: Some("   ".to_owned()),
-            definition: None,
-        },
-        ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(25),
-            owned_by: None,
-            definition: Some(String::new()),
-        },
-    ] {
-        let error = client
-            .fetch_explorer_assets_page(query)
-            .await
-            .expect_err("blank filters must fail locally");
-        assert!(
-            error
-                .to_string()
-                .contains("must be non-empty and contain no surrounding whitespace")
-        );
-    }
-    for query in [
-        ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(25),
-            owned_by: Some("alice@wonderland".to_owned()),
-            definition: None,
-        },
-        ExplorerAssetsQuery {
-            cursor: None,
-            limit: Some(25),
-            owned_by: None,
-            definition: Some("usd#sora".to_owned()),
-        },
-    ] {
-        let error = client
-            .fetch_explorer_assets_page(query)
-            .await
-            .expect_err("noncanonical Explorer filters must fail locally");
-        assert!(error.to_string().contains("must be a canonical"), "{error}");
-    }
-}
-#[test]
 fn encode_lower_hex_is_exact() {
     assert_eq!(encode_lower_hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
 }
@@ -1998,7 +1306,7 @@ fn parse_pipeline_smoke_status_reports_exact_state_rejection() {
     });
     assert_eq!(
         parse_pipeline_smoke_status(&value, &hash).expect("exact Rejected status"),
-        SmokeTransactionStatus::Rejected("rejected".to_owned())
+        SmokeTransactionStatus::Rejected
     );
 }
 #[test]
@@ -2476,4 +1784,190 @@ fn empty_metrics_snapshot() -> ToriiMetricsSnapshot {
         state_tiered_cold_bytes: None,
         uptime_since_genesis_ms: None,
     }
+}
+
+#[test]
+fn unexpected_status_names_the_reject_code_and_message() {
+    let error = ToriiError::UnexpectedStatus {
+        status: StatusCode::BAD_REQUEST,
+        reject_code: Some("query_rejected".into()),
+        message: Some("fetch size exceeds the limit".into()),
+    };
+    assert_eq!(
+        error.to_string(),
+        "unexpected Torii status code 400 Bad Request (query_rejected): fetch size exceeds the limit"
+    );
+    let bare = ToriiError::UnexpectedStatus {
+        status: StatusCode::BAD_REQUEST,
+        reject_code: None,
+        message: Some(String::new()),
+    };
+    assert_eq!(
+        bare.to_string(),
+        "unexpected Torii status code 400 Bad Request"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn execute_query_refuses_a_singular_response_to_an_iterable_query() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let singular = QueryResponse::Singular(
+        iroha_data_model::query::SingularQueryOutputBox::DomainIds(Vec::new()),
+    );
+    let encoded = norito::to_bytes(&singular).expect("encode singular response");
+    server.mock(|when, then| {
+        when.method(POST).path("/v1/query");
+        then.status(200).body(encoded.clone());
+    });
+    let keypair = KeyPair::random();
+    let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
+    let signed_query = client
+        .sign_query(
+            QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            )),
+            AccountId::new(keypair.public_key().clone()),
+            &keypair,
+        )
+        .expect("sign query");
+    let error = client
+        .execute_query(&signed_query)
+        .await
+        .expect_err("a singular response carries no iterable output");
+    assert!(
+        matches!(&error, ToriiError::Decode(message) if message.contains("singular")),
+        "{error}"
+    );
+}
+/// The canonical reason of a genuine localnet rejection, as its explorer record carries it:
+/// the developer account minted XOR, whose definition genesis owns.
+const LIVE_MINT_REJECTION: &str = "TlJUMAAAz1n2xH3xEMy41ie2TvXH6wBYAAAAAAAAAAtceQipNysbAgIAAABTAAAAAE5NQ2FuJ3QgbWludCBhbiBhc3NldCB3aXRob3V0IG93bmluZyBpdHMgZGVmaW5pdGlvbiBvciBhbiBleGFjdCBtaW50IHBlcm1pc3Npb24=";
+/// The explorer's own wording of [`LIVE_MINT_REJECTION`].
+const LIVE_MINT_MESSAGE: &str = "Validation failed: Operation is not permitted: Can't mint an asset without owning its definition or an exact mint permission";
+
+#[test]
+fn rejection_messages_name_the_failure_and_its_causes() {
+    use iroha_data_model::{ValidationFail, transaction::error::TransactionLimitError};
+    let not_permitted = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        "Can't mint an asset without owning its definition or an exact mint permission".into(),
+    ));
+    assert_eq!(rejection_message(&not_permitted), LIVE_MINT_MESSAGE);
+    let limit = TransactionRejectionReason::LimitCheck(TransactionLimitError {
+        reason: "too many instructions".into(),
+    });
+    let message = rejection_message(&limit);
+    assert!(message.starts_with(&limit.to_string()), "{message}");
+    assert!(message.ends_with(": too many instructions"), "{message}");
+    let long = TransactionRejectionReason::Validation(ValidationFail::NotPermitted("x".repeat(4096)));
+    assert_eq!(
+        rejection_message(&long).chars().count(),
+        MAX_REJECTION_MESSAGE_CHARS
+    );
+}
+
+#[test]
+fn explorer_rejections_prefer_the_canonical_reason_over_the_explorer_wording() {
+    let record = norito::json!({
+        "status": "Rejected",
+        "rejection_reason": { "reason": (LIVE_MINT_REJECTION), "message": "explorer wording" }
+    });
+    assert_eq!(
+        explorer_rejection_message(&record).as_deref(),
+        Some(LIVE_MINT_MESSAGE)
+    );
+    let unreadable = norito::json!({
+        "rejection_reason": { "reason": "not a reason", "message": " explorer wording " }
+    });
+    assert_eq!(
+        explorer_rejection_message(&unreadable).as_deref(),
+        Some("explorer wording")
+    );
+    for applied in [
+        norito::json!({ "status": "Applied", "rejection_reason": null }),
+        norito::json!({ "status": "Applied" }),
+        norito::json!({ "rejection_reason": { "message": "  " } }),
+    ] {
+        assert_eq!(explorer_rejection_message(&applied), None, "{applied:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rejection_reasons_come_from_the_exact_explorer_record() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let rejected = format!("{}f", "a".repeat(63));
+    let unknown = format!("{}d", "b".repeat(63));
+    let record = norito::json!({
+        "hash": "hash:AAAA#0000",
+        "status": "Rejected",
+        "rejection_reason": { "reason": (LIVE_MINT_REJECTION), "message": (LIVE_MINT_MESSAGE) }
+    });
+    let body = json::to_json(&record).expect("record JSON");
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/v1/explorer/transactions/{rejected}"));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(body.clone());
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/v1/explorer/transactions/{unknown}"));
+        then.status(404);
+    });
+    let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
+    assert_eq!(
+        client
+            .fetch_rejection_reason(&rejected)
+            .await
+            .expect("explorer record")
+            .as_deref(),
+        Some(LIVE_MINT_MESSAGE)
+    );
+    assert_eq!(
+        client
+            .fetch_rejection_reason(&unknown)
+            .await
+            .expect("absent record"),
+        None
+    );
+    assert!(
+        client.fetch_rejection_reason("not a hash").await.is_err(),
+        "only exact hashes are looked up"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn name_service_policies_are_read_from_their_suffix_route() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    // A generated localnet's domain policy, with its accounts replaced by a sample account.
+    let body = r#"{"suffix_id":4098,"suffix":"domain","steward":"OWNER","status":{"status":"Active","detail":null},"min_term_years":1,"max_term_years":5,"grace_period_days":30,"redemption_period_days":60,"referral_cap_bps":0,"reserved_labels":[{"normalized_label":"treasury","assigned_to":"OWNER","release_at_ms":null,"note":"Protocol reserved domain label"}],"payment_asset_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","pricing":[{"tier_id":0,"label_regex":"^[a-z0-9-]{1,63}\\.[a-z0-9-]{1,63}$","base_price":{"asset_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","amount":"0.5"},"auction_kind":{"kind":"VickreyCommitReveal","detail":null},"dutch_floor":null,"min_duration_years":1,"max_duration_years":5}],"fee_split":{"treasury_bps":7000,"steward_bps":3000,"referral_max_bps":0,"escrow_bps":0},"fund_splitter_account":"OWNER","policy_version":1,"metadata":{}}"#
+        .replace("OWNER", &ALICE_ID.to_string());
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sns/policies/4098");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(body.clone());
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/v1/sns/policies/4097");
+        then.status(404);
+    });
+    let client = ToriiClient::new_for_network(server.url("/"), test_network_id()).expect("client");
+    let policy = client
+        .fetch_sns_policy(iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID)
+        .await
+        .expect("domain policy");
+    assert_eq!(policy.suffix_id, 4098);
+    assert_eq!(policy.policy_version, 1);
+    assert_eq!(policy.payment_asset_id, "6TEAJqbb8oEPmLncoNiMRbLEK6tw");
+    assert!(matches!(
+        client.fetch_sns_policy(4097).await,
+        Err(ToriiError::UnexpectedStatus { .. })
+    ));
 }

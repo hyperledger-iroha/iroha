@@ -51,7 +51,7 @@ fn ordinary_library_exports_the_complete_prover_and_local_verifier() {
         &PrivacyConsensusLimitsV1,
         [u8; 32],
         u64,
-        &mut rand::rngs::OsRng,
+        &mut rand::rngs::SysRng,
     ) -> Result<ZkX509PendingCredentialProofV1, ZkX509HolderAttemptErrorV1>;
     type Release =
         fn(
@@ -70,7 +70,7 @@ fn ordinary_library_exports_the_complete_prover_and_local_verifier() {
         &[u8],
     ) -> Result<(), ZkX509EngineErrorV1>;
     let prepare: Prepare = ZkX509HolderAttemptV1::prepare;
-    let prover: Prover = ZkX509HolderAttemptV1::prove_with_rng::<rand::rngs::OsRng>;
+    let prover: Prover = ZkX509HolderAttemptV1::prove_with_rng::<rand::rngs::SysRng>;
     let release: Release = ZkX509PendingCredentialProofV1::release;
     let verifier: Verifier = verify_zk_x509_credential_proof_v1;
     std::hint::black_box((

@@ -260,7 +260,25 @@ fn current_genesis_history_replays_from_reopened_stores_to_the_identical_state()
             frames[index],
             "reopening validator {index}'s store rewrites nothing"
         );
-        let (state, prepared) = cold_replay(&chain, disk, None);
+        let state = empty_state(&chain.chain_id, &chain.genesis, &disk.kura);
+        let tiered_root = disk.dir.path().join("replayed-tiered");
+        *state.tiered_backend.lock() = crate::state::TieredStateBackend::new(
+            true,
+            0,
+            0,
+            0,
+            Some(tiered_root.clone()),
+            None,
+            0,
+            0,
+        );
+        let prepared = prepare(PrepareInputs {
+            state: Arc::clone(&state),
+            events: tokio::sync::broadcast::channel(64).0,
+            genesis: None,
+            genesis_account: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            consensus_mode: ConsensusMode::Permissioned,
+        });
         let prepared =
             prepared.expect("the persisted current-genesis history replays without other inputs");
         assert_eq!(startup::applied_height(&state), height as u64);
@@ -270,6 +288,25 @@ fn current_genesis_history_replays_from_reopened_stores_to_the_identical_state()
             "replay reproduces the complete World root validator {index} had before shutdown"
         );
         assert_eq!(state.view().native_execution_tip(), tips[index]);
+        assert_eq!(
+            state
+                .tiered_backend
+                .lock()
+                .last_manifest()
+                .unwrap()
+                .snapshot_index,
+            1,
+            "genesis and every certified replay block produce one final tiered projection"
+        );
+        assert_eq!(
+            std::fs::read_dir(&tiered_root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().join("manifest.json").exists())
+                .count(),
+            1,
+            "startup must not persist intermediate full-World manifests"
+        );
         assert_eq!(
             prepared.instance(),
             root_instance(&chain.genesis, chain.chain_id.as_ref()).unwrap(),

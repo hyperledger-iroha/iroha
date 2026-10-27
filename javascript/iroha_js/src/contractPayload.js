@@ -1,4 +1,4 @@
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 
 /** Browser profile for the canonical `IrohaJson` contract payload preimage. */
 export const CONTRACT_PAYLOAD_MAX_CANONICAL_BYTES = 1_048_576;

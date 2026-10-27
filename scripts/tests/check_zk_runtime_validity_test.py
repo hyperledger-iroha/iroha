@@ -1040,7 +1040,7 @@ def test_source_lookup_and_phone_key_checks_have_distinct_authorities() -> None:
 
 
 def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
-    """A compiled built-in profile is a binary-digest admission, never a strict lookup hint.
+    """A compiled built-in profile checks its semantic ABI and exact originals, never a strict lookup hint.
 
     It is recorded out of plan only while KAGEMUSHA is its sole production caller; a caller
     of the delivery plan makes it open F.4 work, so this test fails until the census is
@@ -1054,10 +1054,11 @@ def test_compiled_source_profiles_are_a_kagemusha_only_digest_gate() -> None:
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source"),
         ("crates/iroha_plonk/src/keys/keygen/builtin.rs", "unavailable", "unsupported"),
         ("crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source"),
+        ("crates/iroha_plonk/src/contract.rs", "digest_identity", "source"),
     }
     lookup = {site[0] for site in entry(CENSUS, "plonk.source_lookup")["sites"]}
     assert not {row[0] for row in rows} & lookup
-    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_source_identity_v1")
+    api = ("BuiltinSourceProfileV1", "BuiltinSourceMemberV1", "builtin_contract_v1")
     callers = set()
     for path in sorted((ROOT / "crates").glob("*/src/**/*.rs")):
         relative = path.relative_to(ROOT).as_posix()
@@ -1079,8 +1080,11 @@ def test_staking_monetary_owner_migrates_without_hiding_remaining_nexus_readers(
     rows = {site[2] for site in nexus["sites"] if site[0] == staking and site[1] == "node_policy_read"}
     assert rows == {"staking.max_validators"}
     source = tree_scan.text(staking)
-    assert ".staking_monetary_policy()" in source
-    assert "let allowed = slash_within_limit(amount, &slashable_exposure, max_slash_bps);" in source
+    slash = source.split("fn apply_slash_to_validator_inner(", 1)[1].split("\nfn ", 1)[0]
+    assert "state_transaction.nexus.staking" not in slash
+    assert ".staking_monetary_policy()" in slash
+    assert "let allowed = slash_within_limit(amount, &slashable_exposure, max_slash_bps);" in slash
+    assert "if !allowed {" in slash
     assert "state_transaction.nexus.staking.max_validators.get()" in source
     assert entry(CENSUS, "cfg.root_fees.committed_policy")["status"] == "open"
 
@@ -1116,13 +1120,23 @@ def test_original_policy_owner_rejects_current_cut_and_decoy(
     ("state_transaction.nexus.fees", "fees"),
 ])
 def test_retired_monetary_node_policy_reads_cannot_return(tmp_path, statement, token) -> None:
-    """Removing stale rows strengthens the unlisted-site check for a reintroduced read."""
+    """Reintroducing a retired configuration field and its reader cannot evade the census."""
     path = "crates/iroha_core/src/smartcontracts/isi/staking.rs"
     write(tmp_path, path, "fn regress() { let _ = " + statement + "; }")
-    write(tmp_path, CHECKER["RESOURCE_CONTRACT"], json.dumps(CONTRACT))
+    contract = copy.deepcopy(CONTRACT)
+    if token.startswith("staking."):
+        catalog_id = "nexus_consensus_policy_v1"
+        assert token not in CHECKER["contract_catalog_fields"](CONTRACT)[catalog_id]
+        catalog = next(item for item in contract["catalogs"] if item["id"] == catalog_id)
+        catalog["excluded"].append({
+            "reason": "Mutation restores the retired node policy field before adding its reader.",
+            "fields": [token],
+        })
+    write(tmp_path, CHECKER["RESOURCE_CONTRACT"], json.dumps(contract))
     scan = Scan(tmp_path)
     assert scan.rows[(path, "node_policy_read", token)] == 1
-    assert_fails(scan, CENSUS, f"unlisted site: {path} detector node_policy_read token {token!r}")
+    assert_fails(scan, CENSUS, f"unlisted site: {path} detector node_policy_read token {token!r}",
+                 contract=contract)
 
 
 def test_sccp_fixture_rows_are_excluded_only_by_actual_test_declaration(tree_scan) -> None:

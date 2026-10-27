@@ -98,12 +98,18 @@ pub(super) fn receive_signatures(
     renewed: bool,
     root: [[u64; 4]; 2],
 ) -> Result<Vec<SignatureWitness>, Error> {
+    receive_signatures_under(objects, key(credential, CREDENTIAL_KEY)?, renewed, root)
+}
+/// The same merged leaf with the own receipt (slot 0) under `own`: Receive admission
+/// signs its placeholder own receipt under a key other than the payment key.
+pub(super) fn receive_signatures_under(
+    objects: &[Vec<u8>; 9],
+    own: [[u64; 4]; 2],
+    renewed: bool,
+    root: [[u64; 4]; 2],
+) -> Result<Vec<SignatureWitness>, Error> {
     let mut witnesses = vec![
-        signature(
-            ObjectKind::Receipt,
-            &objects[6],
-            key(credential, CREDENTIAL_KEY)?,
-        )?,
+        signature(ObjectKind::Receipt, &objects[6], own)?,
         signature(
             ObjectKind::Receipt,
             &objects[2],
@@ -160,6 +166,26 @@ fn incoming_send_selector(payment: &KagemushaWalletPaymentV1) -> Result<u8, Erro
         .unwrap_or(0);
     Ok(2 + selected)
 }
+/// Receive's compiled route: a Request quoting an earlier credential of this incarnation
+/// is ReceiveRenewed, and the Payment's lineage controls select the incoming σ_send key.
+pub(super) fn receive_route(
+    renewed: bool,
+    payment: &KagemushaWalletPaymentV1,
+) -> Result<OperationRoute, Error> {
+    let route = OperationRoute {
+        variant: if renewed {
+            Variant::ReceiveRenewed
+        } else {
+            Variant::Receive
+        },
+        own: 6,
+        incoming: Some(incoming_send_selector(payment)?),
+    };
+    if !compiled_routes().contains(&route) {
+        return Err(Error::Invalid("uncompiled native operation route"));
+    }
+    Ok(route)
+}
 fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
     use KagemushaWalletOperationKindV1 as K;
     use KagemushaWalletRetainedInputRoleV1 as R;
@@ -181,14 +207,11 @@ fn selector(step: &ReleasedStep) -> Result<OperationRoute, Error> {
                 custody_codec::decode(original(step, R::Request)?)?;
             let payment: KagemushaWalletPaymentV1 =
                 custody_codec::decode(original(step, R::Payment)?)?;
-            let variant = if request.receiver_credential.credential_digest()
-                == step.frozen.credential.credential_digest()
-            {
-                Variant::Receive
-            } else {
-                Variant::ReceiveRenewed
-            };
-            (variant, 6, Some(incoming_send_selector(&payment)?))
+            return receive_route(
+                request.receiver_credential.credential_digest()
+                    != step.frozen.credential.credential_digest(),
+                &payment,
+            );
         }
         K::ArchiveSent => {
             let evidence: KagemushaWalletCreditedV1 =

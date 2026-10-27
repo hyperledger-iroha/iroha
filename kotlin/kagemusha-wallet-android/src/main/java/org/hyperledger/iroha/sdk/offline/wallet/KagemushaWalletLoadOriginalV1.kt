@@ -13,7 +13,7 @@ import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge
 /**
  * Exact canonical receipt and native BLS evidence bound to the signed read's selectors
  * and payer. Decoding grants no verified finality, wallet admission, balance or Load permission.
- * The existing native wallet [KagemushaWalletV1.load] independently verifies its certificate,
+ * The existing native wallet [KagemushaWalletExchangeCallV1.load] independently verifies its certificate,
  * event path, installed genesis/epoch authority, enrolled account, ordinal and durable operation.
  */
 class KagemushaWalletLoadOriginalV1 private constructor(

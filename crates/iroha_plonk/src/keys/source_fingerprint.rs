@@ -119,7 +119,7 @@ impl SourceHasher {
     ) -> Result<Self, iroha_pasta::Cancelled> {
         CancellationToken::checkpoint(cancellation)?;
         let mut hash = Sha256::new();
-        hash.update(b"iroha:pipa:source-lookup:v1\0");
+        hash.update(crate::contract::SOURCE_FINGERPRINT_DOMAIN);
         hash.update((binding.encoded().len() as u64).to_le_bytes());
         hash.update(binding.encoded());
         hash.update(copy_digest);

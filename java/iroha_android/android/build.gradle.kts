@@ -12,16 +12,7 @@ plugins {
     `maven-publish`
 }
 
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-    dependencies {
-        classpath("org.cyclonedx:cyclonedx-gradle-plugin:3.1.0")
-    }
-}
+// The root supplies the current CycloneDX plugin and its patched classpath.
 
 val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
 @Suppress("UNCHECKED_CAST")
@@ -92,7 +83,7 @@ fun renderDependencyManifest(
 
 android {
     namespace = "org.hyperledger.iroha.android"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24
@@ -135,16 +126,16 @@ dependencies {
     api(project(":core"))
     api("org.hyperledger.iroha.sdk:client-android:${irohaKotlinSdkVersion.get()}")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.camera:camera-core:1.3.3")
-    implementation("androidx.camera:camera-camera2:1.3.3")
-    implementation("androidx.camera:camera-lifecycle:1.3.3")
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
+    implementation("androidx.camera:camera-core:1.6.2")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("com.google.zxing:core:3.5.4")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
 
 val androidDependencyManifest =

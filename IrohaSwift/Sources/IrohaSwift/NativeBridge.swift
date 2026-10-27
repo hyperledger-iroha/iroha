@@ -154,6 +154,7 @@ enum NoritoBridgeLoader {
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_validate_exact12_capability_manifest_v1",
+        "iroha_privacy_validate_exact12_submit_proof_construction_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
         "iroha_privacy_free_buffer",
@@ -179,7 +180,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 31
+        return 33
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -2015,7 +2016,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }) else {
             self.loadedBridgeAbiVersion = nil
             NSLog(
-                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-31 exports"
+                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-33 exports"
             )
             return
         }
@@ -3206,6 +3207,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && privacyCompiledProfileCatalogFn != nil
             && privacyValidateCompiledProfileCatalogFn != nil
             && privacyValidateExact12CapabilityManifestFn != nil
+            && privacyValidateExact12SubmitProofConstructionFn != nil
             && privacyExact12FixtureBundleFn != nil
             && privacyValidateExact12FixtureBundleFn != nil
             && privacyFreeFn != nil

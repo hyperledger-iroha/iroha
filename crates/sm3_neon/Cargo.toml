@@ -15,9 +15,9 @@ bench = []
 [dependencies]
 
 [dev-dependencies]
-sm3 = "0.5.0-rc.1"
+sm3 = "0.5.0"
 criterion = { workspace = true }
-rand = { version = "0.9.3", default-features = false, features = ["std", "std_rng", "alloc"] }
+rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "alloc"] }
 hex-literal = "1.1.0"
 
 [[bench]]

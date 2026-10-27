@@ -81,7 +81,7 @@ fn receipt_identity_comes_only_from_the_carried_lineage_original() {
     if let KagemushaWalletLineageSlotV1::Present { lineage } = &mut original.send.lineage {
         lineage.public.credential_digest = Fp::from(731).to_repr();
         lineage.public.payment_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            signer.verifying_key().to_encoded_point(false).as_bytes(),
+            signer.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap();
     }
@@ -114,7 +114,7 @@ fn invalid_objects_and_signatures_reach_the_original_tapes_without_repair() {
     changed.send.receipt.payment_digest = Fp::from(31).to_repr();
     let key = SigningKey::from_slice(&[37; 32]).unwrap();
     let signature: Signature = key.sign(b"wrong incoming receipt message");
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     changed.send.receipt.signature =
         KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     assert!(changed.digests().is_err());
@@ -208,17 +208,14 @@ impl PreparationV1<'_> {
     ) {
         let signature = |key: &SigningKey, message: &[u8]| {
             let value: Signature = key.sign(message);
-            let value = value.normalize_s().unwrap_or(value);
+            let value = value.normalize_s();
             KagemushaDeviceSignatureV1::from_raw_bytes(&value.to_bytes()).unwrap()
         };
         let scheme = self.installed.verifier().scheme();
         let payer_signer = SigningKey::from_slice(&[0x39; 32]).unwrap();
         let mut payer = owner.credential;
         payer.body.payment_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            payer_signer
-                .verifying_key()
-                .to_encoded_point(false)
-                .as_bytes(),
+            payer_signer.verifying_key().to_sec1_point(false).as_bytes(),
         )
         .unwrap();
         payer.body.account_digest = [0x40; 32];
@@ -660,7 +657,7 @@ fn malformed_key_and_signature_encodings_are_custody_errors_before_soft_predicat
     let signature = original.send.receipt.signature.as_raw_bytes();
     let low = Signature::from_slice(signature).unwrap();
     let high = Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes()).unwrap();
-    assert!(high.normalize_s().is_some());
+    assert!(high.normalize_s() != high);
     let mut zero_r = *signature;
     zero_r[..32].fill(0);
     let mut zero_s = *signature;

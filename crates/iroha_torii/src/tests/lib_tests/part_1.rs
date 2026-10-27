@@ -1515,6 +1515,8 @@ use crate::{
         app_auth_test_guard, checked_torii_test_account_id, checked_torii_test_ed25519_keypair,
         mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
         mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world,
+        mk_native_app_state_for_tests, mk_native_app_state_for_tests_with_iso_bridge,
+        mk_native_app_state_for_tests_with_options, mk_native_app_state_for_tests_with_world,
         record_latest_committed_header_for_test, signed_app_headers, world_with_account,
     },
 };
@@ -1734,7 +1736,7 @@ fn local_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
 }
 #[tokio::test]
 async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
-    let app = mk_app_state_for_tests_with_iso_bridge(Some(&sample_iso_bridge_config(
+    let app = mk_native_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
         "DE89370400440532013000",
         &ALICE_ID,
     )));
@@ -1781,7 +1783,7 @@ async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
 #[tokio::test]
 async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
     let err = handler_iso_audit_messages(
-        State(mk_app_state_for_tests()),
+        State(mk_native_app_state_for_tests()),
         Extension(operator_signatures::AuthenticatedOperatorPublicKey(
             checked_torii_test_ed25519_keypair(0x81, "derive disabled ISO reader fixture key")
                 .public_key()

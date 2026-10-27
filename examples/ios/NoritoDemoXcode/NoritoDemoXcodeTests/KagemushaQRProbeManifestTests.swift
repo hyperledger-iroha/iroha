@@ -5,7 +5,7 @@ import XCTest
 final class KagemushaQRProbeManifestTests: XCTestCase {
   func testOnlyExactLocalSelectionInputsAreAccepted() {
     let identity: Set<String> = ["setup-id", "request-id"]
-    for action in ["qr-send", "qr-recover-send", "qr-recover-receive"] {
+    for action in ["qr-send", "qr-continue-send", "qr-recover-send", "qr-recover-receive"] {
       XCTAssertTrue(KagemushaQRProbeManifest.accepts(action, names: identity))
       for imported in ["qr-text", "image", "payment", "credited", "envelope", "caller-success"] {
         XCTAssertFalse(KagemushaQRProbeManifest.accepts(action, names: identity.union([imported])))
@@ -26,6 +26,6 @@ final class KagemushaQRProbeManifestTests: XCTestCase {
     for action in ["qr-import", "QR-send", "qr-recover", "qr-send ", ""] {
       XCTAssertFalse(KagemushaQRProbeManifest.accepts(action, names: ["setup-id", "request-id"]))
     }
-    XCTAssertEqual(Set(KagemushaQRProbeManifest.schemas.keys), ["qr-send", "qr-receive", "qr-recover-send", "qr-recover-receive"])
+    XCTAssertEqual(Set(KagemushaQRProbeManifest.schemas.keys), ["qr-send", "qr-continue-send", "qr-receive", "qr-recover-send", "qr-recover-receive"])
   }
 }

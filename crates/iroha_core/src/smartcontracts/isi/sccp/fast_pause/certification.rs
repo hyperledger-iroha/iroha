@@ -5,8 +5,8 @@ use crate::state::{StateBlock, StateBlockStartError};
 use iroha_crypto::{
     Hash,
     blake2::{
-        Blake2bVar,
-        digest::{Update, VariableOutput},
+        Blake2b,
+        digest::{Digest, consts::U32},
     },
 };
 use iroha_data_model::sccp::{
@@ -74,7 +74,7 @@ fn recheck(
 }
 
 // Raw Blake2b fingerprint matches the model domains, but streams canonical Norito bytes.
-struct FingerprintWriter(Blake2bVar);
+struct FingerprintWriter(Blake2b<U32>);
 impl std::io::Write for FingerprintWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.update(bytes);
@@ -89,16 +89,13 @@ fn fingerprint(
     value: &impl norito::core::SerializePayload,
 ) -> Result<[u8; 32], Error> {
     use std::io::Write;
-    let mut writer =
-        FingerprintWriter(Blake2bVar::new(32).map_err(|_| refuse("fingerprint width"))?);
+    let mut writer = FingerprintWriter(Blake2b::<U32>::new());
     writer
         .write_all(&(domain.len() as u64).to_le_bytes())
         .map_err(refuse)?;
     writer.write_all(domain).map_err(refuse)?;
     norito::codec::encode_adaptive_into(value, &mut writer).map_err(refuse)?;
-    let mut result = [0; 32];
-    writer.0.finalize_variable(&mut result).map_err(refuse)?;
-    Ok(result)
+    Ok(writer.0.finalize().into())
 }
 /// The roots bind canonical account order, each signed incident and its committed height.
 /// Account payload lengths are explicit; no concatenation or account graph is allocated.

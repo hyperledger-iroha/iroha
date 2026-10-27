@@ -4,10 +4,10 @@
 //! phone it is running on, at that moment. Free bytes in its no-backup custody storage must
 //! cover the operation's commit, recovery and output reservation plus the fold witnesses the
 //! step adds until a durable Ω covers it. Memory currently available to the app must cover the
-//! peak proving memory of the relations that prove the step and fold it; one prover runs at a
-//! time, so the largest of them bounds the operation.
+//! admission memory budget of the relations that prove the step and fold it; one prover runs
+//! at a time, so the check takes the largest relation budget.
 //!
-//! Each relation has two bounds ([`KagemushaWalletProvingMemoryV1`]): the fused quotient, which
+//! Each relation has two budgets ([`KagemushaWalletProvingMemoryV1`]): the fused quotient, which
 //! transforms every coset column at once and is the fastest, and the lean quotient, which
 //! evaluates the same terms in passes of at most [`KAGEMUSHA_WALLET_LEAN_QUOTIENT_COLUMNS_V1`]
 //! columns and costs extra coset FFTs. Admission requires the lean bound, so a phone with less
@@ -23,9 +23,16 @@
 //! check adds no field to the artifact manifest, verifier pack, producer inventory or
 //! transport. A failed check refuses the operation before commit with a typed
 //! `NotEnoughStorage` or `NotEnoughMemory` result, never a device verdict: nothing is debited
-//! or credited and the holder retries after freeing storage or memory. A measured peak above
-//! the computed bound is a defect in [`iroha_plonk::prover::peak_proving_columns`], fixed in
-//! code.
+//! or credited and the holder retries after freeing storage or memory.
+//!
+//! The memory formula counts the core prover's field buffers, then adds its margin,
+//! parameters, MSM scratch and wallet-core allowance. Installed native sources also retain
+//! synthesis caches, decoded proof tapes and prepared source witnesses; these are not
+//! enumerated by [`iroha_plonk::prover::peak_proving_columns`]. The allowances alone do not
+//! establish that complete synthesis, key reconstruction and proving fit this budget.
+//! TODO: qualify those phases together with retained wallet allocations for every installed
+//! source. An observed excess must be attributed to its actual owner and corrected in the
+//! budget or implementation; it is not necessarily a core column-counting defect.
 
 use iroha_pasta::msm::PROCESS_MSM_SCRATCH_BYTES;
 use iroha_plonk::{
@@ -74,7 +81,7 @@ pub enum KagemushaWalletCapacityShortfallV1 {
     Memory,
 }
 
-/// Peak proving memory under both quotient plans (see the module documentation).
+/// Admission memory budgets under both quotient plans (see the module documentation).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_field_names,
@@ -165,9 +172,10 @@ impl KagemushaWalletRuntimeCapacityV1 {
     }
 }
 
-/// Conservative peak proving memory of `columns` field columns of `2^k` rows, in bytes: the
+/// Core proving-buffer budget for `columns` field columns of `2^k` rows, in bytes: the
 /// columns with a 15% margin, the pinned `g` and `g_lagrange` parameters (`2·64·2^k` bytes),
-/// the process-wide 64 MiB MSM scratch cap and the 50 MiB wallet-core baseline. `None` on
+/// the process-wide 64 MiB MSM scratch cap and the 50 MiB wallet-core allowance. This does
+/// not separately count source-owned synthesis or retained wallet allocations. `None` on
 /// overflow.
 fn peak_bytes(k: u8, columns: usize) -> Option<u64> {
     let n = 1_u64.checked_shl(u32::from(k))?;
@@ -183,11 +191,13 @@ fn peak_bytes(k: u8, columns: usize) -> Option<u64> {
         .checked_add(KAGEMUSHA_WALLET_CORE_BASELINE_BYTES_V1)
 }
 
-/// Both quotient plans' peak proving memory of one installed relation descriptor.
+/// Both quotient plans' admission memory budgets for one installed relation descriptor.
 ///
-/// The prover counts the field columns one proof holds at its peak, key included
-/// ([`iroha_plonk::prover::peak_proving_columns`]); a measured peak above that count is a defect
-/// there, fixed in code. The lean bound counts passes at least
+/// The prover counts its core field-buffer envelope, key included
+/// ([`iroha_plonk::prover::peak_proving_columns`]). Source-specific synthesis caches, prepared
+/// witnesses and reconstruction work need separate qualification against the complete budget
+/// described above; the descriptor count is not a whole-process RSS bound.
+/// The lean bound counts passes at least
 /// [`KAGEMUSHA_WALLET_LEAN_QUOTIENT_COLUMNS_V1`] columns wide, so a plan `x` columns wider holds
 /// at most `x` more columns. `None` for a descriptor whose columns cannot be counted.
 #[must_use]

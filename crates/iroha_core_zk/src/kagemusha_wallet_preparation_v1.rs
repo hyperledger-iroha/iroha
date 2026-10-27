@@ -672,7 +672,7 @@ impl<'a> PreparationV1<'a> {
 
     /// Convert retained ordinary receipt originals and own signed fields. Native
     /// verified BLS finality before Advance; the producer verifies the receipt-bound
-    /// Advance signature and the state transition in the two lean Load stages.
+    /// Advance signature and the state transition in the single terminal Load A.
     /// # Errors
     /// Another operation, missing/ambiguous original, noncanonical fields, changed
     /// receipt terms or source digest.

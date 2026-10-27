@@ -2,6 +2,7 @@
 
 mod amx_approvals;
 mod amx_roles;
+mod contract_permissions;
 mod decode_refusal;
 mod role_removal;
 

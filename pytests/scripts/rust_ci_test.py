@@ -86,6 +86,38 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     assert len(packages) == sum(len(packages) for packages in manifest.lanes.values())
 
 
+def test_every_active_vendor_patch_routes_to_workspace_validation() -> None:
+    """Each patched source owner selects its package closure or the full workspace."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    packages = rust_ci.workspace_packages(metadata, root=ROOT)
+    root_manifest = rust_ci.tomllib.loads((ROOT / "Cargo.toml").read_text())
+    patches = root_manifest["patch"]["crates-io"]
+    assert patches
+    for patch in patches.values():
+        directory = patch["path"]
+        assert directory.startswith("vendor/")
+        result = rust_ci.classify_paths(
+            [f"{directory}/Cargo.toml"],
+            metadata=metadata, manifest=manifest, root=ROOT,
+        )
+        owners = {
+            package.name for package in packages.values()
+            if str(package.directory) == directory
+        }
+        if owners:
+            assert not result.full
+            assert set(result.changed_packages) == owners
+            assert owners <= set(result.impacted_packages)
+        else:
+            # Excluded upstream packages cannot disappear through a prose/ignore
+            # rule: their vendor source changes require every workspace lane.
+            assert result.full
+            assert set(result.impacted_packages) == set(packages)
+
+
+
 @pytest.mark.parametrize("relative_path", ("src/lib.rs", "Cargo.toml"))
 def test_plonk_recursion_owner_selects_real_proof_consumers(relative_path: str) -> None:
     """Recursion changes retain the actual proof consumers in execution checks."""

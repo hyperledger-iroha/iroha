@@ -1,5 +1,3 @@
-using System.Buffers;
-using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 
 namespace Hyperledger.Iroha.Petal;
@@ -7,7 +5,6 @@ namespace Hyperledger.Iroha.Petal;
 /// <summary>Decoder tuning.</summary>
 public sealed record PetalDecodeOptions
 {
-    private readonly IReadOnlyList<double> templateSigmas = Array.AsReadOnly(new[] { 0.0, 0.5, 0.8, 1.1, 1.5 });
     private readonly long maxPixels = 12_000_000;
 
     /// <summary>The reference defaults.</summary>
@@ -15,24 +12,6 @@ public sealed record PetalDecodeOptions
 
     /// <summary>Also try horizontally mirrored images (front-camera previews). Default <see langword="true"/>.</summary>
     public bool TryMirrored { get; init; } = true;
-
-    /// <summary>
-    /// Blur widths (in template cells) tried for glyph matching; the reading with
-    /// the lowest total match error wins. Default <c>[0, 0.5, 0.8, 1.1, 1.5]</c>.
-    /// </summary>
-    /// <exception cref="ArgumentException">The list is empty or holds a non-finite or negative value.</exception>
-    public IReadOnlyList<double> TemplateSigmas
-    {
-        get => templateSigmas;
-        init
-        {
-            ArgumentNullException.ThrowIfNull(value);
-            var copy = value.ToArray();
-            if (copy.Length == 0 || copy.Any(sigma => !double.IsFinite(sigma) || sigma < 0.0))
-                throw new ArgumentException("Template sigmas must be a non-empty list of finite, non-negative values.", nameof(value));
-            templateSigmas = Array.AsReadOnly(copy);
-        }
-    }
 
     /// <summary>
     /// Largest image (in pixels) the decoder accepts; larger frames should be
@@ -57,7 +36,7 @@ public enum PetalDecodeError
     /// <summary>The image is smaller than 48 pixels on a side or larger than <see cref="PetalDecodeOptions.MaxPixels"/>.</summary>
     UnsupportedImage,
 
-    /// <summary>The four corner finders were not found.</summary>
+    /// <summary>No set of corner finders (four, or three forming a corner) was found.</summary>
     NoFinders,
 
     /// <summary>Finders were found but no orientation produced a readable lane.</summary>
@@ -110,41 +89,41 @@ public sealed class PetalLaneResult : IEquatable<PetalLaneResult>
 /// <summary>Everything read from one camera frame.</summary>
 public sealed class PetalDecodedFrame
 {
+    private readonly PetalLaneResult?[] fields;
+
     internal PetalDecodedFrame(
-        PetalHomography homography,
+        PetalPose pose,
         int rotation,
         bool mirrored,
-        PetalLaneResult? p,
-        PetalLaneResult? k,
         PetalLaneResult? d,
+        ReadOnlySpan<PetalLaneResult?> fields,
         int? inferredCorner)
     {
-        Homography = homography;
+        if (fields.Length != PetalLayout.Sectors)
+            throw new ArgumentException("A frame has four field lanes.", nameof(fields));
+        Pose = pose;
         Rotation = rotation;
         Mirrored = mirrored;
-        P = p;
-        K = k;
         D = d;
+        this.fields = fields.ToArray();
+        Fields = Array.AsReadOnly(this.fields);
         InferredCorner = inferredCorner;
     }
 
-    /// <summary>Canvas-to-pixel homography that was used.</summary>
-    public PetalHomography Homography { get; }
+    /// <summary>Canvas-to-pixel pose that was used (homography and lens distortion).</summary>
+    public PetalPose Pose { get; }
 
-    /// <summary>Orientation hypothesis: how many quarter turns the finder order was rotated.</summary>
+    /// <summary>Orientation: how many quarter turns the finder order was rotated.</summary>
     public int Rotation { get; }
 
     /// <summary>Whether the image was mirrored.</summary>
     public bool Mirrored { get; }
 
-    /// <summary>Lane <c>P</c> result.</summary>
-    public PetalLaneResult? P { get; }
-
-    /// <summary>Lane <c>K</c> result.</summary>
-    public PetalLaneResult? K { get; }
-
     /// <summary>Lane <c>D</c> result.</summary>
     public PetalLaneResult? D { get; }
+
+    /// <summary>Field lane results, sector 0 first (<see langword="null"/> where a lane did not decode).</summary>
+    public IReadOnlyList<PetalLaneResult?> Fields { get; }
 
     /// <summary>
     /// The corner finder that was hidden (by a finger, a glare or the edge of the frame) and
@@ -155,10 +134,38 @@ public sealed class PetalDecodedFrame
     public int? InferredCorner { get; }
 
     /// <summary>Number of lanes that decoded.</summary>
-    public int LanesOk => (P is null ? 0 : 1) + (K is null ? 0 : 1) + (D is null ? 0 : 1);
+    public int LanesOk
+    {
+        get
+        {
+            var count = D is null ? 0 : 1;
+            foreach (var field in fields)
+                count += field is null ? 0 : 1;
+            return count;
+        }
+    }
 
-    /// <summary>Lanes that decoded, as letters from <c>"PKD"</c> in that order.</summary>
-    public string Lanes => (P is null ? string.Empty : "P") + (K is null ? string.Empty : "K") + (D is null ? string.Empty : "D");
+    /// <summary>The lanes that decoded, as letters: <c>D</c> and the sector digits <c>0</c>–<c>3</c> (for example <c>"D0123"</c>).</summary>
+    public string Lanes
+    {
+        get
+        {
+            Span<char> letters = stackalloc char[1 + PetalLayout.Sectors];
+            var count = 0;
+            foreach (var lane in PetalLanes.DecodeOrder)
+            {
+                if (Lane(lane) is not null)
+                    letters[count++] = PetalLanes.Letter(lane);
+            }
+
+            return new string(letters[..count]);
+        }
+    }
+
+    /// <summary>The result of <paramref name="lane"/>, when it decoded.</summary>
+    /// <param name="lane">The lane.</param>
+    /// <returns>The result, or <see langword="null"/>.</returns>
+    public PetalLaneResult? Lane(PetalLane lane) => PetalLanes.IsField(lane) ? fields[PetalLanes.Sector(lane)] : D;
 
     /// <summary>What lane <c>D</c> carried, when it decoded.</summary>
     /// <returns>The parsed lane, or <see langword="null"/>.</returns>
@@ -168,15 +175,17 @@ public sealed class PetalDecodedFrame
     /// <returns>The beacon, or <see langword="null"/>.</returns>
     public PetalBeacon? Beacon() => DLane()?.Beacon;
 
-    /// <summary>Atom packets from every lane that decoded (<c>P</c>, <c>K</c>, then <c>D</c>).</summary>
+    /// <summary>Atom packets from every lane that decoded (the field lanes in sector order, then <c>D</c>).</summary>
     /// <returns>The packets.</returns>
     public IReadOnlyList<PetalAtomPacket> AtomPackets()
     {
-        var packets = new List<PetalAtomPacket>(3);
-        if (P is not null && PetalStream.ParseAtomLane(PetalLane.P, P.Data) is { } p)
-            packets.Add(p);
-        if (K is not null && PetalStream.ParseAtomLane(PetalLane.K, K.Data) is { } k)
-            packets.Add(k);
+        var packets = new List<PetalAtomPacket>(1 + PetalLayout.Sectors);
+        foreach (var lane in PetalLanes.Fields)
+        {
+            if (Lane(lane) is { } result && PetalStream.ParseAtomLane(lane, result.Data) is { } packet)
+                packets.Add(packet);
+        }
+
         if (DLane()?.Atoms is { } d)
             packets.Add(d);
         return packets;
@@ -187,12 +196,13 @@ public sealed class PetalDecodedFrame
     public void Feed(PetalStreamAssembler assembler)
     {
         ArgumentNullException.ThrowIfNull(assembler);
-        if (DLane() is { } lane)
-            assembler.PushDLane(lane);
-        if (P is not null && PetalStream.ParseAtomLane(PetalLane.P, P.Data) is { } p)
-            assembler.PushAtoms(p);
-        if (K is not null && PetalStream.ParseAtomLane(PetalLane.K, K.Data) is { } k)
-            assembler.PushAtoms(k);
+        if (DLane() is { } d)
+            assembler.PushDLane(d);
+        foreach (var lane in PetalLanes.Fields)
+        {
+            if (Lane(lane) is { } result && PetalStream.ParseAtomLane(lane, result.Data) is { } packet)
+                assembler.PushAtoms(packet);
+        }
     }
 }
 
@@ -221,17 +231,20 @@ public readonly struct PetalDecodeResult
     internal static PetalDecodeResult Fail(PetalDecodeError error) => new(null, error);
 }
 
-/// <summary>Owned tile patches and finder levels from one decoded capture (about 128 KB).</summary>
-public sealed class PetalTileEvidence
+/// <summary>
+/// What one capture shows of a frame's petal field: the level of every field cell sampled under
+/// the capture's decoded pose and normalised by that capture's finder levels (about 27 KB).
+/// </summary>
+/// <remarks>Captures of one shown frame merge with <see cref="PetalDecoder.MergeFields"/>.</remarks>
+public sealed class PetalFieldEvidence
 {
-    internal PetalTileEvidence(double[] patches, PetalDecoder.Reference reference)
+    internal PetalFieldEvidence(double[] levels)
     {
-        Patches = patches;
-        Reference = reference;
+        Levels = levels;
     }
 
-    internal double[] Patches { get; }
-    internal PetalDecoder.Reference Reference { get; }
+    /// <summary>The normalised level of every field cell (owned, never shared).</summary>
+    internal double[] Levels { get; }
 }
 
 /// <summary>
@@ -239,33 +252,34 @@ public sealed class PetalTileEvidence
 /// </summary>
 /// <remarks>
 /// <para>
-/// The decoder locates the corner finders, derives a homography for each
-/// orientation hypothesis (four rotations, optionally mirrored), ranks the
-/// hypotheses by how well the ring gates and the <c>天</c> silhouette line up,
-/// takes the first whose lane <c>D</c> (or else a tile lane) codeword checks
-/// out, then reads the tiles and dots. When one blossom is hidden, its corner is
-/// inferred from the other three and moved to where the dotted rings line up
-/// best; <see cref="PetalDecodedFrame.InferredCorner"/> reports it. Every tile is
-/// classified jointly: its 8×8 sample patch is compared against the 32
-/// hypotheses (polarity × glyph) and the best match wins, so the katakana and the
-/// light/dark bit help each other. Cells the decoder is unsure about become
-/// Reed–Solomon erasures.
+/// The decoder locates the corner finders (four, or three with the fourth inferred), derives a
+/// pose for each orientation hypothesis, ranks the orientations by how well the ring gates line
+/// up (lane <c>D</c> must check out), then reads the dots and the petal field. Every petal is
+/// one bit: its level, normalised by the finder levels, is compared with a two-means threshold
+/// computed for its codeword and colour class (the petals inside the <c>天</c> are lighter than
+/// the pink ones). Bytes the decoder is unsure about become Reed–Solomon erasures.
 /// </para>
 /// <para>
-/// <see cref="Track"/> reads the next camera frame by following the pose of the
-/// previous one, which skips the finder search.
+/// When some field lanes do not decode, the pose is searched for radial lens distortion: a
+/// cheap camera's barrel distortion moves the petals by a third of their pitch at the edge of a
+/// 480p frame, while the finders that fix the homography sit far outside the field. Sectors
+/// still unread are read again from <em>local levels</em>: every cell rescaled by the darkest and
+/// brightest levels of its 32-unit neighbourhood, which cancels shadows, glare, banding and
+/// veiling light.
 /// </para>
 /// <para>
-/// The tile <em>level read</em> judges every patch against the light and dark
-/// levels measured at the finders. When it leaves lane <c>P</c> or <c>K</c>
-/// unreadable, the <em>normalised read</em> is tried for the missing lane: it
-/// rescales each patch (and each template) by its own contrast, so
-/// over-exposure, veiling light, glare, shadows and gradients cancel out.
+/// <see cref="Track"/> reads the next camera frame by following the pose of the previous one,
+/// which skips the finder search. A camera sees each shown frame two to four times:
+/// <see cref="FieldEvidence"/> keeps what one capture shows of the petal field, and
+/// <see cref="MergeFields"/> reads the field lanes from the average of several captures of one
+/// shown frame.
 /// </para>
 /// <para>
 /// Untrusted images never raise exceptions: every failure is reported through
-/// <see cref="PetalDecodeResult"/>. A lane that decodes is protected by its
-/// Reed–Solomon code and, end to end, by the payload CRC-32C.
+/// <see cref="PetalDecodeResult"/>. A lane that decodes is protected by its Reed–Solomon code
+/// and, end to end, by the payload CRC-32C. The decoder repeats the reference's IEEE double
+/// operations in the same order. Scratch buffers are kept per thread, so concurrent decodes on
+/// different threads are safe and a camera loop does not allocate them per frame.
 /// </para>
 /// </remarks>
 public static class PetalDecoder
@@ -273,44 +287,49 @@ public static class PetalDecoder
     /// <summary>Smallest accepted image side in pixels.</summary>
     public const int MinimumImageSide = 48;
 
-    private const int Patch = PetalGlyphs.TemplateSize;
-    private const int Cells = Patch * Patch;
-    private const int Hypotheses = 2 * PetalGlyphs.GlyphCount;
+    /// <summary>Final refinement step of the distortion search.</summary>
+    private const double DistortionRefine = 0.015;
 
-    /// <summary>Number of values in the raw patches of all tiles.</summary>
-    private const int PatchValues = PetalLayout.TileCount * Cells;
+    /// <summary>A colour class with fewer cells in a codeword than this takes the codeword's threshold.</summary>
+    private const int ClassMinCells = 16;
 
-    /// <summary>Relative level of the glyph ink on a light tile (ink / light fill).</summary>
-    private const double InkOnLight = 0.04;
+    /// <summary>Field cells within this distance of a cell are its neighbourhood for the local read.</summary>
+    private const double Neighbourhood = 32.0;
 
-    /// <summary>Relative level of a pink glyph on a dark tile (pink / light fill).</summary>
-    private const double PinkOnDark = 0.83;
+    /// <summary>Cells averaged at each end of a sorted neighbourhood for its local dark and lit levels.</summary>
+    private const int NeighbourhoodEnds = 5;
+
+    /// <summary>Sample spread of a ring dot, in canvas units (<c>0.32 × 9</c>).</summary>
+    private const double DotSpread = 0.32 * PetalLayout.DotRadius;
+
+    /// <summary>Sample spread of a petal, in canvas units: <c>0.4 ×</c> the single-precision petal radius widened.</summary>
+    private const double PetalSpread = 0.4 * PetalLayout.PetalRadius;
+
+    private const int AllSectors = (1 << PetalLayout.Sectors) - 1;
 
     /// <summary>
-    /// Cells cut from each end of a sorted patch to find its robust darkest and brightest level.
+    /// Distortion steps tried, relative to the starting pose, when a plain pose leaves field
+    /// lanes unread; the best is then refined by ±<see cref="DistortionRefine"/>.
     /// </summary>
-    private const int PatchCut = Cells / 10;
+    private static readonly double[] DistortionSteps = [-0.03, -0.06, -0.09, -0.12, -0.16, 0.03];
 
-    /// <summary>
-    /// Tiles whose contrast is below this fraction of the median tile contrast become erasures
-    /// in the normalised read.
-    /// </summary>
-    private const double WeakTile = 0.25;
-
-    /// <summary>Smallest span (in luma levels) of a camera patch that counts as contrast.</summary>
-    private const double PatchSpanFloor = 1.0;
-
-    /// <summary>Smallest span (in relative levels) of a template that counts as contrast.</summary>
-    private const double TemplateSpanFloor = 0.001;
-
-    private static readonly ConcurrentDictionary<long, double[]> PatternCache = new();
-    private static readonly ConcurrentDictionary<long, double[]> NormalisedPatternCache = new();
-    private static readonly bool[] NoErasures = new bool[PetalLayout.TileCount];
     private static readonly double[] ReferenceCos = new double[8];
     private static readonly double[] ReferenceSin = new double[8];
-    private static readonly double[] TileOffsets = [-0.25, -0.25, 0.25, -0.25, -0.25, 0.25, 0.25, 0.25];
     private static readonly bool[] Mirrorings = [false, true];
-    private static readonly PetalPoint[] EmptyCells = BuildEmptyCells();
+
+    /// <summary>The bit cells of every sector (840 each, bit order) and whether each is light.</summary>
+    private static readonly int[] SectorBitCells = new int[PetalLayout.Sectors * PetalLanes.FieldBits];
+    private static readonly bool[] SectorBitLights = new bool[PetalLayout.Sectors * PetalLanes.FieldBits];
+    private static readonly int[] SectorLightCounts = new int[PetalLayout.Sectors];
+
+    /// <summary>Canvas position of every cell as a fraction of the canvas, for the bilinear reference levels.</summary>
+    private static readonly double[] CellU = new double[PetalLayout.FieldCells];
+    private static readonly double[] CellV = new double[PetalLayout.FieldCells];
+
+    /// <summary>The neighbourhood of every field cell, cell <c>c</c> at <c>[NeighbourStarts[c], NeighbourStarts[c + 1])</c>.</summary>
+    private static readonly int[] NeighbourStarts = new int[PetalLayout.FieldCells + 1];
+    private static readonly ushort[] NeighbourCells;
+    private static readonly int LargestNeighbourhood;
 
     static PetalDecoder()
     {
@@ -320,15 +339,59 @@ public static class PetalDecoder
             ReferenceCos[k] = Math.Cos(angle);
             ReferenceSin[k] = Math.Sin(angle);
         }
+
+        var order = PetalLayout.SectorOrderTable;
+        var lights = PetalLayout.CellLightTable;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            for (var bit = 0; bit < PetalLanes.FieldBits; bit++)
+            {
+                var cell = order[sector * PetalLayout.SectorCells + bit];
+                SectorBitCells[sector * PetalLanes.FieldBits + bit] = cell;
+                SectorBitLights[sector * PetalLanes.FieldBits + bit] = lights[cell];
+                SectorLightCounts[sector] += lights[cell] ? 1 : 0;
+            }
+        }
+
+        var xs = PetalLayout.CellXTable;
+        var ys = PetalLayout.CellYTable;
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
+        {
+            CellU[cell] = Math.Clamp(xs[cell] / 1024.0, 0.0, 1.0);
+            CellV[cell] = Math.Clamp(ys[cell] / 1024.0, 0.0, 1.0);
+        }
+
+        // Bands are 11 units apart, so only the three bands on either side can hold neighbours.
+        var bands = PetalLayout.CellBandTable;
+        var offsets = PetalLayout.BandOffsetTable;
+        var neighbours = new List<ushort>(PetalLayout.FieldCells * 24);
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
+        {
+            NeighbourStarts[cell] = neighbours.Count;
+            var (x, y) = (xs[cell], ys[cell]);
+            var band = bands[cell];
+            var first = offsets[Math.Max(band - 3, 0)];
+            var last = offsets[Math.Min(band + 4, PetalLayout.BandCount)];
+            for (var other = first; other < last; other++)
+            {
+                var (dx, dy) = (xs[other] - x, ys[other] - y);
+                if (dx * dx + dy * dy <= Neighbourhood * Neighbourhood)
+                    neighbours.Add((ushort)other);
+            }
+
+            LargestNeighbourhood = Math.Max(LargestNeighbourhood, neighbours.Count - NeighbourStarts[cell]);
+        }
+
+        NeighbourStarts[PetalLayout.FieldCells] = neighbours.Count;
+        NeighbourCells = neighbours.ToArray();
     }
 
     /// <summary>Decodes one camera frame.</summary>
     /// <remarks>
     /// Tries the finder candidates of <see cref="PetalLocator.Candidates"/> in order and returns
     /// the first that reads. For each, the orientation hypotheses (four quarter turns,
-    /// optionally mirrored) are ranked by the ring gates plus the <c>天</c>; lane <c>D</c> is
-    /// tried under the best three whose gate score is at least 0.2, then the tile lanes under
-    /// the best four.
+    /// optionally mirrored) are ranked by the ring gates; lane <c>D</c> is tried under the best
+    /// three whose gate score is at least 0.2, then the field lanes under the best four.
     /// </remarks>
     /// <param name="image">The luma plane.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
@@ -364,8 +427,9 @@ public static class PetalDecoder
     /// rest. A corner inferred in the previous frame counts as seen again only when its blossom
     /// is re-found within a quarter diameter of that prediction (so a thumb beside it does not
     /// count). When exactly one corner is missing it is placed at the prediction and refined
-    /// against the rings like an inferred corner. The orientation is kept from the previous
-    /// frame.
+    /// against the rings like an inferred corner. The orientation and the lens distortion are
+    /// kept from the previous frame (the distortion is searched again when a field lane does
+    /// not decode).
     /// </remarks>
     /// <param name="image">The luma plane of the next camera frame.</param>
     /// <param name="previous">The last frame that decoded.</param>
@@ -379,20 +443,20 @@ public static class PetalDecoder
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(previous);
         options ??= PetalDecodeOptions.Default;
-        // a frame naming a corner that does not exist is refused like a broken pose
+        // a frame built by the caller may name a corner that does not exist
         if (!Supported(image, options) || previous.InferredCorner is { } named && (uint)named > 3)
             return null;
-        var h0 = previous.Homography;
+        var p0 = previous.Pose;
         Span<PetalFinder> expected = stackalloc PetalFinder[4];
         double shortSide = Math.Min(image.Width, image.Height);
         for (var i = 0; i < 4; i++)
         {
             var center = PetalLayout.FinderCenterTable[i];
             var (cx, cy) = (center.X, center.Y);
-            h0.Apply(cx, cy, out var x, out var y);
+            p0.Apply(cx, cy, out var x, out var y);
             var size = PetalMath.Max(
-                ProjectedLength(h0, cx - 60.0, cy, cx + 60.0, cy),
-                ProjectedLength(h0, cx, cy - 60.0, cx, cy + 60.0));
+                ProjectedLength(p0, cx - 60.0, cy, cx + 60.0, cy),
+                ProjectedLength(p0, cx, cy - 60.0, cx, cy + 60.0));
             expected[i] = new PetalFinder(x, y, size);
         }
 
@@ -461,160 +525,167 @@ public static class PetalDecoder
         Span<PetalPoint> points = stackalloc PetalPoint[4];
         for (var i = 0; i < 4; i++)
             points[i] = new PetalPoint(corners[i].X, corners[i].Y);
-        if (PetalHomography.FromPoints(PetalLayout.FinderCenterTable, points) is not { } h)
+        var workspace = Workspace.Current;
+        if (ReadFieldSearching(image, points, previous.Pose.Distortion, inferred, workspace) is not { } read)
             return null;
-        if (ReferenceLevels(image, h, inferred) is not { } reference)
+        var d = ReadLaneD(image, read.Pose, read.Reference);
+        if (d is null && read.Decoded == 0)
             return null;
-        var d = ReadLaneD(image, h, reference);
-        using var patches = PooledValues.Rent(PatchValues);
-        SamplePatches(image, h, patches.Span);
-        var (p, k) = ReadTileLanes(patches.Span, reference, options.TemplateSigmas);
-        if (p is null && k is null && d is null)
-            return null;
-        return new PetalDecodedFrame(h, previous.Rotation, previous.Mirrored, p, k, d, inferred);
+        return new PetalDecodedFrame(read.Pose, previous.Rotation, previous.Mirrored, d, read.Fields, inferred);
     }
 
-    /// <summary>Reads all lanes with a known canvas-to-pixel homography (no finder search).</summary>
+    /// <summary>Reads all lanes with a known canvas-to-pixel pose (no finder search, no distortion search).</summary>
     /// <remarks>
-    /// Used by trackers that already know the pose, by refinement passes and by
-    /// qualification tooling with a ground-truth pose.
+    /// Used by refinement passes and by qualification tooling with a ground-truth pose. The
+    /// reference levels come from all four corner finders, so a frame whose corner blossom is
+    /// hidden is refused here (the hidden corner has no contrast); <see cref="Decode"/> and
+    /// <see cref="Track"/> read such frames by inferring that corner. Field lanes the levels
+    /// leave unread are read again from their local levels.
     /// </remarks>
     /// <param name="image">The luma plane.</param>
-    /// <param name="homography">Canvas-to-pixel transform.</param>
+    /// <param name="pose">Canvas-to-pixel pose.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
     /// <returns>
     /// The frame, or <see langword="null"/> when the image is unusable (see
     /// <see cref="PetalDecodeError.UnsupportedImage"/>) or the finder reference levels are too weak.
     /// </returns>
-    public static PetalDecodedFrame? DecodeAt(PetalLuma image, PetalHomography homography, PetalDecodeOptions? options = null)
+    public static PetalDecodedFrame? DecodeAt(PetalLuma image, PetalPose pose, PetalDecodeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(image);
         options ??= PetalDecodeOptions.Default;
         if (!Supported(image, options))
             return null;
-        var reference = ReferenceLevels(image, homography, null);
-        if (reference is null)
+        if (ReferenceLevels(image, pose, null) is not { } reference)
             return null;
-        return Finish(image, options, 0, false, homography, reference.Value, null, null);
-    }
-
-    /// <summary>Samples owned tile evidence under a decoded pose; unusable images or poses return null.</summary>
-    public static PetalTileEvidence? TileEvidence(PetalLuma image, PetalDecodedFrame frame, PetalDecodeOptions? options = null)
-    {
-        ArgumentNullException.ThrowIfNull(image);
-        ArgumentNullException.ThrowIfNull(frame);
-        options ??= PetalDecodeOptions.Default;
-        if (!Supported(image, options) || frame.InferredCorner is { } corner && (uint)corner > 3)
-            return null;
-        if (ReferenceLevels(image, frame.Homography, frame.InferredCorner) is not { } reference)
-            return null;
-        var patches = new double[PatchValues];
-        SamplePatches(image, frame.Homography, patches);
-        return new PetalTileEvidence(patches, reference);
+        var workspace = Workspace.Current;
+        var levels = workspace.Levels;
+        FieldLevels(image, pose, reference, levels);
+        Span<PetalLaneResult?> fields = new PetalLaneResult?[PetalLayout.Sectors];
+        ReadFields(levels, 0, fields, workspace);
+        return new PetalDecodedFrame(pose, 0, false, ReadLaneD(image, pose, reference), fields, null);
     }
 
     /// <summary>
-    /// Reads tile lanes from the ordered mean of captures of one shown frame. The caller
-    /// must group captures by independently decoded headers and check recovered headers.
+    /// Builds the cells a decoder believes it saw under <paramref name="frame"/>'s pose, for
+    /// diagnostics: every codeword thresholded as the first read of <see cref="Decode"/>
+    /// thresholds it (no local read). The petals are left unturned (see
+    /// <see cref="PetalTurns.ObservedTurns"/>).
     /// </summary>
-    public static (PetalLaneResult? P, PetalLaneResult? K) MergeTiles(
-        IReadOnlyList<PetalTileEvidence> evidence, PetalDecodeOptions? options = null)
-    {
-        ArgumentNullException.ThrowIfNull(evidence);
-        if (evidence.Count == 0)
-            return (null, null);
-        options ??= PetalDecodeOptions.Default;
-        using var mean = PooledValues.Rent(PatchValues);
-        using var levelled = PooledValues.Rent(PatchValues);
-        mean.Span.Clear();
-        foreach (var item in evidence)
-        {
-            LevelPatches(item.Patches, item.Reference, levelled.Span);
-            for (var i = 0; i < PatchValues; i++)
-                mean.Span[i] += levelled.Span[i];
-        }
-        for (var i = 0; i < PatchValues; i++)
-            mean.Span[i] /= evidence.Count;
-        var (pWord, pConfidence, kWord, kConfidence) = TileWords(Classify(mean.Span, options.TemplateSigmas, false, NoErasures));
-        var p = DecodeWithErasures(PetalLane.P, pWord, pConfidence);
-        var k = DecodeWithErasures(PetalLane.K, kWord, kConfidence);
-        if (p is null || k is null)
-        {
-            mean.Span.Clear();
-            foreach (var item in evidence)
-                for (var i = 0; i < PatchValues; i++)
-                    mean.Span[i] += item.Patches[i];
-            for (var i = 0; i < PatchValues; i++)
-                mean.Span[i] /= evidence.Count;
-            (pWord, pConfidence, kWord, kConfidence) = TileWords(ReadTilesNormalised(mean.Span, options.TemplateSigmas));
-            p ??= DecodeWithErasures(PetalLane.P, pWord, pConfidence);
-            k ??= DecodeWithErasures(PetalLane.K, kWord, kConfidence);
-        }
-        return (p, k);
-    }
-
-    /// <summary>Builds the cells a decoder believes it saw, for diagnostics.</summary>
-    /// <remarks>
-    /// Tiles are taken from the level read (the one that judges against the finder levels),
-    /// even for a frame whose lanes were rescued by the normalised read. The levels of a corner
-    /// the frame inferred are extrapolated as in the decoder.
-    /// </remarks>
+    /// <remarks>The levels of a corner the frame inferred are extrapolated as in the decoder.</remarks>
     /// <param name="image">The luma plane the frame was decoded from.</param>
     /// <param name="frame">The decoded frame.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
     /// <returns>
-    /// The observed cells, or <see langword="null"/> when the image is unusable or the reference
-    /// levels are too weak.
+    /// The observed cells, or <see langword="null"/> when the image is unusable, the frame names
+    /// a corner that does not exist, or the reference levels are too weak.
     /// </returns>
     public static PetalFrameCells? ObservedCells(PetalLuma image, PetalDecodedFrame frame, PetalDecodeOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(image);
-        ArgumentNullException.ThrowIfNull(frame);
-        options ??= PetalDecodeOptions.Default;
-        if (!Supported(image, options))
+        if (FieldEvidence(image, frame, options) is not { } evidence)
             return null;
-        var reference = ReferenceLevels(image, frame.Homography, frame.InferredCorner);
-        if (reference is null)
+        if (ReferenceLevels(image, frame.Pose, frame.InferredCorner) is not { } reference)
             return null;
-        using var patches = PooledValues.Rent(PatchValues);
-        SamplePatches(image, frame.Homography, patches.Span);
-        var reads = ReadTiles(patches.Span, reference.Value, options.TemplateSigmas);
-        var (p, _, k, _) = TileWords(reads);
-        var (d, _) = ReadDots(image, frame.Homography, reference.Value);
-        return PetalFrameCells.FromWords(p, k, d);
+        var (d, _) = ReadDots(image, frame.Pose, reference);
+        var workspace = Workspace.Current;
+        var words = new byte[PetalLayout.Sectors][];
+        var confidence = new double[PetalLanes.FieldWordLength];
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            var margins = 0.0;
+            words[sector] = new byte[PetalLanes.FieldWordLength];
+            ReadWord(evidence.Levels, sector, ref margins, words[sector], confidence, workspace);
+        }
+
+        return PetalFrameCells.FromWords(d, words);
     }
 
-    /// <summary>Mean squared tile-match error of the level read, a quick image-quality indicator.</summary>
-    /// <remarks>
-    /// It can be large for a frame whose lanes were rescued by the normalised read, which is the
-    /// point: the finder levels did not describe that picture.
-    /// </remarks>
+    /// <summary>The field evidence of <paramref name="image"/> under the pose <paramref name="frame"/> was decoded with.</summary>
     /// <param name="image">The luma plane the frame was decoded from.</param>
     /// <param name="frame">The decoded frame.</param>
     /// <param name="options">Decoder options; <see cref="PetalDecodeOptions.Default"/> when omitted.</param>
     /// <returns>
-    /// The mean error, or <see langword="null"/> when the image is unusable or the reference
-    /// levels are too weak.
+    /// The evidence, or <see langword="null"/> when the image is unusable (see
+    /// <see cref="PetalDecodeError.UnsupportedImage"/>), the frame names a corner that does not
+    /// exist, or the finder levels under that pose are too weak.
     /// </returns>
-    public static double? TileMatchError(PetalLuma image, PetalDecodedFrame frame, PetalDecodeOptions? options = null)
+    public static PetalFieldEvidence? FieldEvidence(PetalLuma image, PetalDecodedFrame frame, PetalDecodeOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(image);
         ArgumentNullException.ThrowIfNull(frame);
         options ??= PetalDecodeOptions.Default;
-        if (!Supported(image, options))
+        // a frame built by the caller may name a corner that does not exist
+        if (!Supported(image, options) || frame.InferredCorner is { } corner && (uint)corner > 3)
             return null;
-        var reference = ReferenceLevels(image, frame.Homography, frame.InferredCorner);
-        if (reference is null)
+        if (ReferenceLevels(image, frame.Pose, frame.InferredCorner) is not { } reference)
             return null;
-        using var patches = PooledValues.Rent(PatchValues);
-        SamplePatches(image, frame.Homography, patches.Span);
-        var reads = ReadTiles(patches.Span, reference.Value, options.TemplateSigmas);
-        var total = PetalMath.SumIdentity;
-        foreach (var read in reads)
-            total += read.Error;
-        return total / reads.Length;
+        var levels = new double[PetalLayout.FieldCells];
+        FieldLevels(image, frame.Pose, reference, levels);
+        return new PetalFieldEvidence(levels);
     }
 
+    /// <summary>
+    /// The field lanes from several captures of one shown frame: the cell-by-cell mean of their
+    /// levels (summed in capture order, then divided by the number of captures), read as one
+    /// capture's levels are, local read included.
+    /// </summary>
+    /// <remarks>
+    /// Averaging cancels the sensor noise, banding and shake that differ between captures; one
+    /// evidence reads exactly the field lanes <see cref="Decode"/> read from that capture's pose.
+    /// The caller checks that every evidence comes from captures of the same shown frame: a lane
+    /// read here names its frame in its own header.
+    /// </remarks>
+    /// <param name="evidence">The captures' field evidence.</param>
+    /// <param name="skip">Sectors not to read (four flags, sector 0 first); empty reads every sector.</param>
+    /// <returns>The field lane results, sector 0 first.</returns>
+    /// <exception cref="ArgumentException"><paramref name="skip"/> is neither empty nor four flags long.</exception>
+    public static PetalLaneResult?[] MergeFields(IReadOnlyList<PetalFieldEvidence> evidence, ReadOnlySpan<bool> skip = default)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        if (!skip.IsEmpty && skip.Length != PetalLayout.Sectors)
+            throw new ArgumentException("Skip flags name the four sectors.", nameof(skip));
+        var mask = 0;
+        for (var sector = 0; sector < skip.Length; sector++)
+            mask |= skip[sector] ? 1 << sector : 0;
+        var results = new PetalLaneResult?[PetalLayout.Sectors];
+        if (evidence.Count == 0)
+            return results;
+        var workspace = Workspace.Current;
+        var mean = workspace.Levels;
+        Array.Clear(mean);
+        foreach (var capture in evidence)
+        {
+            ArgumentNullException.ThrowIfNull(capture, nameof(evidence));
+            var levels = capture.Levels;
+            for (var cell = 0; cell < mean.Length; cell++)
+                mean[cell] += levels[cell];
+        }
+
+        double count = evidence.Count;
+        for (var cell = 0; cell < mean.Length; cell++)
+            mean[cell] /= count;
+        ReadFields(mean, mask, results, workspace);
+        return results;
+    }
+
+    /// <summary>
+    /// The field lanes read from normalised cell levels: the level read alone, or with
+    /// <paramref name="local"/> also the local read of the sectors it leaves unread (diagnostics).
+    /// </summary>
+    internal static PetalLaneResult?[] ReadFieldLanes(double[] levels, bool local)
+    {
+        var workspace = Workspace.Current;
+        var results = new PetalLaneResult?[PetalLayout.Sectors];
+        if (local)
+            ReadFields(levels, 0, results, workspace);
+        else
+            ReadSectors(levels, 0, results, workspace);
+        return results;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="image"/> is something the decoder may work on: at least 48 pixels
+    /// on a side and within <see cref="PetalDecodeOptions.MaxPixels"/>.
+    /// </summary>
     private static bool Supported(PetalLuma image, PetalDecodeOptions options) =>
         image.Width >= MinimumImageSide
         && image.Height >= MinimumImageSide
@@ -622,28 +693,10 @@ public static class PetalDecoder
         // the locator's integral image must fit in one array, whatever MaxPixels says
         && (long)(image.Width + 1) * (image.Height + 1) <= Array.MaxLength;
 
-    /// <summary>Completes a frame under one pose: lane <c>D</c> unless already read, then the tile lanes.</summary>
-    private static PetalDecodedFrame Finish(
-        PetalLuma image,
-        PetalDecodeOptions options,
-        int rotation,
-        bool mirrored,
-        in PetalHomography h,
-        in Reference reference,
-        PetalLaneResult? d,
-        int? inferredCorner)
-    {
-        d ??= ReadLaneD(image, h, reference);
-        using var patches = PooledValues.Rent(PatchValues);
-        SamplePatches(image, h, patches.Span);
-        var (p, k) = ReadTileLanes(patches.Span, reference, options.TemplateSigmas);
-        return new PetalDecodedFrame(h, rotation, mirrored, p, k, d, inferredCorner);
-    }
-
     /// <summary>
-    /// One finder candidate: refines an inferred corner against the rings, ranks the
-    /// orientation hypotheses by gate score plus <c>天</c> score, then tries lane <c>D</c> under
-    /// the best three whose gate score is at least 0.2 and the tile lanes under the best four.
+    /// One finder candidate: refines an inferred corner against the rings, ranks the orientation
+    /// hypotheses by gate score, tries lane <c>D</c> under the best three whose gate score is at
+    /// least 0.2 and the field lanes under the best four.
     /// </summary>
     private static PetalDecodedFrame? DecodeCandidate(PetalLuma image, PetalDecodeOptions options, PetalFinderSet set)
     {
@@ -651,44 +704,69 @@ public static class PetalDecoder
             ? RefineInferredCorner(image, set.CornerArray, index)
             : set.CornerArray;
         var scored = new List<Scored>(8);
-        foreach (var (rotation, mirrored, h) in HypothesesFor(corners, options.TryMirrored))
+        foreach (var (rotation, mirrored, destination) in Hypotheses(corners, options.TryMirrored))
         {
             int? inferred = set.Inferred is { } corner ? CanonicalCorner(corner, rotation, mirrored) : null;
-            if (ReferenceLevels(image, h, inferred) is not { } reference)
+            if (FitPose(image, destination, 0.0) is not { } pose)
                 continue;
-            var gate = GateScore(image, h, reference);
-            var mask = MaskScore(image, h, reference);
-            var candidate = new Scored(gate, mask, rotation, mirrored, h, reference, inferred);
-            // Stable descending insertion by gate + mask (Rust `sort_by` with `b.total_cmp(a)`).
-            var key = gate + mask;
+            if (ReferenceLevels(image, pose, inferred) is not { } reference)
+                continue;
+            var gate = GateScore(image, pose, reference);
+            var candidate = new Scored(gate, rotation, mirrored, destination, pose, reference, inferred);
+            // Stable descending insertion by gate score (Rust `sort_by` with `b.total_cmp(a)`).
             var at = scored.Count;
-            while (at > 0 && PetalMath.TotalCompare(key, scored[at - 1].Gate + scored[at - 1].Mask) > 0)
+            while (at > 0 && PetalMath.TotalCompare(gate, scored[at - 1].Gate) > 0)
                 at--;
             scored.Insert(at, candidate);
         }
 
+        var workspace = Workspace.Current;
         // 1. the ring beacon is the cheapest and strongest orientation check
         for (var i = 0; i < Math.Min(3, scored.Count); i++)
         {
             var s = scored[i];
-            // the order is no longer by gate score, so a weak gate skips only this hypothesis
             if (s.Gate < 0.2)
                 continue;
-            if (ReadLaneD(image, s.Homography, s.Reference) is { } d)
-                return Finish(image, options, s.Rotation, s.Mirrored, s.Homography, s.Reference, d, s.InferredCorner);
+            if (ReadLaneD(image, s.Pose, s.Reference) is { } d)
+            {
+                var read = ReadFieldSearching(image, s.Destination, 0.0, s.InferredCorner, workspace);
+                return read is null
+                    ? new PetalDecodedFrame(s.Pose, s.Rotation, s.Mirrored, d, new PetalLaneResult?[PetalLayout.Sectors], s.InferredCorner)
+                    : new PetalDecodedFrame(read.Pose, s.Rotation, s.Mirrored, d, read.Fields, s.InferredCorner);
+            }
         }
 
-        // 2. fall back to the tile lanes under the most promising orientations
-        using var patches = PooledValues.Rent(PatchValues);
+        // 2. fall back to the field lanes under the most promising orientations: a wrong
+        //    orientation reads permuted petals, which no field codeword accepts. Strong lens
+        //    distortion can hide both lane D and the field from a plain pose, so the distortion
+        //    is searched under the best orientation whose gates line up even when its plain pose
+        //    reads nothing.
         for (var i = 0; i < Math.Min(4, scored.Count); i++)
         {
             var s = scored[i];
-            SamplePatches(image, s.Homography, patches.Span);
-            var (p, k) = ReadTileLanes(patches.Span, s.Reference, options.TemplateSigmas);
-            if (p is null && k is null)
+            var plain = workspace.First;
+            if (!ReadFieldAt(image, s.Destination, 0.0, s.InferredCorner, plain, workspace))
                 continue;
-            var d = ReadLaneD(image, s.Homography, s.Reference);
-            return new PetalDecodedFrame(s.Homography, s.Rotation, s.Mirrored, p, k, d, s.InferredCorner);
+            var confident = i == 0 && s.Gate >= 0.2;
+            FieldRead read;
+            if (plain.Decoded == PetalLayout.Sectors)
+            {
+                read = plain;
+            }
+            else if (plain.Decoded == 0 && !confident)
+            {
+                // the local read costs a sort per cell: only the best orientation gets it for free
+                read = i == 0 ? Finish(plain, workspace) : plain;
+            }
+            else
+            {
+                // the reference re-reads the plain pose to start its search; the read is the same
+                read = SearchDistortion(image, s.Destination, 0.0, s.InferredCorner, plain, workspace.Second, workspace);
+            }
+
+            if (read.Decoded == 0)
+                continue;
+            return new PetalDecodedFrame(read.Pose, s.Rotation, s.Mirrored, ReadLaneD(image, read.Pose, read.Reference), read.Fields, s.InferredCorner);
         }
 
         return null;
@@ -698,11 +776,39 @@ public static class PetalDecoder
     internal static int CanonicalCorner(int index, int rotation, bool mirrored) =>
         mirrored ? (rotation + 4 - index) % 4 : (index + 4 - rotation) % 4;
 
-    /// <summary>The length of the image of the canvas segment from <c>(x0, y0)</c> to <c>(x1, y1)</c>.</summary>
-    private static double ProjectedLength(in PetalHomography h, double x0, double y0, double x1, double y1)
+    /// <summary>The orientation hypotheses of a finder quad: four quarter turns, then (optionally) four mirrored ones, with the finder centres in canonical corner order.</summary>
+    internal static List<(int Rotation, bool Mirrored, PetalPoint[] Destination)> Hypotheses(PetalFinder[] finders, bool tryMirrored)
     {
-        h.Apply(x0, y0, out var ax, out var ay);
-        h.Apply(x1, y1, out var bx, out var by);
+        var output = new List<(int, bool, PetalPoint[])>(8);
+        foreach (var mirrored in Mirrorings)
+        {
+            if (mirrored && !tryMirrored)
+                continue;
+            for (var rotation = 0; rotation < 4; rotation++)
+            {
+                var destination = new PetalPoint[4];
+                for (var i = 0; i < 4; i++)
+                {
+                    var q = mirrored ? finders[(rotation + 4 - i) % 4] : finders[(i + rotation) % 4];
+                    destination[i] = new PetalPoint(q.X, q.Y);
+                }
+
+                output.Add((rotation, mirrored, destination));
+            }
+        }
+
+        return output;
+    }
+
+    /// <summary>The pose with lens distortion <paramref name="distortion"/> through the four finder centres (image pixels, canonical corner order).</summary>
+    internal static PetalPose? FitPose(PetalLuma image, ReadOnlySpan<PetalPoint> destination, double distortion) =>
+        PetalPose.Fit(PetalLayout.FinderCenterTable, destination, distortion, image.Width, image.Height);
+
+    /// <summary>The length of the image of the canvas segment from <c>(x0, y0)</c> to <c>(x1, y1)</c>.</summary>
+    private static double ProjectedLength(in PetalPose pose, double x0, double y0, double x1, double y1)
+    {
+        pose.Apply(x0, y0, out var ax, out var ay);
+        pose.Apply(x1, y1, out var bx, out var by);
         return Math.Sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
     }
 
@@ -710,22 +816,22 @@ public static class PetalDecoder
         new(expected.X + shiftX, expected.Y + shiftY, expected.Size);
 
     /// <summary>
-    /// The brightness summed over all ring slots under the pose that maps the canonical corners
-    /// onto <paramref name="corners"/> (in quad order).
+    /// The brightness summed over all ring slots under the plain pose that maps the canonical
+    /// corners onto <paramref name="corners"/> (in quad order).
     /// </summary>
     /// <remarks>
     /// The slots form the same set of points under every quarter turn and mirror of the canvas
-    /// (80, 92 and 104 are multiples of four), so the value does not depend on the orientation.
+    /// (88, 100 and 108 are multiples of four), so the value does not depend on the orientation.
     /// </remarks>
     internal static double? RingBrightness(PetalLuma image, ReadOnlySpan<PetalPoint> corners)
     {
-        if (PetalHomography.FromPoints(PetalLayout.FinderCenterTable, corners) is not { } h)
+        if (FitPose(image, corners, 0.0) is not { } pose)
             return null;
         var sum = PetalMath.SumIdentity;
         for (var flat = 0; flat < PetalLayout.TotalSlots; flat++)
         {
             var center = PetalLayout.SlotCenterFlat(flat);
-            sum += DotSamples(image, h, center.X, center.Y, 3.5);
+            sum += DotSamples(image, pose, center.X, center.Y, DotSpread);
         }
 
         return sum;
@@ -738,7 +844,7 @@ public static class PetalDecoder
     /// </summary>
     /// <remarks>
     /// The rings fix the geometry only; the orientation is decided afterwards by the gates and
-    /// the <c>天</c>. A candidate replaces the best point only when it is strictly brighter.
+    /// the lanes. A candidate replaces the best point only when it is strictly brighter.
     /// </remarks>
     internal static PetalFinder[] RefineInferredCorner(PetalLuma image, PetalFinder[] corners, int inferred)
     {
@@ -785,97 +891,19 @@ public static class PetalDecoder
         }
     }
 
-    /// <summary>
-    /// How well the <c>天</c> lines up: the mean normalised level over the tiles (each sampled at
-    /// five points across the tile, so a glyph stroke at the centre does not decide it) minus
-    /// the mean over the empty lattice cells.
-    /// </summary>
-    /// <remarks>
-    /// The mask is symmetric left to right but not top to bottom, so this tells the four quarter
-    /// turns apart even when the ring gates are damaged.
-    /// </remarks>
-    internal static double MaskScore(PetalLuma image, in PetalHomography h, in Reference reference)
-    {
-        var tiles = PetalMath.SumIdentity;
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
-        {
-            var center = PetalLayout.TileCenterUnchecked(tile);
-            tiles += MaskLevel(image, h, reference, center.X, center.Y);
-        }
-
-        var empty = PetalMath.SumIdentity;
-        foreach (var cell in EmptyCells)
-            empty += MaskLevel(image, h, reference, cell.X, cell.Y);
-        return tiles / PetalLayout.TileCount - empty / EmptyCells.Length;
-    }
-
-    private static double MaskLevel(PetalLuma image, in PetalHomography h, in Reference reference, double x, double y)
-    {
-        reference.At(x, y, out var lit, out var dark);
-        return (DotSamples(image, h, x, y, 8.0) - dark) / (lit - dark);
-    }
-
-    /// <summary>Centres of the lattice cells outside the <c>天</c> mask (no tile is ever drawn there), row-major.</summary>
-    private static PetalPoint[] BuildEmptyCells()
-    {
-        var cells = new List<PetalPoint>();
-        for (var row = 0; row < PetalLayout.TileGrid; row++)
-        {
-            var line = PetalLayout.Mask[row];
-            for (var column = 0; column < line.Length; column++)
-            {
-                if (line[column] != '#')
-                {
-                    cells.Add(new PetalPoint(
-                        PetalLayout.TileOrigin + PetalLayout.TilePitch * (column + 0.5),
-                        PetalLayout.TileOrigin + PetalLayout.TilePitch * (row + 0.5)));
-                }
-            }
-        }
-
-        return cells.ToArray();
-    }
-
-    /// <summary>The orientation hypotheses of a finder quad: four quarter turns, then (optionally) four mirrored ones.</summary>
-    internal static List<(int Rotation, bool Mirrored, PetalHomography Homography)> HypothesesFor(
-        PetalFinder[] finders,
-        bool tryMirrored)
-    {
-        var canonical = PetalLayout.FinderCenterTable;
-        var output = new List<(int, bool, PetalHomography)>(8);
-        Span<PetalPoint> destination = stackalloc PetalPoint[4];
-        foreach (var mirrored in Mirrorings)
-        {
-            if (mirrored && !tryMirrored)
-                continue;
-            for (var rotation = 0; rotation < 4; rotation++)
-            {
-                for (var i = 0; i < 4; i++)
-                {
-                    var q = mirrored ? finders[(rotation + 4 - i) % 4] : finders[(i + rotation) % 4];
-                    destination[i] = new PetalPoint(q.X, q.Y);
-                }
-
-                if (PetalHomography.FromPoints(canonical, destination) is { } h)
-                    output.Add((rotation, mirrored, h));
-            }
-        }
-
-        return output;
-    }
-
-    private static double DotSamples(PetalLuma image, in PetalHomography h, double x, double y, double spread)
+    /// <summary>The mean of five samples: the centre and four at ±<paramref name="spread"/> on x, then y.</summary>
+    private static double DotSamples(PetalLuma image, in PetalPose pose, double x, double y, double spread)
     {
         var sum = 0.0;
-        h.Apply(x + 0.0, y + 0.0, out var px, out var py);
+        pose.Apply(x + 0.0, y + 0.0, out var px, out var py);
         sum += image.Sample(px, py);
-        h.Apply(x + spread, y + 0.0, out px, out py);
+        pose.Apply(x + spread, y + 0.0, out px, out py);
         sum += image.Sample(px, py);
-        h.Apply(x + -spread, y + 0.0, out px, out py);
+        pose.Apply(x + -spread, y + 0.0, out px, out py);
         sum += image.Sample(px, py);
-        h.Apply(x + 0.0, y + spread, out px, out py);
+        pose.Apply(x + 0.0, y + spread, out px, out py);
         sum += image.Sample(px, py);
-        h.Apply(x + 0.0, y + -spread, out px, out py);
+        pose.Apply(x + 0.0, y + -spread, out px, out py);
         sum += image.Sample(px, py);
         return sum / 5.0;
     }
@@ -889,10 +917,10 @@ public static class PetalDecoder
     /// extrapolated from the other three by the parallelogram rule and kept within their range.
     /// </remarks>
     /// <returns>
-    /// The levels, or <see langword="null"/> when a seen corner has less than 12 levels of
-    /// contrast or a non-finite one (only a broken pose produces that).
+    /// The levels, or <see langword="null"/> when a corner has less than 12 levels of contrast
+    /// or a non-finite one (only a broken pose produces that).
     /// </returns>
-    internal static Reference? ReferenceLevels(PetalLuma image, in PetalHomography h, int? inferred)
+    internal static Reference? ReferenceLevels(PetalLuma image, in PetalPose pose, int? inferred)
     {
         var missing = inferred is { } m && (uint)m < 4 ? m : -1;
         var reference = new Reference();
@@ -903,18 +931,18 @@ public static class PetalDecoder
             var center = PetalLayout.FinderCenterTable[i];
             var (cx, cy) = (center.X, center.Y);
             // the blossom is solid out to radius 24 around its centre
-            h.Apply(cx, cy, out var px, out var py);
+            pose.Apply(cx, cy, out var px, out var py);
             var sum = image.Sample(px, py);
             for (var k = 0; k < 8; k++)
             {
-                h.Apply(cx + 20.0 * ReferenceCos[k], cy + 20.0 * ReferenceSin[k], out px, out py);
+                pose.Apply(cx + 20.0 * ReferenceCos[k], cy + 20.0 * ReferenceSin[k], out px, out py);
                 sum += image.Sample(px, py);
             }
 
             var lit = sum / 9.0;
             var (sx, sy) = (cx < 512.0 ? 1.0 : -1.0, cy < 512.0 ? 1.0 : -1.0);
-            var a = DotSamples(image, h, cx + sx * 100.0, cy, 5.0);
-            var b = DotSamples(image, h, cx, cy + sy * 100.0, 5.0);
+            var a = DotSamples(image, pose, cx + sx * 100.0, cy, 5.0);
+            var b = DotSamples(image, pose, cx, cy + sy * 100.0, 5.0);
             var dark = 0.5 * (a + b);
             // also refuses NaN levels, which only a non-finite pose can produce
             if (!double.IsFinite(lit - dark) || lit - dark < 12.0)
@@ -934,29 +962,30 @@ public static class PetalDecoder
         return reference;
     }
 
-    private static double NormalisedDot(PetalLuma image, in PetalHomography h, in Reference reference, int flat)
+    private static double NormalisedDot(PetalLuma image, in PetalPose pose, in Reference reference, int flat)
     {
         var center = PetalLayout.SlotCenterFlat(flat);
         var (x, y) = (center.X, center.Y);
         reference.At(x, y, out var lit, out var dark);
-        return (DotSamples(image, h, x, y, 3.5) - dark) / (lit - dark);
+        return (DotSamples(image, pose, x, y, DotSpread) - dark) / (lit - dark);
     }
 
-    private static double GateScore(PetalLuma image, in PetalHomography h, in Reference reference)
+    /// <summary>The mean normalised level of the gate dots minus that of the guards.</summary>
+    internal static double GateScore(PetalLuma image, in PetalPose pose, in Reference reference)
     {
         var gates = PetalLayout.GateSlotTable;
         var guards = PetalLayout.GuardSlotTable;
         var gateSum = PetalMath.SumIdentity;
         foreach (var slot in gates)
-            gateSum += NormalisedDot(image, h, reference, slot);
+            gateSum += NormalisedDot(image, pose, reference, slot);
         var guardSum = PetalMath.SumIdentity;
         foreach (var slot in guards)
-            guardSum += NormalisedDot(image, h, reference, slot);
+            guardSum += NormalisedDot(image, pose, reference, slot);
         return gateSum / gates.Length - guardSum / guards.Length;
     }
 
     /// <summary>Reads lane <c>D</c>: the transmitted bytes and per-byte confidence.</summary>
-    private static (byte[] Word, double[] Confidence) ReadDots(PetalLuma image, in PetalHomography h, in Reference reference)
+    private static (byte[] Word, double[] Confidence) ReadDots(PetalLuma image, in PetalPose pose, in Reference reference)
     {
         var gates = PetalLayout.GateSlotTable;
         var guards = PetalLayout.GuardSlotTable;
@@ -970,7 +999,7 @@ public static class PetalDecoder
             {
                 if (PetalLayout.SplitSlot(slot).Ring != ring)
                     continue;
-                litSum += NormalisedDot(image, h, reference, slot);
+                litSum += NormalisedDot(image, pose, reference, slot);
                 litCount++;
             }
 
@@ -980,7 +1009,7 @@ public static class PetalDecoder
             {
                 if (PetalLayout.SplitSlot(slot).Ring != ring)
                     continue;
-                darkSum += NormalisedDot(image, h, reference, slot);
+                darkSum += NormalisedDot(image, pose, reference, slot);
                 darkCount++;
             }
 
@@ -999,7 +1028,7 @@ public static class PetalDecoder
         for (var bit = 0; bit < dataSlots.Length; bit++)
         {
             var slot = dataSlots[bit];
-            var value = NormalisedDot(image, h, reference, slot);
+            var value = NormalisedDot(image, pose, reference, slot);
             var threshold = thresholds[PetalLayout.SplitSlot(slot).Ring];
             if (value > threshold)
                 bytes[bit / 8] |= (byte)(1 << (7 - bit % 8));
@@ -1010,22 +1039,19 @@ public static class PetalDecoder
     }
 
     /// <summary>Lane <c>D</c> under one pose.</summary>
-    private static PetalLaneResult? ReadLaneD(PetalLuma image, in PetalHomography h, in Reference reference)
+    private static PetalLaneResult? ReadLaneD(PetalLuma image, in PetalPose pose, in Reference reference)
     {
-        var (word, confidence) = ReadDots(image, h, reference);
+        var (word, confidence) = ReadDots(image, pose, reference);
         return DecodeWithErasures(PetalLane.D, word, confidence);
     }
 
     /// <summary>Tries Reed–Solomon with growing numbers of erasures, least confident first.</summary>
     /// <remarks>
-    /// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes, and for lane <c>K</c> also ⅔.
-    /// Lanes <c>D</c> and <c>P</c> stop at ½: their words have only 11 and 13 parity bytes, and a
-    /// further erasure step leaves so few spare ones that it accepts wrong codewords (lane
-    /// <c>D</c> at 7 erasures: about 0.4 % of random words, and 5 wrong lanes in 2 900 simulated
-    /// harsh frames; lane <c>P</c> at 8: 2 wrong lanes in 600 banded 480p frames). Capping them
-    /// costs 0.65 % of the lane <c>D</c> reads and 0.15 % of the lane <c>P</c> reads in those
-    /// frames. Bytes of equal confidence keep their order (the sort is stable, like Rust's
-    /// <c>sort_by</c>), which decides which of them are erased.
+    /// The schedule erases 0, ⅛, ¼, ⅓ and ½ of the parity bytes (integer division: lane
+    /// <c>D</c> 0, 1, 2, 3, 5; a field lane 0, 2, 5, 7, 11). Lane <c>D</c> has only 11 parity
+    /// bytes, and a further step leaves so few spare ones that it accepts wrong codewords (at 7
+    /// erasures about 0.4 % of random words). Bytes of equal confidence keep their order (the
+    /// sort is stable, like Rust's <c>sort_by</c>), which decides which of them are erased.
     /// </remarks>
     internal static PetalLaneResult? DecodeWithErasures(PetalLane lane, byte[] word, double[] confidence)
     {
@@ -1034,9 +1060,7 @@ public static class PetalDecoder
         for (var i = 0; i < order.Length; i++)
             order[i] = i;
         PetalMath.StableSortByKey(order, confidence);
-        Span<int> schedule = [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2, nsym * 2 / 3];
-        if (lane != PetalLane.K)
-            schedule = schedule[..5];
+        Span<int> schedule = [0, nsym / 8, nsym / 4, nsym / 3, nsym / 2];
         Span<byte> trial = stackalloc byte[word.Length];
         var previous = -1;
         foreach (var erasures in schedule)
@@ -1058,389 +1082,362 @@ public static class PetalDecoder
     }
 
     /// <summary>
-    /// Expected patches for the level read, relative to the light fill (ink 0.04, pink 0.83):
-    /// <c>pattern[(b * 16 + g) * 64 + cell]</c> for polarity <c>b</c> (1 = light tile) and
-    /// glyph <c>g</c>.
+    /// The two-means threshold of a set of values: start at their mean, then move to the
+    /// midpoint of the means of the values above and at or below the threshold, at most eight
+    /// times, stopping when it moves less than 10⁻⁴ or one side is empty. Sums run in the order
+    /// given.
     /// </summary>
-    private static double[] Patterns(double sigma) =>
-        PatternCache.GetOrAdd(BitConverter.DoubleToInt64Bits(sigma), static (_, s) => BuildPatterns(s), sigma);
-
-    private static double[] BuildPatterns(double sigma)
+    internal static double TwoMeans(ReadOnlySpan<double> values)
     {
-        Span<double> kernel = stackalloc double[5];
-        for (var i = -2; i <= 2; i++)
+        var total = PetalMath.SumIdentity;
+        foreach (var value in values)
+            total += value;
+        var threshold = total / values.Length;
+        for (var round = 0; round < 8; round++)
         {
-            double fi = i;
-            kernel[i + 2] = sigma < 0.05
-                ? (i == 0 ? 1.0 : 0.0)
-                : Math.Exp(-(fi * fi) / (2.0 * sigma * sigma));
-        }
-
-        var sum = PetalMath.SumIdentity;
-        foreach (var value in kernel)
-            sum += value;
-        for (var i = 0; i < kernel.Length; i++)
-            kernel[i] /= sum;
-        var patterns = new double[Hypotheses * Cells];
-        Span<double> coverage = stackalloc double[Cells];
-        Span<double> blurred = stackalloc double[Cells];
-        for (var polarity = 0; polarity < 2; polarity++)
-        {
-            for (var glyph = 0; glyph < PetalGlyphs.GlyphCount; glyph++)
+            var (low, lows, high, highs) = (0.0, 0, 0.0, 0);
+            foreach (var value in values)
             {
-                var template = PetalGlyphs.Template(glyph);
-                for (var c = 0; c < Cells; c++)
-                    coverage[c] = template[c] / 255.0;
-                for (var v = 0; v < Patch; v++)
+                if (value > threshold)
                 {
-                    for (var u = 0; u < Patch; u++)
-                    {
-                        var acc = 0.0;
-                        for (var ky = 0; ky < kernel.Length; ky++)
-                        {
-                            for (var kx = 0; kx < kernel.Length; kx++)
-                            {
-                                var (sx, sy) = (u + kx - 2, v + ky - 2);
-                                if (sx >= 0 && sx < Patch && sy >= 0 && sy < Patch)
-                                    acc += kernel[kx] * kernel[ky] * coverage[sy * Patch + sx];
-                            }
-                        }
-
-                        blurred[v * Patch + u] = acc;
-                    }
+                    high += value;
+                    highs++;
                 }
-
-                var offset = (polarity * PetalGlyphs.GlyphCount + glyph) * Cells;
-                for (var c = 0; c < Cells; c++)
+                else
                 {
-                    var ink = blurred[c];
-                    patterns[offset + c] = polarity == 1 ? 1.0 - (1.0 - InkOnLight) * ink : PinkOnDark * ink;
+                    low += value;
+                    lows++;
                 }
             }
+
+            if (lows == 0 || highs == 0)
+                break;
+            var next = 0.5 * (low / lows + high / highs);
+            var moved = Math.Abs(next - threshold);
+            threshold = next;
+            if (moved < 1e-4)
+                break;
         }
 
-        return patterns;
+        return threshold;
     }
 
-    /// <summary>
-    /// Expected patches rescaled like the observed ones, for the normalised read: the
-    /// <see cref="Patterns"/> with every template mapped to its own <c>[0, 1]</c> range.
-    /// </summary>
-    private static double[] NormalisedPatterns(double sigma) =>
-        NormalisedPatternCache.GetOrAdd(BitConverter.DoubleToInt64Bits(sigma), static (_, s) => BuildNormalisedPatterns(s), sigma);
-
-    private static double[] BuildNormalisedPatterns(double sigma)
+    /// <summary>The level of every field cell under one pose, normalised by the finder levels.</summary>
+    internal static void FieldLevels(PetalLuma image, in PetalPose pose, in Reference reference, Span<double> levels)
     {
-        var patterns = (double[])Patterns(sigma).Clone();
-        for (var hypothesis = 0; hypothesis < Hypotheses; hypothesis++)
+        var xs = PetalLayout.CellXTable;
+        var ys = PetalLayout.CellYTable;
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
         {
-            var pattern = patterns.AsSpan(hypothesis * Cells, Cells);
-            Rescale(pattern, TemplateSpanFloor, pattern);
-        }
-
-        return patterns;
-    }
-
-    /// <summary>
-    /// The raw 8×8 luma patch of every tile, as captured (no reference levels applied): each cell
-    /// is the mean of four bilinear samples at ±¼ cell, in raw luma levels.
-    /// </summary>
-    /// <param name="image">The luma plane.</param>
-    /// <param name="h">Canvas-to-pixel transform.</param>
-    /// <param name="patches">Receives <c>patches[tile * 64 + v * 8 + u]</c> for all 256 tiles.</param>
-    internal static void SamplePatches(PetalLuma image, in PetalHomography h, Span<double> patches)
-    {
-        const double half = PetalLayout.GlyphBox / 2.0;
-        const double cell = PetalLayout.GlyphBox / Patch;
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
-        {
-            var center = PetalLayout.TileCenterUnchecked(tile);
-            var (cx, cy) = (center.X, center.Y);
-            var patch = patches.Slice(tile * Cells, Cells);
-            for (var v = 0; v < Patch; v++)
-            {
-                for (var u = 0; u < Patch; u++)
-                {
-                    var gx = cx - half + (u + 0.5) * cell;
-                    var gy = cy - half + (v + 0.5) * cell;
-                    var sum = 0.0;
-                    for (var o = 0; o < TileOffsets.Length; o += 2)
-                    {
-                        h.Apply(gx + TileOffsets[o] * cell, gy + TileOffsets[o + 1] * cell, out var px, out var py);
-                        sum += image.Sample(px, py);
-                    }
-
-                    patch[v * Patch + u] = sum / 4.0;
-                }
-            }
+            reference.AtFraction(CellU[cell], CellV[cell], out var lit, out var dark);
+            levels[cell] = (DotSamples(image, pose, xs[cell], ys[cell], PetalSpread) - dark) / (lit - dark);
         }
     }
 
     /// <summary>
-    /// The robust darkest and brightest level of a patch: the values <see cref="PatchCut"/> cells
-    /// in from either end of the sorted cells.
-    /// </summary>
-    /// <param name="values">The 64 cells of one patch.</param>
-    /// <returns>The darkest and brightest level.</returns>
-    internal static (double Low, double High) PatchLevels(ReadOnlySpan<double> values)
-    {
-        if (values.Length != Cells)
-            throw new ArgumentException("A patch has exactly 64 cells.", nameof(values));
-        Span<double> sorted = stackalloc double[Cells];
-        values.CopyTo(sorted);
-        PetalMath.SortTotal(sorted);
-        return (sorted[PatchCut], sorted[Cells - 1 - PatchCut]);
-    }
-
-    /// <summary>
-    /// Maps a patch's own darkest level to 0 and brightest to 1, with <paramref name="floor"/> as
-    /// the smallest span that counts as contrast, clamped to <c>[-0.25, 1.25]</c>.
-    /// </summary>
-    /// <param name="values">The 64 cells of one patch.</param>
-    /// <param name="floor">Smallest span treated as contrast.</param>
-    /// <param name="destination">Receives the rescaled cells; may be the same memory as <paramref name="values"/>.</param>
-    internal static void Rescale(ReadOnlySpan<double> values, double floor, Span<double> destination)
-    {
-        var (low, high) = PatchLevels(values);
-        Rescale(values, low, high, floor, destination);
-    }
-
-    private static void Rescale(ReadOnlySpan<double> values, double low, double high, double floor, Span<double> destination)
-    {
-        var range = PetalMath.Max(high - low, floor);
-        for (var c = 0; c < Cells; c++)
-            destination[c] = Math.Clamp((values[c] - low) / range, -0.25, 1.25);
-    }
-
-    /// <summary>
-    /// Picks for every patch the polarity and glyph whose template matches best.
+    /// Cell levels rescaled by their neighbourhood: the mean of the lowest and of the highest
+    /// <see cref="NeighbourhoodEnds"/> levels around a cell become 0 and 1 (a span below 0.05
+    /// counts as 0.05).
     /// </summary>
     /// <remarks>
-    /// The template blur is chosen per frame, by the lowest total error. With
-    /// <paramref name="rescaleTemplates"/> the templates are rescaled like the patches; tiles
-    /// flagged in <paramref name="erased"/> get zero margins, so they are the first the
-    /// Reed–Solomon decoder treats as erasures.
+    /// About half the petals around any cell are lit, so shadows, glare, banding and veiling
+    /// light, which the finder levels cannot describe, cancel.
     /// </remarks>
-    private static TileRead[] Classify(
-        ReadOnlySpan<double> patches,
-        IReadOnlyList<double> sigmas,
-        bool rescaleTemplates,
-        ReadOnlySpan<bool> erased)
+    internal static void LocalLevels(ReadOnlySpan<double> levels, Span<double> local)
     {
-        var bestTotal = double.MaxValue;
-        var bestReads = Array.Empty<TileRead>();
-        TileRead[]? spare = null;
-        Span<double> errors = stackalloc double[Hypotheses];
-        for (var s = 0; s < sigmas.Count; s++)
+        Span<double> values = stackalloc double[LargestNeighbourhood];
+        for (var cell = 0; cell < PetalLayout.FieldCells; cell++)
         {
-            var patterns = rescaleTemplates ? NormalisedPatterns(sigmas[s]) : Patterns(sigmas[s]);
-            var total = 0.0;
-            var reads = spare ?? new TileRead[PetalLayout.TileCount];
-            for (var tile = 0; tile < PetalLayout.TileCount; tile++)
-            {
-                var patch = patches.Slice(tile * Cells, Cells);
-                for (var hypothesis = 0; hypothesis < Hypotheses; hypothesis++)
-                {
-                    var pattern = patterns.AsSpan(hypothesis * Cells, Cells);
-                    var error = PetalMath.SumIdentity;
-                    for (var c = 0; c < Cells; c++)
-                    {
-                        var difference = patch[c] - pattern[c];
-                        error += difference * difference;
-                    }
-
-                    errors[hypothesis] = error;
-                }
-
-                // Rust `min_by` keeps the first of equal minima.
-                var best = 0;
-                for (var hypothesis = 1; hypothesis < Hypotheses; hypothesis++)
-                {
-                    if (PetalMath.TotalCompare(errors[hypothesis], errors[best]) < 0)
-                        best = hypothesis;
-                }
-
-                var polarity = best / PetalGlyphs.GlyphCount;
-                var glyph = best % PetalGlyphs.GlyphCount;
-                var otherPolarity = double.MaxValue;
-                for (var g = 0; g < PetalGlyphs.GlyphCount; g++)
-                    otherPolarity = PetalMath.Min(otherPolarity, errors[(1 - polarity) * PetalGlyphs.GlyphCount + g]);
-                var otherGlyph = double.MaxValue;
-                for (var g = 0; g < PetalGlyphs.GlyphCount; g++)
-                {
-                    if (g != glyph)
-                        otherGlyph = PetalMath.Min(otherGlyph, errors[polarity * PetalGlyphs.GlyphCount + g]);
-                }
-
-                total += errors[best];
-                var (polarityMargin, glyphMargin) = erased[tile]
-                    ? (0.0, 0.0)
-                    : (otherPolarity - errors[best], otherGlyph - errors[best]);
-                reads[tile] = new TileRead(polarity == 1, (byte)glyph, polarityMargin, glyphMargin, errors[best]);
-            }
-
-            if (total < bestTotal)
-            {
-                bestTotal = total;
-                spare = bestReads.Length == 0 ? null : bestReads;
-                bestReads = reads;
-            }
-            else
-            {
-                spare = reads;
-            }
+            var start = NeighbourStarts[cell];
+            var count = NeighbourStarts[cell + 1] - start;
+            var around = values[..count];
+            for (var i = 0; i < count; i++)
+                around[i] = levels[NeighbourCells[start + i]];
+            PetalMath.SortTotal(around);
+            var ends = Math.Max(Math.Min(NeighbourhoodEnds, count / 2), 1);
+            var low = PetalMath.SumIdentity;
+            for (var i = 0; i < ends; i++)
+                low += around[i];
+            low /= ends;
+            var high = PetalMath.SumIdentity;
+            for (var i = count - ends; i < count; i++)
+                high += around[i];
+            high /= ends;
+            local[cell] = (levels[cell] - low) / PetalMath.Max(high - low, 0.05);
         }
-
-        return bestReads;
     }
 
     /// <summary>
-    /// The level read: every patch is judged against the light and dark levels measured at the
-    /// finders, interpolated to the tile.
+    /// The field lanes read from normalised cell levels, skipping the sectors in
+    /// <paramref name="skip"/>; sectors the levels leave unread are read again from their
+    /// <see cref="LocalLevels"/>. Returns how far the cells of the first read sit from their
+    /// thresholds on average.
     /// </summary>
-    /// <param name="patches">The raw patches from <see cref="SamplePatches"/>.</param>
-    /// <param name="reference">Finder levels.</param>
-    /// <param name="sigmas">Template blur widths to try.</param>
-    /// <returns>One read per tile.</returns>
-    internal static TileRead[] ReadTiles(ReadOnlySpan<double> patches, in Reference reference, IReadOnlyList<double> sigmas)
+    private static double ReadFields(double[] levels, int skip, Span<PetalLaneResult?> results, Workspace workspace)
     {
-        using var levelled = PooledValues.Rent(PatchValues);
-        LevelPatches(patches, reference, levelled.Span);
-        return Classify(levelled.Span, sigmas, false, NoErasures);
-    }
-
-    private static void LevelPatches(ReadOnlySpan<double> patches, in Reference reference, Span<double> output)
-    {
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
+        var separation = ReadSectors(levels, skip, results, workspace);
+        var unread = 0;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
-            var center = PetalLayout.TileCenterUnchecked(tile);
-            reference.At(center.X, center.Y, out var lit, out var dark);
-            var raw = patches.Slice(tile * Cells, Cells);
-            var patch = output.Slice(tile * Cells, Cells);
-            for (var c = 0; c < Cells; c++)
-                patch[c] = (raw[c] - dark) / (lit - dark);
+            if ((skip >> sector & 1) == 0 && results[sector] is null)
+                unread |= 1 << sector;
         }
 
+        if (unread != 0)
+        {
+            LocalLevels(levels, workspace.Local);
+            Span<PetalLaneResult?> retry = new PetalLaneResult?[PetalLayout.Sectors];
+            ReadSectors(workspace.Local, ~unread & AllSectors, retry, workspace);
+            for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                results[sector] ??= retry[sector];
+        }
+
+        return separation;
     }
 
     /// <summary>
-    /// The normalised read: every patch and every template is rescaled by its own contrast
-    /// before they are compared, so the judgement does not depend on absolute levels. A tile
-    /// whose contrast is below <see cref="WeakTile"/> times the median contrast is unreadable
-    /// and becomes the first erasure.
+    /// One read of the field lanes from cell levels with per-codeword, per-colour thresholds;
+    /// returns how far the cells read sit from their thresholds on average (a pose that lands on
+    /// the petals separates lit from dark cells best).
     /// </summary>
-    /// <param name="patches">The raw patches from <see cref="SamplePatches"/>.</param>
-    /// <param name="sigmas">Template blur widths to try.</param>
-    /// <returns>One read per tile.</returns>
-    internal static TileRead[] ReadTilesNormalised(ReadOnlySpan<double> patches, IReadOnlyList<double> sigmas)
+    private static double ReadSectors(ReadOnlySpan<double> levels, int skip, Span<PetalLaneResult?> results, Workspace workspace)
     {
-        using var rescaled = PooledValues.Rent(PatchValues);
-        var scaled = rescaled.Span;
-        Span<double> spans = stackalloc double[PetalLayout.TileCount];
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
+        var separation = 0.0;
+        var counted = 0;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
-            var raw = patches.Slice(tile * Cells, Cells);
-            var (low, high) = PatchLevels(raw);
-            spans[tile] = high - low;
-            Rescale(raw, low, high, PatchSpanFloor, scaled.Slice(tile * Cells, Cells));
+            results[sector] = null;
+            if ((skip >> sector & 1) != 0)
+                continue;
+            ReadWord(levels, sector, ref separation, workspace.Word, workspace.Confidence, workspace);
+            counted += PetalLanes.FieldBits;
+            results[sector] = DecodeWithErasures(PetalLanes.Field(sector), workspace.Word, workspace.Confidence);
         }
 
-        Span<double> sorted = stackalloc double[PetalLayout.TileCount];
-        spans.CopyTo(sorted);
-        PetalMath.SortTotal(sorted);
-        var median = sorted[PetalLayout.TileCount / 2];
-        Span<bool> erased = stackalloc bool[PetalLayout.TileCount];
-        for (var tile = 0; tile < PetalLayout.TileCount; tile++)
-            erased[tile] = spans[tile] < WeakTile * median;
-        return Classify(scaled, sigmas, true, erased);
+        return separation / Math.Max(counted, 1);
     }
 
     /// <summary>
-    /// Lanes <c>P</c> and <c>K</c> from one set of patches: the level read first, then, for any
-    /// lane still unreadable, the normalised read. A lane the level read decoded is never
-    /// replaced.
+    /// The transmitted word of one sector read from cell levels, and each byte's confidence (the
+    /// smallest margin of its bits). Every bit's margin from its threshold is added to
+    /// <paramref name="margins"/>.
     /// </summary>
-    /// <param name="patches">The raw patches from <see cref="SamplePatches"/>.</param>
-    /// <param name="reference">Finder levels.</param>
-    /// <param name="sigmas">Template blur widths to try.</param>
-    /// <returns>The lanes that decoded, <see langword="null"/> for the others.</returns>
-    internal static (PetalLaneResult? P, PetalLaneResult? K) ReadTileLanes(
-        ReadOnlySpan<double> patches,
-        in Reference reference,
-        IReadOnlyList<double> sigmas)
+    private static void ReadWord(
+        ReadOnlySpan<double> levels,
+        int sector,
+        ref double margins,
+        byte[] bytes,
+        double[] confidence,
+        Workspace workspace)
     {
-        var (pWord, pConfidence, kWord, kConfidence) = TileWords(ReadTiles(patches, reference, sigmas));
-        var p = DecodeWithErasures(PetalLane.P, pWord, pConfidence);
-        var k = DecodeWithErasures(PetalLane.K, kWord, kConfidence);
-        if (p is null || k is null)
+        var cells = SectorBitCells.AsSpan(sector * PetalLanes.FieldBits, PetalLanes.FieldBits);
+        var lights = SectorBitLights.AsSpan(sector * PetalLanes.FieldBits, PetalLanes.FieldBits);
+        var values = workspace.SectorValues.AsSpan();
+        for (var bit = 0; bit < cells.Length; bit++)
+            values[bit] = levels[cells[bit]];
+        var all = TwoMeans(values);
+        // the light (`天`) and pink petals are thresholded apart: their lit levels differ
+        var lightThreshold = ClassThreshold(values, lights, true, SectorLightCounts[sector], all, workspace.ClassValues);
+        var pinkThreshold = ClassThreshold(values, lights, false, PetalLanes.FieldBits - SectorLightCounts[sector], all, workspace.ClassValues);
+        Array.Clear(bytes);
+        Array.Fill(confidence, double.MaxValue);
+        for (var bit = 0; bit < values.Length; bit++)
         {
-            (pWord, pConfidence, kWord, kConfidence) = TileWords(ReadTilesNormalised(patches, sigmas));
-            p ??= DecodeWithErasures(PetalLane.P, pWord, pConfidence);
-            k ??= DecodeWithErasures(PetalLane.K, kWord, kConfidence);
+            var value = values[bit];
+            var threshold = lights[bit] ? lightThreshold : pinkThreshold;
+            if (value > threshold)
+                bytes[bit / 8] |= (byte)(1 << (7 - bit % 8));
+            var margin = Math.Abs(value - threshold);
+            margins += margin;
+            confidence[bit / 8] = PetalMath.Min(confidence[bit / 8], margin);
         }
-
-        return (p, k);
     }
 
-    internal static (byte[] P, double[] PConfidence, byte[] K, double[] KConfidence) TileWords(TileRead[] reads)
+    /// <summary>The two-means threshold of one colour class of a codeword, or <paramref name="all"/> for a class of fewer than <see cref="ClassMinCells"/> cells.</summary>
+    private static double ClassThreshold(
+        ReadOnlySpan<double> values,
+        ReadOnlySpan<bool> lights,
+        bool light,
+        int members,
+        double all,
+        double[] scratch)
     {
-        var p = new byte[PetalLanes.PWordLength];
-        var pConfidence = new double[PetalLanes.PWordLength];
-        var k = new byte[PetalLanes.KWordLength];
-        var kConfidence = new double[PetalLanes.KWordLength];
-        Array.Fill(pConfidence, double.MaxValue);
-        Array.Fill(kConfidence, double.MaxValue);
-        for (var tile = 0; tile < reads.Length; tile++)
+        if (members < ClassMinCells)
+            return all;
+        var count = 0;
+        for (var bit = 0; bit < values.Length; bit++)
         {
-            var read = reads[tile];
-            if (read.Light)
-                p[tile / 8] |= (byte)(1 << (7 - tile % 8));
-            pConfidence[tile / 8] = PetalMath.Min(pConfidence[tile / 8], read.PolarityMargin);
-            k[tile / 2] |= tile % 2 == 0 ? (byte)(read.Glyph << 4) : read.Glyph;
-            kConfidence[tile / 2] = PetalMath.Min(
-                kConfidence[tile / 2],
-                PetalMath.Min(read.GlyphMargin, read.PolarityMargin));
+            if (lights[bit] == light)
+                scratch[count++] = values[bit];
         }
 
-        return (p, pConfidence, k, kConfidence);
+        return TwoMeans(scratch.AsSpan(0, count));
     }
 
-    /// <summary>The verdict on one tile: polarity, glyph, the margins that rank its confidence, and its match error.</summary>
-    internal readonly record struct TileRead(
-        bool Light,
-        byte Glyph,
-        double PolarityMargin,
-        double GlyphMargin,
-        double Error);
+    /// <summary>Fits the pose with distortion <paramref name="distortion"/> and reads the field under it into <paramref name="into"/> (no local read).</summary>
+    private static bool ReadFieldAt(
+        PetalLuma image,
+        ReadOnlySpan<PetalPoint> destination,
+        double distortion,
+        int? inferred,
+        FieldRead into,
+        Workspace workspace)
+    {
+        if (FitPose(image, destination, distortion) is not { } pose)
+            return false;
+        if (ReferenceLevels(image, pose, inferred) is not { } reference)
+            return false;
+        FieldLevels(image, pose, reference, into.Levels);
+        into.Pose = pose;
+        into.Reference = reference;
+        into.Separation = ReadSectors(into.Levels, 0, into.Fields, workspace);
+        into.Decoded = Count(into.Fields);
+        return true;
+    }
 
-    /// <summary>One orientation hypothesis: gate score, <c>天</c> score, orientation, pose, levels and inferred corner.</summary>
+    /// <summary>Reads the sectors this pose left unread again from their <see cref="LocalLevels"/>.</summary>
+    private static FieldRead Finish(FieldRead read, Workspace workspace)
+    {
+        if (read.Decoded < PetalLayout.Sectors)
+        {
+            var unread = 0;
+            for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                unread |= read.Fields[sector] is null ? 1 << sector : 0;
+            LocalLevels(read.Levels, workspace.Local);
+            Span<PetalLaneResult?> retry = new PetalLaneResult?[PetalLayout.Sectors];
+            ReadSectors(workspace.Local, ~unread & AllSectors, retry, workspace);
+            for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+                read.Fields[sector] ??= retry[sector];
+            read.Decoded = Count(read.Fields);
+        }
+
+        return read;
+    }
+
+    /// <summary>
+    /// Reads the field through the finder centres <paramref name="destination"/>, starting from
+    /// lens distortion <paramref name="start"/>, and searches the distortion while some field lane
+    /// stays unread.
+    /// </summary>
+    private static FieldRead? ReadFieldSearching(
+        PetalLuma image,
+        ReadOnlySpan<PetalPoint> destination,
+        double start,
+        int? inferred,
+        Workspace workspace)
+    {
+        var best = workspace.First;
+        if (!ReadFieldAt(image, destination, start, inferred, best, workspace))
+            return null;
+        return SearchDistortion(image, destination, start, inferred, best, workspace.Second, workspace);
+    }
+
+    /// <summary>
+    /// The distortion search from the read <paramref name="best"/> at <paramref name="start"/>:
+    /// <paramref name="start"/> plus each distortion step in turn, then the best
+    /// ±<see cref="DistortionRefine"/>. The pose that decodes the most lanes wins (ties: the
+    /// clearer separation); the search stops once every lane decodes. Lanes the winning pose
+    /// still leaves unread are read again from its <see cref="LocalLevels"/>.
+    /// </summary>
+    private static FieldRead SearchDistortion(
+        PetalLuma image,
+        ReadOnlySpan<PetalPoint> destination,
+        double start,
+        int? inferred,
+        FieldRead best,
+        FieldRead candidate,
+        Workspace workspace)
+    {
+        if (best.Decoded == PetalLayout.Sectors)
+            return best;
+        foreach (var step in DistortionSteps)
+        {
+            if (ReadFieldAt(image, destination, start + step, inferred, candidate, workspace) && candidate.BetterThan(best))
+            {
+                (best, candidate) = (candidate, best);
+                if (best.Decoded == PetalLayout.Sectors)
+                    return best;
+            }
+        }
+
+        var centre = best.Pose.Distortion;
+        Span<double> refinements = [centre - DistortionRefine, centre + DistortionRefine];
+        foreach (var k in refinements)
+        {
+            if (ReadFieldAt(image, destination, k, inferred, candidate, workspace) && candidate.BetterThan(best))
+                (best, candidate) = (candidate, best);
+        }
+
+        return Finish(best, workspace);
+    }
+
+    private static int Count(ReadOnlySpan<PetalLaneResult?> fields)
+    {
+        var count = 0;
+        foreach (var field in fields)
+            count += field is null ? 0 : 1;
+        return count;
+    }
+
+    /// <summary>One orientation hypothesis: gate score, orientation, finder centres, plain pose, levels and inferred corner.</summary>
     private readonly record struct Scored(
         double Gate,
-        double Mask,
         int Rotation,
         bool Mirrored,
-        PetalHomography Homography,
+        PetalPoint[] Destination,
+        PetalPose Pose,
         Reference Reference,
         int? InferredCorner);
 
-    /// <summary>A pooled scratch array of doubles that goes back to the pool when disposed.</summary>
-    private readonly struct PooledValues : IDisposable
+    /// <summary>A read of the field under one pose.</summary>
+    private sealed class FieldRead
     {
-        private readonly double[] array;
-        private readonly int length;
+        public double[] Levels { get; } = new double[PetalLayout.FieldCells];
 
-        private PooledValues(double[] array, int length)
-        {
-            this.array = array;
-            this.length = length;
-        }
+        public PetalLaneResult?[] Fields { get; } = new PetalLaneResult?[PetalLayout.Sectors];
 
-        /// <summary>The usable part of the array: <c>length</c> values with unspecified content.</summary>
-        public Span<double> Span => array.AsSpan(0, length);
+        public PetalPose Pose { get; set; }
 
-        public static PooledValues Rent(int length) => new(ArrayPool<double>.Shared.Rent(length), length);
+        public Reference Reference { get; set; }
 
-        public void Dispose() => ArrayPool<double>.Shared.Return(array);
+        public int Decoded { get; set; }
+
+        public double Separation { get; set; }
+
+        /// <summary>More lanes, then a clearer separation (Rust tuple <c>&gt;</c>).</summary>
+        public bool BetterThan(FieldRead other) =>
+            Decoded != other.Decoded ? Decoded > other.Decoded : Separation > other.Separation;
+    }
+
+    /// <summary>Per-thread scratch buffers, so a camera loop does not allocate them for every frame.</summary>
+    private sealed class Workspace
+    {
+        [ThreadStatic]
+        private static Workspace? current;
+
+        public static Workspace Current => current ??= new Workspace();
+
+        /// <summary>The two reads of the distortion search: the best so far and the one being read.</summary>
+        public FieldRead First { get; } = new();
+
+        public FieldRead Second { get; } = new();
+
+        /// <summary>Levels outside a field read: <see cref="DecodeAt"/> and the merge mean.</summary>
+        public double[] Levels { get; } = new double[PetalLayout.FieldCells];
+
+        /// <summary>The local levels of the local read.</summary>
+        public double[] Local { get; } = new double[PetalLayout.FieldCells];
+
+        /// <summary>The levels of the bit cells of the sector being read, in bit order.</summary>
+        public double[] SectorValues { get; } = new double[PetalLanes.FieldBits];
+
+        /// <summary>The levels of one colour class of the sector being read.</summary>
+        public double[] ClassValues { get; } = new double[PetalLanes.FieldBits];
+
+        /// <summary>The transmitted word of the sector being read and the confidence of each byte.</summary>
+        public byte[] Word { get; } = new byte[PetalLanes.FieldWordLength];
+
+        public double[] Confidence { get; } = new double[PetalLanes.FieldWordLength];
     }
 
     /// <summary>Lit and dark levels at the four finders, interpolated over the canvas.</summary>
@@ -1505,10 +1502,12 @@ public static class PetalDecoder
         };
 
         /// <summary>Bilinear interpolation over the canvas of the four corner estimates.</summary>
-        public readonly void At(double x, double y, out double lit, out double dark)
+        public readonly void At(double x, double y, out double lit, out double dark) =>
+            AtFraction(Math.Clamp(x / 1024.0, 0.0, 1.0), Math.Clamp(y / 1024.0, 0.0, 1.0), out lit, out dark);
+
+        /// <summary><see cref="At"/> with the canvas position already divided by 1024 and clamped.</summary>
+        public readonly void AtFraction(double u, double v, out double lit, out double dark)
         {
-            var u = Math.Clamp(x / 1024.0, 0.0, 1.0);
-            var v = Math.Clamp(y / 1024.0, 0.0, 1.0);
             lit = Mix(lit0, lit1, lit2, lit3, u, v);
             dark = Mix(dark0, dark1, dark2, dark3, u, v);
         }

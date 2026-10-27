@@ -79,7 +79,7 @@ import { parseStrictLosslessIntegerJson, stringifyStrictLosslessIntegerJson } fr
 
 import { Buffer } from "buffer";
 import { BASE58_ALPHABET_TEXT, BASE64_ENCODING, HEX_ENCODING, JS_TYPE_BIGINT, JS_TYPE_FUNCTION, JS_TYPE_OBJECT, JS_TYPE_STRING, UTF8_ENCODING } from "./commonLiterals.js";
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 
 import { blake2b256 } from "./blake2b.js";
 import { createBlockProofVerification } from "./blockProofVerification.js";

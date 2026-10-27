@@ -1,15 +1,21 @@
 "use strict";
 
 // Run through sccp_evm_contract_smoke.sh after the audited native runtime install,
-// or directly: NODE_PATH=<installed evm-runtime>/node_modules node --test <this file>.
+// or directly: SCCP_EVM_RUNTIME_DIR=<installed evm-runtime> node --test <this file>.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
-const { createNativeEdrProvider } = require("../contract_tooling/evm-runtime/edr-provider.js");
-const { rejectedWith } = require("../contract_tooling/evm-runtime/evm-errors.js");
-const { AbiCoder } = require("ethers");
-const { BrowserProvider } = require("ethers");
+const { createRequire } = require("node:module");
+// Use the same audited private installation as the other smoke suites.
+// NODE_PATH is a fallback and can be shadowed by checkout-local node_modules.
+const RUNTIME_DIR = process.env.SCCP_EVM_RUNTIME_DIR
+  ? path.resolve(process.env.SCCP_EVM_RUNTIME_DIR)
+  : path.resolve(__dirname, "../contract_tooling/evm-runtime");
+const runtimeRequire = createRequire(path.join(RUNTIME_DIR, "package.json"));
+const { createNativeEdrProvider } = require(path.join(RUNTIME_DIR, "edr-provider.js"));
+const { rejectedWith } = require(path.join(RUNTIME_DIR, "evm-errors.js"));
+const { AbiCoder, BrowserProvider } = runtimeRequire("ethers");
 
 const HARDFORKS = ["prague", "osaka"];
 // EIP-2537 precompiles used by the SCCP destination (`specs/sccp.md` §5.2.4).

@@ -4365,6 +4365,112 @@
           }
         ]
       },
+      "AssetMovementPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AssetMovementRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "AssetMovementRow": {
+        "additionalProperties": false,
+        "description": "One committed movement of one asset definition. Without `select` every field is present; `select` may omit any field.",
+        "properties": {
+          "amount": {
+            "description": "Exact canonical decimal moved, formatted as account history formats amounts.",
+            "type": "string"
+          },
+          "asset_definition_id": {
+            "description": "The asset definition of the path.",
+            "type": "string"
+          },
+          "authority": {
+            "description": "Signer of the transaction.",
+            "type": "string"
+          },
+          "block_height": {
+            "description": "Height of the block holding the transaction.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "block_index": {
+            "description": "Position of the transaction in its block.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from_account_id": {
+            "description": "Debited account; null only for MINT.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`<tx_hash>:<movement_index>`.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "TRANSFER, MINT and BURN: instruction legs, applied batch receipts and executed multisig transfers. OFFLINE_LOAD: a KAGEMUSHA Load, payer to reserve. OFFLINE_UNLOAD: a paid Unload, reserve to the unloading account. OFFLINE_FEE: a paid fee claim, reserve to the fee beneficiary. OFFLINE_CHARGE: the online charge of a Load (payer to the charge beneficiary) or of a paid Unload (reserve to the charge beneficiary).",
+            "enum": [
+              "TRANSFER",
+              "MINT",
+              "BURN",
+              "OFFLINE_LOAD",
+              "OFFLINE_UNLOAD",
+              "OFFLINE_FEE",
+              "OFFLINE_CHARGE"
+            ],
+            "type": "string"
+          },
+          "movement_index": {
+            "description": "Position among the transaction's movements: instruction legs in instruction order, then applied batch receipts and executed multisig movements, then KAGEMUSHA movements.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result_ok": {
+            "description": "false for an attempted movement of a failed transaction; KAGEMUSHA rows are always true.",
+            "type": "boolean"
+          },
+          "timestamp_ms": {
+            "description": "Creation time of the transaction in Unix milliseconds, as account history reports it.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "to_account_id": {
+            "description": "Credited account; null only for BURN.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tx_hash": {
+            "description": "Entrypoint hash of the transaction, as account history reports it.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AssetTransferIntent": {
         "additionalProperties": false,
         "properties": {
@@ -23894,9 +24000,57 @@
         ],
         "type": "object"
       },
+      "MultisigProposalApproval": {
+        "additionalProperties": false,
+        "description": "When one signer's approval of a multisig proposal landed, as this node read it from committed blocks: the proposer's with its proposal, every other signer's with its first approval.",
+        "properties": {
+          "approved_at_ms": {
+            "description": "Creation time of the block holding the proposing or approving transaction, in Unix milliseconds; null when this node did not see it (an approval made inside another proposal's execution or by a contract, or a block not read yet).",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "approver": {
+            "description": "Canonical AccountId of the signer whose approval is counted.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "block_height": {
+            "description": "Height of that block; null exactly when approved_at_ms is.",
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "approver",
+          "approved_at_ms",
+          "block_height"
+        ],
+        "type": "object"
+      },
       "MultisigProposalEntry": {
         "additionalProperties": false,
         "properties": {
+          "approvals": {
+            "description": "Present only when the request set include_approvals: one entry per approver in proposal.approvals, in the order the approvals landed; untimed approvals last.",
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposalApproval"
+            },
+            "type": "array"
+          },
           "instructions_hash": {
             "maxLength": 64,
             "minLength": 64,
@@ -24023,6 +24177,13 @@
       "MultisigProposalResolveResponse": {
         "additionalProperties": false,
         "properties": {
+          "approvals": {
+            "description": "Present only when the request set include_approvals: one entry per approver in proposal.approvals, in the order the approvals landed; untimed approvals last.",
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposalApproval"
+            },
+            "type": "array"
+          },
           "instructions_hash": {
             "maxLength": 64,
             "minLength": 64,
@@ -24129,6 +24290,11 @@
               }
             ]
           },
+          "include_approvals": {
+            "default": false,
+            "description": "Also return `approvals`: when each approval of each returned proposal landed. Without it the response is unchanged.",
+            "type": "boolean"
+          },
           "limit": {
             "oneOf": [
               {
@@ -24225,6 +24391,11 @@
           }
         ],
         "properties": {
+          "include_approvals": {
+            "default": false,
+            "description": "Also return `approvals`: when each approval of each returned proposal landed. Without it the response is unchanged.",
+            "type": "boolean"
+          },
           "multisig_account_alias": {
             "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
             "maxLength": 512,
@@ -64087,6 +64258,311 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "asset.holder.query"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/assets/{definition_id}/movements": {
+      "get": {
+        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, and OFFLINE_CHARGE for the online charge of a Load or an Unload, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "description": "Asset selector (unprefixed Base58 id or alias).",
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Text filter, e.g. `owned_by = \"sorau…\" and quantity >= 10.5`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated fields to return, e.g. `id,quantity`.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's `next_cursor`.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetMovementPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid query, or `asset_movements_not_retained`: the node dropped the movements below block `details.expected` to bound its index; add `block_height >= details.expected` to read the retained movements.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown asset definition, or one the caller may not read.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "`asset_movements_indexing`: this node has not yet folded the committed tip into its movement index (`details.actual` is the indexed height, `details.expected` the committed tip); retry after `Retry-After` seconds. `emergency_fast_history_unavailable` on a node started in emergency Fast mode.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; grows with the indexing gap, from 1 to 30.",
+                "schema": {
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List asset movements.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.assets_by_definition_id_movements_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/assets/{definition_id}/movements/query": {
+      "post": {
+        "description": "Every committed movement of one asset definition, newest first by block height, block index and movement index, served from this node's movement index. One row per movement: TRANSFER, MINT and BURN for instruction legs, applied batch receipts and executed multisig transfers; OFFLINE_LOAD, OFFLINE_UNLOAD and OFFLINE_FEE for KAGEMUSHA Loads, paid Unloads and paid fee claims, and OFFLINE_CHARGE for the online charge of a Load or an Unload, read from the ledger records of the transaction that moved the value. A failed transaction keeps its attempted instruction movements with result_ok false. Accepts shared filter, select, limit and cursor; a block_height lower bound such as `block_height > 1200` reads only the newer rows. Continue until next_cursor is null, including after short or empty pages. sort, include_total, aggregate, offset and count_mode are rejected. See specs/torii/collection_queries.md.",
+        "parameters": [
+          {
+            "description": "Asset selector (unprefixed Base58 id or alias).",
+            "in": "path",
+            "name": "definition_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetMovementPage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid query, or `asset_movements_not_retained`: the node dropped the movements below block `details.expected` to bound its index; add `block_height >= details.expected` to read the retained movements.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown asset definition, or one the caller may not read.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "`asset_movements_indexing`: this node has not yet folded the committed tip into its movement index (`details.actual` is the indexed height, `details.expected` the committed tip); retry after `Retry-After` seconds. `emergency_fast_history_unavailable` on a node started in emergency Fast mode.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; grows with the indexing gap, from 1 to 30.",
+                "schema": {
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query asset movements.",
+        "tags": [
+          "Assets"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.assets_by_definition_id_movements_query_post"
         },
         "x-iroha-tool-effect": "read"
       }

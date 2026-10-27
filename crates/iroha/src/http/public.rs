@@ -1,4 +1,4 @@
-//! Unsigned bounded HTTPS reads before a ledger identity or network is known.
+//! Unsigned bounded HTTPS or direct numeric-loopback reads before a network is known.
 
 use std::{sync::Arc, time::Instant};
 
@@ -29,7 +29,7 @@ pub enum PublicHttpError {
     Oversized,
 }
 
-/// Isolated native transport for unsigned public material such as release checkpoints.
+/// Isolated native transport for unsigned public discovery and native proof material.
 /// It has no ledger identity, credentials, default-header input, cookies or redirect policy.
 #[derive(Clone, Debug, Default)]
 pub struct PublicHttpClient {
@@ -140,7 +140,13 @@ fn request(
     deadline: Instant,
     maximum: usize,
 ) -> Result<TransportRequest, PublicHttpError> {
-    if url.scheme() != "https"
+    let direct_loopback = url.scheme() == "http"
+        && match url.host() {
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            _ => false,
+        };
+    if !(url.scheme() == "https" || direct_loopback)
         || url.host().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -162,7 +168,7 @@ fn request(
         body: vec![],
         timeout: Some(timeout),
         max_response_bytes: maximum,
-        direct_loopback: false,
+        direct_loopback,
     })
 }
 

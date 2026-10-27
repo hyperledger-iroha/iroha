@@ -66,7 +66,7 @@ fn through_c(input: &[u8], expected: c_int) -> Option<Prepared> {
     })
 }
 fn low_s(signature: Signature) -> Signature {
-    signature.normalize_s().unwrap_or(signature)
+    signature.normalize_s()
 }
 
 #[test]

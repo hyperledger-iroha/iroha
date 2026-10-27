@@ -24,7 +24,7 @@ iroha_operation_journal = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 hex = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std", "zeroize"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 
 # Owner-only key files and journal directories: `O_NOFOLLOW` opens and the effective uid.
 [target.'cfg(unix)'.dependencies]

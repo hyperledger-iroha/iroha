@@ -133,9 +133,13 @@ class TrackedInventory(Base):
         self.assertEqual(len({row["label"] for row in rows}), 12)
         refused = {row["variant"] for row in rows if row["compiled_profile"]["state"] == "refused"}
         self.assertEqual(refused, {"ZkAcePqAuthorizationV1", "IrohaZkAmsV1", "VegaExistingCredentialZkV1", "IrohaZkX509StarkP256V1"})
+        proof_only = {"VeRangeTransparentRangeV1", "IrohaJindoPolynomialCommitmentV1",
+                      "IrohaBootleLanternAnoncredV1"}
         for row in rows:
             self.assertEqual(row["status"]["presence"], "registered")
-            self.assertIn(row["status"]["state_effects"], ("gated", "unreachable"))
+            expected_effects = ("unreachable" if row["variant"] in refused
+                                else "none" if row["variant"] in proof_only else "implemented")
+            self.assertEqual(row["status"]["state_effects"], expected_effects)
             expected = "refused" if row["variant"] in refused else "implemented"
             self.assertEqual(row["status"]["verification"], expected)
 
@@ -204,8 +208,9 @@ class Registry(Base):
                           "SetAssetFiLinkV1", "TransferToLinkedFiV1")),
             ("asset_uid_enrollment", ("ActivateAssetUidEnrollmentV1",
                                       "SetAssetUidSystemAccountV1")),
+            ("asset_fi_context", ("AssertAssetFiContextV1",
+                                   "AssertAssetFiTransferReceiptV1")),
             ("asset_escrow_scope", ("InitializeAssetEscrowReadScopeV1",)),
-            ("asset_fi_context", ("AssertAssetFiContextV1", "AssertAssetFiTransferReceiptV1")),
         ):
             self.assertEqual(INVENTORY["registry"]["modules"][module]["scope"], "out")
             path = f"crates/iroha_core/src/smartcontracts/isi/{module}.rs"
@@ -577,8 +582,10 @@ class ClosedLists(Base):
              "Self::KaigiUsage => Some(KaigiRelation::Authorization)", "kaigi selects"),
             ("Self::ConfidentialTransfer => Some(Kind::Transfer)",
              "Self::ConfidentialTransfer => Some(Kind::Full)", "confidential selects"),
-            ("            KaigiRelation::circuit_id,",
-             "            |_| KaigiRelation::Usage.circuit_id(),", "circuit_id must delegate"),
+            ("KaigiRelation::circuit_id,",
+             "|_kind| KaigiRelation::Usage.circuit_id(),", "circuit_id must delegate"),
+            ('|| self.confidential().expect("closed relation").circuit_id(),',
+             "|| KaigiRelation::Usage.circuit_id(),", "circuit_id must delegate"),
         ):
             self.assert_fails(run("check_generic", overrides=replaced(path, original, substitute)), fragment)
         for path, original, substitute, fragment in (
@@ -1993,7 +2000,8 @@ class SelectionEvidence(Base):
         tokens = {token["id"]: token["pattern"] for token in INVENTORY["digests"]["primitive_tokens"]}
         import re as regex
         for identifier, sample in (("sha2_384", "Sha384::new()"), ("blake2s", "Blake2s256::digest(x)"),
-                                   ("shake128", "Shake128::default()"), ("hkdf", "Hkdf::<Sha3_512>::new(None, k)")):
+                                   ("shake128", "Shake128::default()"), ("hkdf", "Hkdf::<Sha3_512>::new(None, k)"),
+                                   ("hkdf", "SimpleHkdf::<Sha3_512>::new(None, k)")):
             self.assertRegex(sample, regex.compile(tokens[identifier]), identifier)
         race = next(group for group in INVENTORY["digests"]["products"] if group["product"] == "race")
         self.assertGreater(race["census"].get("sha2_384", 0), 0)
@@ -2002,6 +2010,7 @@ class SelectionEvidence(Base):
             group = next(group for group in INVENTORY["digests"]["products"] if group["product"] == product)
             self.assertIn(outer, group["owner_paths"])
             self.assertGreater(group["census"].get("sha3_384", 0), 0, product)
+        self.assertRegex("inner: Sha3_384,", regex.compile(tokens["sha3_384"]))
         self.assertRegex("core: Sha3_384Core,", regex.compile(tokens["sha3_384"]))
 
 

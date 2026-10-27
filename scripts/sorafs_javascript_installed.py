@@ -55,7 +55,7 @@ def installed_projection(package_raw: bytes, *, sources: dict[str, bytes],
                          checksum_manifest: bytes, lock: DependencyLock,
                          dependency_originals: dict[str, bytes], npm_hidden_lock: bytes,
                          environment_label: str, sdk_archive_label: str) -> InstalledProjection:
-    """Join the original SDK and nine dependencies at exact resolution locations.
+    """Join the original SDK and seven dependencies at exact resolution locations.
 
     Source completeness/authentication stays with the caller's original owner.
     Every parser is the existing shared byte owner. In particular neither nested
@@ -94,7 +94,7 @@ def validate_projection(projection: InstalledProjection) -> None:
     bytes cannot establish that the caller independently authenticated them.
     """
     _require(type(projection) is InstalledProjection, "installed projection has a foreign type")
-    for rows, bound in ((projection.sources, MAX_SOURCE_FILES), (projection.dependency_originals, 9)):
+    for rows, bound in ((projection.sources, MAX_SOURCE_FILES), (projection.dependency_originals, 7)):
         _require(type(rows) is tuple and 0 < len(rows) <= bound
                  and all(type(row) is tuple and len(row) == 2 and type(row[0]) is str
                          and 0 < len(row[0]) <= MAX_NAME_BYTES

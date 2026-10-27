@@ -306,8 +306,8 @@ mod tests {
         ZkX509P256ModulusV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
     use p256::{
-        EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar,
-        elliptic_curve::{group::Group as _, sec1::ToEncodedPoint as _},
+        FieldBytes, NistP256, ProjectivePoint, Scalar, Sec1Point,
+        elliptic_curve::{group::Group as _, hazmat::FieldArithmetic, sec1::ToSec1Point as _},
     };
     use thiserror::Error;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,10 +338,15 @@ mod tests {
         fn bytes(&self, value: TestValue) -> [u8; 32] {
             self.values[value.0]
         }
-        fn field(&self, value: TestValue) -> Result<FieldElement, TestCircuitError> {
-            Option::<FieldElement>::from(FieldElement::from_bytes(&FieldBytes::from(
-                self.bytes(value),
-            )))
+        fn field(
+            &self,
+            value: TestValue,
+        ) -> Result<<NistP256 as FieldArithmetic>::FieldElement, TestCircuitError> {
+            Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                <NistP256 as FieldArithmetic>::FieldElement::from_bytes(&FieldBytes::from(
+                    self.bytes(value),
+                )),
+            )
             .ok_or(TestCircuitError::NonCanonical)
         }
         fn push_operation(
@@ -404,8 +409,10 @@ mod tests {
             Ok(())
         }
         fn inverse_nonzero_v1(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error> {
-            let inverse = Option::<FieldElement>::from(self.field(value)?.invert())
-                .ok_or(TestCircuitError::ZeroInverse)?;
+            let inverse = Option::<<NistP256 as FieldArithmetic>::FieldElement>::from(
+                self.field(value)?.invert(),
+            )
+            .ok_or(TestCircuitError::ZeroInverse)?;
             let inverse = self.input(inverse.to_bytes().into())?;
             let product = self.multiply_v1(value, inverse)?;
             let one = self.constant_v1(ONE_BE_V1)?;
@@ -433,7 +440,7 @@ mod tests {
         if bool::from(point.is_identity()) {
             return p256_projective_identity_v1(circuit).expect("identity constants");
         }
-        let encoded = point.to_affine().to_encoded_point(false);
+        let encoded = point.to_affine().to_sec1_point(false);
         let mut x = [0_u8; 32];
         let mut y = [0_u8; 32];
         x.copy_from_slice(encoded.x().expect("nonidentity x"));
@@ -447,10 +454,10 @@ mod tests {
     fn normalized_encoding(
         circuit: &mut RecordingCircuit,
         point: P256ProjectiveValueV1<TestValue>,
-    ) -> EncodedPoint {
+    ) -> Sec1Point {
         let (x, y) =
             normalize_p256_nonidentity_v1(circuit, point).expect("nonidentity normalization");
-        EncodedPoint::from_affine_coordinates(
+        Sec1Point::from_affine_coordinates(
             &FieldBytes::from(circuit.bytes(x)),
             &FieldBytes::from(circuit.bytes(y)),
             false,
@@ -480,9 +487,7 @@ mod tests {
         assert_eq!(add_circuit.operations.len(), 43);
         assert_eq!(
             normalized_encoding(&mut add_circuit, sum),
-            ProjectivePoint::GENERATOR
-                .to_affine()
-                .to_encoded_point(false)
+            ProjectivePoint::GENERATOR.to_affine().to_sec1_point(false)
         );
         let mut double_circuit = RecordingCircuit::default();
         let generator = assigned_point(&mut double_circuit, ProjectivePoint::GENERATOR);
@@ -493,7 +498,7 @@ mod tests {
             normalized_encoding(&mut double_circuit, doubled),
             (ProjectivePoint::GENERATOR + ProjectivePoint::GENERATOR)
                 .to_affine()
-                .to_encoded_point(false)
+                .to_sec1_point(false)
         );
     }
     #[test]
@@ -529,7 +534,7 @@ mod tests {
             } else {
                 assert_eq!(
                     normalized_encoding(&mut circuit, actual),
-                    expected.to_affine().to_encoded_point(false)
+                    expected.to_affine().to_sec1_point(false)
                 );
             }
             build_zk_x509_p256_arithmetic_trace_v1(&circuit.operations)
@@ -554,7 +559,7 @@ mod tests {
             } else {
                 assert_eq!(
                     normalized_encoding(&mut circuit, actual),
-                    expected.to_affine().to_encoded_point(false)
+                    expected.to_affine().to_sec1_point(false)
                 );
             }
             build_zk_x509_p256_arithmetic_trace_v1(&circuit.operations)
@@ -601,7 +606,7 @@ mod tests {
             } else {
                 assert_eq!(
                     normalized_encoding(&mut circuit, actual),
-                    expected.to_affine().to_encoded_point(false)
+                    expected.to_affine().to_sec1_point(false)
                 );
             }
             for operation in circuit.operations.iter().step_by(137) {
@@ -614,9 +619,7 @@ mod tests {
     }
     #[test]
     fn affine_curve_constraint_rejects_every_single_bit_coordinate_mutation() {
-        let encoded = ProjectivePoint::GENERATOR
-            .to_affine()
-            .to_encoded_point(false);
+        let encoded = ProjectivePoint::GENERATOR.to_affine().to_sec1_point(false);
         let mut x = [0_u8; 32];
         let mut y = [0_u8; 32];
         x.copy_from_slice(encoded.x().expect("x"));

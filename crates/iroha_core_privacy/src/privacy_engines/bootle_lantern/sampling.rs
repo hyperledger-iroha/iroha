@@ -20,11 +20,9 @@ use crate::privacy_engines::prover_randomness::{
     CURVE_PROVER_RANDOMNESS_POLICY_V1, HealthCheckedCryptoRngV1, ProverRandomnessErrorV1,
 };
 use p256::elliptic_curve::bigint::{Encoding as _, Limb, NonZero, U256, U512, U1024};
-use rand_core_06::{CryptoRng, RngCore};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use rand_core::{TryCryptoRng, TryRng};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 use std::sync::OnceLock;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -152,7 +150,7 @@ impl BootleSamplingProfileV1 {
         {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
-        U512::from_le_bytes(bytes)
+        U512::from_le_bytes(bytes.into())
     }
     const fn fraction_domain(self) -> &'static [u8] {
         match self {
@@ -489,7 +487,7 @@ impl ProofRandomnessV1 {
     /// # Errors
     ///
     /// Propagates RNG failure and rejects constant or short-period catastrophic-health sentinels.
-    pub(crate) fn from_rng<R: CryptoRng + RngCore>(rng: &mut R) -> Result<Self, SamplingErrorV1> {
+    pub(crate) fn from_rng<R: TryCryptoRng + TryRng>(rng: &mut R) -> Result<Self, SamplingErrorV1> {
         let mut checked_rng = HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
             ProverRandomnessErrorV1::Unavailable => SamplingErrorV1::RandomnessUnavailable,
             ProverRandomnessErrorV1::Unhealthy => SamplingErrorV1::RandomnessHealthCheckFailed,
@@ -506,7 +504,7 @@ impl ProofRandomnessV1 {
     }
     /// Construct a deterministic stream for known-answer and differential
     /// tests.  This is deliberately crate-private so production callers must
-    /// supply a `CryptoRng`.
+    /// supply a `TryCryptoRng`.
     #[cfg(test)]
     pub(crate) fn for_test(seed: [u8; 32]) -> Result<Self, SamplingErrorV1> {
         if seed == [0; 32] || seed.iter().all(|byte| *byte == seed[0]) {
@@ -656,12 +654,12 @@ impl ProofRandomnessV1 {
     fn cdf155_sample(&mut self, domain: &[u8]) -> u32 {
         let mut bytes = [0_u8; 32];
         self.fill_bytes(domain, &mut bytes);
-        cdf155_index_v1(U256::from_be_bytes(bytes))
+        cdf155_index_v1(U256::from_be_bytes(bytes.into()))
     }
     fn bernoulli_q256(&mut self, domain: &[u8], threshold: BernoulliThresholdV1) -> bool {
         let mut bytes = [0_u8; 32];
         self.fill_bytes(domain, &mut bytes);
-        let draw = U256::from_be_bytes(bytes);
+        let draw = U256::from_be_bytes(bytes.into());
         match threshold {
             BernoulliThresholdV1::Never => false,
             BernoulliThresholdV1::Finite(threshold) => draw < threshold,
@@ -722,10 +720,10 @@ fn gaussian_correction_exponent_q256_v1(
         .wrapping_mul(&U256::from_u64(scale))
         .shl_vartime(1)
         .wrapping_add(&offset);
-    let delta: U512 = offset.mul(&linear);
+    let delta: U512 = offset.concatenating_mul(&linear);
     let numerator = delta
         .wrapping_mul(&U512::from_u64(GAUSSIAN_HALF_VARIANCE_DENOMINATOR_V1))
-        .shl_vartime(Q256_FRACTION_BITS_V1);
+        .shl_vartime((Q256_FRACTION_BITS_V1) as u32);
     let denominator = U512::from_u128(
         u128::from(scale) * u128::from(scale) * u128::from(GAUSSIAN_VARIANCE_NUMERATOR_V1),
     );
@@ -808,10 +806,10 @@ fn unsigned_profile_exponent_q256_v1(
     factor: u64,
     profile: BootleSamplingProfileV1,
 ) -> U512 {
-    let product: U512 = value.mul(&U256::from_u64(factor));
-    let numerator = product.shl_vartime(Q256_FRACTION_BITS_V1);
+    let product: U512 = value.concatenating_mul(&U256::from_u64(factor));
+    let numerator = product.shl_vartime((Q256_FRACTION_BITS_V1) as u32);
     let denominator = U512::from_u64(GAUSSIAN_VARIANCE_NUMERATOR_V1)
-        .shl_vartime(usize::from(profile.log2_sigma()) * 2);
+        .shl_vartime(u32::from(profile.log2_sigma()) * 2);
     rational_to_q256_round_v1(numerator, denominator)
 }
 fn rational_to_q256_round_v1(numerator: U512, denominator: U512) -> U512 {
@@ -825,16 +823,16 @@ fn rational_to_q256_round_v1(numerator: U512, denominator: U512) -> U512 {
     }
 }
 fn q256_one_v1() -> U512 {
-    U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1)
+    U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32)
 }
 fn q256_mul_round_v1(left: U512, right: U512) -> U512 {
     // All callers prove operands below 6 * 2^256.  The product and half-ulp
     // rounding term therefore fit U1024, and the rounded result fits U512.
-    let product: U1024 = left.mul(&right);
+    let product: U1024 = left.concatenating_mul(&right);
     let rounded = product
-        .wrapping_add(&U1024::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - 1))
-        .shr_vartime(Q256_FRACTION_BITS_V1);
-    let (high, low) = rounded.split();
+        .wrapping_add(&U1024::ONE.shl_vartime((Q256_FRACTION_BITS_V1 - 1) as u32))
+        .shr_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let (low, high) = rounded.split();
     debug_assert_eq!(high, U512::ZERO);
     low
 }
@@ -889,7 +887,7 @@ fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
     static TABLE: OnceLock<Box<[U512; FRACTION_TABLE_LEN_V1]>> = OnceLock::new();
     TABLE.get_or_init(|| {
         let one = q256_one_v1();
-        let step = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
+        let step = U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1) as u32);
         let decay_step = small_decay_q256_v1(step, FRACTION_STEP_SERIES_TERMS_V1);
         let mut table = vec![U512::ZERO; FRACTION_TABLE_LEN_V1];
         table[0] = one;
@@ -914,9 +912,10 @@ fn decay_q256_v1(value: U512) -> U512 {
     }
     let fraction_word = (u16::from(bytes[32]) << 4) | u16::from(bytes[33] >> 4);
     let fraction_index = usize::from(fraction_word);
-    let integer_part = U512::from_u64(u64::from(integer_byte)).shl_vartime(Q256_FRACTION_BITS_V1);
+    let integer_part =
+        U512::from_u64(u64::from(integer_byte)).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
     let fraction_part = U512::from_u64(u64::from(fraction_word))
-        .shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
+        .shl_vartime((Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1) as u32);
     let residual = value
         .wrapping_sub(&integer_part)
         .wrapping_sub(&fraction_part);
@@ -930,7 +929,7 @@ fn decay_q256_v1(value: U512) -> U512 {
     )
 }
 fn decay_threshold_v1(value: U512) -> BernoulliThresholdV1 {
-    let (high, low) = decay_q256_v1(value).split();
+    let (low, high) = decay_q256_v1(value).split();
     if high != U256::ZERO {
         BernoulliThresholdV1::Always
     } else if low == U256::ZERO {
@@ -946,14 +945,14 @@ fn ratio_threshold_q256_v1(numerator: U512, denominator: U512) -> BernoulliThres
     if denominator == U512::ZERO || numerator >= denominator {
         return BernoulliThresholdV1::Always;
     }
-    let scaled = U1024::from(&numerator).shl_vartime(Q256_FRACTION_BITS_V1);
+    let scaled = U1024::from(&numerator).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
     let denominator = U1024::from(&denominator);
     let nonzero = Option::<NonZero<U1024>>::from(NonZero::new(denominator))
         .expect("ordered ratio denominator is non-zero");
     let quotient = scaled.div_rem(&nonzero).0;
-    let (high, low) = quotient.split();
+    let (low, high) = quotient.split();
     debug_assert_eq!(high, U512::ZERO);
-    let (high, low) = low.split();
+    let (low, high) = low.split();
     debug_assert_eq!(high, U256::ZERO);
     if low == U256::ZERO {
         BernoulliThresholdV1::Never

@@ -440,7 +440,7 @@ mod tests {
         PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
         PrivateSettlementHybridPublicKeyV1,
     };
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
 
     struct Fixture {
         policy: PrivateSettlementAuditPolicyV1,
@@ -729,6 +729,7 @@ mod tests {
     #[derive(Debug)]
     struct InjectedRngError;
 
+    impl std::error::Error for InjectedRngError {}
     impl core::fmt::Display for InjectedRngError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected private-settlement audit RNG failure")
@@ -737,7 +738,7 @@ mod tests {
 
     struct FailingRng;
 
-    impl TryRngCore for FailingRng {
+    impl TryRng for FailingRng {
         type Error = InjectedRngError;
 
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {

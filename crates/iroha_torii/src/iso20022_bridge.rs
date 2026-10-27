@@ -8779,7 +8779,7 @@ fn decode_p256_xmldsig_signature(signature_value: &[u8]) -> Result<P256Signature
     } else {
         P256Signature::from_der(signature_value).map_err(|_| MsgError::ValidationFailed)
     }?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(MsgError::ValidationFailed);
     }
     Ok(signature)
@@ -8790,7 +8790,7 @@ fn decode_p256_der_signature(signature_value: &[u8]) -> Result<P256Signature, Ms
     }
     let signature =
         P256Signature::from_der(signature_value).map_err(|_| MsgError::ValidationFailed)?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(MsgError::ValidationFailed);
     }
     Ok(signature)

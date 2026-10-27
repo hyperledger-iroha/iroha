@@ -46,13 +46,29 @@ internal class EnrollmentProbePin(row: JsonObject) {
     }
 }
 
+/** Test-only cuts around the checked publisher, never Native custody or a runtime setting. */
+internal enum class EnrollmentProbePublicationBoundary {
+    BEFORE_PUBLICATION, AFTER_ACKNOWLEDGED_PUBLICATION,
+}
+
 /**
  * Owner-only test mailbox. Ancestors must remain immutable under the trusted staging owner;
  * path validation plus O_NOFOLLOW is not a sandbox against concurrent same-UID ancestor swaps.
  * Interrupted helper staging is recoverable; published originals are never replaced. Neither
  * this helper nor the driver repairs Native custody.
  */
-internal class EnrollmentProbeFiles(val root: File) {
+internal class EnrollmentProbeFiles(
+    val root: File,
+    private val publicationBoundary: ((String, EnrollmentProbePublicationBoundary, ByteArray) -> Unit)? = null,
+) {
+    /** Review custody uses the same owner, no-follow and immutable-publication checks. */
+    val reviewCustody: KagemushaProbeReviewCustodyIo = object : KagemushaProbeReviewCustodyIo {
+        override fun exists(path: String) = this@EnrollmentProbeFiles.exists(path)
+        override fun read(path: String, maximum: Int) = this@EnrollmentProbeFiles.read(path, maximum)
+        override fun mkdir(path: String) = this@EnrollmentProbeFiles.mkdir(path)
+        override fun publish(path: String, bytes: ByteArray) = this@EnrollmentProbeFiles.publish(path, bytes)
+    }
+
     companion object {
         private val publicationGate = Any()
         private const val PUBLICATION_LOCK = ".publication.lock"
@@ -202,7 +218,10 @@ internal class EnrollmentProbeFiles(val root: File) {
         // other processes. A busy owner is a retryable refusal, never permission to remove staging.
         synchronized(publicationGate) {
             publicationLock().use {
-                publishEnrollmentProbeOriginal(publicationIo, path, stage, bytes.copyOf(), exclusive)
+                val original = bytes.copyOf()
+                publicationBoundary?.invoke(path, EnrollmentProbePublicationBoundary.BEFORE_PUBLICATION, original.copyOf())
+                publishEnrollmentProbeOriginal(publicationIo, path, stage, original, exclusive)
+                publicationBoundary?.invoke(path, EnrollmentProbePublicationBoundary.AFTER_ACKNOWLEDGED_PUBLICATION, original.copyOf())
             }
         }
     }

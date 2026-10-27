@@ -1,4 +1,4 @@
-//! Genuine parent quorum plus deterministic wallet observations for resumable orchestration.
+//! Genuine parent certificates plus deterministic wallet observations for resumable orchestration.
 //! Synthetic execution fixtures test custody/control flow, not live fee or private execution.
 
 use std::{
@@ -6,7 +6,7 @@ use std::{
     num::NonZeroU64,
 };
 
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
     alias_setup::{
         AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasDataSpaceIntentV1,
@@ -15,20 +15,17 @@ use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     isi::alias_setup::EnsureAlias,
     sns::{lease::SnsLeaseProofV1, record_storage_key},
-    sumeragi::{SumeragiFootprint, SumeragiStatus},
     sumeragi_finality::{
-        SumeragiFinalityAttestation, SumeragiFinalityAttestationBody, SumeragiFinalityProof,
-        WorldStateElementKindV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
-        authenticated_genesis, test_fixtures::NativeFinalityFixture, world_state_value_hash_v1,
+        SumeragiFinalityProof, WorldStateElementKindV1, WorldStateSnapshotEntryV1,
+        WorldStateSnapshotV1, authenticated_genesis, test_fixtures::NativeFinalityFixture,
+        world_state_value_hash_v1,
     },
 };
 use iroha_model_base::{peer::PeerId, topology::DataSpaceId};
 use norito::codec::{Decode as _, Encode as _};
 
 use super::*;
-use crate::bootstrap::{
-    NetworkRelease, ReleaseCheckpointStore, ReleasePeer, ReleaseTrust, SignedNetworkCheckpoint,
-};
+use crate::bootstrap::{BootstrapPeer, FaucetPolicy, NetworkMetadata};
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -115,14 +112,10 @@ impl Fixture {
         ));
         let checkpoint = parent.checkpoint();
         let authority = KeyPair::from_seed(vec![132; 32], Algorithm::Ed25519);
-        let release = NetworkRelease {
+        let metadata = NetworkMetadata {
             network_name: "fixture".into(),
-            serial: 1,
-            generation: 1,
             network_id: parent.network_id(),
             chain_id: parent.chain_id().into(),
-            issued_at_ms: now - 1000,
-            expires_at_ms: now + 600_000,
             torii_roots: vec!["https://parent.example/".into()],
             account_chain_discriminant: 753,
             native_world_schema: lease_proof.world.schema_hash,
@@ -130,12 +123,12 @@ impl Fixture {
                 .tip()
                 .committee
                 .iter()
-                .map(|validator| ReleasePeer {
+                .map(|validator| BootstrapPeer {
                     node_id: PeerId::new(validator.public_key.clone()),
                     torii_root: "https://parent.example/".into(),
                 })
                 .collect(),
-            faucet: Some(ReleaseFaucet {
+            faucet: Some(FaucetPolicy {
                 torii_root: "https://parent.example/".into(),
                 issuer: AccountId::new(authority.public_key().clone()),
                 asset_definition_id: iroha_wallet::operations::XOR_ASSET_DEFINITION
@@ -146,22 +139,8 @@ impl Fixture {
                 max_namespace_rent: 100_u64.into(),
             }),
             build_registry: None,
-            checkpoint_hash: Hash::new(checkpoint.encode_canonical().unwrap()),
-            checkpoint_height: checkpoint.height(),
-            checkpoint_block_hash: checkpoint.block_hash().into(),
         };
-        let bytes = SignedNetworkCheckpoint::sign(release, &checkpoint, authority.private_key())
-            .unwrap()
-            .encode_canonical()
-            .unwrap();
-        let bootstrap = ReleaseCheckpointStore::open(&directory.path().join("release"))
-            .unwrap()
-            .authenticate(
-                &ReleaseTrust::new("fixture".into(), authority.public_key().clone(), 1).unwrap(),
-                &bytes,
-                now,
-            )
-            .unwrap();
+        let bootstrap = crate::bootstrap::tests::authenticated(metadata, &checkpoint);
         Self {
             directory,
             parent,
@@ -201,61 +180,26 @@ impl FinalitySource for Source<'_> {
             Err(std::io::Error::other("unserved fixture height"))
         }
     }
-    fn latest_attestation(
+    fn latest_finality_proof(
         &self,
-        peer: &PeerId,
-        challenge: &[u8; 32],
-    ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error> {
+        _: &PeerId,
+        _: &[u8; 32],
+    ) -> std::result::Result<SumeragiFinalityProof, Self::Error> {
         self.reads.set(self.reads.get() + 1);
         if self.offline {
             return Err(std::io::Error::other("offline"));
         }
-        let key = (1..=4)
-            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
-            .find(|key| key.public_key() == peer.public_key())
-            .unwrap();
-        let height = self.chain.checkpoint().height();
-        let config_fingerprint = Hash::new(b"fixture config");
-        let body = SumeragiFinalityAttestationBody {
-            observed_at_unix_ms: 1_000_000,
-            challenge: *challenge,
-            network_id: self.chain.network_id(),
-            node_id: peer.clone(),
-            node_fingerprint: Hash::new(peer.encode()),
-            build_fingerprint: Hash::new(b"fixture build"),
-            config_fingerprint,
-            genesis_block_hash: self.chain.genesis().hash(),
-            genesis_finality_proof: self.chain.genesis_proof().clone(),
-            status: SumeragiStatus {
-                protocol_version: iroha_data_model::sumeragi::PROTOCOL_VERSION,
-                config_fingerprint,
-                beacon_horizon: None,
-                instance: self.chain.verifier().instance().0,
-                height: height + 1,
-                view: 0,
-                stage: 0,
-                leader: None,
-                proxy_tail: None,
-                high_qc_view: None,
-                level: 0,
-                start_level: 0,
-                t_retx_ms: 100,
-                committed_height: height,
-                applied_height: height,
-                awaiting: false,
-                signer: Some(key.public_key().clone()),
-                unanchored: false,
-                abstaining: false,
-                halted: None,
-                footprint: SumeragiFootprint::default(),
-            },
-            finality_proof: self.chain.latest().clone(),
-        };
-        Ok(SumeragiFinalityAttestation {
-            signature: SignatureOf::try_from_hash(key.private_key(), body.signing_hash()).unwrap(),
-            body,
-        }
-        .into())
+        Ok(self.chain.latest().clone())
+    }
+
+    fn latest_attestation(
+        &self,
+        _: &PeerId,
+        _: &[u8; 32],
+    ) -> std::result::Result<crate::verify::finality::FinalityAttestation, Self::Error> {
+        Err(std::io::Error::other(
+            "ordinary provisioning requires certified state, not peer readiness",
+        ))
     }
 }
 
@@ -518,14 +462,12 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
             .unwrap(),
         short_deadline
     );
-    assert!(
+    let original_deadline = Instant::now() + Duration::from_secs(3600);
+    assert_eq!(
         store
-            .turn_deadline(
-                &fixture.bootstrap,
-                Instant::now() + Duration::from_secs(3600)
-            )
-            .unwrap()
-            < Instant::now() + Duration::from_secs(601)
+            .turn_deadline(&fixture.bootstrap, original_deadline)
+            .unwrap(),
+        original_deadline
     );
     assert!(fixture.open().is_err());
     let read_parent = |child: &Config| {
@@ -550,7 +492,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
     let mut changed = fixture.child.clone();
     changed.account = fixture
         .bootstrap
-        .release()
+        .metadata()
         .faucet
         .as_ref()
         .unwrap()
@@ -570,7 +512,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
     let mut changed = fixture.child.clone();
     changed.account = fixture
         .bootstrap
-        .release()
+        .metadata()
         .faucet
         .as_ref()
         .unwrap()
@@ -597,7 +539,7 @@ fn exact_owner_import_and_exclusive_custody_survive_reopen_but_not_child_replace
 }
 
 #[test]
-fn fresh_quorum_precedes_funding_and_pending_namespace_resumes_exact_original_request() {
+fn certified_parent_precedes_funding_and_pending_namespace_resumes_exact_original_request() {
     let fixture = Fixture::new();
     let mut store = fixture.open().unwrap();
     let ops = Operations::new(&store, &fixture);
@@ -617,7 +559,7 @@ fn fresh_quorum_precedes_funding_and_pending_namespace_resumes_exact_original_re
             .provision_with(&fixture.bootstrap, deadline(), &source, &ops)
             .is_err()
     );
-    assert!(source.reads.get() >= 3);
+    assert_eq!(source.reads.get(), 1);
     assert!(ops.calls.borrow().is_empty());
     let source = Source {
         offline: false,
@@ -814,7 +756,7 @@ fn namespace_allowance_and_authenticated_lease_bind_exact_identity_and_rent() {
     let read = LeaseRead {
         alias: "acme",
         owner: &binding.owner,
-        native_schema: fixture.bootstrap.release().native_world_schema,
+        native_schema: fixture.bootstrap.metadata().native_world_schema,
         block: &tip,
         deadline: Instant::now() + Duration::from_secs(1),
     };

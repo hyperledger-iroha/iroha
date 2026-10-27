@@ -52,7 +52,8 @@ use arrayvec::ArrayVec;
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use group::{Curve as _, Group as _, ff::Field as _, prime::PrimeCurveAffine as _};
 use hkdf::Hkdf;
-use rand_core::{OsRng, TryCryptoRng};
+use rand::rngs::SysRng;
+use rand_core::TryCryptoRng;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize as _, Zeroizing};
@@ -862,7 +863,7 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
         parameters: &AdaptiveThresholdBlsParameters<P>,
         dealer_index: u16,
     ) -> Result<(Self, ValidatedDealerCommitment<P>), ThresholdBlsError> {
-        Self::generate_with_rng(parameters, dealer_index, &mut OsRng)
+        Self::generate_with_rng(parameters, dealer_index, &mut SysRng)
     }
 
     /// Generate one complete dealer polynomial using an explicit CSPRNG.
@@ -910,7 +911,7 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
         dealer_index: u16,
         coefficients: DasRenSecretCoefficientsV1,
     ) -> Result<(Self, ValidatedDealerCommitment<P>), ThresholdBlsError> {
-        Self::from_coefficients_with_rng(parameters, dealer_index, coefficients, &mut OsRng)
+        Self::from_coefficients_with_rng(parameters, dealer_index, coefficients, &mut SysRng)
     }
 
     /// Import canonical zeroizing coefficients with an explicit proof CSPRNG.
@@ -1126,7 +1127,7 @@ pub fn seal_das_ren_private_share<P: ThresholdBlsPurpose>(
     let (kem, derived) = hybrid::encapsulate(
         HybridSuite::X25519MlKem768ChaCha20Poly1305,
         recipient,
-        &mut OsRng,
+        &mut SysRng,
     )
     .map_err(|_| ThresholdBlsError::PrivateShareEncryption)?;
     let key = Zeroizing::new(derived.encryption_key());
@@ -1792,7 +1793,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsSecretShare<P> {
         transcript: &AdaptiveThresholdBlsPublicTranscript<P>,
         payload: &[u8],
     ) -> Result<DasRenPartialSignature<P>, ThresholdBlsError> {
-        self.sign_payload_with_rng(transcript, payload, &mut OsRng)
+        self.sign_payload_with_rng(transcript, payload, &mut SysRng)
     }
 
     /// Create an adaptive partial signature using an explicit CSPRNG.
@@ -2204,7 +2205,6 @@ mod tests {
     mod transcript_inline;
 
     use blstrs::{G2Affine, Scalar};
-    use group::{Curve as _, prime::PrimeCurveAffine as _};
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng as _;
 
@@ -2622,8 +2622,8 @@ mod tests {
             evaluate_dealer_scalar(scalars, recipient_index, 2).to_bytes_be(),
         )
         .expect("valid private edge");
-        let recipient = HybridKeyPair::try_generate(&mut OsRng).expect("recipient key");
-        let other = HybridKeyPair::try_generate(&mut OsRng).expect("other recipient key");
+        let recipient = HybridKeyPair::try_generate(&mut SysRng).expect("recipient key");
+        let other = HybridKeyPair::try_generate(&mut SysRng).expect("other recipient key");
         let aad = b"iroha:beacon-dkg:attempt:network:roster:dealer:recipient";
         let (kem, ciphertext) =
             seal_das_ren_private_share(&share, recipient.public(), aad).expect("seal private edge");
@@ -2842,20 +2842,23 @@ mod tests {
     fn adaptive_secret_import_and_rng_failures_do_not_fall_back() {
         #[derive(Debug)]
         struct ZeroRng;
-        impl rand_core::RngCore for ZeroRng {
-            fn next_u32(&mut self) -> u32 {
-                0
+        impl rand::TryRng for ZeroRng {
+            type Error = core::convert::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok(0)
             }
 
-            fn next_u64(&mut self) -> u64 {
-                0
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Ok(0)
             }
 
-            fn fill_bytes(&mut self, destination: &mut [u8]) {
-                destination.fill(0);
+            fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+                Ok({
+                    destination.fill(0);
+                })
             }
         }
-        impl rand_core::CryptoRng for ZeroRng {}
+        impl rand::TryCryptoRng for ZeroRng {}
 
         let fixture = adaptive_fixture();
         let secret = adaptive_secret(&fixture, 1);

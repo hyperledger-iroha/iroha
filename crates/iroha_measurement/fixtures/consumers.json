@@ -51,6 +51,10 @@
       "package": "iroha_kagemusha_proof",
       "sites": [
         {
+          "path": "crates/iroha_kagemusha_proof/src/rebuild_measurement.rs",
+          "use": "Test-only ignored real-family rebuild comparison: fallible process CPU, kernel lifetime RSS and optional retired-instruction diagnostics. Unavailable instruction counts remain explicit nonnumeric observations; measurements never decide proof validity."
+        },
+        {
           "path": "crates/iroha_kagemusha_proof/tests/common/proof_fixtures/native_load_measurement.rs",
           "use": "Test-only genuine native single-terminal Load diagnostic: fallible process CPU and absolute kernel lifetime RSS at actual API boundaries; no measurement in production admission."
         },

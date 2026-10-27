@@ -76,6 +76,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "dep:group",
             "dep:pairing",
             "dep:w3f-bls",
+            "dep:rand_chacha_03",
         ),
         "consensus": ("rand", "bls"),
         "ecc-batch": ("ed25519-dalek/batch",),
@@ -88,11 +89,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         "json": ("norito/json",),
         "node-crypto": ("application", "consensus", "gost", "sm", "rayon"),
-        "pqc": (
-            "dep:pqcrypto-traits",
-            "dep:pqcrypto-mldsa",
-            "dep:soranet_pq",
-        ),
+        "pqc": ("dep:soranet_pq",),
         "rand": (),
         "rayon": ("dep:rayon",),
         "sm": (
@@ -195,7 +192,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "iroha_schema": ("dep:iroha_schema",),
         "iroha_schema_gen": ("dep:iroha_schema_gen",),
         "iroha_telemetry": ("dep:iroha_telemetry",),
-        "push": ("app_api",),
+        "push": ("app_api", "reqwest/form"),
         "schema": ("iroha_schema", "iroha_schema_gen"),
         "transparent_api": ("iroha_data_model/transparent_api",),
         "zk-stark": ("iroha_core/zk-stark",),
@@ -243,7 +240,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "gost": ("iroha_crypto/gost", "iroha_data_model/gost"),
         "sm": ("iroha_crypto/sm", "iroha_data_model/sm"),
         "tls-rustls-native-roots": (
-            "reqwest/rustls-tls-native-roots",
+            "reqwest/rustls",
             "tokio-tungstenite/rustls-tls-native-roots",
             "tungstenite/rustls-tls-native-roots",
         ),
@@ -366,9 +363,10 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "cli_integration_harness": ("iroha_cli_lib/cli_integration_harness",)},
     "iroha_core_privacy": {"default": ("zk-stark", "simd"),
  "zk-stark": (),
- "simd": ("sha3/asm",),
+ # SHA3 0.12 dispatches hardware kernels automatically and retains software parity.
+ "simd": (),
  "privacy-release-evidence": ("zk-stark", "iroha_data_model/privacy-exact12-conformance"),
- "test-utils": ("dep:rand_08",)},
+ "test-utils": ("dep:rand_chacha",)},
     "iroha_core_timed_ovn": {"test-utils": ("dep:rand",), "default": ()},
 }
 

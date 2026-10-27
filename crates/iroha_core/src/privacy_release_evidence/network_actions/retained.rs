@@ -77,24 +77,28 @@ use iroha_data_model::{
     transaction::SignedTransaction,
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
-use rand_core_06::{CryptoRng, Error as RngError06, RngCore};
+
 use zeroize::Zeroizing;
 struct UnavailableIssuanceRngV1;
-impl RngCore for UnavailableIssuanceRngV1 {
-    fn next_u32(&mut self) -> u32 {
-        0
+impl rand::TryRng for UnavailableIssuanceRngV1 {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Err(std::io::Error::other(
+            "cached issuance must not read randomness",
+        ))
     }
-    fn next_u64(&mut self) -> u64 {
-        0
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Err(std::io::Error::other(
+            "cached issuance must not read randomness",
+        ))
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        destination.fill(0);
-    }
-    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
-        Err(RngError06::new("cached issuance must not read randomness"))
+    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+        Err(std::io::Error::other(
+            "cached issuance must not read randomness",
+        ))
     }
 }
-impl CryptoRng for UnavailableIssuanceRngV1 {}
+impl rand::TryCryptoRng for UnavailableIssuanceRngV1 {}
 /// One canonical network-bound `VeRange` action.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseVeRangeNetworkActionV1 {

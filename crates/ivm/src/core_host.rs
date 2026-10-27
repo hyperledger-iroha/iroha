@@ -26,10 +26,7 @@ use crate::{
 };
 use iroha_crypto::{
     Hash as IrohaHash, Sm3Digest,
-    blake2::{
-        Blake2bVar,
-        digest::{Update as Blake2Update, VariableOutput},
-    },
+    blake2::{Blake2b, digest::consts::U32},
 };
 use iroha_data_model::{
     account::AccountId,
@@ -757,14 +754,7 @@ impl CoreHost {
         vm.alloc_host_tlv(&out)
     }
     fn blake2b256(payload: &[u8]) -> [u8; IrohaHash::LENGTH] {
-        let mut digest = [0u8; IrohaHash::LENGTH];
-        let mut hasher =
-            Blake2bVar::new(IrohaHash::LENGTH).expect("32-byte Blake2b output size is supported");
-        hasher.update(payload);
-        hasher
-            .finalize_variable(&mut digest)
-            .expect("fixed Blake2b output buffer has the requested length");
-        digest
+        Blake2b::<U32>::digest(payload).into()
     }
     fn hash_syscall_gas(payload_len: usize) -> u64 {
         let bytes = u64::try_from(payload_len).unwrap_or(u64::MAX);

@@ -9,6 +9,7 @@
 
 use crate::geometry::Homography;
 use crate::image::{Luma, Rgb};
+use crate::layout::SQUARE_TOP;
 
 /// Camera and scene parameters.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -360,7 +361,9 @@ pub fn pixels_per_unit(config: &CaptureConfig) -> f64 {
 /// Supersampling factor of the geometric stage of [`capture`].
 const SS: usize = 3;
 
-/// Captures `source` (a rendered frame) with the simulated camera.
+/// Captures `source` (a rendered card, see [`crate::render::render`]) with the simulated
+/// camera. The camera's geometry is in square coordinates (the square's top-left corner is the
+/// origin); the card's bands lie above and below it.
 #[must_use]
 pub fn capture(source: &Rgb, config: &CaptureConfig) -> Luma {
     let (w, h) = (config.width, config.height);
@@ -384,8 +387,9 @@ pub fn capture(source: &Rgb, config: &CaptureConfig) -> Luma {
         })
         .collect();
     let scale = src_w as f64 / 1024.0;
+    let top = f64::from(SQUARE_TOP);
     let sample_source = |x: f64, y: f64| -> f64 {
-        let (sx, sy) = (x * scale, y * scale);
+        let (sx, sy) = (x * scale, (y + top) * scale);
         if sx < 0.0 || sy < 0.0 || sx >= src_w as f64 || sy >= source.height as f64 {
             return 0.0;
         }
@@ -556,7 +560,8 @@ mod tests {
         let b = capture(&frame, &config);
         assert_eq!(a, b);
         let mean = a.data.iter().map(|&v| f64::from(v)).sum::<f64>() / a.data.len() as f64;
-        assert!(mean > 8.0 && mean < 120.0, "mean {mean}");
+        // the katakana bands above and below the square add lit tiles to the view
+        assert!(mean > 8.0 && mean < 140.0, "mean {mean}");
         let max = a.data.iter().copied().max().unwrap();
         assert!(max > 180, "lit regions must be bright, max {max}");
     }

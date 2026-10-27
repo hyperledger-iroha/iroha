@@ -360,7 +360,10 @@ def test_android_snapshot_rejects_tampering(
     snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock"))
     snapshot_path.write_bytes(snapshot_path.read_bytes().replace(b'"android"', b'"apple"'))
 
-    with pytest.raises(RuntimeError, match="source changed after the build started"):
+    with pytest.raises(
+        RuntimeError,
+        match="source changed: seal structure, platform, targets or Cargo configuration",
+    ):
         SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path, source_fixture / "Cargo.lock")
 
 

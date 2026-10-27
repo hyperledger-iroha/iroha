@@ -12,7 +12,7 @@
 
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget};
-use rand_core_06::RngCore;
+use rand_core::Rng;
 use rayon::prelude::*;
 
 use super::{ProverError, random_values, write_point};
@@ -292,7 +292,7 @@ pub(super) fn commit<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C>,
-    R: RngCore,
+    R: Rng,
 {
     let mut advice = Advice {
         values,

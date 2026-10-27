@@ -27,14 +27,14 @@ def artifact(tmp_path, monkeypatch):
     evidence = root / "evidence"
     evidence.mkdir()
     names = ("producer-launch.json", "producer-record.json", "cargo-messages.jsonl",
-             "pqcrypto-normalization.json", "consumer", "source-observation.json")
+             "native-archive-audit.json", "consumer", "source-observation.json")
     for name in names:
         (evidence / name).write_text("receipt-only fixture")
     manifest = {
         "schema": "iroha.norito-bridge-device-demo-artifact.v1",
         "artifact_scope": "physical-device-demo", "purpose": "physical-ios-debug",
         "source_root": str(ROOT), "source_commit": "a" * 40,
-        "target_triple": "aarch64-apple-ios", "native_bridge_abi_version": 31,
+        "target_triple": "aarch64-apple-ios", "native_bridge_abi_version": 33,
         "hashes": {"ios-arm64": hashlib.sha256(archive.read_bytes()).hexdigest()},
         "evidence": {name: hashlib.sha256((evidence / name).read_bytes()).hexdigest() for name in names},
     }
@@ -51,7 +51,24 @@ def test_prepare_retains_original_and_observes_current_separately(artifact):
     assert record["artifact_source_commit"] == "a" * 40
     assert record["current_source_commit"] == "b" * 40
     assert record["source_head_drifted"] is True
+    assert record["native_bridge_abi_version"] == 33
     assert (artifact / "NoritoBridge.xcframework/NoritoBridge.artifacts.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("version", (31, 32, 34, "33", 33.0, True))
+@pytest.mark.parametrize("allow_drift", (False, True))
+def test_prepare_requires_exact_current_abi_even_with_source_head_drift(
+        artifact, monkeypatch, version, allow_drift):
+    manifest_path = artifact / "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["native_bridge_abi_version"] = version
+    manifest_path.write_text(json.dumps(manifest))
+    if not allow_drift:
+        monkeypatch.setattr(consumer.subprocess, "check_output", lambda *args, **kwargs: "a" * 40)
+    original = manifest_path.read_bytes()
+    with pytest.raises(ValueError, match="producer metadata differs"):
+        consumer.prepare_record(artifact, allow_source_head_drift=allow_drift)
+    assert manifest_path.read_bytes() == original
 
 
 @pytest.mark.parametrize("relative", ("ios-arm64/libNoritoBridge.a", "evidence/producer-record.json"))

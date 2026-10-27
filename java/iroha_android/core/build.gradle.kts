@@ -294,10 +294,10 @@ tasks.named("check") {
 dependencies {
     api("org.hyperledger.iroha:norito-java:${noritoJavaVersion.get()}")
     api("org.hyperledger.iroha.sdk:core-jvm:${irohaKotlinSdkVersion.get()}")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
-    testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
-    testImplementation("com.squareup.okio:okio:3.6.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.1")
+    testImplementation("com.squareup.okhttp3:okhttp:5.5.1")
+    testImplementation("com.squareup.okio:okio:3.18.2")
     testImplementation("junit:junit:4.13.2")
 }
 

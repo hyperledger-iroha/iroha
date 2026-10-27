@@ -47,14 +47,15 @@ use iroha_zkp_halo2::vega::{
     VegaT256ScalarV1, prove_vega_mdl_figure9_v1, verify_vega_mdl_figure9_v1,
 };
 use p256::{
-    EncodedPoint, PublicKey as P256PublicKey,
+    PublicKey as P256PublicKey, Sec1Point,
     ecdsa::{
         Signature as P256Signature, SigningKey as P256SigningKey,
         signature::hazmat::PrehashSigner as _,
     },
-    elliptic_curve::sec1::ToEncodedPoint,
+    elliptic_curve::sec1::ToSec1Point,
 };
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{Date, Month, OffsetDateTime};
@@ -843,7 +844,7 @@ struct CoreVegaRandomSource<'a, R> {
 }
 impl<'a, R> CoreVegaRandomSource<'a, R>
 where
-    R: RngCore + CryptoRng,
+    R: TryRng + TryCryptoRng,
 {
     fn new(source: &'a mut R) -> Result<Self, VegaMdlError> {
         let source = HealthCheckedCryptoRngV1::new(source).map_err(|error| match error {
@@ -853,7 +854,7 @@ where
         Ok(Self { source })
     }
 }
-impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
+impl<R: TryRng + TryCryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
         self.source
             .try_fill_bytes(destination)
@@ -871,7 +872,7 @@ impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> 
 ///
 /// Fails closed on malformed consensus context, a stale or malformed credential, invalid ES256
 /// authentication, random-source failure, an unsatisfied circuit, or proof-system failure.
-pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
+pub fn prove_mdl_figure9_v1<R: TryRng + TryCryptoRng>(
     statement: &VegaExistingCredentialStatementV1,
     binding: &VegaMdlConsensusBindingV1<'_>,
     trusted_block_timestamp_ms: u64,
@@ -1163,7 +1164,7 @@ pub fn prepare_vega_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -1201,7 +1202,7 @@ fn prepare_vega_privacy_action_with_profile_and_rng_v1<R>(
     rng: &mut R,
 ) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let (canonical_genesis_hash, trusted_block_timestamp_ms) = chain_state;
     let draft_statement = vega_statement_v1(
@@ -1229,11 +1230,7 @@ where
         let signature: P256Signature = device_signing_key
             .sign_prehash(device_authentication_digest.as_bytes())
             .map_err(|_| VegaPrivacyActionBuildErrorV1::DeviceAuthenticationSigning)?;
-        signature
-            .normalize_s()
-            .unwrap_or(signature)
-            .to_bytes()
-            .into()
+        signature.normalize_s().to_bytes().into()
     });
     let witness = witness_material
         .witness_with_device_signature(device_signature)
@@ -1373,7 +1370,7 @@ pub fn build_signed_vega_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<SignedVegaPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_vega_transaction_context_v1(context)?;
     validate_vega_signing_authority_v1(&context.authority, private_key)?;
@@ -1412,7 +1409,7 @@ pub fn build_signed_vega_privacy_action_v1(
         canonical_genesis_hash,
         trusted_block_timestamp_ms,
         private_key,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 /// Construct the exact length-delimited device-authentication consensus frame.
@@ -1618,7 +1615,7 @@ fn p256_affine_coordinates(
             field: "issuer_public_key",
         }
     })?;
-    let uncompressed: EncodedPoint = public_key.to_encoded_point(false);
+    let uncompressed: Sec1Point = public_key.to_sec1_point(false);
     let x = uncompressed.x().ok_or(VegaMdlError::InvalidP256PublicKey {
         field: "issuer_public_key",
     })?;
@@ -1653,23 +1650,22 @@ mod tests {
             PrivacyVegaMdlSignatureAlgorithmV1,
         },
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("invalid Vega action boundary reached proof randomness")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("invalid Vega action boundary reached proof randomness")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     #[derive(Clone, Copy)]
     enum VegaEntropyModeV1 {
         Healthy,
@@ -1706,17 +1702,16 @@ mod tests {
             }
         }
     }
-    impl RngCore for VegaEntropySourceV1 {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for VegaEntropySourceV1 {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("Vega must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("Vega must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("Vega must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests.push(destination.len());
             let request = self.requests.len();
             let partial_error = matches!(
@@ -1745,14 +1740,14 @@ mod tests {
                 "injected Vega entropy panic after a partial write"
             );
             if partial_error {
-                return Err(RngError::new(
+                return Err(RngError::other(
                     "injected Vega entropy failure after a partial write",
                 ));
             }
             Ok(())
         }
     }
-    impl CryptoRng for VegaEntropySourceV1 {}
+    impl rand::TryCryptoRng for VegaEntropySourceV1 {}
     fn transaction_key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixed Vega transaction key")
@@ -1774,7 +1769,7 @@ mod tests {
     ) -> VegaPrivacyActionPublicInputV1 {
         let issuer_signing_key =
             P256SigningKey::from_bytes((&[1_u8; 32]).into()).expect("fixed issuer key");
-        let encoded = issuer_signing_key.verifying_key().to_encoded_point(true);
+        let encoded = issuer_signing_key.verifying_key().to_sec1_point(true);
         let issuer_public_key = PrivacyP256PointV1::new(
             encoded
                 .as_bytes()

@@ -72,7 +72,7 @@ mod prover {
             random_goldilocks_fp4_v1,
         },
     };
-    use rand::TryRngCore;
+    use rand::TryRng;
 
     fn erase_fields(values: &mut [E]) {
         zeroize_words_v1(values);
@@ -134,7 +134,7 @@ mod prover {
         /// Add independently sampled masks before any composition commitment.
         /// The caller owns every chunk in a clearing guard across this operation:
         /// entropy failure can leave a partial private result, which must be dropped.
-        pub(crate) fn blind_v1<R: TryRngCore>(
+        pub(crate) fn blind_v1<R: TryRng>(
             self,
             chunks: &mut [Vec<E>],
             rng: &mut R,
@@ -171,7 +171,7 @@ mod prover {
 
         /// Consume one quotient codeword and return independently blinded chunk
         /// codewords, clearing all intermediate private owners on every exit.
-        pub(crate) fn split_evaluations_v1<R: TryRngCore>(
+        pub(crate) fn split_evaluations_v1<R: TryRng>(
             self,
             evaluations: Vec<E>,
             log: u8,
@@ -216,7 +216,8 @@ mod prover {
     mod tests {
         use super::*;
         use crate::privacy_engines::zk_x509::private_table::inspection;
-        use rand::{RngCore, SeedableRng, rngs::StdRng};
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha12Rng;
 
         fn value(index: usize) -> E {
             E::canonical([index as u64 + 1, index as u64 + 3, 5, 7]).unwrap()
@@ -280,10 +281,10 @@ mod prover {
                     PrivateTableV1::new(geometry.split_v1(&coefficients).unwrap(), erase_chunks);
                 let pointers: Vec<_> = first.iter().map(Vec::as_ptr).collect();
                 geometry
-                    .blind_v1(&mut first, &mut StdRng::from_seed([17; 32]))
+                    .blind_v1(&mut first, &mut ChaCha12Rng::from_seed([17; 32]))
                     .unwrap();
                 geometry
-                    .blind_v1(&mut second, &mut StdRng::from_seed([19; 32]))
+                    .blind_v1(&mut second, &mut ChaCha12Rng::from_seed([19; 32]))
                     .unwrap();
                 assert_ne!(*first, *second);
                 assert_eq!(first.iter().map(Vec::as_ptr).collect::<Vec<_>>(), pointers);
@@ -347,10 +348,14 @@ mod prover {
                     let mut chunks =
                         PrivateTableV1::new(geometry.split_v1(coefficients).unwrap(), erase_chunks);
                     let before: Vec<_> = chunks.iter().map(|v| (v.len(), v.capacity())).collect();
-                    let mut rng = StdRng::from_seed([43; 32]);
+                    let mut rng = ChaCha12Rng::from_seed([43; 32]);
                     geometry.blind_v1(&mut chunks, &mut rng).unwrap();
                     let after: Vec<_> = chunks.iter().map(|v| (v.len(), v.capacity())).collect();
-                    let observed = (before, after, rng.next_u64());
+                    let observed = (
+                        before,
+                        after,
+                        rng.try_next_u64().expect("test RNG draw succeeds"),
+                    );
                     if let Some(expected) = &expected {
                         assert_eq!(&observed, expected);
                     } else {
@@ -380,14 +385,17 @@ mod prover {
                     }
                 }
                 let expected = chunks.clone();
-                let mut rng = StdRng::from_seed([23; 32]);
+                let mut rng = ChaCha12Rng::from_seed([23; 32]);
                 let mut untouched = rng.clone();
                 assert_eq!(
                     geometry.blind_v1(&mut chunks, &mut rng),
                     Err(Error::InvalidLayout)
                 );
                 assert_eq!(chunks, expected);
-                assert_eq!(rng.next_u64(), untouched.next_u64());
+                assert_eq!(
+                    rng.try_next_u64().expect("test RNG draw succeeds"),
+                    untouched.try_next_u64().expect("test RNG draw succeeds")
+                );
             }
         }
 
@@ -395,7 +403,7 @@ mod prover {
             draws: usize,
             unwind: bool,
         }
-        impl TryRngCore for PartialEntropy {
+        impl TryRng for PartialEntropy {
             type Error = std::io::Error;
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 unreachable!("byte sampler")
@@ -427,9 +435,8 @@ mod prover {
                             erase_chunks,
                         );
                         match failure {
-                            None => {
-                                geometry.blind_v1(&mut chunks, &mut StdRng::from_seed([31; 32]))
-                            }
+                            None => geometry
+                                .blind_v1(&mut chunks, &mut ChaCha12Rng::from_seed([31; 32])),
                             Some(unwind) => geometry
                                 .blind_v1(&mut chunks, &mut PartialEntropy { draws: 0, unwind }),
                         }
@@ -464,7 +471,7 @@ mod prover {
                 .map(|index| evaluate(&coefficients, E::from_base(shift.mul(root.pow(index)))))
                 .collect();
             let chunks = geometry
-                .split_evaluations_v1(original.clone(), 6, &mut StdRng::from_seed([37; 32]))
+                .split_evaluations_v1(original.clone(), 6, &mut ChaCha12Rng::from_seed([37; 32]))
                 .unwrap();
             for (row, expected) in original.iter().enumerate() {
                 let point = E::from_base(shift.mul(root.pow(row as u128)));
@@ -480,14 +487,14 @@ mod prover {
                 .map(|index| E::from_base(shift.mul(root.pow(index))).pow(48))
                 .collect();
             assert_eq!(
-                geometry.split_evaluations_v1(forbidden, 6, &mut StdRng::from_seed([41; 32])),
+                geometry.split_evaluations_v1(forbidden, 6, &mut ChaCha12Rng::from_seed([41; 32])),
                 Err(Error::FriDegree)
             );
             let (result, observations) = inspection::observe_v1(|| {
                 geometry.split_evaluations_v1(
                     vec![value(7); 63],
                     6,
-                    &mut StdRng::from_seed([43; 32]),
+                    &mut ChaCha12Rng::from_seed([43; 32]),
                 )
             });
             assert_eq!(result, Err(Error::InvalidLayout));

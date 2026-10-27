@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=84.2.1", "wheel>=0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,11 +11,13 @@ authors = [{name = "Hyperledger Iroha Contributors"}]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 dependencies = [
-  "blake3>=1.0",
+  "blake3>=1.0.10",
   "iroha-native==0.0.1",
   "iroha-norito>=0.1.0",
   "iroha-torii-client>=0.0.1",
-  "requests>=2.31",
+  "requests>=2.34.2",
+  "certifi>=2026.10.19",
+  "urllib3>=2.8.0",
 ]
 keywords = ["iroha", "sdk", "blockchain", "norito"]
 classifiers = [
@@ -32,13 +34,13 @@ classifiers = [
 
 [project.optional-dependencies]
 ws = [
-  "websocket-client>=1.7",
+  "websocket-client>=1.9.2",
 ]
 dev = [
-  "pytest>=8.0",
-  "mypy>=1.8.0,<2.0",
-  "ruff>=0.1.9",
-  "types-requests>=2.31,<3",
+  "pytest>=9.1.1",
+  "mypy>=2.4.0,<3.0",
+  "ruff>=0.17.2",
+  "types-requests>=2.33.0.20261006,<3",
 ]
 
 [project.urls]

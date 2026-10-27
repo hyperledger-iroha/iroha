@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install the pinned test runner
@@ -42,7 +42,7 @@ jobs:
           python3 -m pytest -q pytests/scripts/test_sccp_reference.py pytests/scripts/test_sccp_sdk_governance.py 2>&1 | tee target/qualification/sccp/python-reference.log
       - name: Retain the reference test record
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sccp-python-reference-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/qualification/sccp/python-reference.log
@@ -56,14 +56,14 @@ jobs:
     env:
       CARGO_TERM_COLOR: never
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           shared-key: sccp-v1-rust-reference
           cache-on-failure: "true"
@@ -81,7 +81,7 @@ jobs:
           cargo test --locked -p iroha_crypto --lib signature::bls::consensus::tests:: 2>&1 | tee target/qualification/sccp/bls-reference.log
       - name: Retain the Rust test records
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sccp-rust-reference-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/qualification/sccp/*.log
@@ -93,13 +93,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
       - name: Install the pinned test runner
@@ -114,7 +114,7 @@ jobs:
           bash scripts/sccp_evm_contract_smoke.sh 2>&1 | tee target/qualification/sccp/evm-contracts.log
       - name: Retain the EVM test record
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sccp-evm-contracts-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/qualification/sccp/evm-contracts.log
@@ -126,10 +126,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install the pinned test runner
@@ -144,7 +144,7 @@ jobs:
           sh scripts/sccp_ton_contract_build.sh all 2>&1 | tee target/qualification/sccp/ton-contracts.log
       - name: Retain the TON test record and measured gas
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sccp-ton-contracts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

@@ -6,7 +6,7 @@
 //! every integer residue is below `2^43`, so equality in Goldilocks is equality over the integers
 //! rather than a field-wrap shortcut.
 use crate::privacy_engines::transparent_stark::{GoldilocksFieldV1 as F, PolynomialAirFieldV1};
-use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256, U512};
+use p256::elliptic_curve::bigint::{NonZero, U256, U512};
 use thiserror::Error;
 /// P-256 coordinate-field modulus in canonical big-endian form.
 pub const P256_BASE_MODULUS_BE_V1: [u8; 32] = [
@@ -1080,8 +1080,9 @@ fn exact_multiplication_quotient_v1(
     c: [u8; 32],
     modulus: [u8; 32],
 ) -> Result<[u8; 32], ZkX509P256AirErrorV1> {
-    let product: U512 = U256::from_be_slice(&a).mul(&U256::from_be_slice(&b));
-    let wide_modulus = U256::ZERO.concat(&U256::from_be_slice(&modulus));
+    let product: U512 = U256::from_be_slice(&a).concatenating_mul(&U256::from_be_slice(&b));
+    // Widen the numeric modulus, keeping its bytes in the low half.
+    let wide_modulus: U512 = U256::from_be_slice(&modulus).resize();
     let divisor = NonZero::new(wide_modulus).unwrap();
     let (quotient, remainder) = product.div_rem(&divisor);
     let quotient = quotient.to_be_bytes();
@@ -1293,13 +1294,36 @@ mod tests {
         value
     }
     fn bigint_multiply_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
-        let product: U512 = U256::from_be_slice(&left).mul(&U256::from_be_slice(&right));
-        let divisor = NonZero::new(U256::ZERO.concat(&U256::from_be_slice(&modulus))).unwrap();
+        let product: U512 =
+            U256::from_be_slice(&left).concatenating_mul(&U256::from_be_slice(&right));
+        let wide_modulus: U512 = U256::from_be_slice(&modulus).resize();
+        let divisor = NonZero::new(wide_modulus).unwrap();
         let remainder = product.div_rem(&divisor).1.to_be_bytes();
         assert!(remainder[..32].iter().all(|byte| *byte == 0));
         let mut result = [0_u8; 32];
         result.copy_from_slice(&remainder[32..]);
         result
+    }
+    #[test]
+    fn wide_multiplication_preserves_low_modulus_and_high_product_limbs() {
+        for modulus in [P256_BASE_MODULUS_BE_V1, P256_SCALAR_MODULUS_BE_V1] {
+            // (m - 1)^2 = (m - 2) * m + 1, independently of bigint limb order.
+            let operand = minus_one(modulus);
+            assert_eq!(bigint_multiply_mod(operand, operand, modulus), one());
+            assert_eq!(
+                exact_multiplication_quotient_v1(operand, operand, one(), modulus),
+                Ok(subtract_small(modulus, 2))
+            );
+            assert_eq!(bigint_multiply_mod(small(2), small(3), modulus), small(6));
+            assert_eq!(
+                exact_multiplication_quotient_v1(small(2), small(3), small(6), modulus),
+                Ok(zero())
+            );
+            assert_eq!(
+                exact_multiplication_quotient_v1(operand, operand, zero(), modulus),
+                Err(ZkX509P256AirErrorV1::InvalidOperation)
+            );
+        }
     }
     fn bigint_add_mod(left: [u8; 32], right: [u8; 32], modulus: [u8; 32]) -> [u8; 32] {
         let sum = add_be_v1(left, right);

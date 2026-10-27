@@ -1,6 +1,6 @@
 # Hyperledger Iroha SDK for .NET
 
-The C# SDK is the typed .NET 8 client for Hyperledger Iroha 3. This first-release
+The C# SDK is the typed .NET 10 client for Hyperledger Iroha 3. This first-release
 surface exposes the V1 protocol directly and removes pre-release wrappers, fallback
 codecs, compatibility modes, and deprecated transport APIs. Parser vocabulary shared
 with other SDKs changes only through coordinated cross-SDK updates.
@@ -17,7 +17,7 @@ the domain-separated complete-artifact hash. Singular manifest queries use
 Singular queries use the current native query discriminants and Norito newtype
 framing. Domain endorsement queries and domain transfer/metadata instructions require the fully qualified `domain.dataspace`
 identity, for example `banka.universal`.
-These operations require the ABI-30 Rust domain validator and exact canonical ASCII
+These operations require the ABI-33 Rust domain validator and exact canonical ASCII
 labels, including admitted IDNA A-labels; raw Unicode and alternate spellings are
 rejected. The native pinned UTS-46 owner also decides underscore and hyphen admission.
 NFT instructions use the same fully qualified domain inside `name$domain.dataspace`.
@@ -27,13 +27,13 @@ field and the `TriggerId`/`Json` newtype fields; transaction metadata uses that 
 
 ## Requirements
 
-- .NET SDK 8.0.419, as pinned by `global.json`
+- .NET SDK 10.0.402, as pinned by `global.json`; consumers require .NET 10 or newer
 - A Torii endpoint
 - The exact genesis-derived `NetworkId` for authenticated requests
 - A canonical, domainless I105 account ID and its 32-byte Ed25519 seed for signing
 
 Account construction, parsing, and every operation that admits account identities
-require the packaged ABI-30 Rust bridge for the current runtime identifier. Privacy
+require the packaged ABI-33 Rust bridge for the current runtime identifier. Privacy
 and native SoraFS validation use the same bridge. Transport-only anonymous reads do
 not construct account identities.
 
@@ -386,7 +386,7 @@ selector. Microsoft.Testing.Platform ignores the VSTest `dotnet test --filter`
 and `--logger` switches. From the same `csharp/` directory after the build above:
 
 ```bash
-dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Explorer*' -noLogo -noColor
+dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net10.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Explorer*' -noLogo -noColor
 ```
 
 The selector matches the fully qualified method name. Use `Debug` in the artifact
@@ -450,7 +450,7 @@ matching the Kotlin Kaigi encoder's fail-closed scope until the Rust pinned
 NFC/UTS-46 owner is shared. Display text supports UTF-8. Account instruction
 encoding covers all eleven published controller curve IDs and complete canonical
 multisig policies with a u16 member count. Address decoding checks key envelopes;
-every public address constructor and parser additionally requires the ABI-30
+every public address constructor and parser additionally requires the ABI-33
 Rust address owner for complete key and policy admission. Missing native
 validation raises `NativeBridgeUnavailable`; structural checks cannot admit an
 account by themselves. Canonical I105 parsing rejects surrounding Unicode
@@ -477,17 +477,32 @@ four-validator, hardware or release-qualification evidence.
 in the Sakura-storm look) that moves an opaque byte payload from a screen to a phone.
 The stream carries bytes only; this SDK has no peer-message codec. A KAGEMUSHA
 wallet V1 sender plays one `IPM1` message with its IPM1 kind as the stream `kind`
-([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Each frame carries three independent
-Reed–Solomon lanes of fountain-coded atoms — tile polarity (`P`), katakana
-glyphs (`K`) and ring dots (`D`, which carries the stream beacon every fourth
-frame) — so any readable lane of any frame adds progress. A payload is released
-only after its CRC-32C matches the beacon.
+([wallet wire §6](../specs/kagemusha_wallet_wire_v1.md)). Frames use format 5
+([Petal Stream spec](../specs/petal_stream.md)): each is a portrait card of
+1024 × 1668 units, a square code with a band of katakana tiles above and below it
+(`PetalLayout.CardHeight`, `SquareTop`). The square carries five independent
+Reed–Solomon lanes of fountain-coded atoms — the 3,376 petals of the field, cut
+into four sectors (`F0`–`F3`, `PetalLanes.Field(sector)`), and the ring dots (`D`,
+which carries the stream beacon every fourth frame) — and on top of every field lane
+a turn lane (`T0`–`T3`, `PetalTurns`): the first 360 lit petals of a sector are
+turned by 0°, 45°, 90° or 135° about their centres, two more bits each, carrying
+four more atoms from the repair range. Each band holds 306 tiles (`PetalLayout.KanaTiles`),
+eight of them pilots with fixed symbols; the other 298 show one of sixteen katakana
+(`PetalGlyphs`) and are light or dark, which carries a polarity lane (`P0`, `P1`) and a
+glyph lane (`K0`, `K1`) per band (`PetalKana`): eight more atoms per band, bound to the
+stream tag, the frame and the lane by a CRC-32C check. Any readable lane of any frame
+adds progress. Reports name the lanes `D` and `0`–`3` (a turn lane by the digit of its
+field lane) and `P0`, `K0`, `P1`, `K1`. Petals inside the `天` are drawn light and the
+others pink, over a faint `天`; a light tile is filled light with its glyph in ink, a dark
+tile is black with its glyph in pink. A payload is released only after its CRC-32C
+matches the beacon.
 
 ```csharp
-// Sender: draw frames at 8 fps through an IPetalCanvas adapter over the
-// platform canvas (SkiaSharp, MAUI ICanvas, WPF DrawingContext, ...).
+// Sender: draw frames at the default 12 fps through an IPetalCanvas adapter over the
+// platform canvas (SkiaSharp, MAUI ICanvas, WPF DrawingContext, ...). The whole card is
+// drawn, `side` wide and side · 1668 / 1024 tall, from its top-left corner.
 var player = new PetalFramePlayer(new PetalStreamEncoder(payload, kind: 2));
-player.Draw(canvasAdapter, clock.Elapsed, side: viewSizeInPixels);
+player.Draw(canvasAdapter, clock.Elapsed, side: viewWidthInPixels);
 
 // Receiver: feed each camera Y plane (CameraX plane 0, CVPixelBuffer luma).
 var analyzer = new PetalCameraAnalyzer();
@@ -497,27 +512,73 @@ analyzer.AnalyzeYPlane(yPlane, width, height, rowStride, pixelStride, timestampM
 
 `PetalDecoder.Decode` reports `UnsupportedImage`, `NoFinders` or
 `NoOrientation` through `PetalDecodeResult` and never throws on image content.
-Lanes `P` and `K` are first read against the light and dark levels measured at
-the finders; a lane that does not decode is retried from a normalised read that
-rescales every tile patch and glyph template by its own contrast, which cancels
-most over-exposure, veiling light, glare and shadow instead of losing the turbo
-lane. `PetalScanSession` also averages up to four captures of each of six shown
-frames to recover missing tile lanes. Independently decoded headers must agree,
-and recovered lane headers must name that frame. `PetalScanOutcome.Merged` and
-`PetalScanStats.Merges`, `MergedP` and `MergedK` report this recovery separately
-from individual captures; reset and stream timeouts discard held evidence.
-`PetalDecoder.TileEvidence` and `MergeTiles` expose the same low-level read.
+Every petal is one bit: its level, normalised by the light and dark levels measured
+at the finders, is compared with a two-means threshold of its sector and colour
+class. When a plain pose leaves a field lane unread, the decoder searches the pose
+for radial lens distortion (`PetalPose.Distortion`), then reads the sectors still
+unread from local levels that rescale every petal by its 32-unit neighbourhood,
+which cancels shadows, glare, banding and veiling light. `PetalScanSession` follows
+the code from frame to frame and also averages the field evidence of up to four
+captures of each of six shown frames to recover missing field lanes. Independently
+decoded headers must agree, and recovered lane headers must name that frame.
+`PetalScanOutcome.Merged` and `PetalScanStats.Merges` and `MergedLanes` report this
+recovery separately from individual captures (`LaneD`, `FieldLanes`); reset and
+stream timeouts discard held evidence. `PetalDecoder.FieldEvidence` and
+`MergeFields` expose the same low-level read.
+
+`PetalTurns.ReadTurns` reads the turn lanes of the field lanes a capture decoded:
+it samples every carrier petal in its own outward frame under a smooth correction
+of the pose, fits the blur under which the petals and their lit neighbours explain
+the image, and gives each carrier the turn whose template matches best once its
+neighbours are subtracted; a turn lane passes only when its Reed–Solomon codeword
+decodes and its CRC-32C check matches the header of the field lane it rides on. A
+camera too soft to resolve the petals' shapes reads no turn lane and loses nothing
+else. The session tries each turn lane once per shown frame (`PetalScanOutcome.Turned`,
+`PetalScanStats.TurnTries` and `TurnLanes`) and, after tries that read nothing,
+passes over the next captures that would try one, at most `TurnBackoff` of them.
+`PetalTurns.ObservedTurns` reports every carrier's decided turn for diagnostics.
+`PetalFrameCells.Turns`, `SetTurns` and `TurnWord`, `PetalLaneData.Turns` and the
+draw list's turned, notched petals (`IPetalCanvas.FillPetal`: the ellipse minus its
+notch, antialiased) expose the turns to senders.
+
+`PetalKana.ReadKana` reads the kana lanes of a capture whose square decoded, under the
+`(tag, frame)` header its lanes name: the square's pose, extended beyond the square,
+places every tile; each band's pilots are found by a coarse search whose reach grows
+with the distance from the square, pick the blur of the glyph templates, correct every
+tile by an affine shift fitted to their offsets, and calibrate the levels that tell
+light tiles from dark ones; each data tile then takes the polarity its level shows and
+the glyph whose template correlates best. A lane passes when its Reed–Solomon codeword
+decodes (with an erasure schedule) into data whose check matches the square's frame,
+the frame after it or the frame before it (a rolling shutter or a stale display can
+show a band from a neighbouring frame). A phone held upright sees both bands; a camera
+that frames only the square reads the square as before. The session reads each band
+once per shown frame (`PetalScanOutcome.Kana`, `PetalScanStats.KanaTries` and
+`KanaLanes`) with its own back-off (`KanaBackoff`). The bands go first: a capture whose
+bands read a kana lane tries the turn lanes too only when its work and the session's last
+turn try fit a 30 fps camera's frame time (`CaptureBudgetMilliseconds`); otherwise the
+turn lanes of that shown frame wait for its next capture, because on a slow phone core a
+turn try costs five tracked decodes and a band try one. The session times its work with
+`Stopwatch`, and the constructor's `workCost` (a `Func<PetalWork, double, double>`) puts
+a model's costs in place of the measured times; `PetalScanStats.SpareTurns` counts the
+captures that had the time. `PetalKana.ObserveBand` reports every tile's decided polarity and
+glyph for diagnostics. `PetalFrameCells.Kana`, `SetKana`, `KanaPolarityWord` and
+`KanaGlyphWord`, `PetalLaneData.Kana`, `PetalRenderer.Render` (the whole card,
+`PetalRenderer.CardHeightPx(size)` pixels tall) and the draw list's tiles
+(`PetalDrawList.Tiles`; `IPetalCanvas.FillRoundedRectangle` for a light tile's fill and
+`IPetalCanvas.StrokePolyline` for the glyph strokes of `PetalDrawList.KanaGlyphStrokes`,
+round caps and joins, `KanaStrokeWidth` wide) expose the bands to senders.
 `PetalScanSession`, `PetalStreamAssembler` and `PetalRenderer`/`PetalDrawList`
 expose the lower layers, and `PetalPng` writes inspection images. Memory and
 work are bounded by `PetalDecodeOptions.MaxPixels` (12 MP) and
-`PetalAssemblerLimits` (64 KiB payloads, 128 pending atoms). Encoder output is
-bit-identical to Rust, and the decoder repeats the reference's IEEE double
-operations in the same order. The shared fixtures
-`fixtures/petal/petal_stream_v1.json` and `petal_captures_v1.json` pin both. Run
-the Petal tests through the same built xUnit v3 runner:
+`PetalAssemblerLimits` (64 KiB payloads, 512 pending atoms). Encoder output and the
+software renderer are bit-identical to Rust, turn and kana lanes included, and the
+decoder, the turn reader and the band reader repeat the reference's IEEE double
+operations in the same order. The shared fixtures `fixtures/petal/petal_stream_v5.json`
+and `petal_captures_v5.json` pin both. Run the Petal tests through the same built
+xUnit v3 runner:
 
 ```bash
-dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net8.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Petal*' -noLogo -noColor
+dotnet tests/Hyperledger.Iroha.Sdk.Tests/bin/Release/net10.0/Hyperledger.Iroha.Sdk.Tests.dll -method '*Petal*' -noLogo -noColor
 ```
 
 ## Local confidential wallet proofs
@@ -544,7 +605,7 @@ This uses Core's default change diversifier; reusing a nondefault input diversif
 would produce another owner. `ConfidentialNotes` supplies native-backed default
 diversifier, owner, commitment, root and path helpers without managed cryptography.
 
-Run the two-proof disposable example with the current ABI-30 runtime library
+Run the two-proof disposable example with the current ABI-33 runtime library
 available to the .NET loader. `ConfidentialProverException.Code == -101` means
 the bridge is missing or lacks the required wallet contract; install the matching
 current native artifact for your runtime identifier before retrying:

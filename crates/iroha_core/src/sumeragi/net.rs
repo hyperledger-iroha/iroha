@@ -950,7 +950,7 @@ mod tests {
         types::{AggregateSignature, Bitmap, EpochId, SIGNATURE_LEN, Signature},
     };
     use norito::core as ncore;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     use super::*;
 

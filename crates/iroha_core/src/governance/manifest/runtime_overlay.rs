@@ -205,7 +205,11 @@ impl LaneManifestRegistry {
                 .into());
         }
         if additions.is_empty() {
-            return Ok(baseline.bind(effective_catalog, governance));
+            return Self::try_from_source_snapshot(
+                Arc::clone(baseline),
+                effective_catalog,
+                governance,
+            );
         }
         if baseline.bound_lanes.is_empty() {
             return Err(
@@ -291,7 +295,11 @@ impl LaneManifestRegistry {
         }
         effective_sources.consensus_policy_digest =
             effective_sources.compute_consensus_policy_digest();
-        let mut effective = Arc::new(effective_sources).bind(effective_catalog, governance);
+        let mut effective = Self::try_from_source_snapshot(
+            Arc::new(effective_sources),
+            effective_catalog,
+            governance,
+        )?;
         effective.baseline_source_snapshot = Some(Arc::clone(baseline));
         effective
             .validate_active_coverage_for_catalog(effective_catalog)

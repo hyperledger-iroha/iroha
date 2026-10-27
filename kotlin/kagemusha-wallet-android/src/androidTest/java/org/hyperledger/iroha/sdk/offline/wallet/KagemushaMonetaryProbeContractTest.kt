@@ -33,12 +33,38 @@ class KagemushaMonetaryProbeContractTest {
                 }
             }
         }
+        for (action in listOf("begin-exchange", "end-exchange", "discard-review", "retry-reviewed", "resume-deferred-receipt", "drain-deferred-archive")) {
+            assertEquals(action, command(action, emptySet()).action)
+            refused { command(action, setOf("caller-permission")) }
+        }
+        for (retired in listOf("verify-delivery", "accept-credited")) {
+            refused { command(retired, setOf("request-id", "credited")) }
+        }
         refused { command("execute-reviewed", setOf("request-id", "unsigned-permission")) }
         refused { command("destructively-delete", emptySet()) }
         refused { command("request", setOf("setup-id", "amount", "fee-schedule")) }
         refused { command("request", setOf("setup-id", "offer")) }
+        assertEquals(setOf("request-id", "credited"), command("observe-credited", setOf("request-id", "credited")).pins.keys)
+        refused { command("observe-credited", setOf("request-id", "credited", "caller-verdict")) }
+        refused { command("observe-credited", setOf("request-id")) }
+        refused { command("observe-credited", setOf("credited")) }
         refused { command("review-unload", setOf("request-id", "amount", "quote", "certificates")) }
         assertEquals(36 * 1024 * 1024, KagemushaMonetaryProbeManifest.maximum("finality"))
+    }
+    @Test fun conditionalReviewCommandsRetainExactInputsAndNeverAcceptHostPermission() {
+        for (family in listOf("send", "unload")) {
+            assertEquals(KagemushaMonetaryProbeManifest.schemas["review-$family"],
+                KagemushaMonetaryProbeManifest.schemas["continue-review-$family"])
+            for (names in checkNotNull(KagemushaMonetaryProbeManifest.schemas["continue-review-$family"])) {
+                refused { command("continue-review-$family", names + "expected-projection") }
+                refused { command("continue-review-$family", names + "permission") }
+            }
+        }
+        val nearby = setOf("request-id", "session-id", "request-hash", "peer-certificate")
+        assertEquals(nearby, command("nearby-continue-send", nearby).pins.keys)
+        refused { command("nearby-continue-send", nearby + "permission") }
+        refused { command("retry-reviewed", setOf("request-id")) }
+        refused { command("retry-reviewed", setOf("decision")) }
     }
     @Test fun amountsAndIdentifiersPreserveUnsignedBitsAndRefuseTruncation() {
         val all = ByteArray(16) { 0xff.toByte() }
@@ -87,11 +113,56 @@ class KagemushaMonetaryProbeContractTest {
             "native-load-plan-retained", "native-review-awaiting-explicit-decision",
             "native-peer-envelope-decoded-not-admitted", "native-unload-claim-exported-not-settled",
             "native-activation-unconfirmed", "native-activation-epoch-required", "native-unload-unconfirmed",
-            "native-unload-rejected", "native-unload-epoch-required", "native-current-head-not-folded") + (0..60).map { "native-call-status-$it" }) {
+            "native-unload-rejected", "native-unload-epoch-required", "native-current-head-not-folded") + listOf("native-exchange-open", "native-exchange-ended", "native-deferred-receipt-no-work",
+            "native-deferred-archive-no-work", "native-deferred-archive-blocked-ARCHIVE_FOLD",
+            "native-review-retained-SELECTED_PENDING") + (0..70).map { "native-call-status-$it" } +
+            (0..70).map { "native-existing-request-status-$it" } +
+            listOf("SELECTED_PENDING", "ARCHIVE_FOLD", "BUSY").map { "native-review-waiting-$it" }) {
             assertNull(status, enrollmentProbeStage(status))
         }
         assertEquals("abandoned", enrollmentProbeStage("native-expired-local-abandoned"))
         assertEquals("e6", enrollmentProbeStage("native-durable-e6-exported-not-activated"))
+        for (evidence in listOf("UNFOLDED", "CREDITED", "BURNED")) {
+            assertNull(enrollmentProbeStage("native-payer-delivery-evidence-$evidence"))
+        }
+    }
+    @Test fun failedExchangeEndStillReleasesExactOwnerAndPreservesCloseRetry() {
+        val endFailure = UnsupportedOperationException("end refused after wallet retirement")
+        val closeFailure = IllegalStateException("first close failed")
+        val owner = Any()
+        var held: Any? = owner
+        var closes = 0
+        val order = mutableListOf<String>()
+        fun attempt() = cleanupAfterExchangeFence(end = {
+            order.add("fenced-end")
+            throw endFailure
+        }, release = {
+            order.add("exact-owner-close")
+            assertSame(owner, held)
+            closes++
+            if (closes == 1) throw closeFailure
+            held = null
+        })
+        try { attempt(); fail("end failure must remain visible") }
+        catch (failure: Throwable) { assertSame(endFailure, failure) }
+        assertSame(owner, held)
+        assertArrayEquals(arrayOf(closeFailure), endFailure.suppressed)
+        try { attempt(); fail("original end failure remains visible after close") }
+        catch (failure: Throwable) { assertSame(endFailure, failure) }
+        assertNull(held)
+        assertEquals(2, closes)
+        assertEquals(listOf("fenced-end", "exact-owner-close", "fenced-end", "exact-owner-close"), order)
+    }
+    @Test fun successfulExchangeEndDoesNotHideReleaseFailureOrReleaseTwice() {
+        val failure = IllegalStateException("release failed")
+        var ends = 0; var releases = 0
+        try {
+            cleanupAfterExchangeFence({ ends++ }, { releases++; throw failure })
+            fail("release error")
+        } catch (actual: Throwable) { assertSame(failure, actual) }
+        assertEquals(1, ends); assertEquals(1, releases)
+        cleanupAfterExchangeFence({ ends++ }, { releases++ })
+        assertEquals(2, ends); assertEquals(2, releases)
     }
     @Test fun promptTicketRequiresFreshClaimAndRejectsStaleDuplicateAndLateCallbacks() {
         val first = KagemushaProbeConfirmationTicket<String>("first")

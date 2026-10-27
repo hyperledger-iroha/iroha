@@ -372,7 +372,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
     fn try_from(args: IzanamiArgs) -> Result<Self> {
         if !args.allow_net {
             return Err(eyre!(
-                "network orchestration disabled: pass --allow-net or set allow_net=true to run Izanami"
+                "network orchestration is disabled: pass --allow-net, or set \"Allow Network\" in --tui, to let Izanami start, fault and stop local peers"
             ));
         }
         if !is_valid_committee_size(args.peers) {
@@ -1336,9 +1336,10 @@ mod tests {
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("allow_net=false should prevent ChaosConfig construction");
         };
+        let message = err.to_string();
         assert!(
-            err.to_string().contains("allow_net"),
-            "error should mention allow_net opt-in: {err}"
+            message.contains("--allow-net") && message.contains("\"Allow Network\""),
+            "error should name both the flag and the TUI field: {err}"
         );
     }
     #[test]

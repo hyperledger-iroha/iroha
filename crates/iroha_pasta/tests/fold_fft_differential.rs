@@ -12,14 +12,14 @@
 #![allow(clippy::many_single_char_names)]
 
 use ff::{Field, WithSmallOrderMulGroup};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::fft::{FftDomain, naive_coset_dft};
 use iroha_pasta::fold::{FoldChallenge, fold_generators_vartime, fold_generators_with};
 use iroha_pasta::msm::{MemoryBudget, msm_public};
 use iroha_pasta::params::ParamsIpa;
 use iroha_pasta::{Ep, Eq, EqAffine, Fp, Fq, PastaCurve, PastaField};
 use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::rand_core::{Rng, SeedableRng};
 
 fn pool(threads: usize) -> rayon::ThreadPool {
     rayon::ThreadPoolBuilder::new()

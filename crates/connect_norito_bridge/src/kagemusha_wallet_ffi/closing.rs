@@ -48,8 +48,10 @@ impl Target {
             Self::Wallet(owner) => owner.closing.join(|| {
                 owner.background.stop();
                 owner.scheduler.close();
-                // Join any accepted proof before taking the exclusive wallet owner.
-                let _priority = owner.scheduler.payment();
+                // Join accepted proof work outside wallet ownership, then release its
+                // priority before joining maintenance. The permanently closed scheduler
+                // admits no later fold or speculation while maintenance unwinds.
+                drop(owner.scheduler.payment());
                 owner.background.join()?;
                 let mut wallet = owner.wallet.lock().map_err(|_| Failure::code(INTERNAL))?;
                 drop(wallet.take());

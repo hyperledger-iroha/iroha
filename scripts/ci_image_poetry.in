@@ -1,0 +1,2 @@
+# Isolated Poetry environment for Dockerfile.build; resolve all supported platforms.
+poetry==2.5.1

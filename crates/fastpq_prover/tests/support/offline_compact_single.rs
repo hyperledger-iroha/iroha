@@ -439,7 +439,7 @@ fn produce_one(is_axt: bool) {
     .unwrap();
     let elapsed = started.elapsed();
     assert!(bytes.len() <= limits.transport.max_wire_bytes);
-    let sha = format!("{:x}", Sha256::digest(&bytes));
+    let sha = hex::encode(Sha256::digest(&bytes));
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/fastpq-production-validation");
     std::fs::create_dir_all(&directory).unwrap();

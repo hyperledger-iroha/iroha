@@ -101,15 +101,31 @@ impl InternalInvocation {
         Ok(())
     }
 
-    // Called only after the failed overlay is dropped and the rejected row fits.
-    // Persistent action identity, not a transaction-local generation, authenticates
-    // the separate quarantine/retry transaction after rollback.
+    // The existing V1 caller has already fitted its rejected row. Preserve that
+    // order while making the separately owned policy overlay disposable.
     fn apply_failure_policy(
         &self,
         state: &mut StateBlock<'_>,
         height: u64,
         now: u64,
     ) -> Result<(), String> {
+        if let Some(policy) = self.prepare_failure_policy(state, height, now)? {
+            policy.apply()?;
+        }
+        Ok(())
+    }
+
+    // Prepare only after the failed business overlay has been dropped. Persistent
+    // action identity authenticates this separate quarantine/retry transaction.
+    // Drop rolls the policy and witness back; preparation never commits them.
+    // TODO: capture and fund the complete policy trace and applying-State ceilings
+    // before connecting this disposable seam to a lifecycle output owner.
+    fn prepare_failure_policy<'block, 'state>(
+        &self,
+        state: &'block mut StateBlock<'state>,
+        height: u64,
+        now: u64,
+    ) -> Result<Option<OutputTransaction<'block, 'state>>, String> {
         self.authenticate(state, height)?;
         let id = &self.trigger().trigger_id;
         match self {
@@ -134,7 +150,7 @@ impl InternalInvocation {
                 {
                     return Err("quarantine action disappeared".into());
                 }
-                policy.apply()?;
+                Ok(Some(policy))
             }
             Self::Time(_) => {
                 let action = state
@@ -144,7 +160,7 @@ impl InternalInvocation {
                     .get(id)
                     .ok_or("retry action disappeared")?;
                 let Some(retry_policy) = action.retry_policy else {
-                    return Ok(());
+                    return Ok(None);
                 };
                 let used = action
                     .retry_state
@@ -169,10 +185,9 @@ impl InternalInvocation {
                 ) {
                     return Err("retry action disappeared".into());
                 }
-                policy.apply()?;
+                Ok(Some(policy))
             }
         }
-        Ok(())
     }
 }
 
@@ -542,3 +557,7 @@ fn capture_internal_root_dataspace(
 #[cfg(test)]
 #[path = "output_internal_root_scope_tests.rs"]
 mod root_scope_tests;
+
+#[cfg(test)]
+#[path = "output_time_policy_tests.rs"]
+mod time_policy_tests;

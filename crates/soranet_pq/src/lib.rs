@@ -4,6 +4,8 @@
 //! utilities needed by the `SoraNet` handshake.
 #![allow(unsafe_code)]
 #![deny(missing_docs)]
+#[cfg(all(test, feature = "pqc"))]
+mod acvp_tests;
 #[cfg(feature = "pqc")]
 pub mod ffi;
 mod hkdf;
@@ -11,8 +13,6 @@ mod hkdf;
 mod mldsa;
 #[cfg(feature = "pqc")]
 mod mlkem;
-#[cfg(all(test, feature = "pqc"))]
-mod acvp_tests;
 #[cfg(all(test, feature = "pqc"))]
 mod nistkat_sha256;
 mod rng;
@@ -47,3 +47,16 @@ pub use crate::{
         hedged_chacha20_rng_from_rng,
     },
 };
+
+/// A fixed-size protocol field had an incorrect encoded length.
+#[cfg(feature = "pqc")]
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("invalid {name} length: expected {expected}, found {actual}")]
+pub struct EncodingLengthError {
+    /// Protocol field name.
+    pub name: &'static str,
+    /// Encoded byte count received.
+    pub actual: usize,
+    /// Required encoded byte count.
+    pub expected: usize,
+}

@@ -59,10 +59,10 @@ impl FakePlatformV1 {
 }
 
 fn high_s(signature: Signature) -> [u8; 64] {
-    let low = signature.normalize_s().unwrap_or(signature);
+    let low = signature.normalize_s();
     let (r, s) = low.split_scalars();
     let high = Signature::from_scalars(r.to_bytes(), (-*s.as_ref()).to_bytes()).expect("high S");
-    assert!(high.normalize_s().is_some(), "really high S");
+    assert!(high.normalize_s() != high, "really high S");
     high.to_bytes().as_slice().try_into().expect("raw")
 }
 

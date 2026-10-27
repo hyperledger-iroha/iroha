@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Audit fail-closed Exact12 capability-manifest admission across SDKs.
 
-ABI31 has one explicit privacy C export inventory, including construction
-validation. Its no-argument compiled-profile getter can expose only immutable local build metadata; it
-cannot manufacture Torii's committed height, network identity or resource policy.
+ABI33 has one explicit privacy C export inventory, including construction
+validation. Its no-argument compiled-profile getter can expose only immutable
+local build metadata; it cannot manufacture Torii's committed height, network
+identity or resource policy.
 The capability-manifest validator accepts only caller-supplied canonical bytes
 and validates their canonical profile and policy structure.
-Consequently this source contract is complete only when it preserves Torii's canonical
-manifest bytes, validates them, and compares the selected row's complete
+Consequently this source contract is complete only when it preserves Torii's
+canonical manifest bytes, validates them, and compares the selected row's complete
 compiled-profile tuple with the native local catalog before constructing a
 privacy transaction.
 
@@ -510,17 +511,17 @@ def _header_exports(source: str) -> frozenset[str]:
     )
 
 
-def _require_exact_abi31(root: Path) -> None:
+def _require_exact_abi33(root: Path) -> None:
     rust = _rust_exports(_rust_bridge_source(root))
     header = _header_exports(_read(root, C_HEADER))
     if rust != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "Rust ABI31 privacy exports differ from the exact approved inventory: "
+            "Rust ABI33 privacy exports differ from the exact approved inventory: "
             f"found {sorted(rust)}"
         )
     if header != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "C ABI31 privacy declarations differ from the exact approved inventory: "
+            "C ABI33 privacy declarations differ from the exact approved inventory: "
             f"found {sorted(header)}"
         )
 
@@ -535,11 +536,11 @@ def _require_authority_boundary(root: Path) -> None:
         "iroha_privacy_exact12_capability_manifest_v1",
     )
     if any(symbol in combined for symbol in forbidden):
-        raise AuditError("ABI31 added a capability authority getter or retired alias")
+        raise AuditError("ABI33 added a capability authority getter or retired alias")
     if "compiled_privacy_profile_catalog_v1" not in bridge:
-        raise AuditError("ABI31 local catalog is no longer derived from native Rust profiles")
+        raise AuditError("ABI33 local catalog is no longer derived from native Rust profiles")
     if "contains no committed height" not in combined.lower():
-        raise AuditError("ABI31 local catalog lost its explicit non-authority contract")
+        raise AuditError("ABI33 local catalog lost its explicit non-authority contract")
 
 
 def _require_rust_manifest_contract(root: Path) -> None:
@@ -638,7 +639,7 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
             "privacyValidateExact12CapabilityManifestV1",
             "privacyExact12CapabilityManifestJsonV1",
             "privacyRequireExact12CapabilityTupleV1",
-            "requires exact ABI31",
+            "requires exact ABI33",
         )
     )
     exact_tuple_match = all(
@@ -1014,7 +1015,7 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "privacyCompiledProfileCatalogValidationStatusV1(archive)" in bridge,
             "PrivacyExact12CapabilityManifestCodecV1.decode(" in bridge,
             "privacyCompiledProfileCatalogV1()" in bridge,
-            "requiredBridgeABIVersion: UInt32 = 31" in bridge,
+            "requiredBridgeABIVersion: UInt32 = 33" in bridge,
             "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
             in native,
             "privacyNativeProbeOk" in native,
@@ -1301,7 +1302,7 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
 
 def audit(root: Path) -> dict[str, object]:
     root = root.resolve()
-    _require_exact_abi31(root)
+    _require_exact_abi33(root)
     _require_authority_boundary(root)
     _require_rust_manifest_contract(root)
     sdks = {contract.name: _sdk_result(root, contract) for contract in SDK_CONTRACTS}
@@ -1309,7 +1310,7 @@ def audit(root: Path) -> dict[str, object]:
     return {
         "schema_version": 1,
         "evidence_level": "source-prerequisite-not-native-release-authority",
-        "abi31_privacy_exports": sorted(APPROVED_PRIVACY_EXPORTS),
+        "abi33_privacy_exports": sorted(APPROVED_PRIVACY_EXPORTS),
         "authority": "torii-committed-canonical-manifest-bytes",
         "local_catalog_authorizes_network": False,
         "ready": not blockers,
@@ -1322,7 +1323,7 @@ def _format_human(report: dict[str, object]) -> str:
     lines = [
         "Exact12 cross-SDK capability-manifest parity: "
         + ("READY" if report["ready"] else "NOT READY"),
-        f"ABI31 privacy exports: exact {len(APPROVED_PRIVACY_EXPORTS)}",
+        f"ABI33 privacy exports: exact {len(APPROVED_PRIVACY_EXPORTS)}",
         "Network authority: Torii committed canonical manifest bytes",
     ]
     sdks = report["sdk"]

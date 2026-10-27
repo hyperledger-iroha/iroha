@@ -20,7 +20,7 @@ val assetsDir = layout.projectDirectory.dir("src/main/assets")
 
 android {
     namespace = "org.hyperledger.iroha.samples.wallet"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.samples.wallet"
@@ -83,11 +83,11 @@ dependencies {
     implementation(libs.bundles.androidxUi)
     implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
     implementation(libs.jxingCore)
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     testImplementation(libs.junit)
     testImplementation(kotlin("test-junit"))
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260814")
     androidTestImplementation(libs.androidxTestExtJunit)
     androidTestImplementation(libs.androidxTestEspressoCore)
 }

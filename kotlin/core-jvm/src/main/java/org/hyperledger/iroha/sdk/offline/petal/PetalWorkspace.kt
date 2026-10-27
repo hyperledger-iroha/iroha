@@ -3,7 +3,8 @@ package org.hyperledger.iroha.sdk.offline.petal
 /**
  * Scratch buffers reused across decodes so a scanning session does not
  * allocate several megabytes per camera frame. Buffers grow on demand and are
- * never shrunk. Not thread-safe: one workspace per decoding thread.
+ * never shrunk; the field buffers are allocated on first use. Not thread-safe:
+ * one workspace per decoding thread.
  */
 internal class PetalWorkspace {
     var integral = IntArray(0)
@@ -41,34 +42,54 @@ internal class PetalWorkspace {
     var centroidY = DoubleArray(0)
         private set
 
-    /** Raw tile patches in camera luma levels, as captured: `TILE_COUNT × 64` values. */
-    val patches = DoubleArray(PetalLayout.TILE_COUNT * CELLS)
+    private var reads: Array<PetalDecoder.FieldRead>? = null
+    private var local: DoubleArray? = null
+    private var mean: DoubleArray? = null
 
     /**
-     * The patches as the tile read in progress compares them with its
-     * templates (levelled against the finders, or rescaled by their own
-     * contrast): `TILE_COUNT × 64` values. [patches] stays untouched so the
-     * normalised read can follow a level read that did not decode.
+     * Two field reads with their level buffers: the best pose so far and the one being read, which
+     * the distortion search swaps.
      */
-    val scaled = DoubleArray(PetalLayout.TILE_COUNT * CELLS)
+    val fieldReads: Array<PetalDecoder.FieldRead>
+        get() = reads ?: Array(2) { PetalDecoder.FieldRead(DoubleArray(PetalLayout.FIELD_CELLS)) }.also { reads = it }
 
-    /** Matching errors of the 32 polarity × glyph hypotheses of one tile. */
-    val errors = DoubleArray(2 * PetalGlyphs.GLYPH_COUNT)
+    /** Local levels of the field cells (the local read). */
+    val localLevels: DoubleArray
+        get() = local ?: DoubleArray(PetalLayout.FIELD_CELLS).also { local = it }
 
-    /** Tiles the tile read in progress gives up on (zero margins); all `false` for the level read. */
-    val erased = BooleanArray(PetalLayout.TILE_COUNT)
+    /** Cell-by-cell mean of merged field evidence. */
+    val meanLevels: DoubleArray
+        get() = mean ?: DoubleArray(PetalLayout.FIELD_CELLS).also { mean = it }
 
-    /** Contrast span (robust brightest minus darkest level) of every patch in the normalised read. */
-    val spans = DoubleArray(PetalLayout.TILE_COUNT)
+    private var kana: PetalKanaReader? = null
 
-    /** Sorting scratch for the median of [spans]. */
-    val sortedSpans = DoubleArray(PetalLayout.TILE_COUNT)
+    /** The kana reader and its scratch buffers (a few kilobytes). */
+    val kanaReader: PetalKanaReader
+        get() = kana ?: PetalKanaReader().also { kana = it }
 
-    /** Sorting scratch for the cells of one patch. */
-    val sortedCells = DoubleArray(CELLS)
+    private var turns: PetalTurnReader? = null
 
-    /** The robust darkest and brightest level of the patch just analysed: `[low, high]`. */
-    val levels = DoubleArray(2)
+    /** The turn reader and its carrier windows (about 2 MB once a capture has turn lanes to read). */
+    val turnReader: PetalTurnReader
+        get() = turns ?: PetalTurnReader().also { turns = it }
+
+    /** The levels of the bit cells of the sector being read, in bit order. */
+    val sectorValues = DoubleArray(PetalLanes.FIELD_BITS)
+
+    /** The levels of one colour class of the sector being read. */
+    val classValues = DoubleArray(PetalLanes.FIELD_BITS)
+
+    /** The transmitted word of the sector being read and the confidence of each byte. */
+    val wordBytes = ByteArray(PetalLanes.FIELD_WORD)
+    val wordConfidence = DoubleArray(PetalLanes.FIELD_WORD)
+
+    private var neighbours = DoubleArray(0)
+
+    /** Sorting scratch for the levels of one neighbourhood of [size] cells. */
+    fun neighbourValues(size: Int): DoubleArray {
+        if (neighbours.size < size) neighbours = DoubleArray(size)
+        return neighbours
+    }
 
     fun ensurePixels(width: Int, height: Int) {
         val pixels = width * height
@@ -99,10 +120,5 @@ internal class PetalWorkspace {
         sumXY = DoubleArray(count)
         centroidX = DoubleArray(count)
         centroidY = DoubleArray(count)
-    }
-
-    companion object {
-        /** Cells of a tile sample patch (`8 × 8`). */
-        const val CELLS = PetalGlyphs.TEMPLATE_N * PetalGlyphs.TEMPLATE_N
     }
 }

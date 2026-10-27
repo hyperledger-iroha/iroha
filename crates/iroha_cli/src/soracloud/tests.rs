@@ -6,7 +6,7 @@ use iroha::data_model::soracloud::{
 use iroha_crypto::Algorithm;
 use iroha_version::codec::EncodeVersioned as _;
 use norito::json::Value;
-use rand::rand_core::{TryCryptoRng, TryRngCore};
+use rand::rand_core::{TryCryptoRng, TryRng};
 
 include!("tests/part_01.rs");
 include!("tests/part_02.rs");

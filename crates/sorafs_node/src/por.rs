@@ -8,7 +8,7 @@ use iroha_data_model::sorafs::{
 use iroha_model_base::metadata::Metadata;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use sorafs_car::PorMerkleTree;
 use sorafs_manifest::{

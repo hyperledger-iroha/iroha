@@ -450,7 +450,7 @@ fn prepare_fresh(
     let owner = localnet_ephemeral_identity(None, b"private-root-owner")?;
     let operator = localnet_ephemeral_identity(None, b"private-root-http-operator")?;
     let mut token_bytes = Zeroizing::new([0_u8; 32]);
-    OsRng
+    SysRng
         .try_fill_bytes(token_bytes.as_mut())
         .map_err(|error| eyre!("private-root token generation failed: {error}"))?;
     let api_token = Zeroizing::new(hex::encode(*token_bytes));

@@ -7,9 +7,12 @@
 //! sub-proof yields one [`FoldSubProofV1`] for the scheduler's [`FoldObserverV1`]. A turn that
 //! ends before its proof finished reports before the background slot is released, so a
 //! joining payment returns only after its own cancellation was reported; a proved turn
-//! reports after its publication. Idle and caught-up wakes report nothing. Values are public
-//! names, durations and counts only. Verification deltas include calls answered by the
-//! parameter owner's successful-verification and folded-generator memos.
+//! reports after its publication. Idle and caught-up wakes report nothing. A record names
+//! its head's durable sub-proofs (`ordinal`) and, once the turn read the head's schedule,
+//! every sub-proof that head needs, Ω included (`stages`), so a host can show how far a fold
+//! has come. Values are public names, durations and counts only. Verification deltas
+//! include calls answered by the parameter owner's successful-verification and
+//! folded-generator memos.
 //! `engineMicros` reports nested key-original revalidation, key reconstruction, physical
 //! witness synthesis, engine proving, new-proof acceptance and commit durations. It must
 //! not be added to enclosing phase or call durations. `commit` includes validation and
@@ -47,7 +50,7 @@ use super::{Error, FoldStatus};
 use crate::kagemusha_wallet_proofs_v1::KagemushaWalletVerificationCountsV1;
 
 /// Schema of [`FoldMetricsV1::to_json`].
-pub const FOLD_METRICS_SCHEMA_V1: &str = "iroha.kagemusha.fold-metrics.v2";
+pub const FOLD_METRICS_SCHEMA_V1: &str = "iroha.kagemusha.fold-metrics.v3";
 
 /// Most recent sub-proof records one [`FoldMetricsV1`] keeps.
 pub const FOLD_METRICS_RECORDS_V1: usize = 64;
@@ -249,6 +252,9 @@ pub struct FoldSubProofV1 {
     pub stage: Option<FoldStageV1>,
     /// Zero-based sub-proof ordinal.
     pub ordinal: u32,
+    /// Sub-proofs the head's fold needs, Ω included, once the turn read the head's schedule;
+    /// `None` when it ended before. Observation only: nothing reads it back.
+    pub stages: Option<u32>,
     /// How the turn ended.
     pub outcome: FoldOutcomeV1,
     /// Monotonic time per phase, in [`FoldPhaseV1::ALL`] order.
@@ -553,10 +559,11 @@ impl FoldMetricsV1 {
             push_name(&mut output, record.operation.map(operation_name));
             output.push_str(",\"stage\":");
             push_name(&mut output, record.stage.map(FoldStageV1::name));
+            let _ = write!(output, ",\"ordinal\":{},\"stages\":", record.ordinal);
+            push_optional_u64(&mut output, record.stages.map(u64::from));
             let _ = write!(
                 output,
-                ",\"ordinal\":{},\"outcome\":\"{}\",\"cause\":",
-                record.ordinal,
+                ",\"outcome\":\"{}\",\"cause\":",
                 record.outcome.name()
             );
             push_name(
@@ -819,6 +826,7 @@ pub(super) fn stage(stage: FoldStageV1) {
 pub(super) struct FoldTurnV1 {
     sequence: Option<u128>,
     ordinal: u32,
+    stages: Option<u32>,
     operation: Option<KagemushaWalletOperationKindV1>,
     adopted: bool,
     discarded: bool,
@@ -842,6 +850,7 @@ impl FoldTurnV1 {
         Self {
             sequence: None,
             ordinal: 0,
+            stages: None,
             operation: None,
             adopted: false,
             discarded: false,
@@ -852,6 +861,11 @@ impl FoldTurnV1 {
     pub(super) fn select(&mut self, sequence: u128, ordinal: u32) {
         self.sequence = Some(sequence);
         self.ordinal = ordinal;
+    }
+
+    /// The selected head's fold needs `stages` sub-proofs, Ω included.
+    pub(super) fn stages(&mut self, stages: usize) {
+        self.stages = u32::try_from(stages).ok();
     }
 
     /// The operation of the selected head.
@@ -911,6 +925,7 @@ impl FoldTurnV1 {
             operation: self.operation,
             stage,
             ordinal: self.ordinal,
+            stages: self.stages,
             outcome,
             phases,
             verification,

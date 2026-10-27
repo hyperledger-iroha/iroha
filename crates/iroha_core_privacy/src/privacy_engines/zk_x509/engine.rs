@@ -1301,20 +1301,20 @@ mod tests {
     struct PreflightEntropyV1 {
         requests: usize,
     }
-    impl rand::TryRngCore for PreflightEntropyV1 {
-        type Error = &'static str;
+    impl rand::TryRng for PreflightEntropyV1 {
+        type Error = std::io::Error;
 
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             self.requests += 1;
-            Err("preflight must not request entropy")
+            Err(std::io::Error::other("preflight must not request entropy"))
         }
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             self.requests += 1;
-            Err("preflight must not request entropy")
+            Err(std::io::Error::other("preflight must not request entropy"))
         }
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests += 1;
-            Err("preflight must not request entropy")
+            Err(std::io::Error::other("preflight must not request entropy"))
         }
     }
     impl rand::TryCryptoRng for PreflightEntropyV1 {}
@@ -1594,7 +1594,7 @@ mod tests {
             "require_complete_zk_x509_air_v1",
             "after_release_gate",
             "zk_x509_air_gaps_v1",
-            "OsRng",
+            "SysRng",
         ] {
             assert!(
                 !production_source.contains(forbidden),

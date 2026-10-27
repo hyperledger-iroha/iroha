@@ -477,7 +477,7 @@ fn faucet_beacon_seed_for_anchor(state: &State, anchor_height: u64) -> Option<[u
     .map(|pulse| pulse.seed)
 }
 fn faucet_pow_scrypt_params(log_n: u8, r: u32, p: u32) -> ScryptParams {
-    ScryptParams::new(log_n, r, p, 32).expect("valid test scrypt params")
+    ScryptParams::new(log_n, r, p).expect("valid test scrypt params")
 }
 async fn expect_status(resp: Response, expected: StatusCode) -> Response {
     let status = resp.status();

@@ -175,7 +175,7 @@ public enum PrivacyCompiledProfileCatalogBridgeError: Error, Equatable, Sendable
     case invalidFixtureBundle
 }
 
-/// Stable ABI31 result of validating one typed local compiled-profile catalog.
+/// Stable ABI33 result of validating one typed local compiled-profile catalog.
 public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
@@ -188,7 +188,7 @@ public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable
     case invalidCatalog = 8
 }
 
-/// Stable ABI31 result of validating the Rust-derived exact-12 fixture bundle.
+/// Stable ABI33 result of validating the Rust-derived exact-12 fixture bundle.
 public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
@@ -208,7 +208,7 @@ public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendab
 /// establishes network availability. Fetch a fresh authoritative
 /// `PrivacyExact12CapabilityManifestV1` from live Torii before submitting a privacy proof.
 public enum PrivacyNativeBridge {
-    public static let requiredBridgeABIVersion: UInt32 = 31
+    public static let requiredBridgeABIVersion: UInt32 = 33
     public static let compiledProfileCatalogArchiveMaximumBytes = 256 * 1024
     public static let exact12CapabilityManifestArchiveMaximumBytes = 256 * 1024
     public static let exact12FixtureBundleMaximumBytes = 2 * 1024 * 1024
@@ -287,7 +287,7 @@ public enum PrivacyNativeBridge {
     }
 
     /// Validate Torii's canonical Exact12 manifest and compare each committed
-    /// compiled-profile tuple with this exact ABI31 binary's local catalog.
+    /// compiled-profile tuple with this exact ABI33 binary's local catalog.
     ///
     /// Rust validates the canonical archive and semantic profiles and committed resource policies.
     /// Swift retains a local-match flag per row; only the selected row decides admission.

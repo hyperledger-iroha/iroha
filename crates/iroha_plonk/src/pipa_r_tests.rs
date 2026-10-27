@@ -23,7 +23,7 @@ use crate::{
     verifier::{VerifyError, accumulate_generator, verify_full, verify_full_from_bytes_v2},
 };
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaAffine, PastaCurve, PastaField, poseidon::PoseidonField};
 
 fn hex(bytes: [u8; 32]) -> String {

@@ -25,8 +25,8 @@ use iroha_data_model::privacy::{
     PrivacyEncryptionKeyV1, PrivacyFcmpEncryptedOutputV1, PrivacyFcmpOutputTupleV1,
     PrivacyPoolIdV1, PrivacyRecipientIdV1,
 };
-use rand_core_06::{CryptoRng, RngCore};
-use sha2::{Digest as _, Sha256, compress256, digest::generic_array::GenericArray};
+use rand_core::{TryCryptoRng, TryRng};
+use sha2::{Digest as _, Sha256, block_api::compress256};
 use zeroize::{Zeroize, Zeroizing};
 const NOTE_MAGIC_V1: [u8; 4] = *b"IFN1";
 const RECIPIENT_ID_DOMAIN_V1: &[u8] = b"iroha.privacy.fcmp.wallet.recipient-id.v1";
@@ -100,7 +100,7 @@ impl WalletSecretSha256V1 {
         }
     }
     fn compress_block_v1(&mut self) {
-        let block = GenericArray::from_slice(&self.block);
+        let block = &self.block;
         compress256(&mut self.state, core::slice::from_ref(block));
         self.block.zeroize();
         self.block_len = 0;
@@ -525,7 +525,7 @@ pub fn validate_fcmp_encrypted_output_v1(
 /// # Errors
 /// Rejects invalid keys or note/output bindings, unhealthy randomness, encoding failures, or authenticated-encryption failures.
 pub fn encrypt_fcmp_wallet_note_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     output: PrivacyFcmpOutputTupleV1,
     note: &FcmpWalletNoteV1,
@@ -645,7 +645,8 @@ mod tests {
     use crate::privacy_engines::fcmp_plus_plus::{FailingRngV1, range::amount_generator};
     use core::cell::Cell;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
-    use rand_08::{SeedableRng, rngs::StdRng};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
     thread_local! {
         static WALLET_COPY_CLEARS: Cell<usize> = const { Cell::new(0) };
     }
@@ -827,7 +828,8 @@ mod tests {
             .0;
         assert!(secret_sha.contains("state: [u32; 8]"));
         assert!(secret_sha.contains("block: [u8; 64]"));
-        assert!(secret_sha.contains("GenericArray::from_slice(&self.block)"));
+        assert!(secret_sha.contains("let block = &self.block;"));
+        assert!(secret_sha.contains("core::slice::from_ref(block)"));
         assert!(secret_sha.contains("compress256(&mut self.state"));
         let compress = secret_sha
             .find("compress256(&mut self.state")
@@ -917,17 +919,16 @@ mod tests {
         period: usize,
         cursor: usize,
     }
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("FCMP++ wallet must reject the periodic prefix")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("FCMP++ wallet must reject the periodic prefix")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("FCMP++ wallet must use fallible entropy")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 *byte = (self.cursor % self.period).to_le_bytes()[0]
                     .wrapping_mul(31)
@@ -937,7 +938,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
+    impl rand::TryCryptoRng for PeriodicRng {}
     fn fixture() -> (
         PrivacyPoolIdV1,
         PrivacyFcmpOutputTupleV1,
@@ -1069,7 +1070,7 @@ mod tests {
     fn fixed_codec_round_trips_and_rejects_all_required_adversaries() {
         let (pool, output, note, secret) = fixture();
         let public = fcmp_recipient_public_key_v1(secret).unwrap();
-        let mut rng = StdRng::seed_from_u64(0xfc_e001);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xfc_e001);
         let encrypted = encrypt_fcmp_wallet_note_v1(&mut rng, pool, output, &note, public).unwrap();
         assert_eq!(
             encrypted.ciphertext.len(),
@@ -1166,7 +1167,7 @@ mod tests {
     fn fixed_codec_rejects_noncanonical_shapes_and_unspendable_notes() {
         let (pool, output, note, secret) = fixture();
         let public = fcmp_recipient_public_key_v1(secret).unwrap();
-        let mut rng = StdRng::seed_from_u64(0xfc_e002);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xfc_e002);
         let encrypted = encrypt_fcmp_wallet_note_v1(&mut rng, pool, output, &note, public).unwrap();
         let mut truncated = encrypted.clone();
         truncated.ciphertext.pop();
@@ -1209,7 +1210,7 @@ mod tests {
     fn authenticated_malformed_plaintext_fields_fail_closed() {
         let (pool, output, note, secret) = fixture();
         let public = fcmp_recipient_public_key_v1(secret).expect("recipient public key");
-        let mut rng = StdRng::seed_from_u64(0xfc_e003);
+        let mut rng = ChaCha12Rng::seed_from_u64(0xfc_e003);
         let encrypted = encrypt_fcmp_wallet_note_v1(&mut rng, pool, output, &note, public)
             .expect("canonical encrypted note");
         for (label, offset) in [

@@ -4,12 +4,13 @@
   "private": true,
   "description": "Locked audited native EDR runtime for SCCP EVM contract smoke tests",
   "engines": {
-    "node": ">=22 <27"
+    "node": ">=22.23.4 <27"
   },
   "dependencies": {
-    "@noble/curves": "1.2.0",
-    "@nomicfoundation/edr": "0.12.1",
-    "ethers": "6.16.0"
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@nomicfoundation/edr": "0.24.0",
+    "ethers": "6.17.0"
   },
   "overrides": {
     "ws": "8.21.0"

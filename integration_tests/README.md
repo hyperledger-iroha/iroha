@@ -36,6 +36,11 @@ This crate hosts cross-component tests for Iroha.
   every validator must report those exact funded balances. It retains the original
   signed genesis and setup inputs for that network's catalog. Its source-only
   result does not establish genuine Load, offline exchange or Unload completion.
+- The same-network KAGEMUSHA engineering issuer composer and its ordinary controls
+  are documented in [`issuer/README.md`](tests/kagemusha_network_setup/continuation/issuer/README.md).
+  Its explicit Linux-only invocation creates fresh private custody and a controller
+  selection for the current registered Scheme. Empty eligibility state approves no
+  subject; this startup helper does not establish online enrollment or phone acceptance.
 - The focused `taira_consensus_contracts` target in `iroha_test_network` requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and `iroha` CLI and select them with `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p iroha_test_network --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Global candidate admission: `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_candidate::fresh_global_candidate_bonds_before_authenticated_committee_activation -- --exact --nocapture`. This required-network scenario starts four NPoS validators and a separate signed observer, transfers canonical XOR from funded Alice to its ordinary account, rejects foreign peer consent without custody changes, and admits the operator's valid self-bonded candidacy for the E+2 boundary. All five replicas must agree on registration, exact liquid/escrow balances and pending eligibility, while authenticated current finality remains exactly four equal voters and three commit signatures. It fails a sandbox skip. This fee-policy-disabled admission fixture does not qualify fee-enabled quoting, subsequent election, runtime credential installation, observer-to-voter promotion or withdrawal.
@@ -472,17 +477,22 @@ same-candidate `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`, set
 `IROHA_TEST_REQUIRE_NETWORK=1` and `IROHA_TEST_SKIP_BUILD=1`, and supply a new absolute
 `KAGEMUSHA_REAL_NETWORK_CAMPAIGN` under checkout-local `target/qualification`. Keep
 test-network and temporary directories under `target`; select the exact ignored test
-with `--exact --ignored --nocapture --test-threads=1`. By default the owner creates
-fresh canonical signed genesis with current chain parameters. To use the maintained
-engineering originals, set `KAGEMUSHA_RETAINED_NETWORK_INPUTS` to a pinned selection
-with schema `iroha.kagemusha.retained-four-validator-inputs.v1` and exact
-`signed_genesis:{path,sha256}` and `manifest:{path,sha256}` fields. The retained
-constructor verifies the original signatures, policy and all four validator owners
-without re-signing genesis. It completes native beacon provisioning at H2–H5 before
-exporting readiness; registration follows that authenticated predecessor height.
+with `--exact --ignored --nocapture --test-threads=1`. The owner creates fresh
+canonical signed genesis with current chain parameters and retains its runtime-only
+signer alongside the four validator owners. It completes native beacon provisioning
+at H2–H5, restarts all four validators, then funds the ordinary fee buckets before
+exporting that same live network's setup. Registration follows its authenticated
+predecessor height. Historical genesis selection and fixed fixture signing keys
+are removed from this owner.
 The asset incarnation uses its lifecycle ordinal, independently of its instruction
 position. Retired genesis layouts cannot be used as catalog inputs. This disposable
 engineering network does not deploy to production.
+
+The maintained [acceptance controller](../scripts/kagemusha_network_acceptance/README.md)
+coordinates explicit compiler captures, the current 22-route catalog and the
+six receipt-bound stages below. Its pure tests do not establish a real network
+result. Actual issuer provisioning, matching native artifacts and the complete
+monetary campaign remain required.
 
 After `ready.json`, publish `registration-command.json` with schema
 `iroha.kagemusha.real-network-command.v1`, phase `registration`, the exact

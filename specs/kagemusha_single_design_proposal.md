@@ -52,7 +52,8 @@ There is no per-payment issuer call, Reserve/Commit service approval, deferred
 settlement, signature-only payment alternative, or release sign-off gate.
 The local lineage fold (§3.1) is not deferred settlement. It runs on the
 holder's phone, needs no network, counterparty, issuer or ledger, and cannot
-change ownership or reverse a commit, except by the §3.2 burn branch (P4).
+change ownership or reverse a commit. Receive admission (§3.2) keeps the
+in-circuit burn branch from ever selecting an accepted Payment (P4).
 Signatures, proof validity, replay protection and durable state commits are
 ordinary runtime requirements. A failed check rejects that operation; a missing
 implementation returns an explicit error rather than reporting a payment complete.
@@ -64,7 +65,7 @@ implementation returns an explicit error rather than reporting a payment complet
 | R1 | Offline payments | After enrollment and loading, peers need only each other (§5). |
 | R2 | Mainstream phones | Every stock Android phone (with or without Google services, including Huawei, Honor, Meizu, Xiaomi and Samsung) and every iPhone whose payment key is generated in its TEE, StrongBox or Secure Enclave and passes the one §2.2 admission rule; no custom applet, model list, vendor user account, GMS/HMS or store-install dependency; enrollment and issuer-side vendor-service inputs are described in §2.2. This is the design target, not a qualified claim: a vendor's own attestation root is admitted only after its adapter profile is implemented and qualified with genuine device chains (§2.2), and a phone whose attestation carries no application identity is refused for that evidence (§2.4). Actual platform evidence and measurements are recorded separately. Every operation runs a pre-commit runtime capacity check on the phone itself (§5.3). |
 | R3 | Load from the ledger | A finalized reserve debit creates one wallet-bound ordinary Load receipt (§6). |
-| R4 | Final device-to-device value, unbounded hops | Send irreversibly transfers value to the bound receiver. Receive makes it immediately and durably owned by the receiver, subject only to the P4 burn exception (§3.2). The value becomes onward-spendable offline once the receiver's local lineage fold reaches its current head, which covers the crediting head; the fold needs no network, counterparty or approval. Only exact Payment replay can finish delivery; no refund or hop ceiling (§§3–5). |
+| R4 | Final device-to-device value, unbounded hops | Send irreversibly transfers value to the bound receiver. Receive makes it immediately and durably owned by the receiver; Receive admission refuses before Advance any Payment its fold would burn (P4, §3.2). The value becomes onward-spendable offline once the receiver's local lineage fold reaches its current head, which covers the crediting head; the fold needs no network, counterparty or approval. Only exact Payment replay can finish delivery; no refund or hop ceiling (§§3–5). |
 | R5 | Optional return online | Unload is the holder's choice, available from any folded head (§3.1). Remaining offline has no deadline unless an enabled regulatory control supplies one (§§6–7). |
 | R6 | Account blacklist | Each wallet may hold one authenticated list, signed by the RegulatoryPolicy role, installed locally only when its `list_version` strictly increases and never sent to peers (owner decision 2026-10-17, blacklist local-only). While a list is held, the payer refuses to Send to a listed receiver account before the irreversible debit, and the receiver refuses to accept a Payment from a listed payer account (an open Request names no payer). Nothing about the list is committed in wallet state, proved by any σ, Λ or Ω, or carried in a Request, Payment, PayerCompanion, Credited or PolicyData. Lists are best effort and may differ between phones; no list distribution path exists (§7). |
 | R7 | Optional daily/monthly limits | Disabled by default; enforced through signed quotas and persistent counters when enabled (§7). |
@@ -74,27 +75,31 @@ implementation returns an explicit error rather than reporting a payment complet
 
 For a payment from A to B, the following define completion:
 
-- **P1a:** At completion, B durably owns the value, subject only to the P4
-  exception.
+- **P1a:** At completion, B durably owns the value (P4).
 - **P1b:** Once B's local lineage fold reaches B's current head, which covers
   the crediting head, B can spend the value onward offline or unload it. The
   fold needs no network, counterparty or approval.
 - **P2:** A cannot spend the same value again under the stated trust assumptions.
 - **P3:** B needs no later reconciliation, approval or settlement.
 - **P4:** Later discovery of misconduct by A cannot invalidate B's accepted value.
-  Sole exception (§3.2 containment): an incoming Payment that passed every
-  native check at Receive but fails in-circuit verification in B's lineage
-  proof is burned. Its `credit_id` stays consumed, its amount leaves B's
-  spendable balance through the lineage's `burned_total` counter (§3.2), and
-  B's other value is unaffected. Under §2.1 this arises only from a verifier
-  defect or an outside-model payer.
+  An accepted Payment is never burned. Before Advance, Receive admission
+  (§3.2) derives the incoming results and correction modes that B's Λ_recv
+  will derive, with the same native predicate and decide owners, and refuses
+  any Payment for which Λ_recv would take the burn branch. The in-circuit burn
+  branch (§3.2 containment) therefore never selects an accepted Payment; it
+  remains only as Λ_recv's total treatment of incoming objects. A refused
+  Payment changes nothing at B; A's Send stays committed, as for any other
+  refused Payment. Under §2.1 a refusal arises only from a verifier defect or
+  an outside-model payer. Admission applies to every Receive that Advance has
+  not selected, including a durable plan validated again after restart; it
+  cannot speak for a Receive that a build without admission already selected.
 - **P5:** Only explicitly enabled regulatory controls require an otherwise
   functioning offline wallet to reconnect.
 - **PC:** Before completion is shown, all native verification, the receiver's
   step proof, the durable commit, recovery data and fold witnesses (§4.1) are
   finished. The only later work is the deterministic local lineage proof
-  required by P1b. It needs no external input and cannot change ownership
-  except by the P4 burn branch.
+  required by P1b. It needs no external input and cannot change ownership;
+  it never burns an admitted Payment (P4).
 
 A committed Send permanently removes `amount + fee` from the payer. There is
 no refund, cancellation, timeout reversal or retargeting after that commit.
@@ -109,7 +114,7 @@ Unload or device move, including after its own previous Send, waits until its
 current head is folded; the UI shows this as the fold backlog. At Send commit
 the payer reports **sent — irreversible, delivery unconfirmed**; valid
 `Credited` evidence changes that to **delivered**, or to **delivered, burned**
-when it reports the P4 burn. Native verifies that evidence read-only when it
+when it reports a burn, which no admitted Receive produces (P4). Native verifies that evidence read-only when it
 arrives, so the status changes at once; the ArchiveSent step that consumes it
 is deferred (§5.3). Receipt arrival therefore does not itself start another fold.
 This distinction reports delivery, not provisional value. A lost receipt
@@ -867,6 +872,23 @@ core root otherwise.
 
 Post-commit failure is contained:
 
+- Receive admission: before a new Receive plan can reach Advance, the receiver
+  derives Λ_recv's four incoming results (the Ω transport and σ_send verdicts,
+  then the Objects, Signatures and Nonmembership predicates) and the correction
+  modes of every deferred claim, with the same native owners the fold uses, and
+  refuses the Payment if any result is false or any claim needs correction.
+  These derivations read the receiver's lineage only through its stable identity
+  (head, scheme, relation, wallet, credential digest, payment key and policy
+  facts). The own receipt enters only as a hard input: a structurally valid
+  receipt with a valid signature in the hard slot, read by no result. So the
+  receiver opens its committed core under that identity and supplies a
+  placeholder own receipt, which Advance has not yet signed, under another key;
+  the results and modes equal the fold's. Admission runs for every Receive that
+  Advance has not selected, whether planned now or validated again from a
+  durable plan; recovery of an Advance-selected Receive never derives, so never
+  repeats it. A refusal is final for those exact bytes: it is reported as an
+  invalid request, and a freshly bound preparation entry is unbound so that the
+  request reads Unknown.
 - Λ_recv has a deterministic burn branch. It is taken when the in-circuit check
   of an incoming Payment that passed native checks evaluates false: its Ω
   including deferred values, σ_send, τ_send, the Request's signature, the
@@ -1284,7 +1306,7 @@ receiver first). No free-form field changes the monetary interpretation.
 |---|---|
 | Request | Receiver signs a nonmonetary open setup quote containing its terms (the fields above except the payer wallet, payer account digest and `s`, which are zero). It is issued before any payer message, so it consults no blacklist; the receiver's list applies at Receive. Any payer completes it for its own wallet, account and next `s`. |
 | Payment | From a folded head, the payer verifies the Request and the applicable Send policy in one native pre-check, which applies every enabled control (§7) and returns σ_send's control witnesses, and checks `s == next_send`. The Request's payer account digest must be the payer credential's and its receiver account digest the Request receiver credential's; while the payer holds a local blacklist, that list must not contain the receiver's account, checked natively at Send preparation and again at commit, before the irreversible debit (§7). It may prove σ_send *speculatively*, after verifying the Request and before the payer confirms; a declined speculative σ_send is discarded and never signed. It natively verifies σ_send and uses the Ω(pred) recorded as self-verified at fold time (§3.1), which is not re-verified on the payment path. It then permanently subtracts `amount + fee`, increments `next_send`, appends to `send_chain` and inserts the credit descriptor in its pending outbox. It commits and retains the full canonical Payment before first release. Payment contains the unique signed Request fields and signature, and the Send package {statement, Ω(pred), σ_send, τ_send}. It reconstructs the exact signed Request from those single owners; the payer key and credential digest come from Ω(pred). Assembly rejects any mismatch with the original full signed Request before compaction. The receiver's credential, fee schedule and certificates are bound by digest in the Request body, which the receiver holds. |
-| Receive | After the §5.3 runtime capacity check passes on the receiving phone, the receiver natively verifies before mutation: the payer credential from the PayerCompanion carried beside the Payment, whose digest equals Payment's credential digest, σ_send's statement and `Ω(pred).credential`; Ω(pred), including the decide; the §3.2 consumer checks; σ_send and τ_send; its own bound identity, matched by the Request's receiver `wallet_id` and the `payment_key` of the Request's receiver credential, never by credential-digest equality, so that credential may be an earlier one of this incarnation; the open Request it signed, completed by the Payment, whose payer account digest equals the PayerCompanion credential's; and, while it holds a local blacklist, that the list does not contain that payer account (§7). If Payment's Ω(pred) is byte-identical to a Lineage Ω that the receiver already verified in this session, that verification is reused; otherwise it verifies Ω(pred) in full. Using the completed Request and selected receiver head, it proves σ_recv, whose statement and successor commitment exclude the Payment digest (§3), and adds exactly `amount`. In the serialized Advance (§4.2) it checks nonmembership and inserts `credit_id → (amount, receive sequence)` into the permanent consumed-credit map; the Receive receipt also binds the full canonical Payment digest. Show complete only after durable completion. Λ_recv later proves the incoming objects, the map update and the receipt's Payment digest in-circuit and records the digest in the credit-digest root, or takes the burn branch (§3.2). |
+| Receive | After the §5.3 runtime capacity check passes on the receiving phone, the receiver natively verifies before mutation: the payer credential from the PayerCompanion carried beside the Payment, whose digest equals Payment's credential digest, σ_send's statement and `Ω(pred).credential`; Ω(pred), including the decide; the §3.2 consumer checks; σ_send and τ_send; its own bound identity, matched by the Request's receiver `wallet_id` and the `payment_key` of the Request's receiver credential, never by credential-digest equality, so that credential may be an earlier one of this incarnation; the open Request it signed, completed by the Payment, whose payer account digest equals the PayerCompanion credential's; and, while it holds a local blacklist, that the list does not contain that payer account (§7). If Payment's Ω(pred) is byte-identical to a Lineage Ω that the receiver already verified in this session, that verification is reused; otherwise it verifies Ω(pred) in full. Receive admission (§3.2) then refuses the Payment if the incoming results and modes that Λ_recv will derive would take the burn branch. Using the completed Request and selected receiver head, it proves σ_recv, whose statement and successor commitment exclude the Payment digest (§3), and adds exactly `amount`. In the serialized Advance (§4.2) it checks nonmembership and inserts `credit_id → (amount, receive sequence)` into the permanent consumed-credit map; the Receive receipt also binds the full canonical Payment digest. Show complete only after durable completion. Λ_recv later proves the incoming objects, the map update and the receipt's Payment digest in-circuit and records the digest in the credit-digest root; it never burns an admitted Payment (§3.2). |
 | Credited | Optional delivery evidence, in one of two forms. (i) The receiver's Receive package {statement, σ_recv, τ_recv}, whose receipt binds the exact Payment digest; its status is *credited, unfolded*. (ii) A read-only `CreditStatus` against a folded receiver head `h` that covers the credit: {statement(h), proof_digest(h), τ(h), Ω(h), 32-sibling membership opening of `credit_id → (Payment digest, burned flag)` in Ω(h)'s credit-digest root}, with no σ and no Ω(pred); its status is *credited* or *burned*. Credited advances no state. The receiver need not retain it. A payer keeps Credited evidence it consumed as a fold witness until its ArchiveSent step is folded (§4.1). |
 | ArchiveSent | Payer verifies matching Credited evidence (credited or burned) and proves removal of the matching pending outgoing descriptor. It may delete the delivered Payment bytes only after a durable Ω covers the ArchiveSent step on its archive branch (§3.2), and never the copies a fee claim still needs (§6.2). Balance, quotas and consumed-credit entries stay unchanged. The delivery verdict comes first: the payer verifies the evidence read-only when it arrives and defers ArchiveSent to an idle drain (§5.3). An ArchiveSent that Advance never selected, planned from an older head, is planned again on the current head under the same request and Credited original; one archive per Send capsule, wallet and Credited original still holds. Replacement requires both custody nonselection and authenticated absence from the permanent operation index. The selected stale entry and plan retain the retired capsule identity until idempotent draft and capsule cleanup succeeds; only then may a replacement plan be published. A batch-only original is retained under the authenticated entry before its immutable draft key is retired. Interrupted cleanup repeats after restart; selected, uncertain or delivery-data-loss operations never replan. |
 
@@ -1349,7 +1371,10 @@ unrelated sends, receives and cleanup.
 - Receive does not depend on a still-open Request, the receiver's old head or
   the receiver credential that was current when the Request was signed. A
   Request quoted before a renewal stays receivable after it (§3.2). Delayed
-  valid Payments remain receivable after other payments. Malformed,
+  valid Payments remain receivable after other payments. If a Receive preparation
+  was interrupted before Advance selected it, a later head does not strand that
+  Payment: the native owner follows the §5.3 authenticated retirement procedure
+  and prepares again with the same request identity and exact Payment. Malformed,
   unauthenticated or wrong-recipient objects are rejected without mutation;
   rejection is not a value-return authorization.
 - Lost Credited evidence only leaves delivery unconfirmed at the payer.
@@ -1396,9 +1421,18 @@ inputs, source, native choices, plan and objects.
 Only after every object and original is durably acknowledged may one manifest
 publication select the plan. Uncertain publication reopens the selected manifest
 and adopts any present exact batch. Fresh planning is allowed only after definitive batch absence
-before plan selection. Recovery never replaces retained choices, rebases a
-stale source or deletes possibly shared objects. Every materialized object is
-read back from durable storage after the plan publication and before cleanup.
+before plan selection. Recovery never mutates a selected plan's choices or
+source, or deletes possibly shared objects. A never-selected Receive or ArchiveSent may retire its entire
+stale preparation before planning again at the current head, under the same
+request binding and exact retained originals. Receive retains the already-issued
+Payment unchanged; this exception never applies to Send, Unload or Retiring.
+If a capsule exists, both custody nonselection and authenticated absence from the
+permanent operation index are mandatory. Keep the old entry, plan and capsule
+locator selected until idempotent draft/capsule cleanup finishes; only then
+publish a replacement. Retain a batch-only original under the authenticated
+entry before removing its immutable draft key. Interrupted cleanup repeats on
+restart; selected, pending, uncertain or delivery-data-loss outcomes never replan.
+Every materialized object is read back from durable storage after the plan publication and before cleanup.
 Cleanup removes only the acknowledged staging record. Subsequent validation can
 confirm retained objects and proving takes no custody; neither can create new
 preparation objects.
@@ -1437,14 +1471,20 @@ that moment:
 - memory: memory currently available to the app covers the peak proving memory
   of the operation's step relation and of the lineage relation that folds it.
 
-Both bounds come from the installed relations, never from a phone model. The
-proof owner computes each relation's peak proving memory and fold-witness bytes
-from that relation's fixed, authenticated descriptor (its domain size and its
-column and lookup counts) with one conservative formula. The check adds no field
-to the artifact manifest, verifier pack or producer inventory, and needs no
-artifact-producer change. Measured peaks and fold times are recorded as evidence
-(§8); a measurement above the computed bound is a defect in the formula, which
-is fixed in code. A failed check
+Both requirements are selected from the installed relations, never from a phone
+model. The proof owner derives fold-witness bytes and a core proving-buffer
+envelope from each relation's fixed, authenticated descriptor (its domain size
+and column and lookup counts). The current memory formula adds a 15% field-buffer
+margin, pinned parameters, the process-wide MSM scratch budget and a wallet-core
+allowance. It does not separately count the native sources' synthesis caches,
+decoded proof tapes, prepared witnesses or reconstruction work. Those allocations
+must be shown to fit the complete admission budget for each installed source;
+that qualification remains open. The descriptor formula alone is not a
+whole-process RSS bound. The check adds no field to the artifact manifest,
+verifier pack or producer inventory, and needs no artifact-producer change.
+Measured peaks and fold times are recorded as evidence (§8); an excess requires
+identifying its allocation owner and correcting the budget or implementation,
+rather than assuming a defect in the core prover's column count. A failed check
 refuses the operation before commit with a typed `NotEnoughStorage` or
 `NotEnoughMemory` result, never a device verdict: nothing is debited or
 credited, the receipt or Payment stays deliverable, and the holder retries after
@@ -1457,8 +1497,8 @@ whose Advance did not commit leaves the head unchanged and is reported as
 interrupted, with its receipt or Payment still deliverable; an operation whose
 Advance committed completes from its retained outcome. An OS kill is never a
 device verdict, a refusal or a reason to discard a selected outcome. The
-capacity bounds stay derived from the installed relation descriptors, with no
-artifact change. There is no phone-model
+capacity budgets stay tied to the installed relation descriptors and compiled
+native sources, with no artifact change. There is no phone-model
 list, device class, roster or published per-model budget; per-phone latency,
 memory and energy measurements are recorded as evidence (§8), never as an
 admission list. Never rely on platform background-execution time for
@@ -1474,7 +1514,7 @@ issuance of new quotes, never a committed Payment.
 Show amount, recipient, fee and irreversibility before payer confirmation.
 After Send commit show **sent — irreversible, delivery unconfirmed**, then
 **delivered** if valid delivery evidence arrives (**delivered, burned** if it
-reports the P4 burn). A wallet's next Send, Unload or device move, including
+reports a burn, which no admitted Receive produces). A wallet's next Send, Unload or device move, including
 after its own previous Send, waits until its current head is folded; the UI
 shows this as the fold backlog. Reconnecting the same phones
 resumes delivery of the existing Payment; it does not create another payment.
@@ -1556,9 +1596,12 @@ chain's age; transport and durable-custody qualification are tracked in NF6.
 
 The offline Load relation binds the exact receipt transcript, monetary effect,
 ordinal, recovery-map insertion and credential-bound own Advance signature.
-Its two A stages and one W continuation, with one own-receipt signature leaf and
-no own σ leaf, retain monetary proof obligations without a finality proof or
-carried finality accumulators. The existing selected
+Its [single terminal A_Load](../crates/iroha_kagemusha_proof/src/a_relation/native/load.rs),
+one hard own-receipt signature Q and final Ω retain monetary proof obligations
+with no W continuation or own σ leaf. A_Load checks the hard predecessor, proves
+the transition and depth-32 recovery insertion, and binds the own receipt under
+the predecessor payment key. It carries no finality proof or finality accumulator.
+The existing selected
 trust model (§2.1) requires the released app on a stock uncompromised OS to perform
 native verification before requesting that signature. Consequently, offline
 funding lineage relies on that application/provider assumption; PLONK does not
@@ -1576,7 +1619,7 @@ A completed retry returns the exact retained output. Receipt evidence is not par
 of the 10,034-byte offline Payment envelope.
 
 TODO(G3/G5): complete the [native finality goals](kagemusha_native_finality_goals.md),
-rebuild affected A/W/Omega keys, and qualify Load, subsequent Receive/Unload and
+rebuild the affected Load A/Ω keys and downstream artifacts, and qualify Load, subsequent Receive/Unload and
 the common terminal catalog. Measure real complete Payment envelopes against
 10,034 bytes and native verification on physical phones. Historical recursive
 finality runs and structural fixtures do not establish those gates.
@@ -1942,7 +1985,7 @@ historical test artifacts remain evidence only.
 ### 9.1 Cutover sequencing
 
 The first release uses chain-only Android E1 attestation, the closed E5/E6
-exchange, the signed client runtime and bridge ABI 31. No first-device
+exchange, the signed client runtime and bridge ABI 33. No first-device
 Google authentication or Play Integrity input remains. Fact bit 9 is reserved
 zero for every credential evidence record, including retained enrollment
 evidence and renewal fresh evidence. Native record validation and the
@@ -2042,7 +2085,7 @@ and wallet installation remain mandatory after lossless decoding.
 Nothing in this revision is deployed piecemeal. The cutover is one coordinated
 change, and the release driver builds and releases it:
 
-1. **Bridge ABI 31.** `connect_norito_bridge` deletes the first-device
+1. **Bridge ABI 33.** `connect_norito_bridge` deletes the first-device
    authentication-key C/JNI exports (`first_device_auth_key_v1.rs` and its JNI
    adapter), its enrollment `prepare_request` takes the Android chain only, and
    the runtime capacity results of §5.3 become typed. Abandonment returns an
@@ -2051,9 +2094,14 @@ change, and the release driver builds and releases it:
    Refusals carry the closed §2.4
    codes. The first-device authentication and Play Integrity token inputs leave
    every startup consumer together (step 2). The export inventory changes
-   accordingly. The current ABI also carries open-Request setup, Payment-companion
-   setup 55 and verified-delivery setup 54. ABI 31 artifacts refuse older callers;
-   there is no compatibility export.
+   accordingly. The current ABI also carries open-Request setup and Payment-companion
+   setup 55. Logical exchange begin/end controls and the mandatory exchange identity
+   on mutation calls bind accepted work before SDK worker or UI queues. Receipt setup
+   56 retains the exact Send-bound original before verification; setups 57/58 retry
+   verification and drain one scheduler-admitted Archive. Setups 3/41/54 are retired;
+   setup 44 observes only the retained anchor. ABI 33 artifacts refuse older callers;
+   there is no compatibility export. These source interfaces require matching
+   rebuilt artifacts and qualification before release.
 2. **`firstDeviceAuthentication` is removed everywhere at once.** That selection
    carries a Google OAuth client, a Play Integrity cloud project and a second
    attested sign-up key. It goes from the signed v7 runtime the release driver
@@ -2096,7 +2144,7 @@ change, and the release driver builds and releases it:
    READMEs that still describe Play Integrity change with their code.
 4. **Mobile Native rebuild.** The release driver rebuilds Native for the three
    Android ABIs and the Apple xcframework from the cutover source, and the
-   Android and iOS apps bind ABI 31. No other work package builds, promotes or
+   Android and iOS apps bind ABI 33. No other work package builds, promotes or
    deploys mobile natives.
 
 **Cutover acceptance.** Each case below passes against the cutover source and
@@ -2214,7 +2262,7 @@ remain unchanged.
 | --- | --- | --- |
 | 1. iOS rollback and release | G2 / native provider and Swift storage | Trace Selected marker, journal, signature, anchor and externally available Payment bytes. Reproduce interrupted/ambiguous writes, restart, concurrency and replay. Determine which backup/restore schedules supported stock-device operations actually permit. Establish the platform persistence guarantee before claiming that a released Payment precludes a competing successor from restored state; Keychain readback alone is insufficient. Preserve any residual counterexample and identify the smallest unavailable primitive or required design decision. |
 | 2. Complete monetary lifecycle | G4/G5, NF1–NF6 / wallet, node and SDK | From one source/artifact candidate, perform enrollment → activation → funded Load → A pays B → B pays C offline → Unload → ledger payout. Cover supported selectors, Receive folding, ArchiveReceive, ArchiveStatus, fees and enabled controls; crashes, lost acknowledgements, exact retries, duplicate credits, conflicting inputs, invalid proofs, stale state and restart must preserve conservation, committed payments and once-only payout. Retain actual four-validator and physical Android/iPhone results separately from software fixtures. |
-| 3. Proof correctness and privacy | G3 / proof owners and independent reviewer | Run genuine-proof native/circuit binding mutations for every consuming operation, including Ω opening and both exposed accumulator decisions at acceptance boundaries. Complete [C12](kagemusha_recursion_soundness_v1.md) for the actual recursive setup, three-Q prefix, RP57 interfaces, exposed challenges, adaptive histories, checkpoints, retries and joint folding/publication, with explicit assumptions and independent review. Regenerate affected artifacts after a construction change. |
+| 3. Proof correctness and privacy | G3 / proof owners and independent reviewer | Run genuine-proof native/circuit binding mutations for every consuming operation, including Ω opening and both exposed accumulator decisions at acceptance boundaries. Complete [C12](kagemusha_recursion_soundness_v1.md) for the actual recursive setup, every operation's compiled Q prefix, RP57 interfaces, exposed challenges, adaptive histories, checkpoints, retries and joint folding/publication, with explicit assumptions and independent review. Regenerate affected artifacts after a construction change. |
 | 4. Size and performance | G1/G4/G7 / native, SDK and carrier owners | Retain each genuine bounded message's exact canonical envelope and demonstrate ≤10,034 bytes across supported variants. Measure cold opening, peak memory, retained storage, durable payment completion and the separate time until received value is spendable. Evaluate the two-second p95 requirement on a declared physical-device/OS/carrier population; preserve failed, cancelled and slow trials. Stand-in proofs and host timings do not qualify phone payments. |
 | 5. One verified delivery | G6/G7 / native and managed consumer owners | Record source closure, lock/build inputs, catalog/key/native-library/SDK hashes and exact test commands. Rebuild matching consumers, run focused regressions followed by complete required suites and release checks, and update current specifications/status/public documentation. A changed source candidate requires affected evidence to be repeated; compilation or another candidate's results do not close a requirement. |
 

@@ -13,14 +13,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import audit_native_source_inputs as audit
 
 
+@pytest.mark.parametrize('stem', ['build', 'main'])
+@pytest.mark.parametrize('mutation', [None, 'target', 'alias', 'hash', 'bytes', 'output', 'source', 'symlink'])
+def test_custom_build_mapping_binds_only_selected_source_owner_and_bytes(tmp_path, stem, mutation):
+    owner = tmp_path / 'build' / 'dependency-0123456789abcdef'
+    owner.mkdir(parents=True)
+    source = tmp_path / (stem + '.rs')
+    source.write_text('fn main() {}')
+    target_name = 'build-script-' + stem
+    alias = owner / target_name
+    compiled = owner / (target_name.replace('-', '_') + '-0123456789abcdef')
+    depfile = Path(str(compiled) + '.d')
+    alias.write_bytes(b'inert original build executable')
+    compiled.write_bytes(alias.read_bytes())
+    depfile.write_text(f'{compiled}: {source}\n')
+    # A tempting same-directory sibling must never enter the selected closure.
+    (owner / 'build_script_build-0000000000000000.d').write_text('/other: /unrelated.rs\n')
+    message = {'target': {'kind': ['custom-build'], 'name': target_name, 'src_path': str(source)},
+               'filenames': [str(alias)]}
+    if mutation == 'target':
+        message['target']['name'] = 'build-script-unrelated'
+    elif mutation == 'alias':
+        other = alias.with_name('build-script-unrelated')
+        alias.rename(other)
+        message['filenames'] = [str(other)]
+    elif mutation == 'hash':
+        other = owner.with_name('dependency-not-an-owner-hash')
+        owner.rename(other)
+        message['filenames'] = [str(other / alias.name)]
+    elif mutation == 'bytes':
+        compiled.write_bytes(b'substituted')
+    elif mutation == 'output':
+        depfile.write_text(f'/unrelated/build: {source}\n')
+    elif mutation == 'source':
+        depfile.write_text(f'{compiled}: /unrelated.rs\n')
+    elif mutation == 'symlink':
+        compiled.unlink()
+        compiled.symlink_to(alias)
+    if mutation is None:
+        assert audit.artifact_depfiles(message) == {depfile}
+    else:
+        with pytest.raises(ValueError):
+            audit.artifact_depfiles(message)
+
+
 @pytest.fixture
 def selected(tmp_path, monkeypatch):
     root = tmp_path / 'source'
     root.mkdir()
     (root / 'Cargo.lock').write_text('')
     monkeypatch.setattr(audit, 'ROOT', root)
-    for name, relative in [('BUILD_RS', 'crates/iroha_plonk/build.rs'),
-                           ('HELPER', 'crates/iroha_plonk/build_support/source_identity.rs'),
+    for name, relative in [('HELPER', 'crates/iroha_plonk/build_support/source_identity.rs'),
                            ('GENERATED', 'crates/iroha_plonk/src/keys/keygen/builtin/generated.rs'),
                            ('DRIVER', 'scripts/native_source_snapshot.rs')]:
         path = root / relative
@@ -30,34 +73,21 @@ def selected(tmp_path, monkeypatch):
     source = root / 'crates/example/src/lib.rs'
     source.parent.mkdir(parents=True)
     source.write_text('pub fn example() {}')
-    watched = {audit.BUILD_RS, audit.HELPER, audit.GENERATED, audit.DRIVER, source}
-    out = root / 'target/release/build/iroha_plonk-1234/out'
-    out.mkdir(parents=True)
+    watched = {audit.HELPER, audit.GENERATED, audit.DRIVER, source}
     digest = 'ab' * 32
-    identity = out / 'native_source_identity.rs'
-    identity.write_text('NATIVE_SOURCE_CLOSURE_COMPLETE: bool = true;\n'
-                        'BUILTIN_TARGET_SUPPORTED: bool = true;\n'
-                        'NATIVE_SOURCE_TARGET: &str = "aarch64-apple-darwin";\n'
-                        'CURRENT_NATIVE_SOURCE_DIGEST: [u8; 32] = ['
-                        + ', '.join(['171'] * 32) + '];\n')
-    watcher = out / 'native-source-rescan-required'
-    output = out.parent / 'output'
-    output.write_text(''.join('cargo:rerun-if-changed=' + str(p) + '\n'
-                              for p in sorted(watched | {watcher})))
     depfile = tmp_path / 'selected.d'
     depfile.write_text('artifact: ' + ' '.join(str(p) for p in
-                      [source, audit.GENERATED, identity, watcher]) + '\n')
+                      [source, audit.GENERATED]) + '\n')
     tool = tmp_path / 'source-snapshot'
     tool.write_text('unused mocked tool')
     tool.with_name('source-snapshot-build.json').write_text('{}')
     monkeypatch.setattr(audit, 'actual_snapshot', lambda _: (digest, watched))
     args = SimpleNamespace(output=tmp_path / 'audit.json')
     def run(events=None):
-        return audit.audit(args, events or [], {depfile}, {out}, [], tool,
+        return audit.audit(args, events or [], {depfile}, [], tool,
                            digest, digest, watched)
-    return SimpleNamespace(root=root, source=source, watched=watched, out=out,
-                           digest=digest, identity=identity, watcher=watcher,
-                           build_output=output, depfile=depfile, args=args, run=run)
+    return SimpleNamespace(root=root, source=source, watched=watched,
+                           digest=digest, depfile=depfile, args=args, run=run)
 
 
 def test_selected_inputs_and_exact_generated_exceptions_pass(selected):
@@ -67,46 +97,8 @@ def test_selected_inputs_and_exact_generated_exceptions_pass(selected):
     assert result['sourceDigest'] == selected.digest
     assert result['canonicalInputs'] == [str(selected.source)]
     assert {x['path'] for x in result['generatedExceptions']} == {
-        str(selected.identity), str(audit.GENERATED)}
-
-
-def local_source_stamp(selected):
-    import cargo_local_source_identity as local
-    directory = local.private_directory(selected.root / 'target')
-    stamp = directory / 'snapshot-v1'
-    local.update_stamp(stamp, f'{local.STAMP_HEADER}\nroot={str(selected.root).encode().hex()}\n'
-                       f'digest={selected.digest}\nwatches={local.watch_digest(selected.watched)}\n')
-    selected.build_output.write_text('cargo:rerun-if-changed=' + str(stamp) + '\n' + ''.join(
-        'cargo:iroha-plonk-source-input=' + str(path) + '\n' for path in sorted(selected.watched)))
-    selected.depfile.write_text(selected.depfile.read_text().replace(str(selected.watcher), str(stamp)))
-    return stamp
-
-
-def test_local_preflight_stamp_keeps_complete_independent_source_audit(selected):
-    stamp = local_source_stamp(selected)
-    selected.run()
-    result = json.loads(selected.args.output.read_text())
-    assert result['passed'] is True
-    assert result['absentBuildWatchExceptions'] == []
-    assert [entry['path'] for entry in result['localBuildWatchInputs']] == [str(stamp)]
-
-
-@pytest.mark.parametrize('change', ['digest', 'census', 'permission', 'link'])
-def test_local_preflight_stamp_cannot_weaken_source_audit(selected, change):
-    stamp = local_source_stamp(selected)
-    if change == 'digest':
-        stamp.write_text(stamp.read_text().replace(selected.digest, 'cd' * 32))
-    elif change == 'census':
-        selected.build_output.write_text(selected.build_output.read_text().replace(
-            'cargo:iroha-plonk-source-input=' + str(selected.source) + '\n', ''))
-    elif change == 'permission':
-        stamp.chmod(0o644)
-    else:
-        original = stamp.with_name('original')
-        stamp.rename(original)
-        stamp.symlink_to(original)
-    with pytest.raises(ValueError):
-        selected.run()
+        str(audit.GENERATED)}
+    assert result['registryDataSha256'] == audit.sha(audit.GENERATED)
 
 
 @pytest.mark.parametrize('relative', ['python/unrelated/input.json',
@@ -123,27 +115,19 @@ def test_omitted_canonical_or_unknown_generated_input_fails(selected, relative):
     assert result['omittedCanonicalInputs'] == [str(missing)]
 
 
-@pytest.mark.parametrize('old,new,message', [
-    ('171', '172', 'Compiled digest mismatch'),
-    ('NATIVE_SOURCE_CLOSURE_COMPLETE: bool = true;',
-     'NATIVE_SOURCE_CLOSURE_COMPLETE: bool = false;', 'incomplete source closure'),
-])
-def test_compiled_identity_must_match_complete_current_census(selected, old, new, message):
-    selected.identity.write_text(selected.identity.read_text().replace(old, new))
-    with pytest.raises(ValueError, match=message):
+@pytest.mark.parametrize('name', ['HELPER', 'DRIVER', 'GENERATED'])
+def test_provenance_census_requires_its_maintained_inputs(selected, name):
+    selected.watched.remove(getattr(audit, name))
+    with pytest.raises(ValueError, match='provenance omits'):
         selected.run()
 
 
-def test_build_script_census_must_equal_actual_current_census(selected):
-    selected.build_output.write_text(selected.build_output.read_text().replace(
-        'cargo:rerun-if-changed=' + str(selected.source) + '\n', ''))
-    with pytest.raises(ValueError, match='census.*differ'):
-        selected.run()
-
-
-def test_rescan_marker_must_remain_absent(selected):
-    selected.watcher.touch()
-    with pytest.raises(ValueError, match='absent rescan watcher exists'):
+def test_registry_data_changes_are_detected_independently_of_source_digest(selected, monkeypatch):
+    def snapshot(_):
+        audit.GENERATED.write_text('changed registry data')
+        return selected.digest, selected.watched
+    monkeypatch.setattr(audit, 'actual_snapshot', snapshot)
+    with pytest.raises(ValueError, match='registry DATA changed'):
         selected.run()
 
 
@@ -161,7 +145,7 @@ def test_excluded_owner_symlink_cannot_become_external_dependency(selected, tmp_
 def test_regular_lexical_parent_alias_and_generated_paths_are_preserved(selected):
     alias = selected.source.parent / '../src/lib.rs'
     assert audit.resolved(alias) == selected.source
-    assert audit.resolved(selected.identity) == selected.identity
+    assert audit.resolved(audit.GENERATED) == audit.GENERATED
 
 
 def test_parent_segment_cannot_hide_a_symlink_escape(selected, tmp_path):
@@ -206,7 +190,8 @@ def test_external_generated_dependency_version_is_not_silently_upgraded(selected
              'package_id': 'registry+https://github.com/rust-lang/crates.io-index#serde@9.9.9'}])
 
 
-def test_snapshot_rejects_changed_maintained_driver(tmp_path, monkeypatch):
+@pytest.fixture
+def pinned_snapshot_tool(tmp_path, monkeypatch):
     helper, driver, tool = [tmp_path / name for name in ['helper.rs', 'driver.rs', 'source-snapshot']]
     for path in [helper, driver, tool]:
         path.write_text(path.name)
@@ -216,32 +201,223 @@ def test_snapshot_rejects_changed_maintained_driver(tmp_path, monkeypatch):
         'helperPath': str(helper), 'helperSha256': audit.sha(helper),
         'driverPath': str(driver), 'driverSha256': audit.sha(driver),
         'binarySha256': audit.sha(tool)}))
-    driver.write_text('changed driver')
+    return SimpleNamespace(helper=helper, driver=driver, binary=tool)
+
+
+@pytest.mark.parametrize('component', ['helper', 'driver', 'binary'])
+def test_snapshot_rejects_changed_pinned_input(pinned_snapshot_tool, monkeypatch, capsys, component):
+    getattr(pinned_snapshot_tool, component).write_text('changed pinned input')
     monkeypatch.setattr(audit.subprocess, 'run', lambda *a, **k: pytest.fail('must not execute'))
     with pytest.raises(ValueError, match='rebuilt from the current maintained helper'):
-        audit.actual_snapshot(tool)
+        audit.actual_snapshot(pinned_snapshot_tool.binary)
+    assert capsys.readouterr().err == ''  # No fabricated evaluator output before execution.
 
 
-def test_snapshot_uses_explicit_root_and_current_pins(tmp_path, monkeypatch):
-    helper, driver, tool = [tmp_path / name for name in ['helper.rs', 'driver.rs', 'source-snapshot']]
-    for path in [helper, driver, tool]:
+def test_snapshot_uses_explicit_root_and_current_pins(pinned_snapshot_tool, monkeypatch, capsys):
+    selected = pinned_snapshot_tool
+    def execute(command, **kwargs):
+        assert command == [str(selected.binary), str(audit.ROOT)]
+        assert kwargs == {'cwd': audit.ROOT, 'capture_output': True}
+        return subprocess.CompletedProcess(command, 0,
+            ('digest=' + 'ab' * 32 + '\nwatch=' + str(selected.helper)).encode(), b'ordinary diagnostic\n')
+    monkeypatch.setattr(audit.subprocess, 'run', execute)
+    assert audit.actual_snapshot(selected.binary) == ('ab' * 32, {selected.helper})
+    assert capsys.readouterr() == ('', '')
+
+
+@pytest.mark.parametrize('returncode', [101, -9])
+def test_snapshot_nonzero_retains_exact_streams_and_original_exit_without_retry(
+        pinned_snapshot_tool, monkeypatch, capsys, returncode):
+    selected = pinned_snapshot_tool
+    # Even a valid-looking digest cannot turn a failed evaluator into success.
+    stdout = ('digest=' + 'ab' * 32 + '\nwatch=' + str(selected.helper)).encode() + b'\r\n'
+    stderr = b'original refusal\r\ninvalid text remains exact: \xff\x00\x1b'
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {'cwd': audit.ROOT, 'capture_output': True}
+        return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+    monkeypatch.setattr(audit.subprocess, 'run', execute)
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        audit.actual_snapshot(selected.binary)
+    expected_command = [str(selected.binary), str(audit.ROOT)]
+    assert calls == [expected_command]
+    assert raised.value.cmd == expected_command
+    assert raised.value.returncode == returncode
+    assert raised.value.stdout == stdout
+    assert raised.value.stderr == stderr
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == (
+        f'Snapshot evaluator refusal diagnostics:\ncommand={expected_command!r}\n'
+        f'returncode={returncode}\nstdout_bytes={stdout!r}\nstderr_bytes={stderr!r}\n')
+
+
+def test_snapshot_run_only_process_owner_retains_original_refusal(
+        pinned_snapshot_tool, monkeypatch, capsys):
+    # compiler_capture.maintained installs exactly this run-only process facade.
+    # The exception class must not be looked up through the replaceable owner.
+    stdout, stderr = b'partial stdout \xff', b'original evaluator refusal \xfe\r\n'
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {'cwd': audit.ROOT, 'capture_output': True}
+        return subprocess.CompletedProcess(command, 101, stdout, stderr)
+    monkeypatch.setattr(audit, 'subprocess', SimpleNamespace(run=execute))
+    monkeypatch.setattr(audit.locale, 'getpreferredencoding',
+                        lambda _setlocale: pytest.fail('nonzero exit must precede stream decoding'))
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        audit.actual_snapshot(pinned_snapshot_tool.binary)
+    command = [str(pinned_snapshot_tool.binary), str(audit.ROOT)]
+    assert calls == [command]
+    assert raised.value.cmd == command
+    assert raised.value.returncode == 101
+    assert raised.value.stdout == stdout
+    assert raised.value.stderr == stderr
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == (
+        f'Snapshot evaluator refusal diagnostics:\ncommand={command!r}\n'
+        f'returncode=101\nstdout_bytes={stdout!r}\nstderr_bytes={stderr!r}\n')
+
+
+@pytest.mark.parametrize('stdout,stderr,error', [
+    (b'', b'completed with no digest\n', ValueError),
+    (b'digest=short\n', b'original malformed digest\r\n', ValueError),
+    (b'not a digest\nwatch=/retained', b'original malformed header', ValueError),
+    (b'\xff', b'original malformed stdout encoding', UnicodeDecodeError),
+    (b'digest=' + b'ab' * 32 + b'\n', b'\xff', UnicodeDecodeError),
+    (b'digest=' + b'ab' * 32 + b'\nwatch=\x00', b'original malformed path', ValueError),
+])
+def test_snapshot_malformed_output_retains_both_streams_without_retry(
+        pinned_snapshot_tool, monkeypatch, capsys, stdout, stderr, error):
+    monkeypatch.setattr(audit.locale, 'getpreferredencoding', lambda _setlocale: 'utf-8')
+    calls = []
+    def execute(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout, stderr)
+    monkeypatch.setattr(audit.subprocess, 'run', execute)
+    with pytest.raises(error):
+        audit.actual_snapshot(pinned_snapshot_tool.binary)
+    assert len(calls) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == (
+        f'Snapshot evaluator refusal diagnostics:\ncommand={calls[0]!r}\n'
+        f'returncode=0\nstdout_bytes={stdout!r}\nstderr_bytes={stderr!r}\n')
+
+
+def test_evaluator_without_selected_host_dependency_uses_standalone_acquisition(tmp_path, monkeypatch):
+    def acquire():
+        raise ValueError('exact standalone dependency acquisition')
+    monkeypatch.setattr(audit, 'standalone_host_sha2', acquire)
+    with pytest.raises(ValueError, match='exact standalone dependency acquisition'):
+        audit.build_snapshot_tool(tmp_path, [])
+
+
+@pytest.mark.parametrize('kind', ['custom-build', 'proc-macro'])
+def test_evaluator_uses_selected_host_dependency_without_plonk_build_script(tmp_path, monkeypatch, kind):
+    profile = tmp_path / 'target/release'
+    host = profile / ('build/ordinary-1234/build-script-build' if kind == 'custom-build'
+                      else 'deps/libordinary_macro.dylib')
+    sha2 = profile / 'deps/libsha2-host.rlib'
+    target_sha2 = tmp_path / 'target/aarch64-linux-android/release/deps/libsha2-target.rlib'
+    helper, driver = tmp_path / 'helper.rs', tmp_path / 'driver.rs'
+    for path in (host, sha2, target_sha2, helper, driver):
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(path.name)
     monkeypatch.setattr(audit, 'HELPER', helper)
     monkeypatch.setattr(audit, 'DRIVER', driver)
-    tool.with_name('source-snapshot-build.json').write_text(json.dumps({
-        'helperPath': str(helper), 'helperSha256': audit.sha(helper),
-        'driverPath': str(driver), 'driverSha256': audit.sha(driver),
-        'binarySha256': audit.sha(tool)}))
+    monkeypatch.delenv('RUSTC', raising=False)
+    events = [{'reason': 'compiler-artifact', 'package_id': 'ordinary',
+               'target': {'kind': [kind]}, 'filenames': [str(host)]}]
+    for path in (target_sha2, sha2):
+        events.append({'reason': 'compiler-artifact',
+                       'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9',
+                       'target': {'name': 'sha2', 'kind': ['lib']},
+                       'filenames': [str(path)], 'features': ['std']})
+    calls = []
+    def compile_tool(command, **_kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b'standalone source evaluator')
+    monkeypatch.setattr(audit.subprocess, 'run', compile_tool)
+    tool = audit.build_snapshot_tool(tmp_path, events)
+    assert len(calls) == 1
+    assert calls[0][0] == 'rustc'
+    assert 'sha2=' + str(sha2) in calls[0]
+    assert 'sha2=' + str(target_sha2) not in calls[0]
+    record = json.loads(tool.with_name('source-snapshot-build.json').read_text())
+    assert record['sha2Path'] == str(sha2)
+    assert record['sha2Sha256'] == audit.sha(sha2)
+
+
+@pytest.mark.parametrize('defect', [None, 'foreign_artifact', 'unfinished', 'changed_lock',
+                                  'missing_family', 'wrong_family'])
+def test_cross_build_with_only_target_sha2_uses_locked_standalone_host_lane(tmp_path, monkeypatch, defect):
+    monkeypatch.setattr(audit, 'ROOT', tmp_path)
+    monkeypatch.delenv('RUSTC', raising=False)
+    monkeypatch.setenv('CARGO_BUILD_TARGET', 'aarch64-linux-android')
+    monkeypatch.setenv('RUSTFLAGS', '-C target-feature=+device-only')
+    host = 'aarch64-apple-darwin'
+    manifest = tmp_path / 'scripts/native-source-snapshot/Cargo.toml'
+    lock = manifest.with_name('Cargo.lock')
+    helper, driver = tmp_path / 'helper.rs', tmp_path / 'driver.rs'
+    macro = tmp_path / 'target/release/deps/libordinary_macro.dylib'
+    target_sha2 = tmp_path / 'target/aarch64-linux-android/release/deps/libsha2-target.rlib'
+    host_sha2 = tmp_path / f'target/native-source-snapshot/{host}/debug/deps/libsha2-host.rlib'
+    cargo_sha2 = host_sha2.parent.parent / 'libsha2.rlib'
+    for path in (manifest, lock, helper, driver, macro, target_sha2):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.name)
+    monkeypatch.setattr(audit, 'HELPER', helper)
+    monkeypatch.setattr(audit, 'DRIVER', driver)
+    events = [{'reason': 'compiler-artifact', 'package_id': 'ordinary',
+               'target': {'kind': ['proc-macro']}, 'filenames': [str(macro)]},
+              {'reason': 'compiler-artifact',
+               'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9',
+               'target': {'name': 'sha2', 'kind': ['lib']},
+               'filenames': [str(target_sha2)], 'features': ['std']}]
+    calls = []
     def execute(command, **kwargs):
-        assert command == [str(tool), str(audit.ROOT)]
-        return subprocess.CompletedProcess(command, 0, 'digest=' + 'ab' * 32 + '\nwatch=' + str(helper), '')
+        calls.append(command)
+        if command == ['rustc', '-vV']:
+            return subprocess.CompletedProcess(command, 0, f'rustc fixture\nhost: {host}\n', '')
+        if command[0] == 'cargo':
+            assert command == ['cargo', 'build', '--offline', '--locked', '--manifest-path', str(manifest),
+                '--package', 'sha2@0.10.9', '--target', host,
+                '--target-dir', str(tmp_path / 'target/native-source-snapshot'), '--message-format=json']
+            assert kwargs['env']['CARGO_ENCODED_RUSTFLAGS'] == ''
+            host_sha2.parent.mkdir(parents=True)
+            host_sha2.write_bytes(b'locked host dependency')
+            cargo_sha2.write_bytes(b'locked host dependency')
+            host_sha2.with_suffix('.rmeta').write_bytes(b'compiler metadata')
+            output = dict(events[-1])
+            output['filenames'] = [str(target_sha2 if defect == 'foreign_artifact' else cargo_sha2)]
+            if defect != 'missing_family':
+                output['filenames'].append(str(host_sha2.with_suffix('.rmeta')))
+            if defect == 'wrong_family':
+                host_sha2.write_bytes(b'different stale library')
+            lines = [json.dumps(output)]
+            if defect != 'unfinished':
+                lines.append(json.dumps({'reason': 'build-finished', 'success': True}))
+            if defect == 'changed_lock':
+                lock.write_text('changed during compilation')
+            return subprocess.CompletedProcess(command, 0, '\n'.join(lines), '')
+        assert command[0] == 'rustc'
+        assert 'sha2=' + str(host_sha2) in command
+        Path(command[-1]).write_bytes(b'evaluator')
+        return subprocess.CompletedProcess(command, 0, '', '')
     monkeypatch.setattr(audit.subprocess, 'run', execute)
-    assert audit.actual_snapshot(tool) == ('ab' * 32, {helper})
-
-
-def test_evaluator_cannot_guess_a_host_dependency(tmp_path):
-    with pytest.raises(ValueError, match='exact selected host plonk'):
-        audit.build_snapshot_tool(tmp_path, [])
+    if defect:
+        with pytest.raises(ValueError):
+            audit.build_snapshot_tool(tmp_path, events)
+        assert len(calls) == 2
+    else:
+        tool = audit.build_snapshot_tool(tmp_path, events)
+        assert len(calls) == 3
+        record = json.loads(tool.with_name('source-snapshot-build.json').read_text())
+        assert record['sha2Path'] == str(host_sha2)
+        assert record['sha2Sha256'] == audit.sha(host_sha2)
 
 
 @pytest.fixture
@@ -421,7 +597,7 @@ def test_native_mapping_failure_prevents_a_passing_audit_output(selected, monkey
         raise ValueError('Native outputs changed during audit')
     monkeypatch.setattr(audit, 'native_artifact_depfiles', changed)
     with pytest.raises(ValueError, match='outputs changed'):
-        audit.audit(selected.args, [], {selected.depfile}, {selected.out}, [],
+        audit.audit(selected.args, [], {selected.depfile}, [],
                     selected.args.output.parent / 'source-snapshot',
                     selected.digest, selected.digest, selected.watched, [{'event': {}}])
     assert not selected.args.output.exists()
@@ -455,8 +631,6 @@ def kotodama_generator(selected):
          'target': {'kind': ['custom-build'], 'src_path': str(root / 'build.rs')},
          'manifest_path': str(root / 'Cargo.toml'), 'features': [], 'filenames': []},
     ]
-    selected.build_output.write_text(''.join('cargo:rerun-if-changed=' + str(p) + '\n'
-        for p in sorted(selected.watched | {selected.watcher})))
     selected.depfile.write_text(selected.depfile.read_text().rstrip() + ' '
                                + ' '.join(map(str, outputs)) + '\n')
     return SimpleNamespace(root=root, originals=originals, out=out,
@@ -610,3 +784,114 @@ def test_oid_does_not_admit_other_files_in_same_out_dir(selected, oid_generator)
     with pytest.raises(SystemExit, match='1'):
         selected.run(oid_generator.events)
     assert json.loads(selected.args.output.read_text())['omittedCanonicalInputs'] == [str(unexpected)]
+
+
+@pytest.fixture(params=[('serde', '1.0.229', '229'),
+                        ('serde_core', '1.0.229', '229'),
+                        ('thiserror', '2.0.21', '21')])
+def private_module_generator(selected, tmp_path, request):
+    """Synthetic archive exercises custody guards, not registry qualification."""
+    name, version, suffix = request.param
+    identity = f'{name}-{version}'
+    root = tmp_path / 'cargo/registry/src/index-fixture' / identity
+    originals = ['Cargo.toml', 'build.rs']
+    if name == 'thiserror':
+        originals.append('build/probe.rs')
+    archive = root.parents[2] / 'cache/index-fixture' / f'{identity}.crate'
+    archive.parent.mkdir(parents=True)
+    with tarfile.open(archive, 'w:gz') as package:
+        for relative in originals:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = f'synthetic pinned {identity}/{relative}'.encode()
+            path.write_bytes(data)
+            info = tarfile.TarInfo(f'{identity}/{relative}')
+            info.size = len(data)
+            package.addfile(info, io.BytesIO(data))
+    checksum = audit.sha(archive)
+    (selected.root / 'Cargo.lock').write_text(
+        f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        f'checksum = "{checksum}"\n')
+    out = selected.root / f'target/debug/build/{name}-1234abcd/out'
+    out.mkdir(parents=True)
+    output = out / 'private.rs'
+    # Independent reviewed output literal, including serde's extra core import.
+    module = ('#[doc(hidden)]\npub mod __privatePATCH {\n'
+              '    #[doc(hidden)]\n    pub use crate::private::*;\n}\n')
+    if name == 'serde':
+        module += 'use serde_core::__privatePATCH as serde_core_private;\n'
+    output.write_text(module.replace('PATCH', suffix))
+    package_id = f'registry+https://github.com/rust-lang/crates.io-index#{name}@{version}'
+    events = [
+        {'reason': 'build-script-executed', 'package_id': package_id,
+         'out_dir': str(out), 'cfgs': [], 'env': []},
+        {'reason': 'compiler-artifact', 'package_id': package_id,
+         'target': {'kind': ['custom-build'], 'src_path': str(root / 'build.rs')},
+         'manifest_path': str(root / 'Cargo.toml'), 'features': [], 'filenames': []},
+    ]
+    selected.depfile.write_text(selected.depfile.read_text().rstrip() + ' ' + str(output) + '\n')
+    return SimpleNamespace(name=name, version=version, root=root, originals=originals,
+                           archive=archive, output=output, events=events, checksum=checksum)
+
+
+def test_reviewed_private_module_binds_exact_archive_and_output(selected, private_module_generator):
+    item = private_module_generator
+    selected.run(item.events)
+    result = json.loads(selected.args.output.read_text())
+    assert result['passed'] and result['omittedCanonicalInputs'] == []
+    [record] = result['externalDependencyGeneratedInputs']
+    assert record['path'] == str(item.output)
+    assert record['sha256'] == audit.sha(item.output)
+    assert record['cargoLockChecksum'] == record['registryArchiveSha256'] == item.checksum
+    assert {Path(row['path']) for row in record['maintainedGeneratorInputs']} == {
+        item.root / relative for relative in item.originals}
+
+
+@pytest.mark.parametrize('changed', ['Cargo.toml', 'build.rs', 'probe', 'archive',
+                                     'lock-checksum', 'output-suffix', 'output-code',
+                                     'missing-builder', 'extra-output'])
+def test_reviewed_private_module_rejects_changed_custody_or_output(
+        selected, private_module_generator, changed):
+    item = private_module_generator
+    if changed in ('Cargo.toml', 'build.rs', 'probe'):
+        relative = item.originals[-1] if changed == 'probe' else changed
+        (item.root / relative).write_text('changed generator source')
+        message = 'differs from pinned registry archive'
+    elif changed == 'archive':
+        item.archive.write_bytes(item.archive.read_bytes() + b'changed archive')
+        message = 'registry archive checksum mismatch'
+    elif changed == 'lock-checksum':
+        lock = selected.root / 'Cargo.lock'
+        lock.write_text(lock.read_text().replace(item.checksum, '00' * 32))
+        message = 'registry archive checksum mismatch'
+    elif changed in ('output-suffix', 'output-code'):
+        original = item.output.read_text()
+        item.output.write_text(original.replace('__private', '__private0')
+                               if changed == 'output-suffix' else original + 'pub fn injected() {}\n')
+        message = 'Unexpected private module generation'
+    elif changed == 'missing-builder':
+        item.events.pop()
+        message = 'Missing or ambiguous exact dependency generator'
+    else:
+        extra = item.output.with_name('unreviewed.rs')
+        extra.write_text('not the single reviewed private module')
+        selected.depfile.write_text(selected.depfile.read_text().rstrip() + ' ' + str(extra) + '\n')
+        with pytest.raises(SystemExit, match='1'):
+            selected.run(item.events)
+        assert json.loads(selected.args.output.read_text())['omittedCanonicalInputs'] == [str(extra)]
+        return
+    with pytest.raises(ValueError, match=message):
+        audit.external_generated_inputs(item.events)
+
+
+@pytest.mark.parametrize('name,version', [
+    ('serde', '1.0.228'), ('serde', '1.0.230'),
+    ('serde_core', '1.0.228'), ('serde_core', '1.0.230'),
+    ('thiserror', '2.0.18'), ('thiserror', '2.0.22'),
+])
+def test_private_module_admission_rejects_retired_and_unreviewed_versions(selected, name, version):
+    with pytest.raises(ValueError, match='Unreviewed generated dependency version'):
+        audit.external_generated_inputs([
+            {'reason': 'build-script-executed',
+             'package_id': f'registry+https://github.com/rust-lang/crates.io-index#{name}@{version}'}])

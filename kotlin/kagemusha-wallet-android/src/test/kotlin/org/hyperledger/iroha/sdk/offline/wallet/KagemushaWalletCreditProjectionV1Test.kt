@@ -32,7 +32,7 @@ class KagemushaWalletCreditProjectionV1Test {
         }
     }
     @Test fun `malformed or ambiguous projections never become a credit verdict`() {
-        assertFailsWith<KagemushaWalletExceptionV1> { decode(ByteArray(10_093)) }
+        assertFailsWith<KagemushaWalletExceptionV1> { decode(ByteArray(10_127)) }
         assertFailsWith<KagemushaWalletExceptionV1> { KagemushaWalletCallV1(12, -1, 0, 0, 0, 0, ByteArray(10_035)) }
         val bad = listOf(frame(evidence = 0), frame(evidence = 4), frame(archive = 4),
             frame(archive = 5, original = byteArrayOf()), frame(pending = 2),
@@ -54,9 +54,9 @@ class KagemushaWalletCreditProjectionV1Test {
         val id = ByteArray(32) { 1 }; val original = byteArrayOf(7)
         KagemushaWalletSetupInputV1(43, id)
         KagemushaWalletSetupInputV1(44, id, first = original)
-        KagemushaWalletSetupInputV1(44, id, first = original, second = original)
-        KagemushaWalletSetupInputV1(54, id, first = original)
-        for (selector in listOf(43, 44, 54)) {
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(44, id, first = original, second = original) }
+        KagemushaWalletSetupInputV1(56, id, first = original)
+        for (selector in listOf(43, 44, 56)) {
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector) }
             assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(selector, id, token = 1, first = original) }
         }
@@ -64,8 +64,11 @@ class KagemushaWalletCreditProjectionV1Test {
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(44, id) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(44, id, first = original, third = original) }
         assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(44, id, first = original, second = ByteArray(10_035)) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(54, id) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(54, id, first = original, second = original) }
-        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(54, id, first = ByteArray(10_035)) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(56, id) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(56, id, first = original, second = original) }
+        assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(56, id, first = ByteArray(10_035)) }
+        for (retired in listOf(3, 41, 54)) {
+            assertFailsWith<IllegalArgumentException> { KagemushaWalletSetupInputV1(retired, id, first = original) }
+        }
     }
 }

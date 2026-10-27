@@ -34,14 +34,14 @@ use crate::{
     subtract_ciphertexts_rns_exact, validate_registered_bfv_parameters,
 };
 use hex::FromHex as _;
-use hkdf::Hkdf;
+use hkdf::SimpleHkdf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::derive::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "json")]
 use norito::json;
-use rand::{Rng as _, SeedableRng as _};
+use rand::{RngExt as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 use sha3::Sha3_512;
 use std::{fmt, ops::Deref, str::FromStr, string::String, sync::Arc, vec::Vec};
@@ -645,7 +645,7 @@ pub fn derive_phone_retail_nullifier_v1(
     if secret.len() < Hash::LENGTH {
         return Err(RamLfeError::WeakPhoneNullifierSecret);
     }
-    let hkdf = Hkdf::<Sha3_512>::new(Some(network_id), secret);
+    let hkdf = SimpleHkdf::<Sha3_512>::new(Some(network_id), secret);
     let mut material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let info = Zeroizing::new([PHONE_RETAIL_NULLIFIER_DOMAIN, canonical_phone.as_bytes()].concat());
     hkdf.expand(&info, material.as_mut())
@@ -1087,7 +1087,7 @@ fn evaluate_hkdf_prf(
     }
     let transcript = hkdf_request_transcript(expected.policy_hash, commitment, request)?;
     let hkdf_salt = [HKDF_SALT_DOMAIN, expected.policy_hash.as_ref()].concat();
-    let hkdf = Hkdf::<Sha3_512>::new(Some(&hkdf_salt), secret);
+    let hkdf = SimpleHkdf::<Sha3_512>::new(Some(&hkdf_salt), secret);
     let mut opaque_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     hkdf.expand_multi_info(
         &[HKDF_OPAQUE_INFO_DOMAIN, transcript.as_slice()],

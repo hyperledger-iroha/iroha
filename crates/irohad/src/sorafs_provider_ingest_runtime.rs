@@ -59,7 +59,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use mv::storage::StorageReadOnly as _;
 use norito::{core::DecodeLimits, decode_from_bytes_with_limits};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use sorafs_car::{
     CarBuildPlan, ChunkStoreError, compute_chunk_plan_digest_sha3,
     musubi::{MusubiBundleVerifierV1, VerifiedMusubiBundleV1},
@@ -3673,7 +3673,7 @@ fn record_tick_outcome(
 fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 32];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut bytes)
             .wrap_err("operating-system randomness unavailable for provider-ingest claim owner")?;
         if let Ok(owner) = ProviderIngestClaimOwnerV1::new(bytes) {
@@ -3685,7 +3685,7 @@ fn random_claim_owner() -> Result<ProviderIngestClaimOwnerV1> {
 fn random_provider_attestation_claim_owner() -> Result<MusubiProviderAttestationClaimOwnerV1> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 32];
-        OsRng.try_fill_bytes(&mut bytes).wrap_err(
+        SysRng.try_fill_bytes(&mut bytes).wrap_err(
             "operating-system randomness unavailable for provider-attestation claim owner",
         )?;
         if let Ok(owner) = MusubiProviderAttestationClaimOwnerV1::new(bytes) {

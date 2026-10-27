@@ -32,7 +32,7 @@ use norito::derive::JsonDeserialize;
 #[cfg(feature = "connect")]
 use norito::json;
 #[cfg(feature = "connect")]
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 #[cfg(feature = "connect")]
 use reqwest::Client;
 #[cfg(feature = "connect")]
@@ -88,7 +88,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     let (app_pk, app_secret_key) = x.try_keypair(KeyGenOption::Random)?;
     let app_pk_bytes: [u8; 32] = *app_pk.as_bytes();
     let mut nonce = [0u8; 16];
-    rand::rngs::OsRng.try_fill_bytes(&mut nonce)?;
+    rand::rngs::SysRng.try_fill_bytes(&mut nonce)?;
     if nonce.iter().all(|byte| *byte == 0) {
         anyhow::bail!("operating-system RNG returned an invalid all-zero Connect nonce");
     }

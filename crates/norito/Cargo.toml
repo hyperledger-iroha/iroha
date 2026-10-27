@@ -17,11 +17,11 @@ iroha_schema.workspace = true
 simdutf8 = { version = "0.1.5", optional = true }
 rayon = { version = "1.11.0", optional = true }
 url.workspace = true
-sha3 = "0.10.8"
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha3 = "0.12.0"
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 toml.workspace = true
-hkdf = "0.12.4"
-chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
+hkdf = "0.13.0"
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
 blake3 = "1.8.2"
 iroha_audio = { path = "../iroha_audio" }
 ryu = "1.0.20"
@@ -32,7 +32,7 @@ gpuzstd_metal = { path = "../gpuzstd_metal", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-rand = "0.9.3"
+rand = "0.10.3"
 regex = { version = "1.12.2", default-features = false, features = ["std"] }
 iroha_schema = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }

@@ -1,7 +1,7 @@
 //! Live-cell clearing controls for confidential wallet keys and partial RNG output.
 
 use super::*;
-use rand_core::TryRngCore;
+use rand_core::TryRng;
 
 thread_local! {
     static CLEARED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -94,7 +94,7 @@ struct PartialRng {
     unwind: bool,
 }
 
-impl TryRngCore for PartialRng {
+impl TryRng for PartialRng {
     type Error = PartialRngError;
 
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {

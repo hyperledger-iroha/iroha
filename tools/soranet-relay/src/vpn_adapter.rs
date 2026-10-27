@@ -9,7 +9,7 @@ use crate::vpn::{
     send_scheduled_frames_with_adapter, write_frame as write_padded_frame,
 };
 use iroha_data_model::soranet::vpn::{VpnCellClassV1, VpnCellFlagsV1, VpnCellV1, VpnFlowLabelV1};
-use rand::{TryRngCore as _, rngs::OsRng};
+use rand::{TryRng as _, rngs::SysRng};
 use std::{fmt, sync::Arc};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Batch parameters for building data-class VPN frames.
@@ -235,7 +235,7 @@ pub struct VpnBridge {
 }
 fn random_cover_seed() -> Result<[u8; 32], VpnFrameBuildError> {
     let mut seed = zeroize::Zeroizing::new([0u8; 32]);
-    OsRng
+    SysRng
         .try_fill_bytes(seed.as_mut())
         .map_err(|_| VpnFrameBuildError::CoverRandomnessUnavailable)?;
     if seed.iter().all(|byte| *byte == 0) {

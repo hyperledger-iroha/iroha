@@ -897,6 +897,7 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected entropy failure")

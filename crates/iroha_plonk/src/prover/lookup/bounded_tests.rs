@@ -75,7 +75,7 @@ fn eligibility_requires_an_unrotated_single_public_fixed_table() {
 /// The default opt-out is shared with malicious-prover verifier tests.
 struct FullWidthReference;
 impl<F: PastaField> LookupPermutation<F> for FullWidthReference {
-    fn permute<R: RngCore>(
+    fn permute<R: Rng>(
         &mut self,
         input: &[F],
         table: &[F],

@@ -6,6 +6,7 @@ import Foundation
 enum KagemushaQRProbeManifest {
   static let schemas: [String: [Set<String>]] = [
     "qr-send": [["setup-id", "request-id"]],
+    "qr-continue-send": [["setup-id", "request-id"]],
     "qr-receive": [["setup-id", "request-id", "amount"],
       ["setup-id", "request-id", "amount", "fee-schedule", "fee-certificate"]],
     "qr-recover-send": [["setup-id", "request-id"]],

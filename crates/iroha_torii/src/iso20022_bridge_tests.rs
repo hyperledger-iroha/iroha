@@ -299,7 +299,7 @@ fn xml_signature_test_signing_key() -> P256SigningKey {
     P256SigningKey::from_bytes(&[0x31; 32].into()).expect("deterministic P-256 key")
 }
 fn low_s_p256_signature(signature: P256Signature) -> P256Signature {
-    signature.normalize_s().unwrap_or(signature)
+    signature.normalize_s()
 }
 fn low_s_p256_signature_der_from_bytes(signature: &[u8]) -> Vec<u8> {
     let signature = if signature.len() == P256_XMLDSIG_SIGNATURE_LEN {
@@ -340,7 +340,7 @@ fn high_s_p256_signature(signature: P256Signature) -> P256Signature {
     );
     let high_s = P256Signature::from_slice(&high_s_bytes).expect("high-S signature");
     assert!(
-        high_s.normalize_s().is_some(),
+        high_s.normalize_s() != high_s,
         "test helper must produce a non-canonical high-S signature"
     );
     high_s
@@ -396,7 +396,7 @@ fn signed_pacs008_xml() -> String {
 fn test_p256_public_key_pin() -> String {
     let public_key = test_p256_signing_key()
         .verifying_key()
-        .to_encoded_point(false)
+        .to_sec1_point(false)
         .as_bytes()
         .to_vec();
     sha256_hex(&public_key)
@@ -541,7 +541,7 @@ fn signed_pacs008_xml_with_sgntr_signature_carrier() -> String {
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -665,7 +665,7 @@ fn signed_pacs008_xml_with_extra_reference_transform() -> String {
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -923,7 +923,7 @@ fn signed_pacs008_xml_with_signed_info_rewrite(
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1002,7 +1002,7 @@ fn signed_pacs008_xml_with_signed_properties(
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1194,7 +1194,7 @@ fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     format!(
@@ -1416,7 +1416,7 @@ fn signed_pacs008_xml_with_comments() -> String {
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1510,7 +1510,7 @@ fn signed_pacs008_xml_with_signed_info_xml_namespace_attribute() -> String {
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1572,7 +1572,7 @@ fn signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute() -> String 
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1638,7 +1638,7 @@ fn signed_pacs008_xml_with_default_signature_namespace(xmldsig_namespace: &str) 
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1728,7 +1728,7 @@ fn signed_pacs008_xml_with_prefixed_signature_namespace_options_and_namespace(
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -1893,7 +1893,7 @@ fn signed_pacs008_xml_from_unsigned_with_reference_options(
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let signature_xml = format!(
@@ -2327,7 +2327,7 @@ impl PublicKeyData for CompressedP256PublicKey {
 fn compressed_p256_subject_public_key_info(key_pair: &RcgenKeyPair) -> CompressedP256PublicKey {
     let compressed_point = P256VerifyingKey::from_sec1_bytes(key_pair.public_key_raw())
         .expect("rcgen P-256 public key")
-        .to_encoded_point(true);
+        .to_sec1_point(true);
     CompressedP256PublicKey {
         bytes: compressed_point.as_bytes().to_vec(),
     }
@@ -5401,7 +5401,7 @@ fn supported_xml_key_material_enforces_key_info_shape() {
     let public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(false)
+            .to_sec1_point(false)
             .as_bytes(),
     );
     let default_namespaces = default_xmlsig_namespace_bindings();
@@ -5449,7 +5449,7 @@ fn supported_xml_key_material_enforces_key_info_shape() {
     let compressed_public_key = BASE64_STANDARD.encode(
         signing_key
             .verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes(),
     );
     let compressed_public_key_xml = format!(
@@ -6948,7 +6948,7 @@ fn require_verified_profile_rejects_compressed_public_key() {
     let signing_key = xml_signature_test_signing_key();
     let compressed_public_key = signing_key
         .verifying_key()
-        .to_encoded_point(true)
+        .to_sec1_point(true)
         .as_bytes()
         .to_vec();
     let payload =

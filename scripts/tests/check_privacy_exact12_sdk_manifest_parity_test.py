@@ -197,7 +197,7 @@ def test_shared_construction_owner_is_in_the_exact_bridge_closure(tmp_path: Path
     else:
         owner.write_text('#[unsafe(no_mangle)] pub extern "C" fn iroha_privacy_unchecked_v1() {}\n')
     with pytest.raises(MODULE.AuditError):
-        MODULE._require_exact_abi31(root)
+        MODULE._require_exact_abi33(root)
 
 
 @pytest.mark.parametrize("relative, needle, replacement", (
@@ -246,7 +246,7 @@ def test_relocated_guards_cannot_be_satisfied_by_other_functions_or_comments() -
 def test_human_report_uses_the_exact_approved_export_count() -> None:
     report = MODULE.audit(ROOT)
     assert len(MODULE.APPROVED_PRIVACY_EXPORTS) == 7
-    assert "ABI31 privacy exports: exact 7" in MODULE._format_human(report)
+    assert "ABI33 privacy exports: exact 7" in MODULE._format_human(report)
     assert "exact six" not in MODULE._format_human(report)
 
 
@@ -813,7 +813,7 @@ def test_csharp_authenticated_network_boundary_cannot_be_removed(
 
 
 def test_live_c_privacy_inventory_matches_its_single_approved_owner() -> None:
-    MODULE._require_exact_abi31(ROOT)
+    MODULE._require_exact_abi33(ROOT)
     assert len(MODULE.APPROVED_PRIVACY_EXPORTS) == 7
 
 
@@ -823,16 +823,16 @@ def test_missing_c_capability_validator_is_rejected(tmp_path: Path) -> None:
     declaration = "void iroha_privacy_validate_exact12_capability_manifest_v1(void);"
     assert declaration in header.read_text()
     header.write_text(header.read_text().replace(declaration, ""), encoding="utf-8")
-    with pytest.raises(MODULE.AuditError, match="C ABI31.*exact approved inventory"):
-        MODULE._require_exact_abi31(root)
+    with pytest.raises(MODULE.AuditError, match="C ABI33.*exact approved inventory"):
+        MODULE._require_exact_abi33(root)
 
 
 def test_unapproved_c_privacy_export_is_rejected(tmp_path: Path) -> None:
     root = _minimal_safe_tree(tmp_path)
     header = root / MODULE.C_HEADER
     header.write_text(header.read_text() + "\nvoid iroha_privacy_unapproved_v1(void);\n", encoding="utf-8")
-    with pytest.raises(MODULE.AuditError, match="C ABI31.*exact approved inventory"):
-        MODULE._require_exact_abi31(root)
+    with pytest.raises(MODULE.AuditError, match="C ABI33.*exact approved inventory"):
+        MODULE._require_exact_abi33(root)
 
 
 @pytest.mark.parametrize("mutation", ("java-owner", "android-export", "kotlin-validator", "java-transport-owner", "java-id-owner"))

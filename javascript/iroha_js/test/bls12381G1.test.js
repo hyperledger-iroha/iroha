@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { bls12_381 } from "@noble/curves/bls12-381";
+import { bls12_381 } from "@noble/curves/bls12-381.js";
 
 import {
   assertCanonicalBls12381G1Compressed,
@@ -35,7 +35,7 @@ function acceptedBy(assertion, compressed) {
 
 function acceptedByNoble(compressed) {
   try {
-    const point = bls12_381.G1.Point.fromHex(compressed);
+    const point = bls12_381.G1.Point.fromBytes(compressed);
     point.assertValidity();
     return !point.is0();
   } catch {
@@ -116,7 +116,7 @@ test("canonical BLS12-381 G1 validation rejects hostile encodings like noble", (
   }
 });
 
-test("canonical BLS12-381 G1 validation is stricter than reducing field encodings", () => {
+test("canonical BLS12-381 G1 validation and Noble v2 reject unreduced field encodings", () => {
   const twiceGeneratorX = bls12_381.G1.Point.BASE.multiply(2n).toAffine().x;
   const nonCanonicalEquivalent = bytesFromBigInt(
     BLS12381_FIELD_MODULUS + twiceGeneratorX,
@@ -127,8 +127,8 @@ test("canonical BLS12-381 G1 validation is stricter than reducing field encoding
   );
   assert.equal(
     acceptedByNoble(nonCanonicalEquivalent),
-    true,
-    "the differential oracle reduces this field element modulo p",
+    false,
+    "the differential oracle rejects a noncanonical field element",
   );
   assert.equal(
     acceptedBy(assertCanonicalBls12381G1Compressed, nonCanonicalEquivalent),

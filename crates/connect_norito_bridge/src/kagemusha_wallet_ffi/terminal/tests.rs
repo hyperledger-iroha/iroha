@@ -65,14 +65,42 @@ fn deletion_intake_accepts_only_zero_unused_fields_and_actual_token_slot() {
             assert!(setup::request(&[0; 32], selector, 0, token, originals).is_err());
         }
     }
-    assert!(setup::bounds(56).is_err());
+    assert!(setup::bounds(59).is_err());
 }
 struct Script {
     base: super::super::tests::TestWallet,
     phase: Arc<AtomicUsize>,
-    tokens: review::Tokens<()>,
+    tokens: review::Tokens<review::OriginBound<()>>,
 }
 impl Wallet for Script {
+    fn deferred_receipt(&mut self) -> Result<maintenance::ReceiptStep> {
+        Ok(maintenance::ReceiptStep::Empty)
+    }
+    fn deferred_wake_hint(&mut self) -> Result<maintenance::WakeHint> {
+        Ok(maintenance::WakeHint::Age(
+            state::DeferredArchiveWakeHintV1::NoAgeWake,
+        ))
+    }
+    fn drain_plan(&mut self) -> Result<maintenance::DrainPlan> {
+        Ok(maintenance::DrainPlan::Finished(
+            state::DeferredArchiveDrainV1::NoWork,
+        ))
+    }
+
+    fn maintenance(&mut self) -> Result<maintenance::View> {
+        Ok(maintenance::View::Released)
+    }
+    fn discard_capability(
+        &mut self,
+        kind: review::CapabilityKind,
+        origin: u64,
+        token: u64,
+    ) -> Result<()> {
+        match kind {
+            review::CapabilityKind::Deletion => self.tokens.take_bound(token, origin),
+            _ => self.base.discard_capability(kind, origin, token),
+        }
+    }
     fn require_custody_operations(&self) -> Result<()> {
         if self.phase.load(Ordering::SeqCst) == 0 {
             Ok(())
@@ -80,19 +108,22 @@ impl Wallet for Script {
             Err(Failure::code(TERMINAL))
         }
     }
-    fn setup(&mut self, input: setup::Setup) -> Result<Response> {
+    fn setup(&mut self, _exchange_id: u64, input: setup::Setup) -> Result<Response> {
         match input {
             setup::Setup::ReviewCustodyDeletion => {
                 self.require_custody_operations()?;
                 Ok(Response {
                     kind: 53,
-                    sequence: self.tokens.put(())?.into(),
+                    sequence: self
+                        .tokens
+                        .put(review::OriginBound::new(_exchange_id, ()))?
+                        .into(),
                     bytes: projection(&view())?,
                     ..Response::default()
                 })
             }
             setup::Setup::ConfirmCustodyDeletion { token } => {
-                self.tokens.take(token)?;
+                self.tokens.take_bound(token, _exchange_id)?;
                 self.phase.store(1, Ordering::SeqCst);
                 Err(Failure::code(UNCERTAIN))
             }
@@ -103,13 +134,13 @@ impl Wallet for Script {
                 }))
             }
             setup::Setup::DiscardCustodyDeletion { token } => {
-                self.tokens.take(token)?;
+                self.tokens.take_bound(token, _exchange_id)?;
                 Ok(Response {
                     kind: 55,
                     ..Response::default()
                 })
             }
-            _ => self.base.setup(input),
+            _ => self.base.setup(_exchange_id, input),
         }
     }
     fn snapshot(&mut self) -> Result<state::Snapshot> {
@@ -131,6 +162,9 @@ impl Wallet for Script {
     }
     fn retry(&mut self, operation: &[u8; 32]) -> Result<Response> {
         self.base.retry(operation)
+    }
+    fn has_pending_operation(&mut self) -> Result<bool> {
+        self.base.has_pending_operation()
     }
     fn resume(&mut self) -> Result<Response> {
         self.base.resume()
@@ -177,7 +211,14 @@ fn call(handle: u64, selector: u32, token: u64) -> WalletResult {
         third_length: 0,
     };
     let mut result = WalletResult::default();
-    let rc = unsafe { connect_norito_kagemusha_wallet_setup_v1(handle, &request, &mut result) };
+    let rc = unsafe {
+        connect_norito_kagemusha_wallet_setup_v1(
+            handle,
+            test_setup_exchange_request(handle, &request),
+            &request,
+            &mut result,
+        )
+    };
     assert_eq!(rc, if result.status < 0 { result.status } else { 0 });
     result
 }
@@ -201,38 +242,46 @@ fn c_boundary_preserves_foreign_review_freezes_money_and_keeps_only_terminal_rec
     let calls = b_calls.load(Ordering::SeqCst);
     assert_eq!(snapshot(b).unwrap_err().status, TERMINAL);
     assert_eq!(
-        setup(b, setup::Setup::Bootstrap).unwrap_err().status,
+        test_setup(&test_invocation(b).unwrap(), setup::Setup::Bootstrap)
+            .unwrap_err()
+            .status,
         TERMINAL
     );
     assert_eq!(fold(b).unwrap_err().status, TERMINAL);
     let codecs_refused = |expected| {
         for status in [false, true] {
             assert_eq!(
-                setup(
-                    b,
-                    setup::Setup::CreditedOriginal {
-                        status,
-                        original: vec![1],
-                    },
-                )
-                .unwrap_err()
-                .status,
+                test_invocation(b)
+                    .and_then(|invocation| {
+                        test_setup(
+                            &invocation,
+                            setup::Setup::CreditedOriginal {
+                                status,
+                                original: vec![1],
+                            },
+                        )
+                    })
+                    .unwrap_err()
+                    .status,
                 expected
             );
         }
         for kind in 1..=4 {
             for wrap in [false, true] {
                 assert_eq!(
-                    setup(
-                        b,
-                        setup::Setup::Transport {
-                            kind,
-                            wrap,
-                            original: vec![1],
-                        },
-                    )
-                    .unwrap_err()
-                    .status,
+                    test_invocation(b)
+                        .and_then(|invocation| {
+                            test_setup(
+                                &invocation,
+                                setup::Setup::Transport {
+                                    kind,
+                                    wrap,
+                                    original: vec![1],
+                                },
+                            )
+                        })
+                        .unwrap_err()
+                        .status,
                     expected
                 );
             }
@@ -338,13 +387,19 @@ fn c_allocator_failure_after_review_issuance_discards_only_the_undelivered_revie
     let mut out = WalletResult::default();
     let mut failed_token = 0;
     let result = unsafe {
-        exports::setup_output_with(id, &request, &mut out, |value, bytes| {
-            assert_eq!(value.status, 53);
-            assert_eq!(bytes.len(), 254);
-            assert_ne!(value.sequence_low, prior.sequence_low);
-            failed_token = value.sequence_low;
-            Err(()) // exact post-issuance output allocator refusal, not null-out preflight
-        })
+        exports::setup_output_with(
+            id,
+            test_setup_exchange_request(id, &request),
+            &request,
+            &mut out,
+            |value, bytes| {
+                assert_eq!(value.status, 53);
+                assert_eq!(bytes.len(), 254);
+                assert_ne!(value.sequence_low, prior.sequence_low);
+                failed_token = value.sequence_low;
+                Err(()) // exact post-issuance output allocator refusal, not null-out preflight
+            },
+        )
     };
     assert_eq!(result, RESOURCE);
     assert_ne!(failed_token, 0);
@@ -373,8 +428,14 @@ fn c_allocator_failure_after_review_issuance_discards_only_the_undelivered_revie
 fn jni_delivery_refusal_discards_new_review_but_never_rolls_back_terminal_outcome() {
     let (id, _, _) = scripted();
     let mut failed_token = 0;
-    let result = setup(id, setup::Setup::ReviewCustodyDeletion);
-    let null = deliver(id, 48, result, |result| {
+    let invocation = test_invocation(id).unwrap();
+    let mut delivery = review::CapabilityDelivery::default();
+    let result = setup(
+        &invocation,
+        setup::Setup::ReviewCustodyDeletion,
+        &mut delivery,
+    );
+    let null = review::deliver(delivery, result, |result| {
         let result = result.unwrap();
         assert_eq!(result.kind, 53);
         failed_token = result.sequence as u64;
@@ -384,13 +445,25 @@ fn jni_delivery_refusal_discards_new_review_but_never_rolls_back_terminal_outcom
     assert_ne!(failed_token, 0);
     assert_eq!(call(id, 49, failed_token).status, INVALID);
     snapshot(id).unwrap();
-    let result = setup(id, setup::Setup::ReviewCustodyDeletion);
-    let token = deliver(id, 48, result, |result| {
+    let invocation = test_invocation(id).unwrap();
+    let mut delivery = review::CapabilityDelivery::default();
+    let result = setup(
+        &invocation,
+        setup::Setup::ReviewCustodyDeletion,
+        &mut delivery,
+    );
+    let token = review::deliver(delivery, result, |result| {
         (result.unwrap().sequence as u64, true)
     });
     assert_eq!(call(id, 49, token).status, UNCERTAIN);
-    let result = setup(id, setup::Setup::ResumeCustodyDeletion);
-    let null = deliver(id, 50, result, |result| {
+    let invocation = test_invocation(id).unwrap();
+    let mut delivery = review::CapabilityDelivery::default();
+    let result = setup(
+        &invocation,
+        setup::Setup::ResumeCustodyDeletion,
+        &mut delivery,
+    );
+    let null = review::deliver(delivery, result, |result| {
         assert_eq!(result.unwrap().kind, 54);
         (std::ptr::null_mut::<u8>(), false)
     });

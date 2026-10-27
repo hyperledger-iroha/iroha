@@ -151,7 +151,7 @@ static HANDSHAKE_BUCKET_COUNTS: [AtomicU64; HN] = [
 static HANDSHAKE_MS_SUM: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKE_MS_COUNT: AtomicU64 = AtomicU64::new(0);
 fn soranet_handshake_rng() -> Result<StdRng, Error> {
-    StdRng::try_from_os_rng()
+    StdRng::try_from_rng(&mut rand::rngs::SysRng)
         .map_err(|err| Error::HandshakeSoranet(format!("SoraNet OS RNG failed: {err}")))
 }
 fn generate_soranet_transport_delegation_challenge<R>(

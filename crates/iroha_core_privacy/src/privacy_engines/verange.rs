@@ -11,7 +11,7 @@ use super::p256::{
     random_nonzero_scalar, validate_generator_independence,
 };
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 /// Closed suite identifier committed by every `VeRange` transcript.
@@ -750,7 +750,7 @@ pub fn prove<R>(
     rng: &mut R,
 ) -> Result<VeRangeType1ProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_prover_witness(statement, value, blinding)?;
     let mut checked_rng = health_checked_p256_rng_v1(rng)?;
@@ -779,7 +779,7 @@ fn prove_validated<R>(
     rng: &mut R,
 ) -> Result<VeRangeType1ProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = VeRangeParametersV1::for_profile(statement.profile)?;
     for _ in 0..MAX_PROVER_RESTARTS {
@@ -804,7 +804,7 @@ fn prove_once<R>(
     parameters: &VeRangeParametersV1,
 ) -> Result<VeRangeType1ProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let rows = statement.profile.rows();
     let columns = statement.profile.columns();
@@ -1063,7 +1063,7 @@ pub fn prove_batch<R>(
     rng: &mut R,
 ) -> Result<VeRangeType1BatchProofV1, VeRangeError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if values.len() != statement.len() || blindings.len() != statement.len() {
         return Err(VeRangeError::BatchLengthMismatch {
@@ -1200,7 +1200,7 @@ fn scalar_power_of_two(exponent: usize) -> Scalar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1210,37 +1210,42 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            let mut offset = 0;
-            while offset < dest.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.verange.kat.rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (dest.len() - offset).min(block.len());
-                dest[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(dest);
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < dest.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.verange.kat.rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (dest.len() - offset).min(block.len());
+                    dest[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     #[derive(Clone, Copy)]
     enum AdversarialRngMode {
         Periodic,
@@ -1248,17 +1253,16 @@ mod tests {
         Panic,
     }
     struct AdversarialRng(AdversarialRngMode);
-    impl RngCore for AdversarialRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for AdversarialRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("VeRange must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("VeRange must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("VeRange must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 AdversarialRngMode::Periodic => {
                     for (index, byte) in destination.iter_mut().enumerate() {
@@ -1272,7 +1276,7 @@ mod tests {
                     for (index, byte) in destination.iter_mut().take(17).enumerate() {
                         *byte = index.to_le_bytes()[0];
                     }
-                    Err(RngError::new("injected partial VeRange entropy failure"))
+                    Err(RngError::other("injected partial VeRange entropy failure"))
                 }
                 AdversarialRngMode::Panic => {
                     panic!("invalid VeRange witness consumed entropy")
@@ -1280,7 +1284,7 @@ mod tests {
             }
         }
     }
-    impl CryptoRng for AdversarialRng {}
+    impl rand::TryCryptoRng for AdversarialRng {}
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[31] = value;

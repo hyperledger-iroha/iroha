@@ -5,9 +5,9 @@ mod test_fixture_cohort;
 
 use super::*;
 use iroha_plonk::{
-    check::{CheckMode, check_circuit},
+    check::{CheckFailure, CheckMode, check_circuit},
     cs::{Column, ConstraintSystem, Instance},
-    frontend::{Circuit, Layouter, SimpleFloorPlanner, Value},
+    frontend::{Circuit, Layouter, SimpleFloorPlanner, Value, configure, synthesize},
 };
 use iroha_plonk_gadgets::{
     GlueConfig, LimbBits, Pow5Columns, RoundConstantColumns, RunningSumChip, RunningSumConfig,
@@ -16,7 +16,7 @@ use iroha_plonk_gadgets::{
         p_bytes_native,
         tape::{BytesChip, BytesConfig},
     },
-    tamper::undetected_tampers,
+    tamper::{Tamper, check_tampers, undetected_tampers},
 };
 
 #[derive(Clone)]
@@ -30,6 +30,7 @@ struct Config {
     range: RunningSumConfig,
     bytes: BytesConfig,
     hash: SpongeConfig<Fp>,
+    hash_columns: Pow5Columns,
     instance: Column<Instance>,
 }
 
@@ -62,6 +63,7 @@ impl Circuit<Fp> for ReceiptCircuit {
             range,
             bytes,
             hash,
+            hash_columns: columns,
             instance,
         }
     }
@@ -272,6 +274,95 @@ fn every_receipt_advice_cell_is_constrained() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn receipt_secondary_amount_cannot_diverge_from_primary_digest() {
+    let bytes_a = sample();
+    let public_a = public(&bytes_a);
+    let circuit_a = ReceiptCircuit {
+        bytes: bytes_a.clone(),
+        known: true,
+    };
+    assert!(
+        check_tampers(&circuit_a, 10, &public_a, &[])
+            .unwrap()
+            .is_satisfied()
+    );
+    let (_, config) = configure(&circuit_a).unwrap();
+    let assigned_a = synthesize(&circuit_a, 10, Some(&public_a)).unwrap();
+    let advice_a = assigned_a.tables.advice().unwrap();
+    let primary = config.bytes.primary().index();
+    let replaced_columns = [config.bytes.primary()]
+        .into_iter()
+        .chain(config.hash_columns.state)
+        .chain([config.hash_columns.aux])
+        .map(|column| column.index())
+        .collect::<Vec<_>>();
+    assert!(!replaced_columns.contains(&config.bytes.secondary().index()));
+
+    // Exercise both the first-word link and the final-byte anchor of amount's
+    // secondary segment, which crosses the primary chunk boundary at row 155.
+    for changed_byte in [146, 161] {
+        let mut bytes_b = bytes_a.clone();
+        bytes_b[changed_byte] ^= 1;
+        let public_b = public(&bytes_b);
+        let circuit_b = ReceiptCircuit {
+            bytes: bytes_b,
+            known: true,
+        };
+        assert!(
+            check_tampers(&circuit_b, 10, &public_b, &[])
+                .unwrap()
+                .is_satisfied()
+        );
+        let assigned_b = synthesize(&circuit_b, 10, Some(&public_b)).unwrap();
+        assert_eq!(assigned_a.tables.fixed(), assigned_b.tables.fixed());
+        assert_eq!(assigned_a.tables.selectors(), assigned_b.tables.selectors());
+        assert_eq!(
+            assigned_a.tables.advice_assigned(),
+            assigned_b.tables.advice_assigned()
+        );
+        let advice_b = assigned_b.tables.advice().unwrap();
+        let mut tampers = Vec::new();
+        for &column in &replaced_columns {
+            for (row, &assigned) in assigned_b.tables.advice_assigned()[column]
+                .iter()
+                .enumerate()
+            {
+                let delta = advice_a[column][row] - advice_b[column][row];
+                if assigned && delta != Fp::ZERO {
+                    tampers.push(Tamper { column, row, delta });
+                }
+            }
+        }
+        assert!(tampers.iter().any(|tamper| tamper.column == primary));
+        assert!(tampers.iter().any(|tamper| tamper.column != primary));
+
+        // Keep B's complete secondary, range and arithmetic witness, but replace
+        // every primary/hash cell with A's coherent witness. The public frame
+        // deliberately asks for digest(A) and all semantic/derived fields(B).
+        // A stale copy or digest must not be the reason this forgery is rejected.
+        let mut mixed_public = public_b;
+        mixed_public[0][0] = public_a[0][0];
+        let report = check_tampers(&circuit_b, 10, &mixed_public, &tampers).unwrap();
+        assert!(!report.is_satisfied());
+        assert_eq!(report.failures().len(), 1, "{report}");
+        assert!(
+            matches!(
+                &report.failures()[0],
+                CheckFailure::ConstraintNotSatisfied {
+                    gate_name,
+                    constraint_name,
+                    location,
+                    ..
+                } if gate_name == "bytes secondary link"
+                    && constraint_name == "secondary byte = primary byte"
+                    && location.row == changed_byte
+            ),
+            "{report}"
+        );
+    }
 }
 
 #[test]

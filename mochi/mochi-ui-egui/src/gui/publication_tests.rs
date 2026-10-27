@@ -76,7 +76,7 @@ fn publication_form_requires_explicit_click_and_respects_disabled_actions() {
                 ..Default::default()
             };
             let mut requested = None;
-            let mut draw = |context: &egui::Context| {
+            let mut draw = |context: &mut egui::Ui| {
                 egui::CentralPanel::default().show(context, |ui| {
                     if let Some(action) = form.show(ui, available) {
                         requested = Some(action);

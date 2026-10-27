@@ -1,4 +1,4 @@
-//! Differential tests of `iroha_pasta::{Fp, Fq}` against `pasta_curves` 0.5.2.
+//! Differential tests of `iroha_pasta::{Fp, Fq}` against `pasta_curves` 0.6.1.
 //!
 //! Every operation result is compared through the canonical 32-byte encoding.
 //! The random loop performs well over 10^6 field operations per run, and the
@@ -7,7 +7,7 @@
 
 use ff::{Field, FromUniformBytes, PrimeField, PrimeFieldBits, WithSmallOrderMulGroup};
 use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::rand_core::{Rng, SeedableRng};
 
 /// Runs the differential suite for one field pair.
 macro_rules! field_suite {

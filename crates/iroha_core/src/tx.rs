@@ -15072,7 +15072,7 @@ pub mod tests {
                 telemetry: crate::telemetry::StateTelemetry::default(),
             }
             .into_state_from_json(snapshot),
-            Err(crate::state::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+            Err(crate::state::deserialize::StateRestoreError::SuccessorRequired { .. })
         ));
         let mut replay = original_chain();
         assert_eq!(replay.network_id(), chain.network_id());

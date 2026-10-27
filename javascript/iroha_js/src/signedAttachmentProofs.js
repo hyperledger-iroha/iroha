@@ -1,7 +1,7 @@
 /** Canonical proof-carrier metadata checks. These do not verify proofs or admit transactions. */
 import { Buffer } from "buffer";
-import { blake3 } from "@noble/hashes/blake3";
-import { blake2b } from "@noble/hashes/blake2b";
+import { blake3 } from "@noble/hashes/blake3.js";
+import { blake2b } from "@noble/hashes/blake2.js";
 import {
   BufferReader, decodeNoritoVec, decodeStructFields, decodeU32Value,
   encodeNoritoField, encodeNoritoVec, frameNoritoPayload, readNoritoField,

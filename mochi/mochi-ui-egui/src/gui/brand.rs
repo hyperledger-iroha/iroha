@@ -547,12 +547,16 @@ mod tests {
             Mood::Dizzy,
         ] {
             let mut area = Rect::NOTHING;
-            let output = context.run(egui::RawInput::default(), |context| {
-                egui::CentralPanel::default().show(context, |ui| {
-                    area = mascot(ui, None, 120.0, mood).rect;
-                    wordmark(ui, 20.0, INK);
-                });
-            });
+            let output = super::super::tests::run_headless_frame(
+                &context,
+                egui::RawInput::default(),
+                |context| {
+                    egui::CentralPanel::default().show(context, |ui| {
+                        area = mascot(ui, None, 120.0, mood).rect;
+                        wordmark(ui, 20.0, INK);
+                    });
+                },
+            );
             assert!(!output.shapes.is_empty());
             assert!((area.width() - 120.0).abs() < f32::EPSILON);
         }

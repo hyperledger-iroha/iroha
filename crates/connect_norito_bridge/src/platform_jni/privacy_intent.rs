@@ -34,7 +34,7 @@ fn project_instruction(archive: &[u8]) -> Option<Vec<u8>> {
 
 /// Return an intent-only instruction projection; null means malformed or unavailable input.
 pub(super) fn java_native_submit_proof_intent_projection(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
     if archive.is_null() {

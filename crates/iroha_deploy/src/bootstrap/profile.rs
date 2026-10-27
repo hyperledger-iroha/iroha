@@ -1,12 +1,11 @@
-//! Independently installed release authorities and retrieval locations, with no network defaults.
+//! Installed discovery roots and exact network expectations for native bootstrap.
 
 use std::{collections::BTreeMap, path::Path};
 
-use iroha_crypto::PublicKey;
 use norito::{Decode, Encode};
 use url::Url;
 
-use super::{BootstrapError, ReleaseTrust, Result, decode};
+use super::{BootstrapError, Result, decode, validate_network_name};
 
 /// Canonical native bundle filename containing independently installed network profiles.
 pub const NETWORK_PROFILES_FILENAME: &str = "network-profiles.nrt";
@@ -14,84 +13,97 @@ pub const NETWORK_PROFILES_FILENAME: &str = "network-profiles.nrt";
 pub const MAX_INSTALLED_NETWORK_PROFILES: usize = 32;
 /// Maximum canonical installation artifact before decoding or retaining it.
 pub const MAX_INSTALLED_PROFILE_BYTES: usize = 128 * 1024;
-const MAX_CHECKPOINT_URL_BYTES: usize = 2048;
+const MAX_TORII_ROOT_BYTES: usize = 2048;
 
-/// One installed network selection; responses never choose its release key or checkpoint URL.
+/// One installed network selection, with HTTPS or numeric-loopback HTTP for initial discovery.
+/// Native bootstrap retains the exact discovered genesis identity and verifies consensus proofs.
 #[derive(Clone, Debug)]
 pub struct InstalledNetworkProfile {
-    trust: ReleaseTrust,
-    checkpoint_url: Url,
+    network_name: String,
+    torii_root: Url,
+    expected_chain_id: String,
+    account_chain_discriminant: u16,
 }
 
 impl InstalledNetworkProfile {
-    /// Install one independently authenticated release key, serial floor and canonical HTTPS URL.
-    /// This constructor grants no trust to an HTTP response or a key included in one.
+    /// Select a canonical discovery root and exact chain/address expectations.
+    /// Remote networks require HTTPS; explicit numeric-loopback development roots may use HTTP.
+    /// The installed root provides initial discovery; later responses cannot replace a retained
+    /// genesis identity or substitute these chain and account-address selections.
     ///
     /// # Errors
-    /// Invalid network label, authority, rollback floor, credentials, noncanonical URL or bounds.
+    /// Invalid network label, chain, address prefix, credentials, noncanonical URL or bounds.
     pub fn new(
         network_name: String,
-        public_key: PublicKey,
-        minimum_serial: u64,
-        checkpoint_url: &str,
+        torii_root: &str,
+        expected_chain_id: String,
+        account_chain_discriminant: u16,
     ) -> Result<Self> {
-        let trust = ReleaseTrust::new(network_name, public_key, minimum_serial)?;
-        if checkpoint_url.len() > MAX_CHECKPOINT_URL_BYTES {
+        validate_network_name(&network_name)?;
+        expected_chain_id
+            .parse::<iroha_model_base::chain::ChainId>()
+            .map_err(|_| BootstrapError::Invalid("invalid installed chain identity"))?;
+        iroha::config::resolve_account_chain_discriminant(None, Some(account_chain_discriminant))
+            .map_err(|_| BootstrapError::Invalid("invalid installed account address prefix"))?;
+        if torii_root.len() > MAX_TORII_ROOT_BYTES {
             return Err(BootstrapError::Invalid(
-                "installed checkpoint URL exceeds byte bound",
+                "installed Torii root exceeds byte bound",
             ));
         }
-        let url = Url::parse(checkpoint_url)
-            .map_err(|_| BootstrapError::Invalid("invalid installed checkpoint URL"))?;
-        if url.as_str() != checkpoint_url
-            || url.scheme() != "https"
+        let url = Url::parse(torii_root)
+            .map_err(|_| BootstrapError::Invalid("invalid installed Torii root"))?;
+        let numeric_loopback = match url.host() {
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            _ => false,
+        };
+        if url.as_str() != torii_root
+            || !(url.scheme() == "https" || url.scheme() == "http" && numeric_loopback)
             || url.host().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
             || url.fragment().is_some()
+            || !url.path().ends_with('/')
         {
             return Err(BootstrapError::Invalid(
-                "installed checkpoint URL must be canonical credential-free HTTPS",
+                "installed Torii root requires canonical credential-free HTTPS or numeric-loopback HTTP with a trailing slash",
             ));
         }
         Ok(Self {
-            trust,
-            checkpoint_url: url,
+            network_name,
+            torii_root: url,
+            expected_chain_id,
+            account_chain_discriminant,
         })
     }
 
     /// Exact installed CLI selection, without an inferred official-network fallback.
     pub fn network_name(&self) -> &str {
-        &self.trust.network_name
+        &self.network_name
     }
 
-    /// Independently selected verification authority and rollback floor.
-    pub fn release_trust(&self) -> &ReleaseTrust {
-        &self.trust
+    /// Exact installed root used for native discovery and proof retrieval.
+    pub fn torii_root(&self) -> &Url {
+        &self.torii_root
     }
 
-    /// Exact independently installed release authority; endpoints cannot replace this key.
-    pub fn release_public_key(&self) -> &PublicKey {
-        &self.trust.public_key
+    /// Chain identity that the discovered signed genesis must match exactly.
+    pub fn chain_id(&self) -> &str {
+        &self.expected_chain_id
     }
 
-    /// Installation's minimum accepted release serial, independent of retained release custody.
-    pub const fn minimum_serial(&self) -> u64 {
-        self.trust.minimum_serial
-    }
-
-    /// Exact approved retrieval location; redirects cannot replace it.
-    pub fn checkpoint_url(&self) -> &Url {
-        &self.checkpoint_url
+    /// Account-address prefix required for native account and faucet discovery.
+    pub const fn account_chain_discriminant(&self) -> u16 {
+        self.account_chain_discriminant
     }
 
     fn record(&self) -> ProfileRecord {
         ProfileRecord {
-            network_name: self.trust.network_name.clone(),
-            public_key: self.trust.public_key.clone(),
-            minimum_serial: self.trust.minimum_serial,
-            checkpoint_url: self.checkpoint_url.to_string(),
+            network_name: self.network_name.clone(),
+            torii_root: self.torii_root.to_string(),
+            expected_chain_id: self.expected_chain_id.clone(),
+            account_chain_discriminant: self.account_chain_discriminant,
         }
     }
 }
@@ -100,9 +112,9 @@ impl InstalledNetworkProfile {
 #[norito_schema(name = "iroha_deploy::bootstrap::InstalledNetworkProfileV1")]
 struct ProfileRecord {
     network_name: String,
-    public_key: PublicKey,
-    minimum_serial: u64,
-    checkpoint_url: String,
+    torii_root: String,
+    expected_chain_id: String,
+    account_chain_discriminant: u16,
 }
 
 #[derive(Encode, Decode, norito::NoritoSchema)]
@@ -112,7 +124,7 @@ struct ProfileRecords {
 }
 
 /// Bounded, exactly named profiles supplied by an authenticated native installation.
-/// An empty set is valid: no official Taira authority or URL is invented by this library.
+/// An empty set is valid; network selections must be supplied by the installation.
 #[derive(Clone, Debug)]
 pub struct InstalledNetworkProfiles {
     profiles: BTreeMap<String, InstalledNetworkProfile>,
@@ -166,9 +178,9 @@ impl InstalledNetworkProfiles {
                 .map(|record| {
                     InstalledNetworkProfile::new(
                         record.network_name,
-                        record.public_key,
-                        record.minimum_serial,
-                        &record.checkpoint_url,
+                        &record.torii_root,
+                        record.expected_chain_id,
+                        record.account_chain_discriminant,
                     )
                 })
                 .collect::<Result<_>>()?,
@@ -216,7 +228,7 @@ impl InstalledNetworkProfiles {
         self.profiles
             .get(network_name)
             .ok_or(BootstrapError::Invalid(
-                "selected network has no installed release profile",
+                "selected network has no installed profile",
             ))
     }
 }

@@ -8,8 +8,9 @@ requested SHA-3 assembly features are adjusted; other targets pass through.
 Safe defaults: no source/cache deletion, no deployment, bounded temporary
 response files removed after the compiler exits. --help does not invoke Zig.
 
-TODO: retire this build-only adapter when cargo-zigbuild or pqcrypto-internals
-corrects the Linux library-kind/search-mode interaction. No crypto code changes.
+TODO: requalify and retire this build-only adapter when cargo-zigbuild corrects
+the Linux library-kind/search-mode interaction for the current native graph.
+The retired PQClean bindings are no longer dependencies. No crypto code changes.
 """
 import argparse
 import os

@@ -1,7 +1,7 @@
 //! Offline minting, inspection, and revocation tooling for SoraNet admission tokens.
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use norito::json::{self, Value};
-use rand::{RngCore, SeedableRng, rng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rng, rngs::StdRng};
 use soranet_pq::MlDsaSuite;
 use soranet_relay::token_tool::{
     MintRequest, REVOCATION_LIST_MAX_ENTRIES_V1, RevocationList, TokenBundle, encode_token_base64,

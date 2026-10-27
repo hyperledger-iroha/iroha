@@ -2710,7 +2710,7 @@ struct CaCompositionInputsV1<'a> {
     claims: &'a ZkX509CaAccumulatorStarkTerminalClaimsV1,
 }
 #[cfg(test)]
-fn ca_composition_lanes_v1<R: rand::TryRngCore>(
+fn ca_composition_lanes_v1<R: rand::TryRng>(
     inputs: &CaCompositionInputsV1<'_>,
     alphas: &[E],
     layout: &aggregate::AggregateProofLayoutV1,
@@ -2801,7 +2801,7 @@ mod tests {
         sha_call_bus_stark::{ZkX509ShaCallBusLaneChallengesV1, ZkX509ShaCallPublicShapeV1},
         stark::zk_x509_test_digest384_v1,
     };
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     fn spki(index: u16) -> [u8; ZK_X509_CA_SPKI_DER_BYTES_V1] {
         let mut spki = [0x42; ZK_X509_CA_SPKI_DER_BYTES_V1];
         spki[..2].copy_from_slice(&index.to_be_bytes());
@@ -2874,6 +2874,7 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected compact-CA prover entropy failure")
@@ -2886,7 +2887,7 @@ mod tests {
         Panic,
     }
     struct AdversarialEntropy(EntropyMode);
-    impl TryRngCore for AdversarialEntropy {
+    impl TryRng for AdversarialEntropy {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)

@@ -10,7 +10,7 @@ use crate::secret::SecretPolynomial;
 use ff::Field;
 use iroha_pasta::CancellationToken;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 use rayon::prelude::*;
 
 use super::{MultiopenError, OpeningPlan, ShapeItem};
@@ -172,7 +172,7 @@ pub fn create_proof<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,
-    R: RngCore + CryptoRng,
+    R: Rng + CryptoRng,
 {
     Ok(*create_proof_with_claim(params, plan, points, polys, rng, transcript, budget)?.g())
 }
@@ -193,7 +193,7 @@ pub fn create_proof_with_claim<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,
-    R: RngCore + CryptoRng,
+    R: Rng + CryptoRng,
 {
     create_proof_with_claim_cancellable(params, plan, points, polys, rng, transcript, budget, None)
 }
@@ -219,7 +219,7 @@ pub fn create_proof_with_claim_cancellable<C, T, R>(
 where
     C: PastaCurve,
     T: TranscriptWrite<C> + ?Sized,
-    R: RngCore + CryptoRng,
+    R: Rng + CryptoRng,
 {
     CancellationToken::checkpoint(cancellation)?;
     let n = params.n();

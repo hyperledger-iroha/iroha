@@ -3,7 +3,7 @@ use super::*;
 use crate::kagemusha_wallet_enrollment_v1::prekey::{
     GenerationAuthorizationV1, PreKeyDispatchV1, require_elapsed,
 };
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 
 #[derive(Clone)]
 #[expect(
@@ -31,7 +31,7 @@ use crate::kagemusha_wallet_advance_v1::PreKeySlotSelectionV1 as SlotSelection;
 fn nonce() -> Result<[u8; 32], Error> {
     let mut value = [0; 32];
     while value == [0; 32] {
-        rand::rngs::OsRng
+        rand::rngs::SysRng
             .try_fill_bytes(&mut value)
             .map_err(|_| Error::Original("native entropy unavailable"))?;
     }

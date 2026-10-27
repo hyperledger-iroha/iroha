@@ -1,0 +1,314 @@
+// Copyright 2025 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#import "internal/platform/implementation/apple/Mediums/Hotspot/GNCHotspotMedium.h"
+
+#import <CoreLocation/CoreLocation.h>
+#import <Foundation/Foundation.h>
+#import <Network/Network.h>
+#if TARGET_OS_IOS
+#import <NetworkExtension/NetworkExtension.h>
+#elif TARGET_OS_OSX
+#import <CoreWLAN/CoreWLAN.h>
+#endif  // TARGET_OS_IOS
+#import <SystemConfiguration/CaptiveNetwork.h>
+
+#import "internal/platform/implementation/apple/Log/GNCLogger.h"
+#import "internal/platform/implementation/apple/Mediums/WiFiCommon/GNCIPv4Address.h"
+#import "internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWConnectionImpl.h"
+#import "internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFramework.h"
+#import "internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFrameworkError.h"
+#import "internal/platform/implementation/apple/Mediums/WiFiCommon/GNCNWFrameworkSocket.h"
+
+NS_ASSUME_NONNULL_BEGIN
+
+#if TARGET_OS_IOS
+// The maximum number of retries for connecting to the Hotspot.
+static const UInt8 kMaxRetryCount = 3;
+// Timeout after 18s for connection attempt. From the stability test, connection take between 8-14s
+// on iOS
+static const UInt8 kConnectionTimeoutInSeconds = 18;
+#elif TARGET_OS_OSX
+// The maximum number of retries for connecting to the hotspot on MacOS.
+static const UInt8 kMaxRetryCount = 3;
+
+// Timeout for connection attempt.
+static const UInt8 kConnectionTimeoutInSeconds = 2;
+#endif  // TARGET_OS_IOS
+
+// An arbitrary timeout that should be pretty lenient.
+static const UInt8 kConnectionToHostTimeoutInSeconds = 10;
+
+@interface GNCHotspotMedium ()
+@property(nonatomic) CLLocationManager *locationManager;
+@end
+
+@implementation GNCHotspotMedium {
+  dispatch_queue_t _hotspot_queue;
+  GNCNWFramework *_nwFramework;
+}
+
+- (instancetype)init {
+  return [self initWithQueue:dispatch_get_main_queue()];
+}
+
+- (instancetype)initWithQueue:(dispatch_queue_t)queue {
+  return [self initWithQueue:queue nwFramework:[[GNCNWFramework alloc] initWithPeerToPeer:YES]];
+}
+
+- (instancetype)initWithQueue:(dispatch_queue_t)queue nwFramework:(GNCNWFramework *)nwFramework {
+  self = [super init];
+  if (self) {
+    _hotspot_queue = queue;
+    _locationManager = [[CLLocationManager alloc] init];
+    _nwFramework = nwFramework;
+  }
+  return self;
+}
+
+- (BOOL)connectToWifiNetworkWithSSID:(NSString *)ssid password:(NSString *)password {
+  if (ssid.length == 0) {
+    GNCLoggerError(@"SSID cannot be empty.");
+    return NO;
+  }
+  if (password.length == 0) {
+    GNCLoggerError(@"Password cannot be empty.");
+    return NO;
+  }
+
+#if TARGET_OS_IOS
+  __block BOOL connected = NO;
+  NEHotspotConfiguration *config = [[NEHotspotConfiguration alloc] initWithSSID:ssid
+                                                                     passphrase:password
+                                                                          isWEP:NO];
+  config.joinOnce = YES;  // A temporary connection
+
+  dispatch_time_t timeout =
+      dispatch_time(DISPATCH_TIME_NOW, kConnectionTimeoutInSeconds * NSEC_PER_SEC);
+  for (UInt8 i = 0; i < kMaxRetryCount; i++) {
+    dispatch_semaphore_t semaphore_internal = dispatch_semaphore_create(0);
+    [[NEHotspotConfigurationManager sharedManager]
+        applyConfiguration:config
+         completionHandler:^(NSError *_Nullable error) {
+           if (error) {
+             if ([error.domain isEqualToString:NEHotspotConfigurationErrorDomain] &&
+                 error.code == NEHotspotConfigurationErrorAlreadyAssociated) {
+               GNCLoggerInfo(@"Already connected to %@", ssid);
+               connected = YES;
+             } else {
+               GNCLoggerError(@"Failed to connect: %@ (%@)", ssid, error.localizedDescription);
+             }
+           } else {
+             GNCLoggerInfo(@"Successfully connected to %@", ssid);
+             connected = YES;
+           }
+           dispatch_semaphore_signal(semaphore_internal);
+         }];
+    if (dispatch_semaphore_wait(semaphore_internal, timeout) != 0) {
+      // Timeout to connect to the hotspot. Technically, we should not reach here because the
+      // completion handler will be called even if it times out. But adding this log for debugging
+      // purpose.
+      GNCLoggerError(@"Connecting to %@ timeout in %d seconds", ssid, kConnectionTimeoutInSeconds);
+      break;
+    }
+
+    if (connected) {
+      // Connected to the hotspot, no need to retry.
+      break;
+    }
+  }
+
+  // After the loop, if we believe we are connected, verify the SSID.
+  if (connected) {
+    NSString *currentSSID = [self getCurrentWifiSSID];
+    if (currentSSID == nil) {
+      GNCLoggerInfo(@"Not able to get current SSID, assume connected");
+    } else if ([currentSSID isEqualToString:ssid]) {
+      GNCLoggerDebug(@"Connected to %@ successfully", ssid);
+    } else {
+      GNCLoggerError(@"Connected to wrong SSID: %@", currentSSID);
+      connected = NO;  // Still not connected to the right SSID
+    }
+  }
+
+  // If we failed to connect or connected to the wrong network, remove the configuration.
+  if (!connected) {
+    [[NEHotspotConfigurationManager sharedManager] removeConfigurationForSSID:ssid];
+  }
+  return connected;
+#elif TARGET_OS_OSX
+  // MacOS treats access to Wi-Fi SSIDs and BSSIDs as location-sensitive information, so need to
+  // make sure location authorization is granted before joining a Wi-Fi network using CoreWLAN.
+  CLAuthorizationStatus status;
+  if (@available(macOS 11.0, *)) {
+    status = _locationManager.authorizationStatus;
+  } else {
+    status = [CLLocationManager authorizationStatus];
+  }
+
+  if (status != kCLAuthorizationStatusAuthorizedAlways) {
+    GNCLoggerError(@"Location access permission is not granted, skipping to connect to Hotspot.");
+    return NO;
+  }
+
+  CWInterface *wifiInterface = [CWWiFiClient sharedWiFiClient].interface;
+  if (!wifiInterface) {
+    GNCLoggerError(@"Wi-Fi interface not found.");
+    return NO;
+  }
+
+  NSError *error = nil;
+  NSSet<CWNetwork *> *networks =
+      [wifiInterface scanForNetworksWithSSID:[ssid dataUsingEncoding:NSUTF8StringEncoding]
+                                       error:&error];
+
+  if (!networks) {
+    GNCLoggerError(@"Failed to scan for networks: %@", error);
+    return NO;
+  }
+
+  CWNetwork *bestNetwork = nil;
+  for (CWNetwork *network in networks) {
+    if (bestNetwork == nil) {
+      bestNetwork = network;
+    } else {
+      if (network.rssiValue > bestNetwork.rssiValue) {
+        bestNetwork = network;
+      }
+    }
+  }
+
+  if (!bestNetwork) {
+    GNCLoggerError(@"Failed to find network: %@", ssid);
+    return NO;
+  }
+
+  for (int i = 0; i < kMaxRetryCount; ++i) {
+    BOOL success = [wifiInterface associateToNetwork:bestNetwork password:password error:&error];
+
+    if (success) {
+      GNCLoggerInfo(@"Successfully connected to %@", ssid);
+      return YES;
+    } else {
+      GNCLoggerError(@"Failed to connect to %@ at attempt %d. Error: %@", ssid, i, error);
+      [NSThread sleepForTimeInterval:kConnectionTimeoutInSeconds];
+    }
+  }
+
+  return NO;
+#else
+  GNCLoggerError(@"Not implemented");
+  return NO;
+#endif  // TARGET_OS_IOS
+}
+
+- (void)disconnectToWifiNetworkWithSSID:(NSString *)ssid {
+#if TARGET_OS_IOS
+  if (ssid.length == 0) {
+    GNCLoggerError(@"SSID cannot be empty.");
+    return;
+  }
+  [[NEHotspotConfigurationManager sharedManager] removeConfigurationForSSID:ssid];
+#elif TARGET_OS_OSX
+  CWInterface *wifiInterface = [CWWiFiClient sharedWiFiClient].interface;
+  if (wifiInterface && [wifiInterface.ssid isEqualToString:ssid]) {
+    [wifiInterface disassociate];
+  }
+#else
+  GNCLoggerError(@"Not implemented");
+#endif  // TARGET_OS_IOS
+}
+
+- (nullable GNCNWFrameworkSocket *)connectToHost:(GNCIPv4Address *)host
+                                            port:(NSInteger)port
+                                    cancelSource:(nullable dispatch_source_t)cancelSource
+                                           error:(NSError *_Nullable *_Nullable)error {
+  // Validate host address
+  if (!host.dottedRepresentation.UTF8String) {
+    if (error) {
+      *error = [NSError errorWithDomain:GNCNWFrameworkErrorDomain
+                                   code:GNCNWFrameworkErrorUnknown
+                               userInfo:nil];
+    }
+    GNCLoggerError(@"Invalid host address");
+    return nil;
+  }
+
+  return [_nwFramework connectToHost:host
+                                port:port
+                        cancelSource:cancelSource
+                               queue:_hotspot_queue
+                               error:error];
+}
+
+- (NSString *)getCurrentWifiSSID {
+#if TARGET_OS_IOS
+  dispatch_semaphore_t semaphore_internal = dispatch_semaphore_create(0);
+  __block NSString *networkSSID = nil;
+  CLAuthorizationStatus status;
+
+  // Request permission
+  GNCLoggerDebug(@"Request Location permission");
+
+  if (@available(iOS 14.0, *)) {
+    status = _locationManager.authorizationStatus;
+  } else {
+    status = [CLLocationManager authorizationStatus];
+  }
+
+  if (status != kCLAuthorizationStatusAuthorizedWhenInUse &&
+      status != kCLAuthorizationStatusAuthorizedAlways) {
+    GNCLoggerError(@"❌ Location access permission is not granted, skipping Hotspot SSID check");
+    return nil;
+  }
+
+  if (@available(iOS 14.0, *)) {
+    [NEHotspotNetwork fetchCurrentWithCompletionHandler:^(NEHotspotNetwork *_Nullable network) {
+      if (network) {
+        networkSSID = network.SSID;
+        GNCLoggerDebug(@"iOS 14+ Current Wi-Fi SSID: %@", networkSSID);
+      } else {
+        GNCLoggerError(@"Failed to get current Wifi SSID");
+      }
+      dispatch_semaphore_signal(semaphore_internal);
+    }];
+  } else {
+    NSArray<NSString *> *interfaces = CFBridgingRelease(CNCopySupportedInterfaces());
+    for (NSString *interface in interfaces) {
+      id info = CFBridgingRelease(CNCopyCurrentNetworkInfo((__bridge CFStringRef)(interface)));
+      networkSSID = [info valueForKey:@"SSID"];
+      GNCLoggerDebug(@"Current Wi-Fi SSID: %@", networkSSID);
+    }
+    dispatch_semaphore_signal(semaphore_internal);
+  }
+
+  dispatch_time_t timeout =
+      dispatch_time(DISPATCH_TIME_NOW, kConnectionToHostTimeoutInSeconds * NSEC_PER_SEC);
+  if (dispatch_semaphore_wait(semaphore_internal, timeout) != 0) {
+    GNCLoggerError(@"Getting current Wifi SSID timeout in %d seconds",
+                   kConnectionToHostTimeoutInSeconds);
+  }
+
+  return networkSSID;
+#elif TARGET_OS_OSX
+  return [CWWiFiClient sharedWiFiClient].interface.ssid;
+#else
+  GNCLoggerError(@"Not implemented");
+  return nil;
+#endif  // TARGET_OS_IOS
+}
+
+@end
+
+NS_ASSUME_NONNULL_END

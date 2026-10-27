@@ -40,7 +40,7 @@ fn actual_signer_uses_sha256_and_canonical_low_s_der_for_exact_selected_key() {
     assert!((8..=72).contains(&der.len()));
     let signature = Signature::from_der(&der).unwrap();
     assert_eq!(signature.to_der().as_bytes(), der);
-    assert!(signature.normalize_s().is_none());
+    assert!(signature.normalize_s() == signature);
     let key =
         p256::ecdsa::VerifyingKey::from_sec1_bytes(provider.certificate.body.key.as_sec1_bytes())
             .unwrap();

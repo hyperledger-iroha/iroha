@@ -57,7 +57,7 @@ bytes matching that blob and the tracked pin. `--source` adds only a stable,
 byte-identical comparison input; it never replaces the tracked root authority.
 The provisioner never edits the checkout, starts Cargo, or generates lock
 bytes. Release wrappers verify the lock already present in each isolated Git
-clone. All Cargo work remains behind the shared `+1.93.1`, `--locked`,
+clone. All Cargo work remains behind the shared `+1.99.1`, `--locked`,
 `--offline`, `-j1` policy and its same-snapshot guard.
 
 An unsigned dirty-tree replay may repair a stale pin only while `Cargo.lock`

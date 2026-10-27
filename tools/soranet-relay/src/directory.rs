@@ -18,7 +18,7 @@ use norito::{
     DecodeLimits,
     json::{self, JsonDeserialize, JsonSerialize},
 };
-use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
+use rand::{CryptoRng, Rng, SeedableRng, rngs::StdRng};
 use soranet_pq::{
     MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
 };
@@ -632,7 +632,7 @@ pub fn rotate_snapshot_with_os_rng(
 /// # Errors
 /// Returns [`DirectoryRotateError`] when exact source authentication fails or
 /// certificates cannot be reissued.
-pub fn rotate_snapshot<R: RngCore + CryptoRng>(
+pub fn rotate_snapshot<R: Rng + CryptoRng>(
     snapshot_bytes: &[u8],
     expected_snapshot_digest: [u8; 32],
     at_unix: i64,
@@ -905,7 +905,7 @@ fn build_snapshot(
     };
     Ok(DirectorySnapshotBundle { snapshot, metadata })
 }
-fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
+fn rotate_snapshot_struct<R: Rng + CryptoRng>(
     snapshot: GuardDirectorySnapshotV2,
     rng: &mut R,
 ) -> Result<RotationOutput, DirectoryRotateError> {
@@ -2268,18 +2268,20 @@ mod tests {
     #[test]
     fn rotate_snapshot_rejects_all_zero_generated_ed25519_seed() {
         struct ZeroRng;
-        impl RngCore for ZeroRng {
-            fn next_u32(&mut self) -> u32 {
-                0
+        impl rand::TryRng for ZeroRng {
+            type Error = core::convert::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok(0)
             }
-            fn next_u64(&mut self) -> u64 {
-                0
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Ok(0)
             }
-            fn fill_bytes(&mut self, dest: &mut [u8]) {
+            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
                 dest.fill(0);
+                Ok(())
             }
         }
-        impl CryptoRng for ZeroRng {}
+        impl rand::TryCryptoRng for ZeroRng {}
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
         let mut rng = StdRng::seed_from_u64(0xA55A56);

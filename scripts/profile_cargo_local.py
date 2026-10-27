@@ -25,9 +25,6 @@ import subprocess
 import sys
 import time
 
-import cargo_local_source_identity as native
-
-
 TIMING_PREFIX = "[cargo-fast-timings] "
 
 
@@ -53,23 +50,17 @@ def cargo_arguments(arguments, jobs):
 
 
 def phase_times(stderr):
-    """Require exactly one diagnostic phase record, including skipped preflight."""
+    """Require exactly one Cargo timing record."""
     records = [json.loads(line[len(TIMING_PREFIX):]) for line in stderr.splitlines()
                if line.startswith(TIMING_PREFIX)]
     if len(records) != 1 or not isinstance(records[0], dict):
         raise ValueError("missing or duplicate local phase timing record")
     result = records[0]
-    if "cargo_seconds" not in result or any(
+    if result.keys() != {"cargo_seconds"} or any(
         type(value) not in (int, float) or not 0 <= value < float("inf")
         for value in result.values()
     ):
         raise ValueError("invalid local phase timing record")
-    result["source_preflight_seconds"] = sum(
-        result.get(key, 0.0) for key in (
-            "discovery_seconds", "receipt_seconds", "preflight_before_seconds",
-            "preflight_after_seconds",
-        )
-    )
     return result
 
 
@@ -149,24 +140,12 @@ def summarize(samples):
     """Summarize measured samples only, preserving failures and rebuilt counts."""
     if not samples:
         return {}
-    keys = ("elapsed_seconds", "cargo_seconds", "source_preflight_seconds")
+    keys = ("elapsed_seconds", "cargo_seconds")
     result = {key: {"median": statistics.median(sample[key] for sample in samples),
                     "worst": max(sample[key] for sample in samples)} for key in keys}
     result["all_successful"] = all(sample["returncode"] == 0 for sample in samples)
     result["zero_rebuilt_artifacts"] = all(sample["compiled"] == 0 for sample in samples)
     return result
-
-
-def native_snapshot(root, arguments, environment):
-    """Capture the maintained native census outside the timed command, if used."""
-    outputs = native.output_roots(root, arguments, environment)
-    if not outputs:
-        return {"required": False}
-    probe = native.find_probe(root, outputs)
-    if probe is None:
-        raise ValueError("native evaluator is not ready; request --warmup 1 before measured samples")
-    value = native.parse_record(native.evaluate(probe, root, outputs), native.STAMP_HEADER, native.STAMP_KEYS)
-    return {"required": True, **value}
 
 
 def cargo_evidence(lines):
@@ -306,8 +285,6 @@ def run(argv, api):
                                "--target-dir", str(target), "--", *arguments]
                     report["command"] = command
                     for index in range(args.warmup + args.repeat):
-                        if index == args.warmup:
-                            report["native_before"] = native_snapshot(root, arguments, environment)
                         prefix = out.with_name(out.name + f".run-{index + 1}")
                         log, errors = Path(str(prefix) + ".jsonl"), Path(str(prefix) + ".stderr.log")
                         old_records = set(record_dir.iterdir()) if record_dir else set()
@@ -321,7 +298,7 @@ def run(argv, api):
                                   "fresh": fresh, "compiled": compiled, "units": units,
                                   "load_before": before_load, "load_after": host_load(),
                                   "stdout": str(log), "stderr": str(errors)}
-                        # A refused preflight can exit before Cargo produces timing evidence.
+                        # A refused command can exit before Cargo produces timing evidence.
                         group = "warmup" if index < args.warmup else "samples"
                         report[group].append(sample)
                         if result.returncode:
@@ -330,9 +307,6 @@ def run(argv, api):
                         messages = cargo_evidence(log.read_text().splitlines())
                         if not units:
                             raise ValueError("Cargo emitted no complete artifact identities")
-                        if group == "samples" and report["native_before"]["required"]:
-                            if not {"preflight_before_seconds", "preflight_after_seconds"} <= sample.keys():
-                                raise ValueError("measured native build omitted complete pre/post census")
                         if record_dir:
                             captured = private_directory(Path(str(prefix) + ".compiler-records"))
                             for path in set(record_dir.iterdir()) - old_records:
@@ -343,13 +317,11 @@ def run(argv, api):
                                 records, {"source": root, "target": target}, api.artifact_unit,
                                 build_script_messages=[message for message in messages if message.get("reason") == "build-script-executed"],
                             )
-                    report.update(source_after=snapshot(), native_after=native_snapshot(root, arguments, environment),
+                    report.update(source_after=snapshot(),
                                   cache_after=target_size(target), load_after=host_load())
                     report["source_unchanged"] = report["source_before"] == report["source_after"]
                     if not report["source_unchanged"]:
                         raise ValueError("local source changed during measurement; samples are diagnostic only")
-                    if report["native_before"] != report["native_after"]:
-                        raise ValueError("native census changed across measured samples")
                     for value in report["toolchain"].values():
                         if api.RUSTC_PROFILE.stable_file_identity(Path(value["path"])) != {key: value[key] for key in ("bytes", "sha256")}:
                             raise ValueError("toolchain changed during measurement")

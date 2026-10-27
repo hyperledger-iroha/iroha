@@ -125,6 +125,10 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       },
       () => import(bundleUrl),
     );
+    // Noble 2 probes the browser CSPRNG once before enabling scalar blinding.
+    assert.deepEqual(entropyCalls, [16]);
+    entropyCalls.length = 0;
+    const requestEntropy = [];
     const privateKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
     const timestampMs = 1_700_000_000_123;
     const method = "POST";
@@ -137,7 +141,9 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       {
         getRandomValues(view) {
           entropyCalls.push(view.byteLength);
-          return webcrypto.getRandomValues(view);
+          const filled = webcrypto.getRandomValues(view);
+          requestEntropy.push(Buffer.from(filled));
+          return filled;
         },
       },
       () =>
@@ -151,8 +157,11 @@ test("packed canonical-request subpath executes securely and has strict DOM type
           timestampMs,
         }),
     );
-    assert.deepEqual(entropyCalls, [16]);
+    // One nonce draw and two Ed25519 scalar-blinding draws retain the exact
+    // canonical nonce and deterministic signature over the signed message.
+    assert.deepEqual(entropyCalls, [16, 16, 16]);
     assert.match(headers["X-Iroha-Nonce"], /^[0-9a-f]{32}$/u);
+    assert.equal(headers["X-Iroha-Nonce"], requestEntropy[0].toString("hex"));
     assert.equal(headers["X-Iroha-Timestamp-Ms"], String(timestampMs));
     const message = canonicalRequest.canonicalRequestSignatureMessage({
       networkId,
@@ -211,6 +220,9 @@ test("packed canonical-request subpath executes securely and has strict DOM type
         "  canonicalRequestMessage,",
         "  canonicalRequestSignatureMessage,",
         "  withCanonicalReadRetry,",
+        "  CANONICAL_READ_ATTEMPT_TIMEOUT_MS,",
+        "  CANONICAL_READ_TOTAL_TIMEOUT_MS,",
+        "  type CanonicalReadAttempt,",
         "  NetworkId,",
         '  type CanonicalJsonRequest,',
         '  type CanonicalJsonRequestSignerInput,',
@@ -229,8 +241,8 @@ test("packed canonical-request subpath executes securely and has strict DOM type
         "    return new Uint8Array(64);",
         "  },",
         "});",
-        "const retried: Promise<string> = withCanonicalReadRetry({ method: \"POST\", path: \"/v1/multisig/spec\", signal: new AbortController().signal, operation: (attempt: number) => String(attempt) });",
-        "void query; void base; void signed; void headers; void request; void retried;",
+        "const retried: Promise<string> = withCanonicalReadRetry({ method: \"POST\", path: \"/v1/multisig/spec\", signal: new AbortController().signal, operation: (attempt: number, context: CanonicalReadAttempt) => { const signal: AbortSignal | undefined = context.signal; const timeout: number | undefined = context.timeoutMs; void signal; void timeout; return String(attempt); } });",
+        "void query; void base; void signed; void headers; void request; void retried; void CANONICAL_READ_ATTEMPT_TIMEOUT_MS; void CANONICAL_READ_TOTAL_TIMEOUT_MS;",
       ].join("\n"),
       "utf8",
     );

@@ -37,12 +37,12 @@ def verify_scheduled_trigger_execution_v1(
     ):
         if type(value) is not bytes or not 0 < len(value) <= maximum:
             raise ValueError(f"{name} must be bounded exact immutable bytes")
-    for name, value, maximum in (
+    for name, text_value, maximum in (
         ("trigger_id", trigger_id, 255),
         ("expected_chain", expected_chain, 1024),
         ("native_finality_proof_chain_json", native_finality_proof_chain_json, 16 * 1024 * 1024),
     ):
-        if type(value) is not str or not 0 < len(value.encode("utf-8")) <= maximum:
+        if type(text_value) is not str or not 0 < len(text_value.encode("utf-8")) <= maximum:
             raise ValueError(f"{name} must be bounded exact UTF-8 text")
     verify = getattr(_crypto, "verify_scheduled_trigger_execution_v1", None)
     if not callable(verify):

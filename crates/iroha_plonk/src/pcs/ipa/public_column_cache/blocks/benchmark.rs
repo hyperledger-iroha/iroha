@@ -22,7 +22,13 @@ fn read_case(directory: &std::path::Path, slots: usize) -> Columns {
     assert!(path.metadata().unwrap().len() <= 512 << 20);
     let encoded = std::fs::read(path).unwrap();
     let expected = std::env::var(format!("IROHA_PUBLIC_COLUMN_FIXTURE_{slots}_SHA256")).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(&encoded)), expected);
+    assert_eq!(
+        Sha256::digest(&encoded)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        expected
+    );
     // The hash-pinned diagnostic includes every canonical byte of two large
     // native public tables; keep its larger decode allowance local and finite.
     let limits = norito::DecodeLimits::new(1 << 20, 512 << 20, 1 << 28, 1 << 30, 16);

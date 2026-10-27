@@ -10011,10 +10011,22 @@ fn build_state(
             "failed to read the exact durable Kura boundary: {error}"
         ))
     })?;
+    let restored_tip = usize::try_from(restored_height).map_err(|error| {
+        MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored committed height does not fit this host: {error}"
+        ))
+    })?;
+    if restored_tip > durable_blocks {
+        return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+            "restored committed height {restored_tip} exceeds durable Kura height {durable_blocks}"
+        )));
+    }
+    // The restored tip, not the Kura tip: Kura may hold the blocks replay applies next, and
+    // the next block's time triggers start from this header's creation time.
     let latest_block_header = if emergency_fast {
         None
     } else {
-        NonZeroUsize::new(durable_blocks)
+        NonZeroUsize::new(restored_tip)
             .map(|height| kura.get_block(height, &execution_budget))
             .transpose()
             .map_err(|error| match error {

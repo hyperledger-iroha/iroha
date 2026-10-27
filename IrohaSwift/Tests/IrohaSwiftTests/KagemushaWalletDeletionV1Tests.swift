@@ -20,7 +20,7 @@ final class KagemushaWalletDeletionV1Tests: XCTestCase {
     for selector in [UInt32(48), 49, 50, 51] {
       let input = try KagemushaWalletSetupInputV1(selector: selector, token: [49, 51].contains(selector) ? 1 : 0)
       XCTAssertThrowsError(try driver.result { output in
-        input.withRequest { driver.setup(0, $0, output) }
+        input.withRequest { driver.setup(0, input.requiresExchange ? 1 : 0, $0, output) }
       }) { error in XCTAssertEqual(error as? KagemushaWalletErrorV1, .closed) }
     }
   }
@@ -75,26 +75,28 @@ final class KagemushaWalletDeletionV1Tests: XCTestCase {
   }
   func testOneUseOwnerBindingAndUncertainConfirmationFreeze() throws {
     enum Failure: Error { case lost }
+    let exchange = NSObject()
     let gate = KagemushaWalletDeletionGateV1(), foreign = KagemushaWalletDeletionGateV1()
     XCTAssertThrowsError(try gate.resume { XCTFail("fresh resume dispatched"); return try call(56) })
     try gate.requireOrdinary()
-    let review = try gate.review { try call(53, token: 7, bytes: frame()) }
-    XCTAssertThrowsError(try foreign.confirm(review) { _ in XCTFail("foreign dispatch"); return try call(54, bytes: Data(repeating: 1, count: 32)) })
-    let stale = try gate.review { try call(53, token: 8, bytes: frame()) }
-    XCTAssertThrowsError(try gate.confirm(review) { token in
+    let review = try gate.review(exchange: exchange) { try call(53, token: 7, bytes: frame()) }
+    XCTAssertThrowsError(try foreign.confirm(review, exchange: exchange) { _ in XCTFail("foreign dispatch"); return try call(54, bytes: Data(repeating: 1, count: 32)) })
+    XCTAssertThrowsError(try gate.confirm(review, exchange: NSObject()) { _ in XCTFail("foreign exchange"); return try call(56) })
+    let stale = try gate.review(exchange: exchange) { try call(53, token: 8, bytes: frame()) }
+    XCTAssertThrowsError(try gate.confirm(review, exchange: exchange) { token in
       XCTAssertEqual(token, 7)
       XCTAssertThrowsError(try gate.requireOrdinary())
       XCTAssertThrowsError(try gate.resume { XCTFail("concurrent resume"); return try call(56) })
       throw Failure.lost
     })
     XCTAssertThrowsError(try gate.requireOrdinary())
-    XCTAssertThrowsError(try gate.discard(review) { _ in XCTFail("cannot undo"); return try call(55) })
+    XCTAssertThrowsError(try gate.discard(review, exchange: exchange) { _ in XCTFail("cannot undo"); return try call(55) })
     XCTAssertEqual(try gate.resume { try call(56) }, .notDeleted)
     try gate.requireOrdinary()
-    XCTAssertThrowsError(try gate.confirm(stale) { _ in XCTFail("stale review"); return try call(56) })
-    let fresh = try gate.review { try call(53, token: 9, bytes: frame()) }
+    XCTAssertThrowsError(try gate.confirm(stale, exchange: exchange) { _ in XCTFail("stale review"); return try call(56) })
+    let fresh = try gate.review(exchange: exchange) { try call(53, token: 9, bytes: frame()) }
     let marker = Data(repeating: 3, count: 32)
-    XCTAssertEqual(try gate.confirm(fresh) { _ in try call(54, bytes: marker) }, marker)
+    XCTAssertEqual(try gate.confirm(fresh, exchange: exchange) { _ in try call(54, bytes: marker) }, marker)
     XCTAssertThrowsError(try gate.requireOrdinary())
     XCTAssertEqual(try gate.resume { try call(54, bytes: marker) }, .deleted(marker: marker))
     XCTAssertThrowsError(try gate.resume { try call(54, bytes: Data(repeating: 4, count: 32)) })
@@ -102,13 +104,14 @@ final class KagemushaWalletDeletionV1Tests: XCTestCase {
     XCTAssertThrowsError(try gate.requireOrdinary())
   }
   func testDiscardAndMalformedResponseDoNotAuthorizeDeletionOrResume() throws {
+    let exchange = NSObject()
     let gate = KagemushaWalletDeletionGateV1()
-    let review = try gate.review { try call(53, token: 1, bytes: frame()) }
-    try gate.discard(review) { _ in try call(55) }
+    let review = try gate.review(exchange: exchange) { try call(53, token: 1, bytes: frame()) }
+    try gate.discard(review, exchange: exchange) { _ in try call(55) }
     try gate.requireOrdinary()
-    XCTAssertThrowsError(try gate.confirm(review) { _ in XCTFail("discarded"); return try call(56) })
-    let fresh = try gate.review { try call(53, token: 2, bytes: frame()) }
-    XCTAssertThrowsError(try gate.confirm(fresh) { _ in try call(55) })
+    XCTAssertThrowsError(try gate.confirm(review, exchange: exchange) { _ in XCTFail("discarded"); return try call(56) })
+    let fresh = try gate.review(exchange: exchange) { try call(53, token: 2, bytes: frame()) }
+    XCTAssertThrowsError(try gate.confirm(fresh, exchange: exchange) { _ in try call(55) })
     XCTAssertThrowsError(try gate.requireOrdinary())
     XCTAssertThrowsError(try gate.resume { try call(55) })
     XCTAssertThrowsError(try gate.requireOrdinary())

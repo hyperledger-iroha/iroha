@@ -171,7 +171,7 @@ pub(super) struct Work {
     observed: Observed,
 }
 impl Work {
-    fn new(remaining: u64) -> Self {
+    pub(super) fn new(remaining: u64) -> Self {
         Self {
             remaining,
             #[cfg(test)]
@@ -182,7 +182,7 @@ impl Work {
         clippy::result_large_err,
         reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
     )]
-    fn prepay(&mut self, amount: u64) -> Result<(), TriggerContractError> {
+    pub(super) fn prepay(&mut self, amount: u64) -> Result<(), TriggerContractError> {
         self.remaining = self
             .remaining
             .checked_sub(amount)
@@ -193,14 +193,14 @@ impl Work {
         clippy::result_large_err,
         reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
     )]
-    fn bytes(&mut self, amount: usize) -> Result<(), TriggerContractError> {
+    pub(super) fn bytes(&mut self, amount: usize) -> Result<(), TriggerContractError> {
         self.prepay(u64::try_from(amount).map_err(|_| TriggerContractError::WorkLimit)?)
     }
     #[expect(
         clippy::result_large_err,
         reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
     )]
-    fn setup(&mut self) -> Result<(), TriggerContractError> {
+    pub(super) fn setup(&mut self) -> Result<(), TriggerContractError> {
         self.prepay(CURSOR_SETUP)?;
         #[cfg(test)]
         {
@@ -212,7 +212,7 @@ impl Work {
         clippy::result_large_err,
         reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
     )]
-    fn next<I: Iterator>(&mut self, rows: &mut I) -> Result<Option<I::Item>, TriggerContractError> {
+    pub(super) fn next<I: Iterator>(&mut self, rows: &mut I) -> Result<Option<I::Item>, TriggerContractError> {
         self.prepay(CURSOR_NEXT)?;
         #[cfg(test)]
         {

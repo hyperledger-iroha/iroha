@@ -166,11 +166,12 @@ fn late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected() {
     assert!(crate::execution_proofs::verify_execution_proof_v1(&wrong_profile).is_err());
 }
 
-/// Test-only entry point. Production proving continues to use `OsRng`; the full
+/// Test-only entry point. Production proving continues to use `SysRng`; the full
 /// native driver already accepts injected masking entropy internally.
 fn prove_with_test_entropy(request: &RaceProverRequestV1) -> ExecutionProofEnvelopeV1 {
     use super::super::stark::proof_managed_note_stark::prove_proof_managed_note_stark_v1_with_rng;
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     let mut payload = race_payload_from_request_v1(request).expect("canonical reference payload");
     let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("compiled adapter");
     let size = adapter.compiled.trace_size(&payload.replay);
@@ -195,7 +196,7 @@ fn prove_with_test_entropy(request: &RaceProverRequestV1) -> ExecutionProofEnvel
     payload.stark_bytes = prove_proof_managed_note_stark_v1_with_rng(
         &adapter,
         &columns,
-        &mut StdRng::from_seed([0x53; 32]),
+        &mut ChaCha12Rng::from_seed([0x53; 32]),
     )
     .expect("genuine deterministic native proof");
     let envelope = ExecutionProofEnvelopeV1 {

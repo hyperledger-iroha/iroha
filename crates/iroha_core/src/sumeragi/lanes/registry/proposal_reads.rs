@@ -544,7 +544,7 @@ impl LaneStoreAuthorities for SweepAuthorities {
 }
 
 #[test]
-fn cancelled_original_sweep_does_not_wait_for_new_disjoint_opening() {
+fn original_lane_sweep_does_not_wait_for_new_disjoint_opening() {
     let mut fixture = transaction_fixture();
     let budget = fixture.stores.budget.clone();
     let frame = fs::read(fixture.path()).unwrap();
@@ -570,6 +570,8 @@ fn cancelled_original_sweep_does_not_wait_for_new_disjoint_opening() {
     });
     // Initial registry membership is A<C. A is an idle actual native owner; C retains the
     // original incoming frame. No synthetic StoreSlot or copied cancellation interest is used.
+    // Neither incarnation is applied, so the retirement sweep releases both after it cleans
+    // C's cancelled read; the cancelled-read cleanup alone keeps idle Ready owners.
     drop(fixture.stores.runtime_store(before.0, &before.1).unwrap());
     let baseline = budget.reserved_bytes();
     let store = fixture.stores.runtime_store(LANE, &INCARNATION).unwrap();
@@ -596,7 +598,7 @@ fn cancelled_original_sweep_does_not_wait_for_new_disjoint_opening() {
     let (retired_entered, opened, unlocked, registered, released, exact_refund, native_unlocked) =
         std::thread::scope(|threads| {
             let stores = &fixture.stores;
-            let cleanup = threads.spawn(|| stores.release_cancelled_proposal_reads());
+            let cleanup = threads.spawn(|| stores.release_retired(&SumeragiLaneState::default()));
             let retired_entered = retired_entered.recv_timeout(Duration::from_secs(5)).is_ok();
             let unlocked = stores.stores.try_lock().is_some();
             let new_runtime = threads.spawn(|| stores.runtime_store(inserted.0, &inserted.1));
@@ -651,7 +653,7 @@ fn cancelled_original_sweep_does_not_wait_for_new_disjoint_opening() {
     assert!(retired_entered && opened && unlocked && registered);
     assert!(
         released && exact_refund && native_unlocked,
-        "original cancelled lane cleanup cannot wait for an unrelated newly registered opening"
+        "an original lane sweep cannot wait for an unrelated newly registered opening"
     );
 }
 
@@ -676,11 +678,14 @@ fn original_sweep_preserves_a_later_same_key_native_owner() {
     drop(fixture.stores.runtime_store(before.0, &before.1).unwrap());
     let original = Arc::downgrade(&fixture.stores.runtime_store(LANE, &INCARNATION).unwrap());
     assert_eq!(fixture.stores.stores.lock().len(), 2);
+    // Cancelled-read cleanup keeps both idle Ready owners registered.
+    fixture.stores.release_cancelled_proposal_reads();
+    assert_eq!(fixture.stores.stores.lock().len(), 2);
     retiring.armed.store(true, Ordering::SeqCst);
     let (entered, unlocked, original_retired, replacement_retained) =
         std::thread::scope(|threads| {
             let stores = &fixture.stores;
-            let cleanup = threads.spawn(|| stores.release_cancelled_proposal_reads());
+            let cleanup = threads.spawn(|| stores.release_retired(&SumeragiLaneState::default()));
             let entered = retired_entered.recv_timeout(Duration::from_secs(5)).is_ok();
             let unlocked = stores.stores.try_lock().is_some();
             stores.release(LANE, &INCARNATION);

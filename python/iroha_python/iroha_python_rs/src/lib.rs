@@ -203,7 +203,7 @@ use pyo3::{
     types::{PyAny, PyBool, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyTuple, PyType},
     wrap_pyfunction,
 };
-use rand_core_06::{OsRng as OsRng06, RngCore as _};
+use rand::{TryRng as _, rngs::SysRng};
 use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
@@ -5597,8 +5597,8 @@ mod tests {
     include!("tests/python_transaction_account_context_tests.rs");
     include!("tests/python_ensure_alias_tests.rs");
     #[test]
-    fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 31);
+    fn native_sdk_bridge_abi_version_is_exactly_thirty_three() {
+        assert_eq!(connect_norito_bridge_abi_version_py(), 33);
     }
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {
@@ -12114,7 +12114,7 @@ fn sign_query_request(
     let time_to_live_ms =
         NonZeroU64::new(QUERY_TIME_TO_LIVE_MS).expect("query TTL constant is nonzero");
     let mut nonce = [0_u8; 32];
-    OsRng06
+    SysRng
         .try_fill_bytes(&mut nonce)
         .map_err(|error| PyValueError::new_err(format!("query nonce OS RNG failed: {error}")))?;
     request

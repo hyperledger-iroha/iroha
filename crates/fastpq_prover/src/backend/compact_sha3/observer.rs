@@ -478,9 +478,9 @@ fn execute_metal(label: &str, capture: &Capture) {
     }
     assert_eq!(done, 326);
     eprintln!(
-        "q77 canonical Metal {label}: completed_tree_hashes={done}; scalar_atomic_tapes=10; observed_bytes={}; tree_outputs_sha256={:x}; release_qualified=false",
+        "q77 canonical Metal {label}: completed_tree_hashes={done}; scalar_atomic_tapes=10; observed_bytes={}; tree_outputs_sha256={}; release_qualified=false",
         capture.bytes,
-        digest.finalize()
+        hex::encode(digest.finalize())
     );
 }
 #[test]

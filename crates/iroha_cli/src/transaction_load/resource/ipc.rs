@@ -771,7 +771,7 @@ impl Captures {
         if !same_file(&before, &held)
             || !same_file(&before, &named)
             || bytes.len() as u64 != manifest.bytes
-            || format!("{:x}", Sha256::digest(&bytes)) != manifest.sha256
+            || hex::encode(Sha256::digest(&bytes)) != manifest.sha256
         {
             bail!("resource manifest publication changed or digest mismatched");
         }

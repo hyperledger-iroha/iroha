@@ -380,7 +380,7 @@ impl SignedTicket {
             &self.signature,
         )
         .map_err(|e| match e {
-            MlDsaError::VerificationFailed(_) => Error::InvalidSignature,
+            MlDsaError::VerificationFailed => Error::InvalidSignature,
             other => Error::PostQuantum(other.to_string()),
         })
     }

@@ -3106,7 +3106,7 @@
    "attribution": "path_rule",
    "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. Current native confirmation owns retained signed attempts and authenticated finality through retain_activation_attempt, activation_attempt_outcome and ingest_activation_finality; the former confirmation/cursor source is retired. Count reconciliation does not establish KAGEMUSHA readiness or change its separate custody requirements.",
    "sites": [
-    ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs", "activation", "activation", 3],
+    ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs", "activation", "activation", 4],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/exports.rs", "activation", "lifecycle", 4],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/setup.rs", "activation", "activation", 16],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/terminal.rs", "activation", "lifecycle", 1],
@@ -3128,7 +3128,7 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/consuming.rs", "activation", "lifecycle", 8],
     ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/incoming_statement.rs", "activation", "lifecycle", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/load.rs", "activation", "lifecycle", 2],
-    ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/monetary.rs", "activation", "lifecycle", 8],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/monetary.rs", "activation", "lifecycle", 10],
     ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/refresh/prepare.rs", "activation", "lifecycle", 2],
     ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/unfolded.rs", "activation", "lifecycle", 4],
     ["crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1.rs", "activation", "lifecycle", 1],
@@ -3236,7 +3236,7 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/review.rs", "qualification", "qualification", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/runtime.rs", "qualification", "qualification", 6],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker.rs", "qualification", "qualification", 11],
-    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming_inputs.rs", "qualification", "qualification", 2],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming_inputs.rs", "qualification", "qualification", 4],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/inputs.rs", "qualification", "qualification", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/stages.rs", "qualification", "qualification", 14]
    ]
@@ -3251,16 +3251,18 @@
    "gates": "KAGEMUSHA offline monetary authority: a timeout, deadline or millisecond budget on the proof path.",
    "decided_by": "Outside the ZK delivery plan; recorded for visibility only.",
    "attribution": "path_rule",
-   "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. The Instant readings of kagemusha_wallet_advance_v1/counters.rs (sync call duration), producer_inventory/opening_metrics.rs (opening laps) and kagemusha_wallet_state_v1/fold_metrics.rs (fold phase time) only accumulate diagnostic counters; nothing compares them with a limit. fold_metrics/bridge.rs records nested scheduler, wallet-lock and custody-admission elapsed times on Drop into thread-local diagnostic totals; no decision reads a threshold from those values.",
+   "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. The Instant readings of kagemusha_wallet_advance_v1/counters.rs (sync call duration), producer_inventory/opening_metrics.rs (opening laps) and kagemusha_wallet_state_v1/fold_metrics.rs (fold phase time) only accumulate diagnostic counters; nothing compares them with a limit. fold_metrics/bridge.rs records nested scheduler, wallet-lock and custody-admission elapsed times on Drop into thread-local diagnostic totals; no decision reads a threshold from those values. Deferred Archive wall observations schedule local idle maintenance only and never enter proofs, quotas, leases or authenticated monetary time. The maintenance condition-variable timeout only bounds a wait; every wake re-reads selected Native state before admission.",
    "sites": [
     ["crates/iroha_core/src/kagemusha_wallet_v1/enrollment_issuer/runtime.rs", "time_budget", "timeout", 1],
     ["crates/iroha_core/src/kagemusha_wallet_v1/enrollment_issuer/selection.rs", "time_budget", "timeout", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/counters.rs", "wall_clock", "elapsed", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/counters.rs", "wall_clock", "instant", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/opening_metrics.rs", "wall_clock", "instant", 1],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive/clock.rs", "wall_clock", "system_time", 3],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics.rs", "wall_clock", "instant", 3],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics/bridge.rs", "wall_clock", "elapsed", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/fold_metrics/bridge.rs", "wall_clock", "instant", 1],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/scheduling/archive_admission.rs", "time_budget", "timeout", 3],
     ["crates/iroha_data_model/src/kagemusha/kagemusha_wallet_v1/policy.rs", "time_budget", "deadline", 5]
    ]
   },
@@ -3274,11 +3276,11 @@
    "gates": "KAGEMUSHA offline monetary authority: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "Outside the ZK delivery plan; recorded for visibility only.",
    "attribution": "path_rule",
-   "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. Individually read added dispatch/native_owner sites distinguish unavailable original sigma artifact custody from invalid proof content and refuse a poisoned original-source lock. These local wallet preparation failures do not relax the separate hardware custody or qualified artifact checks.",
+   "note": "KAGEMUSHA is the offline monetary authority. AGENTS.md keeps its hardware-backed release and custody policy separate; it is not a product of the ZK delivery plan, which only requires mixed blocks with KAGEMUSHA top-ups to be exercised (A.1, A.3). Its release, qualification and lifecycle names are recorded so that a change to them is seen, not because F.4 or a later plan task removes them. Individually read added dispatch/native_owner sites distinguish unavailable original sigma artifact custody from invalid proof content and refuse a poisoned original-source lock. These local wallet preparation failures do not relax the separate hardware custody or qualified artifact checks. Deferred Archive distinguishes missing/regressed local wall observations and unavailable selected receipt/storage custody from an empty queue. verification_errors maps unsupported local multiopen domain construction to Attempt::Local; it does not turn unavailable construction into a proof verdict.",
    "sites": [
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs", "unavailable", "unavailable", 18],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs", "unavailable", "unsupported", 1],
-    ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/android.rs", "unavailable", "unavailable", 15],
+    ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/android.rs", "unavailable", "unavailable", 14],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed.rs", "unavailable", "unavailable", 6],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/exports.rs", "unavailable", "unavailable", 2],
     ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/jni.rs", "unavailable", "unavailable", 2],
@@ -3341,9 +3343,13 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/dispatch.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1/randomness.rs", "unavailable", "unavailable", 3],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1/verification_errors.rs", "unavailable", "unsupported", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_registration_v1.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/builder.rs", "unavailable", "unavailable", 4],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1.rs", "unavailable", "unavailable", 1],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive.rs", "unavailable", "unavailable", 3],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive/clock.rs", "unavailable", "unavailable", 10],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive/drain.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/bootstrap.rs", "unavailable", "unavailable", 3],
     ["crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_owner/review.rs", "unavailable", "unavailable", 3],
@@ -5134,7 +5140,9 @@
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_stark.rs", "activation", "activation", 5],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs", "activation", "activation", 16],
     ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_frame_prefix.rs", "activation", "activation", 3],
-    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_digest_joins.rs", "activation", "activation", 6]
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_projection_bus.rs", "activation", "activation", 2],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_digest_joins.rs", "activation", "activation", 6],
+    ["crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_sha_digests.rs", "activation", "activation", 3]
    ]
   },
   {
@@ -5380,7 +5388,6 @@
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "exact12", 77],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "readiness", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/SubmitPrivacyZkX509CertificateV1.kt", "sdk_availability", "exact12", 1],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkX509SigningPreparationV1.kt", "sdk_availability", "readiness", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "exact12", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "qualification", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "release_manifest", 1],
@@ -5414,7 +5421,7 @@
    "gates": "Kotlin/Java/Android SDK: words that a detector matches in names and comments.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_kotlin.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there.",
+   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_kotlin.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. The X.509 signing-preparation and KAGEMUSHA fold-progress readiness hits are API documentation: they grant no release readiness or monetary completion.",
    "sites": [
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/alias/AccountOnboardingModels.kt", "sdk_availability", "readiness", 12],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/alias/AliasNames.kt", "sdk_availability", "qualification", 3],
@@ -5428,7 +5435,9 @@
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/ValidatorStakingNoritoV1.kt", "sdk_availability", "qualification", 3],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/ValidatorStakingNoritoV1.kt", "sdk_availability", "readiness", 10],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/petal/PetalDecoder.kt", "sdk_availability", "qualification", 1],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkX509SigningPreparationV1.kt", "sdk_availability", "readiness", 1],
     ["kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletEnrollmentV1.kt", "sdk_availability", "qualification", 2],
+    ["kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletFoldProgressV1.kt", "sdk_availability", "readiness", 1],
     ["kotlin/kagemusha-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletV1.kt", "sdk_availability", "readiness", 2]
    ]
   },
@@ -5528,7 +5537,7 @@
    "note": "The SDK verifies canonical capability bytes, expected network/genesis, actual native implementation availability, the exact selected compiled semantic tuple and effective resource limits. Protocol lifecycle, activation and deployment qualification prerequisites are removed. Native/archive and final proof-construction checks remain mandatory. Fixture bundles are data transport. This records source behavior, not complete SDK, network, cryptographic or platform qualification.",
    "sites": [
     ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "capability_manifest", 14],
-    ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "exact12", 66],
+    ["IrohaSwift/Sources/IrohaSwift/NativeBridge.swift", "sdk_availability", "exact12", 68],
     ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "capability_manifest", 33],
     ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "exact12", 63],
     ["IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift", "sdk_availability", "qualification", 1],
@@ -5539,8 +5548,7 @@
     ["IrohaSwift/Sources/IrohaSwift/PrivacyX509TransactionV1.swift", "sdk_availability", "exact12", 8],
     ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "capability_manifest", 5],
     ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "exact12", 14],
-    ["IrohaSwift/Sources/IrohaSwift/TxBuilder.swift", "sdk_availability", "exact12", 17],
-    ["IrohaSwift/Sources/IrohaSwift/ZkX509SigningPreparationV1.swift", "sdk_availability", "readiness", 1]
+    ["IrohaSwift/Sources/IrohaSwift/TxBuilder.swift", "sdk_availability", "exact12", 17]
    ]
   },
   {
@@ -5570,13 +5578,14 @@
    "gates": "Swift SDK: words that a detector matches in names and comments.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_swift.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. KagemushaWalletApplePlatformV1.swift and KagemushaWalletAppleSystemV1.swift mention in comments that platform rollback qualification stays open; no code reads a qualification record.",
+   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_swift.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. KagemushaWalletApplePlatformV1.swift and KagemushaWalletAppleSystemV1.swift mention in comments that platform rollback qualification stays open; no code reads a qualification record. The X.509 signing-preparation and KAGEMUSHA fold-progress readiness hits are API documentation: they grant no release readiness or monetary completion.",
    "sites": [
     ["IrohaSwift/Sources/IrohaSwift/AccelerationSettings.swift", "sdk_availability", "qualification", 2],
     ["IrohaSwift/Sources/IrohaSwift/ConnectClient.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/KagemushaWalletApplePlatformV1.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/KagemushaWalletAppleSystemV1.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/KagemushaWalletEnrollmentV1.swift", "sdk_availability", "qualification", 2],
+    ["IrohaSwift/Sources/IrohaSwift/KagemushaWalletFoldProgressV1.swift", "sdk_availability", "readiness", 1],
     ["IrohaSwift/Sources/IrohaSwift/KagemushaWalletV1.swift", "sdk_availability", "readiness", 2],
     ["IrohaSwift/Sources/IrohaSwift/KaigiInstructionsV1.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/NativeAcceleration.swift", "sdk_availability", "qualification", 1],
@@ -5586,7 +5595,8 @@
     ["IrohaSwift/Sources/IrohaSwift/ToriiSumeragiModels.swift", "sdk_availability", "readiness", 2],
     ["IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/ValidatorStakingNoritoV1.swift", "sdk_availability", "qualification", 2],
-    ["IrohaSwift/Sources/IrohaSwift/ValidatorStakingNoritoV1.swift", "sdk_availability", "readiness", 5]
+    ["IrohaSwift/Sources/IrohaSwift/ValidatorStakingNoritoV1.swift", "sdk_availability", "readiness", 5],
+    ["IrohaSwift/Sources/IrohaSwift/ZkX509SigningPreparationV1.swift", "sdk_availability", "readiness", 1]
    ]
   },
   {
@@ -5726,7 +5736,7 @@
     ["crates/iroha_plonk/src/keys/keygen/rebuild.rs", "digest_identity", "source", 15],
     ["crates/iroha_plonk/src/keys/mod.rs", "digest_identity", "source", 4],
     ["crates/iroha_plonk/src/keys/pk/artifact.rs", "digest_identity", "source", 12],
-    ["crates/iroha_plonk/src/keys/source_fingerprint.rs", "digest_identity", "source", 6]
+    ["crates/iroha_plonk/src/keys/source_fingerprint.rs", "digest_identity", "source", 7]
    ]
   },
   {
@@ -5736,12 +5746,13 @@
    "owner": null,
    "path": "crates/iroha_plonk/src/keys/keygen/builtin.rs",
    "symbol": "fn select_profile(",
-   "gates": "Closed compiled source-profile admission of a PLONK verifying-key original (BuiltinSourceProfileV1::match_actual, BuiltinSourceMemberV1::admit_originals_*): a profile is admitted only when its exact bytes match an entry of the table generated into this binary (keys/keygen/builtin/generated.rs) and the build-computed source identity, the complete source closure and the supported compile target agree; otherwise UnsupportedProfile, StaleSource, UnsupportedTarget or IncompleteSourceClosure.",
+   "gates": "Closed compiled source-profile admission of a PLONK verifying-key original (BuiltinSourceProfileV1::match_actual, BuiltinSourceMemberV1::admit_originals_*): a profile is admitted only when its exact bytes match an entry of the table generated into this binary (keys/keygen/builtin/generated.rs) and the pinned semantic ABI contract and supported compile target agree; otherwise UnsupportedProfile, ContractMismatch or UnsupportedTarget.",
    "decided_by": "Outside the ZK delivery plan: the only production callers are KAGEMUSHA wallet owners, which select it explicitly instead of strict source reconstruction (plonk.source_lookup).",
    "attribution": "read",
-   "note": "BuiltinSourceProfileV1, BuiltinSourceMemberV1 and builtin_source_identity_v1 are called in production only by the KAGEMUSHA producer inventory (iroha_core_zk kagemusha_wallet_artifacts_v1: wallet.rs qualify_wallet_builtin, builtin.rs, operation.rs, sigma.rs), the KAGEMUSHA proof crate (iroha_kagemusha_proof OriginalAdmission::Builtin), the wallet bridge (connect_norito_bridge kagemusha_wallet_ffi/installed.rs) and the offline kagemusha_wallet_artifacts tool; no validator path and no product of the ZK delivery plan calls it. Availability there depends on the binary: the generated table, the build-computed source digest and the compile target. This is a binary/source-digest gate in the sense of F.4; it is recorded here, out of plan with the rest of KAGEMUSHA, and becomes open F.4 work as soon as any operation of the delivery plan admits an original through it. Later proving still rebuilds the actual source and compares its digest (plonk.source_lookup).",
+   "note": "BuiltinSourceProfileV1, BuiltinSourceMemberV1 and builtin_contract_v1 are called in production only by the KAGEMUSHA producer inventory (iroha_core_zk kagemusha_wallet_artifacts_v1: wallet.rs qualify_wallet_builtin, builtin.rs, operation.rs, sigma.rs), the KAGEMUSHA proof crate (iroha_kagemusha_proof OriginalAdmission::Builtin), the wallet bridge (connect_norito_bridge kagemusha_wallet_ffi/installed.rs) and the offline kagemusha_wallet_artifacts tool; no validator path and no product of the ZK delivery plan calls it. Availability there depends on the binary: the generated table, its explicit semantic ABI contract and the compile target. Workspace file hashes are packaging provenance only; they are not runtime compatibility authority. This is a compiled-profile admission gate in the sense of F.4; it is recorded here, out of plan with the rest of KAGEMUSHA, and becomes open F.4 work as soon as any operation of the delivery plan admits an original through it. Later proving still rebuilds the actual source and compares its digest (plonk.source_lookup).",
    "sites": [
-    ["crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source", 13],
+    ["crates/iroha_plonk/src/contract.rs", "digest_identity", "source", 2],
+    ["crates/iroha_plonk/src/keys/keygen/builtin.rs", "digest_identity", "source", 11],
     ["crates/iroha_plonk/src/keys/keygen/builtin.rs", "unavailable", "unsupported", 8],
     ["crates/iroha_plonk/src/keys/keygen/builtin/generated.rs", "digest_identity", "source", 201]
    ]
@@ -5771,8 +5782,9 @@
    "gates": "Local portable-proof destination construction stops after its caller deadline.",
    "decided_by": "CertifiedChain and the independent verifier establish finality from original committed material; a destination grants no authority.",
    "attribution": "read",
-   "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation.",
+   "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline.",
    "sites": [
+    ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 4],
     ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 13],
     ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "wall_clock", "instant", 1]
    ]
@@ -6313,16 +6325,7 @@
       "routing.rules.instruction",
       "staking.public_validator_mode",
       "staking.restricted_validator_mode",
-      "staking.min_validator_stake",
       "staking.max_validators",
-      "staking.max_stake_shares_per_validator",
-      "staking.max_pending_unbonds_per_share",
-      "staking.unbonding_delay.seconds",
-      "staking.unbonding_delay.nanoseconds",
-      "staking.max_slash_bps",
-      "staking.stake_asset_id",
-      "staking.stake_escrow_account_id",
-      "staking.slash_sink_account_id",
       "hf_shared_leases.drain_grace.seconds",
       "hf_shared_leases.drain_grace.nanoseconds",
       "endorsement.committee_keys",
@@ -6471,7 +6474,8 @@
    "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 16},
    "zk-proof-tags": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 0},
    "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 47},
-   "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."}
+   "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
+   "kagemusha-simulator": {"class": "development_or_test", "reason": "Explicit nonshipping software-key wallet simulator for genuine-proof merchant acceptance; not a node release feature."}
   },
   "iroha_core_privacy": {
    "default": {"class": "packaging", "reason": "The default feature set of the crate."},
@@ -6492,13 +6496,14 @@
    "test-utils": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 0},
    "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 27},
-   "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."}
+   "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
+   "kagemusha-simulator": {"class": "development_or_test", "reason": "Explicit nonshipping software-key wallet simulator for genuine-proof merchant acceptance; not a node release feature."}
   },
   "iroha_crypto": {
    "application": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "bfv-accel": {"class": "acceleration", "reason": "Hardware acceleration or parallelism with a deterministic scalar fallback."},
    "bfv-test-fixtures": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
-   "bls": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 105},
+   "bls": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 106},
    "consensus": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "crypto-parity-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "default": {"class": "packaging", "reason": "The default feature set of the crate."},
@@ -6507,7 +6512,7 @@
    "gost": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 32},
    "json": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "node-crypto": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
-   "pqc": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 53},
+   "pqc": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 49},
    "rand": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "rayon": {"class": "acceleration", "reason": "Hardware acceleration or parallelism with a deterministic scalar fallback."},
    "sm": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 31},
@@ -6643,7 +6648,7 @@
  },
  "summary": {
   "entries": 232,
-  "sites": 1491,
+  "sites": 1503,
   "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

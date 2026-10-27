@@ -240,7 +240,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             "scripts/check_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
             "scripts/exec_with_file_lock.py": "#!/usr/bin/env python3\n",
             "scripts/norito_bridge_source_seal.py": "# fixture\n",
-            "scripts/normalize_pqcrypto_archive.py": "# archive normalization fixture\n",
+            "scripts/audit_native_static_archive.py": "# archive normalization fixture\n",
             "scripts/norito_bridge_local_integration.py": "# local integration policy fixture\n",
             "scripts/norito_bridge_apple_slice_handoff.py": "#!/usr/bin/env python3\n",
             "scripts/package_mobile_sdk_artifacts.sh": "#!/bin/sh\n",
@@ -891,7 +891,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("scripts/exec_with_file_lock.py", apple)
         self.assertIn("scripts/archive_norito_xcframework.py", apple)
         self.assertIn("scripts/norito_bridge_apple_slice_handoff.py", apple)
-        self.assertIn("scripts/normalize_pqcrypto_archive.py", apple)
+        self.assertIn("scripts/audit_native_static_archive.py", apple)
         self.assertIn("scripts/norito_bridge_local_integration.py", apple)
         self.assertIn("scripts/package_mobile_sdk_artifacts.sh", apple)
         self.assertIn("scripts/validate_norito_bridge_archive.py", apple)
@@ -954,7 +954,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         inputs = self.inputs("apple")
         original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         for relative in (
-            "scripts/normalize_pqcrypto_archive.py",
+            "scripts/audit_native_static_archive.py",
             "scripts/norito_bridge_local_integration.py",
         ):
             with self.subTest(source_owner=relative):

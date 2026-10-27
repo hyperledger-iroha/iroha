@@ -181,7 +181,7 @@ fn infinite_combined_point_is_rejected_by_every_public_verification_path() {
         .chain_update(message)
         .finalize()
         .into();
-    let r = Scalar::reduce_bytes(&digest.into());
+    let r = <Scalar as Reduce<sm2::FieldBytes>>::reduce(&digest.into());
     let s = -r * d * (Scalar::from(1_u64) + d).invert().unwrap();
     let signature = Signature::from_scalars(r.to_bytes(), s.to_bytes()).unwrap();
     let (parsed_r, parsed_s) = signature.split_scalars();
@@ -189,22 +189,20 @@ fn infinite_combined_point_is_rejected_by_every_public_verification_path() {
     assert!(!bool::from(parsed_r.is_zero()));
     assert!(!bool::from(parsed_s.is_zero()));
     assert!(!bool::from(t.is_zero()));
-    let combined = ProjectivePoint::lincomb(
-        &ProjectivePoint::generator(),
-        &parsed_s,
-        &ProjectivePoint::from(borrowed.point),
-        &t,
-    );
+    let combined = ProjectivePoint::lincomb(&[
+        (ProjectivePoint::generator(), *parsed_s),
+        (ProjectivePoint::from(borrowed.point), t),
+    ]);
     assert!(bool::from(combined.is_identity()));
     assert_eq!(
-        Scalar::reduce_bytes(&combined.to_affine().x()),
+        <Scalar as Reduce<sm2::FieldBytes>>::reduce(&combined.to_affine().x()),
         Scalar::from(0_u64)
     );
     // Without the finite-point check, the x=0 sentinel makes the final equation
     // accept r=e despite B6 having no valid affine coordinates.
     assert_eq!(*parsed_r, r);
     let bytes = signature.to_bytes();
-    let sm2_signature = Sm2Signature::from_bytes(&bytes).unwrap();
+    let sm2_signature = Sm2Signature::from_bytes(bytes.as_ref()).unwrap();
     let compact = crate::PublicKey::from_bytes(crate::Algorithm::Sm2, &payload).unwrap();
     let ordinary = crate::Signature::from_bytes(&bytes);
     for result in [

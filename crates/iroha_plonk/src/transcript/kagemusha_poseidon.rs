@@ -155,7 +155,7 @@ where
 #[cfg(test)]
 mod tests {
     use ff::Field;
-    use group::{Curve, Group, prime::PrimeCurveAffine};
+    use group::{Curve, CurveAffine, Group};
     use iroha_pasta::{Ep, EpAffine, Eq, EqAffine, Fp, Fq};
 
     use super::*;

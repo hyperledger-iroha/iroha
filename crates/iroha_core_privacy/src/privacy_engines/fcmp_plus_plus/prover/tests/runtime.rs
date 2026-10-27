@@ -4,39 +4,36 @@ use super::*;
 struct ZeroRng {
     calls: usize,
 }
-impl RngCore for ZeroRng {
-    fn next_u32(&mut self) -> u32 {
-        0
+impl rand::TryRng for ZeroRng {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(0)
     }
-    fn next_u64(&mut self) -> u64 {
-        0
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(0)
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        destination.fill(0);
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         self.calls += 1;
         destination.fill(0);
         Ok(())
     }
 }
-impl CryptoRng for ZeroRng {}
+impl rand::TryCryptoRng for ZeroRng {}
 #[derive(Default)]
 struct ZeroThenOneRng {
     calls: usize,
 }
-impl RngCore for ZeroThenOneRng {
-    fn next_u32(&mut self) -> u32 {
-        0
+impl rand::TryRng for ZeroThenOneRng {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(0)
     }
-    fn next_u64(&mut self) -> u64 {
-        0
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(0)
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        self.try_fill_bytes(destination)
-            .expect("infallible fixture");
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         self.calls += 1;
         destination.fill(0);
         if self.calls == 2 {
@@ -45,22 +42,21 @@ impl RngCore for ZeroThenOneRng {
         Ok(())
     }
 }
-impl CryptoRng for ZeroThenOneRng {}
+impl rand::TryCryptoRng for ZeroThenOneRng {}
 struct PeriodicRng {
     period: usize,
     cursor: usize,
 }
-impl RngCore for PeriodicRng {
-    fn next_u32(&mut self) -> u32 {
+impl rand::TryRng for PeriodicRng {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         panic!("FCMP++ public prover must reject the periodic prefix")
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         panic!("FCMP++ public prover must reject the periodic prefix")
     }
-    fn fill_bytes(&mut self, _destination: &mut [u8]) {
-        panic!("FCMP++ public prover must use fallible entropy")
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         for byte in destination {
             *byte = (self.cursor % self.period).to_le_bytes()[0]
                 .wrapping_mul(73)
@@ -70,7 +66,7 @@ impl RngCore for PeriodicRng {
         Ok(())
     }
 }
-impl CryptoRng for PeriodicRng {}
+impl rand::TryCryptoRng for PeriodicRng {}
 #[test]
 fn prover_witness_debug_is_redacted_and_explicit_zeroize_covers_the_full_path() {
     let (mut input, _new_output, _root) = one_layer_fixture();
@@ -1265,7 +1261,7 @@ fn maximum_compiled_shape_release_resource_audit() {
     let (inputs, output_openings, root) = maximum_bound_fixture();
     let setup_ms = setup_started.elapsed().as_millis();
     let context = [0xa5_u8; 32];
-    let mut rng = StdRng::seed_from_u64(0xfcff_ff01);
+    let mut rng = ChaCha12Rng::seed_from_u64(0xfcff_ff01);
     let prove_started = std::time::Instant::now();
     let bundle = prove_fcmp_plus_plus_v1(&mut rng, context, &inputs, &output_openings, root)
         .expect("maximum-bound native proof");
@@ -1418,7 +1414,7 @@ fn extracted_prover_test_module_retains_every_legacy_regression() {
 fn native_one_layer_prover_round_trips_end_to_end() {
     let context = [0x91_u8; 32];
     let (input, new_output, root) = one_layer_fixture();
-    let mut rng = StdRng::seed_from_u64(0xfc_0001);
+    let mut rng = ChaCha12Rng::seed_from_u64(0xfc_0001);
     let bundle = prove_fcmp_plus_plus_v1(
         &mut rng,
         context,
@@ -1559,7 +1555,7 @@ fn native_two_layer_prover_exercises_alternating_curve_path() {
     )
     .expect("two-layer witness");
     let new_output = output_opening(127, 131, TEST_AMOUNT, 109 + 113);
-    let mut rng = StdRng::seed_from_u64(0xfc_0002);
+    let mut rng = ChaCha12Rng::seed_from_u64(0xfc_0002);
     let bundle = prove_fcmp_plus_plus_v1(
         &mut rng,
         context,
@@ -1613,7 +1609,7 @@ fn native_two_input_prover_round_trips_at_the_compiled_bound() {
         .expect("second witness"),
     ];
     let new_output = output_opening(173, 179, TEST_AMOUNT * 2, 149 + 163 + 157 + 167);
-    let mut rng = StdRng::seed_from_u64(0xfc_0003);
+    let mut rng = ChaCha12Rng::seed_from_u64(0xfc_0003);
     let bundle = prove_fcmp_plus_plus_v1(
         &mut rng,
         context,
@@ -1689,7 +1685,7 @@ fn prover_rejects_duplicate_outputs_key_images_and_input_overflow_preflight() {
     )
     .expect("second input");
     let new_output = output_opening(199, 211, TEST_AMOUNT, 179 + 193);
-    let mut rng = StdRng::seed_from_u64(0xfc_0004);
+    let mut rng = ChaCha12Rng::seed_from_u64(0xfc_0004);
     let duplicate_output_a = first_input.duplicate_for_test();
     let duplicate_output_b = first_input.duplicate_for_test();
     assert_eq!(

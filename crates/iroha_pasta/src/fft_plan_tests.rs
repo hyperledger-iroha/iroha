@@ -4,7 +4,7 @@ use super::*;
 use crate::field::{Fp, Fq};
 use ff::WithSmallOrderMulGroup;
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::SeedableRng;
+use rand_core::SeedableRng;
 
 fn coefficients<F: PastaField>(n: usize, seed: u64) -> Vec<F> {
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
@@ -224,11 +224,6 @@ fn direct_input_schedule<F: PastaField>(
 fn batch_parallelism_diagnostic() {
     use std::{hint::black_box, time::Instant};
 
-    fn require_release() {
-        #[cfg(debug_assertions)]
-        panic!("run this diagnostic with --release");
-    }
-
     fn run<F: PastaField>(curve: &str) {
         let read = |name: &str| std::env::var(name).expect("explicit diagnostic selection");
         let k: u32 = read("FFT_BATCH_K").parse().unwrap();
@@ -300,7 +295,12 @@ fn batch_parallelism_diagnostic() {
             }
         });
     }
-    require_release();
+    // Keep this an invocation-time refusal: debug builds must still compile
+    // the ignored diagnostic. This check is outside every timed cut.
+    assert!(
+        !black_box(cfg!(debug_assertions)),
+        "run this diagnostic with --release"
+    );
     match std::env::var("FFT_BATCH_CURVE").unwrap().as_str() {
         "fp" => run::<Fp>("fp"),
         "fq" => run::<Fq>("fq"),

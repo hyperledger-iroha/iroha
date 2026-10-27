@@ -1,7 +1,8 @@
 //! Original-entropy parity, work bounds and real-cell clearing for mask sampling.
 
 use super::*;
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::SeedableRng;
+use rand_chacha::ChaCha12Rng;
 
 fn native(column: usize, pattern: usize) -> ZeroizingMainTraceColumnV1 {
     ZeroizingMainTraceColumnV1(
@@ -19,7 +20,7 @@ fn native(column: usize, pattern: usize) -> ZeroizingMainTraceColumnV1 {
 fn batched_mask_sampling_preserves_every_draw_and_masked_column() {
     for pattern in 0..3 {
         for width in [1, 7, 8, 9, 17] {
-            let mut scalar_rng = StdRng::from_seed([91; 32]);
+            let mut scalar_rng = ChaCha12Rng::from_seed([91; 32]);
             let mut batch_rng = scalar_rng.clone();
             let scalar = MainTraceMaskGroupV1::sample_v1(3, 13, width, &mut scalar_rng, |column| {
                 Ok(native(column, pattern))
@@ -48,7 +49,10 @@ fn batched_mask_sampling_preserves_every_draw_and_masked_column() {
                     batch.replay_v1(column, &native(column, pattern)).unwrap(),
                 );
             }
-            assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+            assert_eq!(
+                scalar_rng.try_next_u64().expect("test RNG draw succeeds"),
+                batch_rng.try_next_u64().expect("test RNG draw succeeds")
+            );
         }
     }
 }
@@ -56,7 +60,7 @@ fn batched_mask_sampling_preserves_every_draw_and_masked_column() {
 #[test]
 fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
     for width in [0, usize::from(u16::MAX) + 1] {
-        let mut rng = StdRng::from_seed([13; 32]);
+        let mut rng = ChaCha12Rng::from_seed([13; 32]);
         let mut unchanged = rng.clone();
         let mut calls = 0;
         assert!(
@@ -67,10 +71,13 @@ fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
             .is_err()
         );
         assert_eq!(calls, 0);
-        assert_eq!(rng.next_u64(), unchanged.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            unchanged.try_next_u64().expect("test RNG draw succeeds")
+        );
     }
     for returned in [0, 7, 9] {
-        let mut rng = StdRng::from_seed([17; 32]);
+        let mut rng = ChaCha12Rng::from_seed([17; 32]);
         let mut unchanged = rng.clone();
         assert!(
             MainTraceMaskGroupV1::sample_batched_v1(3, 13, 8, &mut rng, |_| {
@@ -78,9 +85,12 @@ fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
             })
             .is_err()
         );
-        assert_eq!(rng.next_u64(), unchanged.next_u64());
+        assert_eq!(
+            rng.try_next_u64().expect("test RNG draw succeeds"),
+            unchanged.try_next_u64().expect("test RNG draw succeeds")
+        );
     }
-    let mut scalar_rng = StdRng::from_seed([19; 32]);
+    let mut scalar_rng = ChaCha12Rng::from_seed([19; 32]);
     let mut batch_rng = scalar_rng.clone();
     let column = |index| {
         let mut value = native(index, 2);
@@ -99,14 +109,17 @@ fn malformed_sampling_batches_preserve_preflight_and_entropy_position() {
         })
         .is_err()
     );
-    assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+    assert_eq!(
+        scalar_rng.try_next_u64().expect("test RNG draw succeeds"),
+        batch_rng.try_next_u64().expect("test RNG draw succeeds")
+    );
 }
 
 struct PartialEntropy {
     draws: usize,
     panic_on_failure: bool,
 }
-impl TryRngCore for PartialEntropy {
+impl TryRng for PartialEntropy {
     type Error = std::io::Error;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         unreachable!("mask sampler requests byte arrays")
@@ -149,7 +162,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
             3,
             13,
             17,
-            &mut StdRng::from_seed([23; 32]),
+            &mut ChaCha12Rng::from_seed([23; 32]),
             |range| Ok(range.map(|column| native(column, 2)).collect()),
         )
     });
@@ -178,7 +191,7 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
                     3,
                     13,
                     17,
-                    &mut StdRng::from_seed([29; 32]),
+                    &mut ChaCha12Rng::from_seed([29; 32]),
                     |range| {
                         let mut batch = Vec::with_capacity(range.len());
                         for column in range {
@@ -431,11 +444,11 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)
         }
     };
-    let mut scalar_rng = StdRng::from_seed([53; 32]);
+    let mut scalar_rng = ChaCha12Rng::from_seed([53; 32]);
     let mut batch_rng = scalar_rng.clone();
     let indices = [0, 1, (1 << layout.common_lde_log2) - 1];
     let commit =
-        |rng: &mut StdRng,
+        |rng: &mut ChaCha12Rng,
          source: &mut dyn FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>| {
             aggregate::commit_masked_trace_columns_v1(
                 ZK_X509_DIGEST_CONTEXT_V1,
@@ -456,7 +469,10 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         };
     let (scalar_commitment, scalar_masks) = commit(&mut scalar_rng, &mut scalar);
     let (batch_commitment, batch_masks) = commit(&mut batch_rng, &mut batched());
-    assert_eq!(scalar_rng.next_u64(), batch_rng.next_u64());
+    assert_eq!(
+        scalar_rng.try_next_u64().expect("test RNG draw succeeds"),
+        batch_rng.try_next_u64().expect("test RNG draw succeeds")
+    );
     assert_eq!(scalar_commitment, batch_commitment);
     let point = E::from_coefficients([F(113), F(127), F(131), F(137)]).unwrap();
     assert_eq!(

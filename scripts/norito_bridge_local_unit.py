@@ -19,7 +19,6 @@ import stat
 import subprocess
 import sys
 import time
-import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve(strict=True).parent))
 import native_sdk_source_custody as source_custody
@@ -29,6 +28,8 @@ RECORD_SCHEMA = "iroha.norito-bridge-local-unit-producer.v1"
 SCOPE = "local-unit"
 PURPOSE = "macos-swift-debug-unit-tests"
 SOURCE_SCOPE = "verified-compiler-native-runtime-manifest-inputs"
+# Source packages outside IrohaSwift are part of its actual SwiftPM build closure.
+SWIFT_LOCAL_DEPENDENCIES = ("vendor/boringssl-swiftpm", "vendor/nearby")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 TARGETS = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}
 HEADER_INPUTS = {
@@ -37,7 +38,7 @@ HEADER_INPUTS = {
     "module.modulemap": "crates/connect_norito_bridge/module.modulemap.template",
 }
 POLICY_INPUTS = [
-    "scripts/build_norito_xcframework.sh", "scripts/normalize_pqcrypto_archive.py",
+    "scripts/build_norito_xcframework.sh", "scripts/audit_native_static_archive.py",
     "scripts/validate_norito_bridge_xcframework.py", "scripts/check_native_sdk_artifact.py",
     "crates/soranet_pq/include/soranet_pq.h", "crates/iroha_data_model/src/privacy/protocol.rs",
     "docs/norito_bridge_release.md",
@@ -206,8 +207,8 @@ def check_record_semantics(emitter: dict, capture: dict, component: dict,
     require(capture.get("native_companion_sha256") == item.get("sha256"), "static archive companion differs")
     require(component.get("emitter_path") == str(emitter_path) and component.get("emitter_sha256") == emitter_sha,
             "native component names a different emitter")
-    require(component.get("qualified") is True and component.get("observed_abi_version") == 31,
-            "original ABI component did not pass exact ABI31")
+    require(component.get("qualified") is True and component.get("observed_abi_version") == 33,
+            "original ABI component did not pass exact ABI33")
     require(component.get("artifact_path") == item.get("snapshot")
             and component.get("artifact_sha256") == item.get("sha256"), "native component tested a different library")
     require(check_source_record(component) == source
@@ -330,6 +331,19 @@ def swift_sources(root: Path):
                     os.readlink(path).encode()).hexdigest()
                 continue
             inputs[str(path.relative_to(root))] = digest(path)
+    for relative in SWIFT_LOCAL_DEPENDENCIES:
+        owner = source_custody.original_directory(root / relative)
+        for current, directories, files in os.walk(
+            owner, followlinks=False,
+            onerror=lambda error: require(False, "local Swift dependency is unreadable: " + str(error)),
+        ):
+            # Even ignored build/cache directories cannot be aliases into another tree.
+            for name in directories:
+                source_custody.original_directory(Path(current) / name)
+            directories[:] = sorted(name for name in directories if name not in {".build", ".swiftpm", ".git", "__pycache__"})
+            for name in sorted(files):
+                path = Path(current) / name
+                inputs[str(path.relative_to(root))] = digest(path)
     for name in POLICY_INPUTS + list(HEADER_INPUTS.values()):
         inputs[name] = digest(root / name)
     return inputs
@@ -349,17 +363,17 @@ def host_policy(scope: str, platform_name: str, configuration: str, require_exte
 
 
 def expected_commands(root: Path, output: Path, target: str, config: dict):
-    """The sole five-child normalization, index, link, run, package recipe."""
+    """The sole five-child archive audit, index, link, run, package recipe."""
     stage = output / "staging"
     archive = stage / "libNoritoBridge.a"
     bridge_output = Path(config["actual_archive_original"]).parent
     architecture = {value: key for key, value in TARGETS.items()}[target]
     return [
-        ([config["python"], "-I", "-S", "-B", str(root / "scripts/normalize_pqcrypto_archive.py"),
+        ([config["python"], "-I", "-S", "-B", str(root / "scripts/audit_native_static_archive.py"),
           "--library", str(archive), "--cargo-build-dir", str(bridge_output / "build"),
           "--cargo-messages", config["messages_path"], "--target", target,
-          "--cargo-lock", str(root / "Cargo.lock"), "--report", str(stage / "normalization.json")],
-         config["python"], "normalization.log"),
+          "--cargo-lock", str(root / "Cargo.lock"), "--report", str(stage / "archive_audit.json")],
+         config["python"], "archive_audit.log"),
         (["ranlib", "-D", str(archive)], config["ranlib"], "ranlib.log"),
         ([config["clang"], "-target", architecture + "-apple-macos" + config["deployment_target"],
           "-isysroot", config["sdk"], "-I", str(root / "crates/connect_norito_bridge/include"),
@@ -416,7 +430,7 @@ def check_manifest(manifest: dict, target: str, producer: Path, producer_pin: st
     require(type(manifest) is dict and set(manifest) == MANIFEST_FIELDS
             and manifest["schema"] == SCHEMA and manifest["artifact_scope"] == SCOPE
             and manifest["purpose"] == PURPOSE and manifest["version"] == "0.1.0"
-            and type(manifest["native_bridge_abi_version"]) is int and manifest["native_bridge_abi_version"] == 31
+            and type(manifest["native_bridge_abi_version"]) is int and manifest["native_bridge_abi_version"] == 33
             and manifest["target_triple"] == target, "local-unit manifest schema/scope/ABI is not exact")
     require(manifest["producer_record"] == str(producer) and manifest["producer_record_sha256"] == producer_pin,
             "manifest producer pin differs")
@@ -435,7 +449,7 @@ def validate_tool_config(config: dict):
             "Xcode developer directory is not canonical")
     toolchain = developer / "Toolchains/XcodeDefault.xctoolchain/usr/bin"
     require(Path(config["python"]).resolve(strict=True) == Path(sys.executable).resolve(strict=True),
-            "normalizer/verifier Python differs from the current interpreter")
+            "auditor/verifier Python differs from the current interpreter")
     require(Path(config["clang"]) == toolchain / "clang" and Path(config["ranlib"]) == toolchain / "ranlib"
             and Path(config["xcodebuild"]) == Path("/usr/bin/xcodebuild"),
             "native child tools do not belong to the selected actual Xcode recipe")
@@ -492,7 +506,9 @@ def consumer_source(root: Path):
     marker = "cat > \"$consumer_dir/main.c\" <<'CONSUMER_EOF'\n"
     require(source.count(marker) == 1, "native consumer source owner is not unique")
     result = source.split(marker, 1)[1].split("\nCONSUMER_EOF", 1)[0] + "\n"
-    require("check_mldsa_ffi()" in result and "PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec" in result
+    require("check_mldsa_ffi(suite)" in result and "check_mlkem_ffi(suite)" in result
+            and "suite < 3" in result and "ciphertext[0] ^= 1" in result
+            and "SORANET_PQ_ERR_VERIFICATION_FAILED" in result
             and "CONNECT_NORITO_BRIDGE_ABI_VERSION" in result, "complete original native consumer checks are absent")
     policy = native_policy(root)
     required = ",\n".join("    " + json.dumps(name) for name in policy["required"])
@@ -553,36 +569,32 @@ def produce(root: Path, pins: dict, output: Path, config: dict, acknowledge_reci
     archive = stage / "libNoritoBridge.a"
     clone(Path(admitted["capture"]["archive_snapshot"]), archive)
     archive.chmod(0o600)
-    normalizer = root / "scripts/normalize_pqcrypto_archive.py"
-    normalizer_owner = module(normalizer, "current_original_unit_normalizer")
-    lock = tomllib.loads((root / "Cargo.lock").read_text())
-    packages = [p for p in lock["package"] if p["name"] == "pqcrypto-internals"]
-    require(len(packages) == 1, "locked PQClean reference package is not unique")
+    auditor = root / "scripts/audit_native_static_archive.py"
+    auditor_owner = module(auditor, "current_original_unit_auditor")
     actual = admitted["capture"]["actual_cargo_artifact"]
     build_dir = Path(admitted["capture"]["archive_original"]).parent / "build"
-    references, reference_record = normalizer_owner.cargo_references(build_dir, admitted["target"], admitted["messages_path"], packages[0])
+    references, reference_record = auditor_owner.cargo_references(
+        build_dir, admitted["target"], admitted["messages_path"], root / "Cargo.lock")
     ref_dir = stage / "reference-originals"
     ref_dir.mkdir(mode=0o700)
-    reference_inputs = {reference_record["cargo_build_output"]: reference_record["cargo_build_output_sha256"]}
-    out_dir = Path(reference_record["cargo_build_output"]).parent / "out"
-    for name, value in references.items():
-        reference_inputs[str(out_dir / name)] = hashlib.sha256(value).hexdigest()
-        clone(out_dir / name, ref_dir / name)
-        (ref_dir / name).chmod(0o400)
-    clone(Path(reference_record["cargo_build_output"]), ref_dir / "output")
-    (ref_dir / "output").chmod(0o400)
+    reference_inputs = {name: hashlib.sha256(value).hexdigest() for name, value in references.items()}
+    require(len({Path(name).name for name in references}) == len(references), "reference filenames collide")
+    for name in references:
+        destination = ref_dir / Path(name).name
+        clone(Path(name), destination)
+        destination.chmod(0o400)
     save(stage / "reference-inputs.json", {"scope": SCOPE, "original_inputs": reference_inputs,
         "held_inputs": {str(p): digest(p) for p in ref_dir.iterdir()}, "provenance": reference_record})
     guard_inputs(root, admitted, swift, tools)
-    commands.append(command_record([config["python"], "-I", "-S", "-B", str(normalizer), "--library", str(archive),
+    commands.append(command_record([config["python"], "-I", "-S", "-B", str(auditor), "--library", str(archive),
         "--cargo-build-dir", str(build_dir), "--cargo-messages", str(admitted["messages_path"]),
         "--target", admitted["target"], "--cargo-lock", str(root / "Cargo.lock"),
-        "--report", str(stage / "normalization.json")], environment=environment, cwd=root, log=stage / "normalization.log"))
+        "--report", str(stage / "archive_audit.json")], environment=environment, cwd=root, log=stage / "archive_audit.log"))
     verify_hashes(reference_inputs)
-    normalization = load(stage / "normalization.json")
-    require(normalization["input_sha256"] == admitted["capture"]["archive_sha256"]
-            and normalization["unindexed_output_sha256"] == digest(archive),
-            "normalizer input/output differs from the actual retained/derived archives")
+    archive_audit = load(stage / "archive_audit.json")
+    require(archive_audit["archive_sha256"] == admitted["capture"]["archive_sha256"]
+            and archive_audit["archive_sha256"] == digest(archive),
+            "archive audit differs from the unchanged captured archive")
     guard_inputs(root, admitted, swift, tools)
     commands.append(command_record(["ranlib", "-D", str(archive)], executable=config["ranlib"],
         environment=environment, cwd=root, log=stage / "ranlib.log"))
@@ -622,8 +634,8 @@ def produce(root: Path, pins: dict, output: Path, config: dict, acknowledge_reci
               "native_source": admitted["native_source"], "swift_sources": swift, "tool_inputs": tools,
               "native_broad_diagnostic": admitted["native_broad_diagnostic"],
               "reference_inputs_record": str(stage / "reference-inputs.json"), "reference_inputs_record_sha256": digest(stage / "reference-inputs.json"),
-              "normalization": str(stage / "normalization.json"), "normalization_sha256": digest(stage / "normalization.json"),
-              "unindexed_archive_sha256": normalization["unindexed_output_sha256"],
+              "archive_audit": str(stage / "archive_audit.json"), "archive_audit_sha256": digest(stage / "archive_audit.json"),
+              "unindexed_archive_sha256": archive_audit["archive_sha256"],
               "consumer_source_sha256": digest(main), "consumer_sha256": digest(consumer), "commands": commands,
               "archive_sha256": indexed_sha, "finished_unix": time.time(), "release_qualified": False,
               "config": config, "environment": environment, "info_plist": info,
@@ -637,7 +649,7 @@ def produce(root: Path, pins: dict, output: Path, config: dict, acknowledge_reci
         source[path] = expected
     receipts = {value["path"]: value["sha256"] for value in pins.values()}
     manifest = {"schema": SCHEMA, "artifact_scope": SCOPE, "purpose": PURPOSE, "version": "0.1.0",
-                "native_bridge_abi_version": 31, "target_triple": admitted["target"], "hashes": {identifier: indexed_sha},
+                "native_bridge_abi_version": 33, "target_triple": admitted["target"], "hashes": {identifier: indexed_sha},
                 "source_inputs": source, "tool_inputs": tools, "receipt_inputs": receipts,
                 "producer_record": str(producer), "producer_record_sha256": digest(producer)}
     save(framework / "NoritoBridge.artifacts.json", manifest)
@@ -682,36 +694,31 @@ def verify_artifact(root: Path, output: Path, producer_pin: str):
             and (stage / "main.c").read_text() == consumer_source(root), "complete original native consumer source differs")
     require(digest(stage / "consumer") == record["consumer_sha256"], "actual complete-archive consumer changed")
     require(record["commands"][3]["argv"] == [str(stage / "consumer")], "native execution receipt ran a different consumer")
-    require(digest(Path(record["normalization"])) == record["normalization_sha256"], "normalization record changed")
-    normalized = load(Path(record["normalization"]))
-    require(set(normalized) == {"schema", "target", "input_sha256", "unindexed_output_sha256",
-                                "removed_identical_members", "references"}
-            and normalized["schema"] == "iroha.pqcrypto-common-archive-normalization.v1"
-            and normalized["input_sha256"] == admitted["capture"]["archive_sha256"]
-            and normalized["target"] == admitted["target"]
-            and normalized["unindexed_output_sha256"] == record["unindexed_archive_sha256"],
-            "normalization used a stale/different archive")
+    require(digest(Path(record["archive_audit"])) == record["archive_audit_sha256"], "archive_audit record changed")
+    audited = load(Path(record["archive_audit"]))
+    require(set(audited) == {"schema", "target", "archive_sha256", "object_count", "references"}
+            and audited["schema"] == "iroha.native-static-archive-audit.v1"
+            and audited["archive_sha256"] == admitted["capture"]["archive_sha256"]
+            and audited["target"] == admitted["target"]
+            and audited["archive_sha256"] == record["unindexed_archive_sha256"],
+            "archive audit used a stale/different archive")
     reference = load(Path(record["reference_inputs_record"]), record["reference_inputs_record_sha256"])
-    require(record["normalization"] == str(stage / "normalization.json")
+    require(record["archive_audit"] == str(stage / "archive_audit.json")
             and record["reference_inputs_record"] == str(stage / "reference-inputs.json")
             and set(reference) == {"scope", "original_inputs", "held_inputs", "provenance"}
-            and reference["scope"] == SCOPE and normalized["references"] == reference["provenance"],
-            "normalization/reference source relationships differ")
-    normalizer = module(root / "scripts/normalize_pqcrypto_archive.py", "current_verified_unit_normalizer")
-    packages = [package for package in tomllib.loads((root / "Cargo.lock").read_text())["package"]
-                if package["name"] == "pqcrypto-internals"]
-    require(len(packages) == 1, "locked PQClean package owner differs")
-    refs, provenance = normalizer.cargo_references(Path(config["actual_archive_original"]).parent / "build",
-                                                  admitted["target"], admitted["messages_path"], packages[0])
+            and reference["scope"] == SCOPE and audited["references"] == reference["provenance"],
+            "archive audit/reference source relationships differ")
+    auditor = module(root / "scripts/audit_native_static_archive.py", "current_verified_unit_auditor")
+    refs, provenance = auditor.cargo_references(Path(config["actual_archive_original"]).parent / "build",
+                                               admitted["target"], admitted["messages_path"], root / "Cargo.lock")
     require(provenance == reference["provenance"], "actual current Cargo-linked reference provenance differs")
+    require(auditor.audit_archive_bytes(Path(admitted["capture"]["archive_snapshot"]).read_bytes())
+            == audited["object_count"], "archive object inventory differs")
     ref_root = stage / "reference-originals"
-    expected_original = {provenance["cargo_build_output"]: provenance["cargo_build_output_sha256"]}
-    out_dir = Path(provenance["cargo_build_output"]).parent / "out"
-    expected_original.update({str(out_dir / name): hashlib.sha256(raw).hexdigest() for name, raw in refs.items()})
-    expected_held = {str(ref_root / "output"): provenance["cargo_build_output_sha256"]}
-    expected_held.update({str(ref_root / name): hashlib.sha256(raw).hexdigest() for name, raw in refs.items()})
+    expected_original = {name: hashlib.sha256(raw).hexdigest() for name, raw in refs.items()}
+    expected_held = {str(ref_root / Path(name).name): value for name, value in expected_original.items()}
     require(reference["original_inputs"] == expected_original and reference["held_inputs"] == expected_held
-            and set(path.name for path in ref_root.iterdir()) == set(refs) | {"output"},
+            and set(path.name for path in ref_root.iterdir()) == {Path(name).name for name in refs},
             "reference input membership is pruned/substituted")
     verify_hashes(reference["held_inputs"])
     verify_hashes(reference["original_inputs"])

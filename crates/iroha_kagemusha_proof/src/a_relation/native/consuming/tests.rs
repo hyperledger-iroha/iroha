@@ -150,7 +150,18 @@ fn uniform_omega_transport_cap_rejects_generic_profiles_without_a_fallback() {
     }
     assert_eq!(check_omega_transport_length(3_904), Ok(()));
     assert_eq!(check_omega_transport_length(4_032), Ok(()));
-    for size in [0, 1, 3_733, 4_064, 11_360 - 1_088, usize::MAX] {
+    // The compact NewAdvice and NewState inventory candidates require
+    // 5,152 and 5,216 transport bytes respectively; both exceed the same
+    // production cap even though their circuit descriptors are valid.
+    for size in [
+        0,
+        1,
+        3_733,
+        5_152 - 1_088,
+        5_216 - 1_088,
+        11_360 - 1_088,
+        usize::MAX,
+    ] {
         assert_eq!(
             check_omega_transport_length(size),
             Err(Error::Input),

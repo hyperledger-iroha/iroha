@@ -21,10 +21,7 @@ fn global_and_private_requests_select_only_their_original_scope_prerequisites() 
     let daemon = PathBuf::from("installed-iroha3d");
     let global = LocalnetRequest::new(launcher.clone(), daemon.clone());
     let private = LocalnetRequest::private_root(launcher.clone(), daemon.clone());
-    assert_eq!(
-        global.service_profile,
-        LocalnetServiceProfile::StreamTokenAuthorities
-    );
+    assert_eq!(global.service_profile, LocalnetServiceProfile::Standard);
     assert_eq!(private.service_profile, LocalnetServiceProfile::Standard);
     assert_eq!(
         LocalnetServiceProfile::default(),
@@ -350,7 +347,23 @@ fn port_reservations_are_live_disjoint_and_released_on_drop() {
     let ports = LocalnetPorts::reserve().unwrap();
     assert_eq!(ports.reserved_count(), 8);
     let bases = [ports.base_api, ports.base_p2p];
+    assert_ne!(
+        ports.base_api, 8080,
+        "fresh networks use an OS-assigned port"
+    );
+    assert_ne!(
+        ports.base_p2p, 1337,
+        "fresh networks use an OS-assigned port"
+    );
     assert!((i32::from(bases[0]) - i32::from(bases[1])).abs() >= 4);
+    let concurrent = LocalnetPorts::reserve().unwrap();
+    for base in [concurrent.base_api, concurrent.base_p2p] {
+        assert!(
+            bases
+                .iter()
+                .all(|other| (i32::from(base) - i32::from(*other)).abs() >= 4)
+        );
+    }
     for base in bases {
         for offset in 0..4 {
             assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).is_err());
@@ -393,6 +406,7 @@ fn selection_ready(context: &ManagedContext) -> ManagedStatus {
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: Vec::new(),
     }
 }
 
@@ -559,6 +573,33 @@ fn unreadable_worker_with_held_lock_is_not_reported_stopped_or_reset() {
 }
 
 #[test]
+fn live_worker_status_preserves_expired_observation_instead_of_ownership_conflict() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let _owned = store::acquire(&directory, "runtime.lock", "local").unwrap();
+    let worker = encode(&WorkerRecord {
+        token: "a".repeat(64),
+    })
+    .unwrap();
+    directory
+        .write_atomic(WORKER, &worker, PublishMode::CreateNew)
+        .unwrap();
+    let _listener = transport::Listener::bind(&directory).unwrap();
+
+    let error = store
+        .status_until("local", std::time::Instant::now())
+        .unwrap_err();
+    assert!(matches!(error, Error::Io(ref error) if error.kind() == std::io::ErrorKind::TimedOut));
+    assert_eq!(
+        directory.read(WORKER, MAX_METADATA).unwrap().as_slice(),
+        worker
+    );
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+    assert!(matches!(store.reset("local"), Err(Error::Busy(_))));
+}
+
+#[test]
 fn stopped_controller_cannot_leave_a_saved_ready_status() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
@@ -571,6 +612,12 @@ fn stopped_controller_cannot_leave_a_saved_ready_status() {
                 phase: ManagedPhase::Ready,
                 running_peers: 4,
                 failure: None,
+                validators: (0..4)
+                    .map(|index| ManagedValidatorStatus {
+                        index,
+                        state: ManagedValidatorState::Running,
+                    })
+                    .collect(),
             })
             .unwrap(),
             PublishMode::CreateNew,
@@ -579,7 +626,99 @@ fn stopped_controller_cannot_leave_a_saved_ready_status() {
     let status = store.status("local").unwrap();
     assert_eq!(status.phase, ManagedPhase::Failed);
     assert_eq!(status.running_peers, 0);
+    // Without a live owner, saved process observations are not current.
+    assert_eq!(status.validators, Vec::<ManagedValidatorStatus>::new());
     assert!(status.failure.unwrap().contains("unexpectedly"));
+}
+
+#[test]
+fn retained_failure_keeps_the_exited_validator_that_caused_it() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    let exited = ManagedValidatorStatus {
+        index: 2,
+        state: ManagedValidatorState::Exited {
+            code: Some(101),
+            signal: None,
+        },
+    };
+    let failed = ManagedStatus {
+        context: prepared.context,
+        phase: ManagedPhase::Failed,
+        running_peers: 0,
+        failure: Some("a supervised validator exited; inspect its retained log peer2.log".into()),
+        validators: vec![exited],
+    };
+    directory
+        .write_atomic(STATUS, &encode(&failed).unwrap(), PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(store.status("local").unwrap(), failed);
+}
+
+#[test]
+fn control_actions_and_validator_states_use_closed_tagged_json() {
+    for (action, kind) in [
+        (ControlAction::Status, "status"),
+        (ControlAction::Down, "down"),
+        (ControlAction::StartupExpired, "startup_expired"),
+        (ControlAction::AttachmentStart, "attachment_start"),
+        (ControlAction::AttachmentStatus, "attachment_status"),
+    ] {
+        let request = ControlRequest {
+            token: "c".repeat(64),
+            action,
+        };
+        let bytes = encode(&request).unwrap();
+        let value: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value
+                .get("action")
+                .and_then(|action| action.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some(kind)
+        );
+        let decoded: ControlRequest = decode(&bytes).unwrap();
+        assert_eq!(decoded.token, request.token);
+        assert_eq!(decoded.action, action);
+    }
+    // Retired string actions, unknown kinds and smuggled fields never decode.
+    for rejected in [
+        r#"{"token":"t","action":"status"}"#,
+        r#"{"token":"t","action":{"kind":"stop_validator"}}"#,
+        r#"{"token":"t","action":{"kind":"status","value":1}}"#,
+        r#"{"token":"t","action":{"kind":"status"},"extra":true}"#,
+    ] {
+        assert!(
+            decode::<ControlRequest>(rejected.as_bytes()).is_err(),
+            "{rejected}"
+        );
+    }
+    for state in [
+        ManagedValidatorState::Running,
+        ManagedValidatorState::Exited {
+            code: Some(101),
+            signal: None,
+        },
+        ManagedValidatorState::Exited {
+            code: None,
+            signal: Some(9),
+        },
+    ] {
+        let validator = ManagedValidatorStatus { index: 3, state };
+        let decoded: ManagedValidatorStatus = decode(&encode(&validator).unwrap()).unwrap();
+        assert_eq!(decoded, validator);
+    }
+    for rejected in [
+        r#"{"index":0,"state":{"kind":"stopped"}}"#,
+        r#"{"index":0,"state":{"kind":"running"},"pid":7}"#,
+        r#"{"index":0,"state":{"kind":"exited","value":{"code":1,"signal":null,"log":"x"}}}"#,
+    ] {
+        assert!(
+            decode::<ManagedValidatorStatus>(rejected.as_bytes()).is_err(),
+            "{rejected}"
+        );
+    }
 }
 
 #[test]
@@ -595,6 +734,7 @@ fn live_foreground_start_is_distinguished_from_a_crashed_handoff() {
                 phase: ManagedPhase::Starting,
                 running_peers: 0,
                 failure: None,
+                validators: Vec::new(),
             })
             .unwrap(),
             PublishMode::CreateNew,
@@ -629,6 +769,7 @@ fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_
         phase: ManagedPhase::Failed,
         running_peers: 0,
         failure: Some("startup readiness deadline expired while confirming the complete four-validator peer mesh".into()),
+        validators: Vec::new(),
     };
     let mut late = failed.clone();
     late.phase = ManagedPhase::Ready;
@@ -645,7 +786,7 @@ fn foreground_expiry_uses_failed_startup_action_and_rejects_late_ready_or_other_
                 if let Some(mut connection) = listener.accept().unwrap() {
                     let request = connection.receive().unwrap();
                     assert_eq!(request.token, token);
-                    assert_eq!(request.action, "startup_expired");
+                    assert_eq!(request.action, ControlAction::StartupExpired);
                     connection.reply(&reply).unwrap();
                     break;
                 }
@@ -904,6 +1045,34 @@ fn retained_service_profile_mismatch_and_private_selection_refuse_before_generat
 }
 
 #[test]
+fn retained_generation_refuses_other_binaries_and_says_how_to_recover() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let (store, _directory, prepared) = fixture(&temporary.path().join("managed"), "local");
+    // A rebuilt installation: the same program with different contents.
+    let rebuilt = temporary.path().join("rebuilt-program");
+    std::fs::copy(std::env::current_exe().unwrap(), &rebuilt).unwrap();
+    let mut appended = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&rebuilt)
+        .unwrap();
+    std::io::Write::write_all(&mut appended, b"\0").unwrap();
+    drop(appended);
+    let request = LocalnetRequest::new(rebuilt.clone(), rebuilt);
+    let message = match store.up(&request) {
+        Err(Error::Invalid(message)) => message,
+        Err(other) => panic!("expected the installation refusal, got: {other}"),
+        Ok(_) => panic!("another installation must not start the retained generation"),
+    };
+    assert!(
+        message.contains("`local` was created by different kagami and iroha3d binaries"),
+        "{message}"
+    );
+    assert!(message.contains("reset discards its ledger"), "{message}");
+    assert_eq!(store.prepared("local").unwrap(), prepared);
+}
+
+#[test]
 fn retained_standard_profile_requires_original_signed_genesis_and_identity() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();
@@ -983,6 +1152,7 @@ fn startup_status_exchange_keeps_original_clocks_and_never_cancels_retained_owne
         phase: ManagedPhase::Ready,
         running_peers: 4,
         failure: None,
+        validators: Vec::new(),
     };
     let server = std::thread::spawn(move || {
         let accepted_before = std::time::Instant::now() + Duration::from_secs(5);
@@ -995,7 +1165,7 @@ fn startup_status_exchange_keeps_original_clocks_and_never_cancels_retained_owne
         };
         let request = connection.receive().unwrap();
         assert_eq!(request.token, token);
-        assert_eq!(request.action, "status");
+        assert_eq!(request.action, ControlAction::Status);
         std::thread::sleep(Duration::from_millis(300));
         let _ = connection.reply(&ready);
     });

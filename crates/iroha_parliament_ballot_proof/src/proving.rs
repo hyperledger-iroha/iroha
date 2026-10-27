@@ -369,7 +369,7 @@ mod tests {
         let profile = Profile::new(Row::Candidate).expect("tables");
         for role in Role::ALL {
             let frame = b"some frame bytes";
-            let mut sponge = sha3::Shake256::default();
+            let mut sponge = shake::Shake256::default();
             sponge.update(profile.prefix(role));
             sponge.update(frame);
             sponge.update(&[0x08]);

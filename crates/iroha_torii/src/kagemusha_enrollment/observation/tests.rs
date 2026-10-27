@@ -37,6 +37,7 @@ fn credential(bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
 struct Server {
     endpoint: Url,
     certificate: reqwest::Certificate,
+    certificate_der: Vec<u8>,
     task: JoinHandle<io::Result<Vec<u8>>>,
 }
 
@@ -49,7 +50,15 @@ impl Server {
     }
 
     fn respond(respond: impl FnOnce(&[u8]) -> Vec<u8> + Send + 'static) -> Self {
-        let identity = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        Self::respond_for_name("127.0.0.1", respond)
+    }
+
+    fn respond_for_name(
+        name: &str,
+        respond: impl FnOnce(&[u8]) -> Vec<u8> + Send + 'static,
+    ) -> Self {
+        let identity = rcgen::generate_simple_self_signed(vec![name.into()]).unwrap();
+        let certificate_der = identity.cert.der().to_vec();
         let certificate = reqwest::Certificate::from_der(identity.cert.der()).unwrap();
         let config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
             .with_safe_default_protocol_versions()
@@ -79,6 +88,7 @@ impl Server {
         Self {
             endpoint,
             certificate,
+            certificate_der,
             task,
         }
     }
@@ -123,6 +133,207 @@ fn ok(body: &[u8]) -> Vec<u8> {
     let mut response = format!("HTTP/1.1 200 OK\r\nContent-Type: {MIME}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
     response.extend_from_slice(body);
     response
+}
+
+fn configured_root(
+    server: &Server,
+    path: &Path,
+) -> (EligibilityObservationTransport, KagemushaEnrollmentProvider) {
+    let directory = iroha_fs::PrivateDirectory::open(path.parent().unwrap()).unwrap();
+    directory
+        .write_atomic(
+            "root.der",
+            &server.certificate_der,
+            iroha_fs::PublishMode::CreateNew,
+        )
+        .unwrap();
+    let mut provider = super::super::test_fixture::provider(path.with_file_name("unused.scalar"));
+    provider.observation_endpoint = server.endpoint.clone();
+    provider.observation_credential = path.to_owned();
+    provider.observation_tls_root = Some(path.with_file_name("root.der"));
+    let owner = EligibilityObservationTransport::open(&provider).unwrap();
+    (owner, provider)
+}
+
+fn valid_observation(
+    provider: &KagemushaEnrollmentProvider,
+) -> (KagemushaWalletAssetScopeV1, Vec<u8>) {
+    let asset = super::super::test_fixture::asset(51, 28);
+    let policy = provider.eligibility.for_asset(&asset).unwrap();
+    let request = KagemushaEligibilityRequestV1 {
+        version: 1,
+        policy_digest: policy.policy_digest().unwrap(),
+        account_digest: [22; 32],
+        actor_digest: [23; 32],
+        attempt_id: [24; 32],
+        nonce: [25; 32],
+        operation_digest: [26; 32],
+        purpose: iroha_data_model::kagemusha::KagemushaEligibilityPurposeV1::VerifyEvidence,
+        requested_at_ms: 1000,
+        expires_at_ms: 2000,
+    };
+    (asset, request.encode_canonical(&policy).unwrap())
+}
+
+#[test]
+fn configured_tls_root_reaches_production_transport_without_changing_bearer() {
+    let (_root, path) = credential(b"test-only-token");
+    let server = Server::start(ok(b"configured-root-DATA"), || {});
+    let (owner, provider) = configured_root(&server, &path);
+    let (asset, request) = valid_observation(&provider);
+    assert_eq!(
+        owner
+            .observe(&provider, &asset, &request, Duration::from_secs(3))
+            .unwrap(),
+        b"configured-root-DATA"
+    );
+    owner.revalidate(&provider).unwrap();
+    let sent = server.task.join().unwrap().unwrap();
+    assert!(
+        sent.windows(b"authorization: Bearer test-only-token\r\n".len())
+            .any(|window| window == b"authorization: Bearer test-only-token\r\n")
+    );
+    let observation = KagemushaEligibilityObservationV1::decode_canonical(
+        authenticated_observation_body(&sent),
+        &provider.eligibility,
+    )
+    .unwrap();
+    assert_eq!(observation.asset, asset);
+    let policy = provider.eligibility.for_asset(&asset).unwrap();
+    assert_eq!(
+        observation.request.encode_canonical(&policy).unwrap(),
+        request
+    );
+}
+
+#[test]
+fn configured_transport_rejects_untrusted_tls_with_default_or_unrelated_root() {
+    for add_unrelated_root in [false, true] {
+        let (_root, path) = credential(b"test-only-token");
+        let server = Server::start(ok(b"must-not-return"), || {});
+        let mut provider =
+            super::super::test_fixture::provider(path.with_file_name("unused.scalar"));
+        provider.observation_endpoint = server.endpoint.clone();
+        provider.observation_credential = path.clone();
+        if add_unrelated_root {
+            let unrelated = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+            let directory = iroha_fs::PrivateDirectory::open(path.parent().unwrap()).unwrap();
+            directory
+                .write_atomic(
+                    "unrelated-root.der",
+                    unrelated.cert.der(),
+                    iroha_fs::PublishMode::CreateNew,
+                )
+                .unwrap();
+            provider.observation_tls_root = Some(path.with_file_name("unrelated-root.der"));
+        } else {
+            assert_eq!(provider.observation_tls_root, None);
+        }
+        let owner = EligibilityObservationTransport::open(&provider).unwrap();
+        let (asset, request) = valid_observation(&provider);
+        assert!(matches!(
+            owner.observe(&provider, &asset, &request, Duration::from_secs(3)),
+            Err(Error::Unavailable)
+        ));
+        // TLS authentication must fail before the server receives any HTTP request.
+        assert!(server.task.join().unwrap().is_err());
+    }
+}
+
+#[test]
+fn configured_tls_root_preserves_hostname_verification() {
+    let (_root, path) = credential(b"test-only-token");
+    let server = Server::respond_for_name("foreign.example", |_| ok(b"must-not-return"));
+    let (owner, provider) = configured_root(&server, &path);
+    let (asset, request) = valid_observation(&provider);
+    assert!(matches!(
+        owner.observe(&provider, &asset, &request, Duration::from_secs(3)),
+        Err(Error::Unavailable)
+    ));
+    assert!(server.task.join().unwrap().is_err());
+}
+
+#[test]
+fn configured_tls_root_is_one_bounded_der_original_and_never_creates_missing_custody() {
+    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let der: &[u8] = certificate.cert.der();
+    for bytes in [
+        Vec::new(),
+        vec![0; MAX_TLS_ROOT + 1],
+        b"invalid-DER".to_vec(),
+        certificate.cert.pem().into_bytes(),
+        [der, der].concat(),
+        [der, b"trailing"].concat(),
+    ] {
+        let (_directory, path) = credential(&bytes);
+        assert!(matches!(TlsRoot::open(&path), Err(Error::Invalid)));
+    }
+    let (_directory, path) = credential(der);
+    let (root, _) = TlsRoot::open(&path).unwrap();
+    root.revalidate().unwrap();
+    let missing = path.with_file_name("absent-root");
+    assert!(matches!(TlsRoot::open(&missing), Err(Error::Unavailable)));
+    assert!(!missing.exists());
+    let mut provider = super::super::test_fixture::provider(path.with_file_name("unused.scalar"));
+    provider.observation_credential = path.clone();
+    provider.observation_tls_root = Some(missing.clone());
+    assert!(matches!(
+        EligibilityObservationTransport::open(&provider),
+        Err(Error::Unavailable)
+    ));
+    assert!(!missing.exists());
+    assert!(matches!(
+        TlsRoot::open(Path::new("relative.der")),
+        Err(Error::Selection)
+    ));
+    // Even a same-byte write changes the selected original's metadata.
+    std::fs::write(&path, der).unwrap();
+    assert!(root.revalidate().is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_tls_root_rejects_replacement_links_and_permissions() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    let certificate = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    for case in 0..4 {
+        let (_directory, path) = credential(certificate.cert.der());
+        let (root, _) = TlsRoot::open(&path).unwrap();
+        let alternate = path.with_file_name("alternate-root");
+        match case {
+            0 => {
+                std::fs::rename(&path, &alternate).unwrap();
+                std::fs::write(&path, certificate.cert.der()).unwrap();
+            }
+            1 => {
+                std::fs::rename(&path, &alternate).unwrap();
+                symlink(&alternate, &path).unwrap();
+            }
+            2 => std::fs::hard_link(&path, &alternate).unwrap(),
+            _ => std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap(),
+        }
+        assert!(root.revalidate().is_err());
+        if case != 0 {
+            assert!(TlsRoot::open(&path).is_err());
+        }
+    }
+}
+
+#[test]
+fn configured_tls_root_change_during_response_discards_observation() {
+    let (_root, path) = credential(b"test-only-token");
+    let selected = path.with_file_name("root.der");
+    let server = Server::start(ok(b"must-not-return"), move || {
+        std::fs::write(selected, b"changed-root").unwrap();
+    });
+    let (owner, provider) = configured_root(&server, &path);
+    let (asset, request) = valid_observation(&provider);
+    assert!(
+        owner
+            .observe(&provider, &asset, &request, Duration::from_secs(3))
+            .is_err()
+    );
+    server.task.join().unwrap().unwrap();
 }
 
 #[test]
@@ -330,7 +541,7 @@ fn outer_transport_retains_exact_provider_selection_before_any_request() {
     let owner = EligibilityObservationTransport::open(&selected).unwrap();
     owner.revalidate(&selected).unwrap();
     let asset = super::super::test_fixture::asset(41, 0);
-    for case in 0..6 {
+    for case in 0..7 {
         let mut changed = selected.clone();
         match case {
             0 => {
@@ -346,7 +557,8 @@ fn outer_transport_retains_exact_provider_selection_before_any_request() {
                     };
             }
             4 => changed.certificate.body.serial += 1,
-            _ => changed.release_digest[0] ^= 1,
+            5 => changed.release_digest[0] ^= 1,
+            _ => changed.observation_tls_root = Some(path.with_file_name("foreign-root")),
         }
         assert!(matches!(owner.revalidate(&changed), Err(Error::Selection)));
         // Changed selection must reject before canonical decoding or any HTTPS dispatch.
@@ -435,6 +647,7 @@ fn actual_tls_carries_canonical_asset_context_bound_to_selected_template() {
     let owner = EligibilityObservationTransport {
         selected: provider.clone(),
         http: server.open(&path),
+        tls_root: None,
     };
     assert_eq!(
         owner
@@ -594,6 +807,7 @@ fn actual_middleware_signs_fresh_bank_and_operator_observations_across_tls() {
                 let owner = EligibilityObservationTransport {
                     selected: provider.clone(),
                     http: server.open(&path),
+                    tls_root: None,
                 };
                 let original = owner
                     .observe(

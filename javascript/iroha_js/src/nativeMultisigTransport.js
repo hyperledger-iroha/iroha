@@ -1,6 +1,6 @@
 import { requireMultisigId } from "./multisigIdentifiers.js";
 import { Buffer } from "buffer";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { networkIdBytes } from "./networkId.js";
 
 const requests = new WeakMap();

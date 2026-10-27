@@ -488,10 +488,10 @@ while True:
             raise SystemExit(
                 f"error: unable to parse authenticated Rust toolchain override: {error}"
             )
-        if configuration != {"toolchain": {"channel": "1.93.1"}}:
+        if configuration != {"toolchain": {"channel": "1.99.1"}}:
             raise SystemExit(
                 "error: authenticated rust-toolchain.toml may only select the "
-                "exact Rust 1.93.1 toolchain"
+                "exact Rust 1.99.1 toolchain"
             )
         observed_allowed = True
     if directory == canonical_root:
@@ -658,10 +658,10 @@ try:
     configuration = tomllib.loads(path.read_text(encoding="utf-8"))
 except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
     raise SystemExit(f"error: unable to read authenticated Rust toolchain: {error}")
-if configuration != {"toolchain": {"channel": "1.93.1"}}:
+if configuration != {"toolchain": {"channel": "1.99.1"}}:
     raise SystemExit(
         "error: authenticated rust-toolchain.toml does not contain only the "
-        "exact Rust 1.93.1 channel selector"
+        "exact Rust 1.99.1 channel selector"
     )
 print(configuration["toolchain"]["channel"])
 PY
@@ -669,10 +669,10 @@ PY
     return 1
   fi
   case "${toolchain_selector}" in
-    1.93.1-x86_64-unknown-linux-gnu|1.93.1-aarch64-apple-darwin) ;;
+    1.99.1-x86_64-unknown-linux-gnu|1.99.1-aarch64-apple-darwin) ;;
     *)
       echo \
-        "error: privacy SDK Rust toolchain selector is not an authenticated host-qualified 1.93.1 selector" \
+        "error: privacy SDK Rust toolchain selector is not an authenticated host-qualified 1.99.1 selector" \
         >&2
       return 1
       ;;
@@ -746,7 +746,7 @@ privacy_sdk_assert_authenticated_toolchain_state() {
   : "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SEAL:?authenticated Rust toolchain seal is required}"
   : "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR:?authenticated Rust toolchain selector is required}"
   case "${IROHA_PRIVACY_AUTHENTICATED_RUST_TOOLCHAIN_SELECTOR}" in
-    1.93.1-x86_64-unknown-linux-gnu|1.93.1-aarch64-apple-darwin) ;;
+    1.99.1-x86_64-unknown-linux-gnu|1.99.1-aarch64-apple-darwin) ;;
     *)
       echo "error: authenticated Rust toolchain selector is invalid" >&2
       return 1
@@ -1473,10 +1473,10 @@ privacy_sdk_provision_ci_cargo_lock() {
     return 1
   fi
   case "${rust_toolchain_selector}" in
-    1.93.1-x86_64-unknown-linux-gnu|1.93.1-aarch64-apple-darwin) ;;
+    1.99.1-x86_64-unknown-linux-gnu|1.99.1-aarch64-apple-darwin) ;;
     *)
       echo \
-        "error: privacy SDK Rust toolchain selector must be an exact supported host-qualified 1.93.1 selector" \
+        "error: privacy SDK Rust toolchain selector must be an exact supported host-qualified 1.99.1 selector" \
         >&2
       return 1
       ;;

@@ -33,15 +33,15 @@ iroha_schema = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec", "simd-accel"] }
 
 # The fake hash implementation is compiled only by `sim` or the crate's unit tests.
-sha2 = { version = "0.10.9", default-features = false, features = ["std"], optional = true }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 
 # sha2's AArch64 SHA instructions retain runtime detection and a portable fallback.
 # Its assembly dependency rejects Windows, which keeps the ordinary portable backend.
 [target.'cfg(all(target_arch = "aarch64", not(target_os = "windows")))'.dependencies]
-sha2 = { version = "0.10.9", default-features = false, features = ["std", "asm"], optional = true }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"], optional = true }
 
 [target.'cfg(all(target_arch = "aarch64", not(target_os = "windows")))'.dev-dependencies]
-sha2 = { version = "0.10.9", default-features = false, features = ["std", "asm"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }

@@ -11726,6 +11726,7 @@ def _transaction_wait_max_attempts(value: Any, *, context: str) -> Optional[int]
     return value
 
 
+websocket: Optional[ModuleType]
 try:  # pragma: no cover - optional dependency
     import websocket
 except ImportError:  # pragma: no cover - optional dependency

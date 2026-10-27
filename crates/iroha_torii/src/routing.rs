@@ -14,6 +14,8 @@ mod account_history_sse;
 #[cfg(feature = "app_api")]
 pub use account_history_sse::{AccountHistorySseRequest, handle_v1_account_history_sse};
 #[cfg(feature = "app_api")]
+pub(crate) mod asset_movements;
+#[cfg(feature = "app_api")]
 pub mod collection_sources;
 #[cfg(feature = "app_api")]
 mod contract_return_attempt;
@@ -296,6 +298,9 @@ pub struct DataspaceReadVisibility {
     fixed_scope: Option<crate::stream_control::FixedScopeOwner>,
     can_read_all: bool,
     exact_account: Option<ExactAccountReadScope>,
+    /// The signed caller whose `CanResolveAccountAlias` grants open the aliases of restricted
+    /// dataspaces in account rows; without one only public-dataspace aliases are disclosed.
+    alias_resolver: Option<AccountId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -304,14 +309,74 @@ struct ExactAccountReadScope {
     balance_dataspaces: BTreeSet<DataSpaceId>,
 }
 
+/// One read's dataspace visibility over one borrowed World.
+///
+/// [`DataspaceReadVisibility::allows_account`] decodes the committed root metadata on every
+/// call. Scans and counters check many accounts and assets against one World inside their
+/// read's allocation budget, so they decode that immutable root once here; each check then
+/// reads only the committed account directory.
+pub(crate) struct WorldReadVisibility<'a, W> {
+    visibility: &'a DataspaceReadVisibility,
+    world: &'a W,
+    root: Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+}
+
+impl<'a, W: WorldReadOnly> WorldReadVisibility<'a, W> {
+    pub(crate) fn world(&self) -> &'a W {
+        self.world
+    }
+
+    pub(crate) fn visibility(&self) -> &'a DataspaceReadVisibility {
+        self.visibility
+    }
+
+    pub(crate) fn allows_account(&self, account_id: &AccountId) -> bool {
+        self.visibility
+            .allows_account_under(self.world, account_id, || self.root)
+    }
+
+    pub(crate) fn allows_asset(&self, asset_id: &AssetId) -> bool {
+        self.visibility
+            .allows_asset_under(self.world, asset_id, || self.root)
+    }
+}
+
 impl DataspaceReadVisibility {
+    /// Resolve this visibility over `world` for a read that checks many accounts or assets.
+    pub(crate) fn in_world<'a, W: WorldReadOnly>(
+        &'a self,
+        world: &'a W,
+    ) -> WorldReadVisibility<'a, W> {
+        // Exact-account and read-all visibilities never consult the committed root.
+        let root = (self.exact_account.is_none() && !self.can_read_all)
+            .then(|| iroha_core::sumeragi::lanes::routing::committed_root_scope(world))
+            .flatten();
+        WorldReadVisibility {
+            visibility: self,
+            world,
+            root,
+        }
+    }
+
     pub(crate) fn new(visible_dataspaces: BTreeSet<DataSpaceId>, can_read_all: bool) -> Self {
         Self {
             visible_dataspaces,
             fixed_scope: None,
             can_read_all,
             exact_account: None,
+            alias_resolver: None,
         }
+    }
+
+    /// Name the signed caller whose alias-resolve permissions apply to account rows.
+    #[must_use]
+    pub(crate) fn with_alias_resolver(mut self, caller: Option<AccountId>) -> Self {
+        self.alias_resolver = caller;
+        self
+    }
+
+    pub(crate) fn alias_resolver(&self) -> Option<&AccountId> {
+        self.alias_resolver.as_ref()
     }
 
     /// Retain definition visibility while restricting holdings to the exact
@@ -342,6 +407,7 @@ impl DataspaceReadVisibility {
             fixed_scope: None,
             can_read_all: true,
             exact_account: None,
+            alias_resolver: None,
         }
     }
 
@@ -363,6 +429,7 @@ impl DataspaceReadVisibility {
             fixed_scope: Some(scope),
             can_read_all,
             exact_account: None,
+            alias_resolver: None,
         }
     }
 
@@ -424,6 +491,19 @@ impl DataspaceReadVisibility {
         world: &impl WorldReadOnly,
         account_id: &AccountId,
     ) -> bool {
+        self.allows_account_under(world, account_id, || {
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(world)
+        })
+    }
+
+    /// [`Self::allows_account`] under a committed root the caller supplies. The root is
+    /// consulted only after the exact-account, read-all and existence checks.
+    fn allows_account_under(
+        &self,
+        world: &impl WorldReadOnly,
+        account_id: &AccountId,
+        root: impl FnOnce() -> Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+    ) -> bool {
         if let Some(exact_account) = &self.exact_account {
             return &exact_account.account == account_id
                 && world.accounts().get(account_id).is_some();
@@ -434,7 +514,7 @@ impl DataspaceReadVisibility {
         if world.accounts().get(account_id).is_none() {
             return false;
         }
-        match iroha_core::sumeragi::lanes::routing::committed_root_scope(world) {
+        match root() {
             Some(iroha_data_model::block::consensus::SumeragiRootScope::Dataspace {
                 dataspace_id,
                 ..
@@ -490,7 +570,18 @@ impl DataspaceReadVisibility {
 
     /// Return whether an asset bucket and its holder belong only to visible routes.
     pub(crate) fn allows_asset(&self, world: &impl WorldReadOnly, asset_id: &AssetId) -> bool {
-        if !self.allows_account(world, asset_id.account()) {
+        self.allows_asset_under(world, asset_id, || {
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(world)
+        })
+    }
+
+    fn allows_asset_under(
+        &self,
+        world: &impl WorldReadOnly,
+        asset_id: &AssetId,
+        root: impl FnOnce() -> Option<iroha_data_model::block::consensus::SumeragiRootScope>,
+    ) -> bool {
+        if !self.allows_account_under(world, asset_id.account(), root) {
             return false;
         }
         if self.can_read_all && self.exact_account.is_none() {
@@ -5196,7 +5287,7 @@ pub async fn handle_connect_session(
     network_id: iroha_data_model::NetworkId,
     NoritoJson(req): NoritoJson<ConnectSessionRequest>,
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rngs::SysRng;
     handle_connect_session_with_rng(network_id, req, &mut rng).await
 }
 #[cfg(feature = "connect")]
@@ -5324,16 +5415,17 @@ mod connect_session_tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     struct FailingConnectSessionRng;
     #[derive(Debug)]
     struct FailingConnectSessionRngError;
+    impl std::error::Error for FailingConnectSessionRngError {}
     impl std::fmt::Display for FailingConnectSessionRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing Connect session RNG")
         }
     }
-    impl TryRngCore for FailingConnectSessionRng {
+    impl TryRng for FailingConnectSessionRng {
         type Error = FailingConnectSessionRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingConnectSessionRngError)
@@ -5908,7 +6000,7 @@ where
 /// committed genesis. `height = None` selects `latest`: the durable tip of the
 /// same immutable view that produces the proof (at least 1, so an empty ledger
 /// still reports a valid selector), so it never names a height it did not sign.
-/// Exact requested/applied/status height races return a selector-bound HTTP 409;
+/// Exact requested/applied/status height races return a selector-bound HTTP 503;
 /// missing or corrupt proofs remain fixed failures.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
@@ -6142,7 +6234,7 @@ mod bridge_finality_attestation_progress_tests {
                         format,
                     ),
                 ));
-                assert_eq!(response.status(), StatusCode::CONFLICT);
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
                 assert_eq!(response.headers()["x-content-type-options"], "nosniff");
                 assert_eq!(
                     response.headers()[axum::http::header::CACHE_CONTROL],
@@ -6240,10 +6332,16 @@ mod bridge_finality_attestation_progress_tests {
     #[tokio::test]
     async fn canonical_boundary_keeps_only_valid_tip_progress_status_and_code() {
         for (status, reason, applied, retained) in [
-            (StatusCode::CONFLICT, Reason::TipChanged, 9, true),
+            (StatusCode::SERVICE_UNAVAILABLE, Reason::TipChanged, 9, true),
+            (StatusCode::CONFLICT, Reason::TipChanged, 9, false),
             (StatusCode::NOT_FOUND, Reason::TipChanged, 9, false),
             (StatusCode::CONFLICT, Reason::ConflictingState, 9, false),
-            (StatusCode::CONFLICT, Reason::TipChanged, 10, false),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Reason::TipChanged,
+                10,
+                false,
+            ),
         ] {
             let (node_id, network_id) = identity();
             let progress = BridgeFinalityAttestationTipMismatchV1 {
@@ -10899,7 +10997,7 @@ fn collect_contract_state_schemas(
 ) -> core::result::Result<BTreeMap<String, Option<ivm::EmbeddedStateType>>, ()> {
     let mut registry = BTreeMap::new();
     let mut retained_canonical_bytes = 0usize;
-    let mut register_schemas_for = |address: &iroha_data_model::smart_contract::ContractAddress, code_hash: &iroha_crypto::Hash| {
+    let mut register_schemas_for = |address: &iroha_data_model::smart_contract::ContractAddress, code_hash: &iroha_crypto::Hash| -> core::result::Result<(), ()> {
         let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::for_address(address, *code_hash).map_err(|_| ())?;
         let Some(code_bytes) = world.contract_code().get(&artifact_id) else {
             return Ok(());
@@ -19171,6 +19269,7 @@ fn query_multisig_proposals(
             operation_type,
             intent,
             proposal,
+            approvals: None,
             status: status.as_str().to_owned(),
             terminal_at_ms: None,
         });
@@ -19245,6 +19344,7 @@ fn query_multisig_proposals(
             operation_type,
             intent,
             proposal: terminal_state.proposal,
+            approvals: None,
             status: status.as_str().to_owned(),
             terminal_at_ms: Some(terminal_state.terminal_at_ms),
         });
@@ -22633,6 +22733,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             },
             signer_one_id.clone(),
         )
@@ -22645,6 +22746,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -22661,6 +22763,7 @@ None,
             MultisigProposalsResolveRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: (active_hash.clone()).parse().unwrap(),
+                include_approvals: false,
             },
             signer_one_id,
         )
@@ -22671,6 +22774,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: active_hash.parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -22694,6 +22798,7 @@ None,
                 status: Vec::new(),
                 cursor: None,
                 limit: Some(1),
+                include_approvals: false,
             },
             signer_one,
         )
@@ -22710,6 +22815,7 @@ None,
                 status: Vec::new(),
                 cursor: Some(cursor.clone()),
                 limit: Some(1),
+                include_approvals: false,
             }),
         )
         .await
@@ -22732,6 +22838,7 @@ None,
                     status: statuses,
                     cursor: Some(cursor),
                     limit: Some(1),
+                    include_approvals: false,
                 }),
             )
             .await
@@ -22779,6 +22886,7 @@ None,
                     status: Vec::new(),
                     cursor: Some(encode_multisig_proposals_cursor(&forged)),
                     limit: Some(1),
+                    include_approvals: false,
                 }),
             )
             .await
@@ -22799,6 +22907,7 @@ None,
                 status: vec!["EXPIRED".to_owned()],
                 cursor: Some(filter_rebound_cursor),
                 limit: Some(1),
+                include_approvals: false,
             }),
         )
         .await
@@ -22815,6 +22924,7 @@ None,
                     status: Vec::new(),
                     cursor: None,
                     limit: Some(limit),
+                    include_approvals: false,
                 }),
             )
             .await
@@ -22850,6 +22960,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: (active_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -22880,6 +22991,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: (active_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -22921,6 +23033,7 @@ None,
                 status: vec!["CANCELED".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             },
             signer_one_id.clone(),
         )
@@ -22938,6 +23051,7 @@ None,
             MultisigProposalsResolveRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: canceled_id,
+                include_approvals: false,
             },
             signer_one_id,
         )
@@ -22967,14 +23081,14 @@ None,
         let selector = concrete_selector(old_account.clone());
         let JsonBody(query) = handle_post_multisig_proposals_query(state.clone(),
             NoritoJson(MultisigProposalsQueryRequestDto { selector: selector.clone(),
-                status: vec!["CANCELED".into()], cursor: None, limit: None }),
+                status: vec!["CANCELED".into()], cursor: None, limit: None, include_approvals: false }),
         ).await.expect("retired original policy history");
         assert_eq!(query.resolved_multisig_account_id, old_account);
         assert_eq!(query.proposals.len(), 1);
         assert_eq!(query.proposals[0].proposal, terminal.proposal);
         let JsonBody(resolved) = handle_post_multisig_proposals_resolve(state.clone(),
             NoritoJson(MultisigProposalsResolveRequestDto { selector: selector.clone(),
-                proposal_id: id }),
+                proposal_id: id, include_approvals: false }),
         ).await.expect("exact original terminal record");
         assert_eq!(resolved.resolved_multisig_account_id, old_account);
         assert_eq!(resolved.status, "CANCELED");
@@ -22994,6 +23108,54 @@ None,
         );
         assert!(resolve_multisig_proposal_read_account(&build_state(invalid), &selector, None).is_err(),
             "a retired controller cannot retain actionable proposal state");
+    }
+    routing_test! { sync multisig_proposal_reads_add_approval_times_only_when_asked
+        // Core decodes resolve answers with a closed field set, so a read that does not ask keeps
+        // exactly its earlier fields; a read that asks gets one entry per approver.
+        let (world, multisig_account_id, signer_one_id, _signer_two_id, _alias_literal, active_hash) =
+            multisig_test_world();
+        let state = build_state(world);
+        let resolve_body = format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{active_hash}"}}"#
+        );
+        let resolve = norito::json::from_str::<MultisigProposalsResolveRequestDto>(&resolve_body)
+            .expect("a resolve request without the flag");
+        assert!(!resolve.include_approvals);
+        let asked = norito::json::from_str::<MultisigProposalsResolveRequestDto>(&format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{active_hash}","include_approvals":true}}"#
+        ))
+        .expect("a resolve request with the flag");
+        assert!(asked.include_approvals);
+        let query = norito::json::from_str::<MultisigProposalsQueryRequestDto>(&format!(
+            r#"{{"multisig_account_id":"{multisig_account_id}","include_approvals":true}}"#
+        ))
+        .expect("a query request with the flag");
+        assert!(query.include_approvals);
+
+        let mut resolved = multisig_proposals_resolve_response(&state, &resolve, None)
+            .expect("resolve the active proposal");
+        let plain = norito::json::to_value(&resolved).expect("serialize resolve");
+        assert!(plain.get("approvals").is_none(), "an unasked resolve keeps its fields");
+        let mut listed = multisig_proposals_query_response(&state, &query, None)
+            .expect("query proposals");
+        let plain_list = norito::json::to_value(&listed).expect("serialize query");
+        assert!(plain_list["proposals"][0].get("approvals").is_none());
+
+        resolved.approvals = Some(vec![MultisigProposalApprovalDto {
+            approver: signer_one_id.clone(),
+            approved_at_ms: None,
+            block_height: None,
+        }]);
+        let timed = norito::json::to_value(&resolved).expect("serialize resolve");
+        assert_eq!(
+            timed["approvals"][0]["approver"].as_str(),
+            Some(signer_one_id.to_string().as_str())
+        );
+        assert_eq!(timed["approvals"][0]["approved_at_ms"], norito::json::Value::Null);
+        assert_eq!(timed["approvals"][0]["block_height"], norito::json::Value::Null);
+        listed.proposals[0].approvals = Some(Vec::new());
+        let timed_list = norito::json::to_value(&listed).expect("serialize query");
+        assert!(timed_list["proposals"][0]["approvals"].as_array().is_some_and(Vec::is_empty));
     }
     routing_test! { async multisig_proposals_query_and_resolve_include_asset_transfer_control_intent
         let (
@@ -23024,6 +23186,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23053,6 +23216,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: (freeze_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23107,6 +23271,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23126,6 +23291,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (pacs009_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23183,6 +23349,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23208,6 +23375,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (transfer_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23219,6 +23387,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (execute_trigger_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -23255,6 +23424,7 @@ None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
                 limit: None,
+                include_approvals: false,
             }),
         )
         .await
@@ -23271,6 +23441,7 @@ None,
             NoritoJson(MultisigProposalsResolveRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: (malformed_hash).parse().unwrap(),
+                include_approvals: false,
             }),
         )
         .await
@@ -26626,6 +26797,7 @@ fn multisig_proposals_resolve_response(
         operation_type,
         intent,
         proposal: proposal_record.proposal,
+        approvals: None,
         status: proposal_record.status.as_str().to_owned(),
         terminal_at_ms: proposal_record.terminal_at_ms,
         terminal_entrypoint_hash,
@@ -28973,6 +29145,9 @@ pub struct MultisigProposalsResolveRequestDto {
     pub selector: MultisigAccountSelectorDto,
     /// Exact proposal occurrence, never an instruction hash alias.
     pub proposal_id: MultisigProposalId,
+    /// Also return when each approval landed (`approvals`). Without it the response is unchanged.
+    #[norito(default)]
+    pub include_approvals: bool,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 /// Response payload for a selector-explicit multisig proposal read.
@@ -28984,6 +29159,9 @@ pub struct MultisigProposalResolveResponseDto {
     #[norito(default)]
     pub intent: Option<IrohaJson>,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// When each approval in `proposal.approvals` landed; present only when requested.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Vec<MultisigProposalApprovalDto>>,
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
@@ -29008,6 +29186,9 @@ pub struct MultisigProposalsQueryRequestDto {
     /// Optional page size; zero and values above the configured app-query maximum are rejected.
     #[norito(default)]
     pub limit: Option<u64>,
+    /// Also return when each approval landed (`approvals`). Without it the response is unchanged.
+    #[norito(default)]
+    pub include_approvals: bool,
 }
 ( Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Envelope describing a multisig proposal returned by Torii.
@@ -29018,9 +29199,25 @@ pub struct MultisigProposalEntryDto {
     #[norito(default)]
     pub intent: Option<IrohaJson>,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// When each approval in `proposal.approvals` landed; present only when requested.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Vec<MultisigProposalApprovalDto>>,
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
+}
+( Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+/// When one signer's approval of a multisig proposal landed, as this node read it from committed
+/// blocks: the proposer's with its proposal, every other signer's with its first approval.
+pub struct MultisigProposalApprovalDto {
+    /// Signer whose approval is counted.
+    pub approver: iroha_data_model::account::AccountId,
+    /// Creation time of the block holding the proposing or approving transaction, in Unix
+    /// milliseconds; null when this node did not see it (an approval made inside another
+    /// proposal's execution or by a contract, or a block not read yet).
+    pub approved_at_ms: Option<u64>,
+    /// Height of that block; null exactly when `approved_at_ms` is.
+    pub block_height: Option<u64>,
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
@@ -37567,6 +37764,147 @@ mod explorer_lookup_tests {
         );
     }
 
+    routing_test! { sync explorer_block_summary_rows_match_full_block_rows_for_every_reader
+        use iroha_data_model::block::{
+            BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
+            ExternalExecutionRouteRole,
+        };
+
+        let instruction: dm::InstructionBox =
+            dm::Log::new(dm::Level::INFO, "summarized".to_owned()).into();
+        let (state, _) = build_state_with_single_transaction(vec![instruction]);
+        let height = NonZeroUsize::new(state.committed_height()).expect("committed height");
+        let mut block = state
+            .block_by_height(height)
+            .expect("funded canonical history read")
+            .expect("committed block remains available")
+            .as_ref()
+            .clone();
+        let (entrypoint_hash, _) = block
+            .external_signed_transaction_at(0)
+            .expect("external signed transaction");
+        let (visible, hidden) = (DataSpaceId::new(7), DataSpaceId::new(8));
+        let readers = [
+            DataspaceReadVisibility::all_for_tests(),
+            DataspaceReadVisibility::new(BTreeSet::from([visible]), false),
+            DataspaceReadVisibility::default(),
+        ];
+        let contexts = [
+            None,
+            Some(BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                LaneId::new(7),
+                visible,
+            )])),
+            Some(BlockExecutionContextBundle::new(vec![
+                ExternalExecutionContext::with_routing_plan(
+                    entrypoint_hash,
+                    LaneId::new(7),
+                    visible,
+                    Hash::new(b"summary route plan"),
+                    vec![
+                        ExternalExecutionRouteLeg::new(
+                            LaneId::new(7),
+                            visible,
+                            ExternalExecutionRouteRole::Coordinator,
+                        ),
+                        ExternalExecutionRouteLeg::new(
+                            LaneId::new(8),
+                            hidden,
+                            ExternalExecutionRouteRole::Participant,
+                        ),
+                    ],
+                ),
+            ])),
+        ];
+        let json = |row: &crate::explorer_history::HistoryBlockRow| {
+            norito::json::to_json_bounded_boxed(row, 4096).expect("row json")
+        };
+        for context in contexts {
+            block.set_execution_context(context);
+            for reader in &readers {
+                let summary = crate::explorer_history::ExplorerBlockSummary::from_block(&block, reader, [9; 32]);
+                let full = crate::explorer_history::HistoryBlockRow::from_block(&block, |index| {
+                    reader.allows_external_entrypoint(&block, index)
+                });
+                assert_eq!(json(&summary.row()), json(&full), "{reader:?}");
+            }
+        }
+    }
+
+    routing_test! { async explorer_block_feed_serves_repeat_reads_from_cached_summaries
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "cached".to_owned()).into();
+        let (state, _) = build_state_with_transactions(vec![vec![instruction.clone()], vec![instruction]]);
+        let summaries = Arc::new(crate::explorer_history::ExplorerBlockSummaryCache::new(64));
+        let read = |visibility: DataspaceReadVisibility| {
+            let state = state.clone();
+            let summaries = summaries.clone();
+            async move {
+                let response = handle_v1_explorer_blocks_with_summaries(
+                    state,
+                    visibility,
+                    crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 },
+                    EXPLORER_BLOCK_HEIGHTS_ALL,
+                    summaries,
+                )
+                .await
+                .expect("block page");
+                let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+                let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+                payload.get("items").cloned().expect("items")
+            }
+        };
+
+        let cold = read(DataspaceReadVisibility::all_for_tests()).await;
+        let committed = state.committed_height();
+        assert_eq!(cold.as_array().map(Vec::len), Some(committed));
+        assert_eq!(summaries.len(), committed, "every block read is summarized");
+        let newest = cold
+            .as_array()
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("transactions_total")?.as_u64());
+        assert_eq!(newest, Some(2), "both inputs share the newest block; genesis has its own entries");
+
+        assert_eq!(read(DataspaceReadVisibility::all_for_tests()).await, cold, "a warm page is the cold page");
+        // Another reader's scope cannot reuse the first reader's counts.
+        let restricted = read(DataspaceReadVisibility::default()).await;
+        assert!(restricted.as_array().expect("rows").iter().all(|row| {
+            row.get("transactions_total").and_then(norito::json::Value::as_u64) == Some(0)
+        }));
+    }
+
+    routing_test! { sync explorer_block_summary_cache_hits_skip_decode_and_recheck_sources
+        let instruction: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "cached source".to_owned()).into();
+        let (chain, _) = build_chain_with_executables_and_route_plans(
+            vec![dm::Executable::from(vec![instruction])], None, None,
+        );
+        let state = chain.state();
+        let height = NonZeroUsize::new(state.committed_height()).unwrap();
+        let summaries = crate::explorer_history::ExplorerBlockSummaryCache::new(16);
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let all = DataspaceReadVisibility::all_for_tests();
+        let read = |reader: &DataspaceReadVisibility| owner.scope(|| {
+            explorer_feed_block_row(state, height, reader, &summaries)
+        });
+        assert!(owner.scope(|| state.canonical_history_summary_source_token(height)).unwrap().is_some());
+        let metadata_bytes = owner.allocation_context().consumed_allocated_bytes();
+        assert!(matches!(read(&all), Ok(ExplorerFeedRow::Row(_))));
+        let after_cold = owner.allocation_context().consumed_allocated_bytes();
+        let cold_bytes = after_cold - metadata_bytes;
+        assert!(cold_bytes > metadata_bytes);
+        assert!(matches!(read(&all), Ok(ExplorerFeedRow::Row(_))));
+        let after_warm = owner.allocation_context().consumed_allocated_bytes();
+        assert_eq!(after_warm - after_cold, metadata_bytes,
+            "a valid cache hit spends only the authoritative metadata check, without another body decode");
+        assert!(matches!(read(&DataspaceReadVisibility::default()), Ok(ExplorerFeedRow::Row(_))));
+        assert!(owner.allocation_context().consumed_allocated_bytes() - after_warm > metadata_bytes,
+            "another reader's visibility must obtain its own counts");
+
+        let wire = chain.committed(height.get() as u64).block().encode_wire().unwrap();
+        chain.kura().overwrite_native_frame_bytes_for_test(height, 0, &[wire[0] ^ 1]);
+        assert!(read(&all).is_err(), "changed source bytes must never reuse the warm row");
+    }
+
     routing_test! { sync native_history_rejects_mixed_execution_routes
         use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
         use iroha_data_model::block::{BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg, ExternalExecutionRouteRole};
@@ -39415,15 +39753,20 @@ fn native_contract_emission_source_is_visible(
     output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
     emission: &iroha_data_model::smart_contract::event::ContractEmissionV1,
 ) -> bool {
-    use iroha_data_model::block::execution_output::{ExecutionOutputV1, PipelineEventPositionV1};
+    use iroha_data_model::block::execution_output::{
+        ExecutionOutputV1, NetworkExecutionOutputV2, PipelineEventPositionV1,
+        PipelineExecutionOutputV2,
+    };
     if !emission.contract.dataspace_id().is_ok_and(|id| visibility.allows_dataspace(id)) { return false; }
     match output {
-        ExecutionOutputV1::Network(source) => visibility.allows_external_entrypoint(block, source.input_index as usize),
-        ExecutionOutputV1::Pipeline(source) => match source.invocation.event {
+        ExecutionOutputV1::Network(source)
+        | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 { execution: source, .. }) => visibility.allows_external_entrypoint(block, source.input_index as usize),
+        ExecutionOutputV1::Pipeline(source)
+        | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 { execution: source, .. }) => match source.invocation.event {
             PipelineEventPositionV1::Network(index) => visibility.allows_external_entrypoint(block, index as usize),
             PipelineEventPositionV1::BlockApproved => true,
         },
-        ExecutionOutputV1::Time(_) => true,
+        ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => true,
     }
 }
 fn native_contract_emission_is_visible_in_block(
@@ -39447,6 +39790,229 @@ fn native_contract_emission_is_visible_in_block(
     }
     Ok(native_contract_emission_source_is_visible(visibility, block, output, emission))
 }
+#[cfg(test)]
+mod native_contract_emission_source_visibility_tests {
+    use super::*;
+    use iroha_data_model::{
+        block::{
+            BlockExecutionContextBundle, ExternalExecutionContext, ExternalExecutionRouteLeg,
+            ExternalExecutionRouteRole, builder::BlockBuilder,
+            execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineExecutionOutputV2,
+                PipelineInvocationV1, TimeExecutionOutputV1, TimeExecutionOutputV2,
+                TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
+            },
+        },
+        events::time::{TimeEvent, TimeInterval},
+        smart_contract::{ContractAddress, entrypoint::*, event::*},
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+    fn network() -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"native emission source visibility fixture",
+        )))
+    }
+
+    // This real signed carrier and its exact execution-context routes are a
+    // structural visibility fixture, not an execution or finality receipt.
+    fn block(routes: &[DataSpaceId]) -> SignedBlock {
+        let mut transaction = TransactionBuilder::new(
+            network(), ALICE_ID.clone(), FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction.set_creation_time(core::time::Duration::from_millis(1_000));
+        let signed = transaction.with_executable(Executable::Instructions(
+            iroha_primitives::const_vec::ConstVec::new_empty(),
+        )).sign(ALICE_KEYPAIR.private_key());
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).unwrap(), None, None, 1_001, 0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(signed);
+        let mut block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let (entrypoint_hash, _) = block.external_signed_transaction_at(0).unwrap();
+        let coordinator = LaneId::new(7);
+        let legs = routes.iter().enumerate().map(|(index, dataspace)| {
+            ExternalExecutionRouteLeg::new(
+                if index == 0 { coordinator } else { LaneId::new(8) },
+                *dataspace,
+                if index == 0 { ExternalExecutionRouteRole::Coordinator }
+                else { ExternalExecutionRouteRole::Participant },
+            )
+        }).collect();
+        block.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::with_routing_plan(
+                entrypoint_hash, coordinator, routes[0],
+                Hash::new(b"visibility fixture route plan"), legs,
+            ),
+        ])));
+        block
+    }
+
+    fn emission(dataspace: DataSpaceId) -> ContractEmissionV1 {
+        let payload_type = EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)],
+        };
+        ContractEmissionV1 {
+            contract: ContractAddress::derive(&network(), &ALICE_ID, 1, dataspace).unwrap(),
+            code_hash: Hash::new(b"visibility fixture artifact"), entrypoint: 0, event: 0,
+            caller: ALICE_ID.clone(),
+            payload: EntrypointReturnRecordV1 {
+                schema_hash: entrypoint_return_schema_hash_v1(
+                    &norito::encode_canonical(&payload_type).unwrap(),
+                ),
+                atoms: vec![EntrypointValueAtomV1::Bool(true)],
+            },
+            definition: ContractEventDescriptorV1 {
+                name: "VisibleEvent".parse().unwrap(), payload_type,
+            },
+        }
+    }
+
+    fn trigger() -> TriggerUseV1 {
+        TriggerUseV1 {
+            trigger_id: "visibility-source".parse().unwrap(), registered_at_height: 0,
+            action_hash: Hash::new(b"untrusted visibility fixture action, not State evidence"),
+        }
+    }
+
+    fn network_outputs(index: u32) -> [ExecutionOutputV1; 2] {
+        let execution = NetworkExecutionOutputV1 {
+            input_index: index, result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        };
+        [ExecutionOutputV1::Network(execution.clone()),
+         ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+             execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
+         })]
+    }
+
+    fn pipeline_outputs(event: PipelineEventPositionV1) -> [ExecutionOutputV1; 2] {
+        let execution = PipelineExecutionOutputV1 {
+            invocation: PipelineInvocationV1 { event, candidate_index: 0, trigger: trigger() },
+            result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
+            completions: Vec::new(),
+        };
+        [ExecutionOutputV1::Pipeline(execution.clone()),
+         ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+             execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
+         })]
+    }
+
+    fn time_outputs() -> [ExecutionOutputV1; 2] {
+        let execution = TimeExecutionOutputV1 {
+            invocation: TimeInvocationV1 {
+                schedule_index: 0, trigger: trigger(),
+                event: TimeEvent { interval: TimeInterval { since_ms: 1_000, length_ms: 1 } },
+            },
+            result: TransactionResult::new(Ok(Vec::new())), failure_root: None,
+            completions: Vec::new(),
+        };
+        [ExecutionOutputV1::Time(execution.clone()),
+         ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+             execution, trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: Vec::new() },
+         })]
+    }
+
+    #[test]
+    fn network_v1_v2_require_all_original_route_legs_and_present_input() {
+        let visible = DataSpaceId::new(7);
+        let hidden = DataSpaceId::new(8);
+        let mut block = block(&[visible, hidden]);
+        let emission = emission(visible);
+        let limited = DataspaceReadVisibility::new(BTreeSet::from([visible]), false);
+        let complete = DataspaceReadVisibility::new(BTreeSet::from([visible, hidden]), false);
+        for output in network_outputs(0) {
+            assert!(!native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+            assert!(native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        for output in network_outputs(1) {
+            assert!(!native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        block.set_execution_context(None);
+        for output in network_outputs(0) {
+            assert!(!native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+    }
+
+    #[test]
+    fn pipeline_v1_v2_preserve_network_vs_block_approved_and_time_sources() {
+        let visible = DataSpaceId::new(7);
+        let hidden = DataSpaceId::new(8);
+        let block = block(&[visible, hidden]);
+        let emission = emission(visible);
+        let limited = DataspaceReadVisibility::new(BTreeSet::from([visible]), false);
+        let complete = DataspaceReadVisibility::new(BTreeSet::from([visible, hidden]), false);
+        for output in pipeline_outputs(PipelineEventPositionV1::Network(0)) {
+            assert!(!native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+            assert!(native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        for output in pipeline_outputs(PipelineEventPositionV1::Network(1)) {
+            assert!(!native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+        for output in pipeline_outputs(PipelineEventPositionV1::BlockApproved).into_iter().chain(time_outputs()) {
+            assert!(native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+        }
+    }
+
+    #[test]
+    fn private_emitting_contract_is_refused_for_every_v1_v2_source_kind() {
+        let visible = DataSpaceId::new(7);
+        let hidden = DataSpaceId::new(8);
+        let block = block(&[visible]);
+        let emission = emission(hidden);
+        let limited = DataspaceReadVisibility::new(BTreeSet::from([visible]), false);
+        let complete = DataspaceReadVisibility::new(BTreeSet::from([visible, hidden]), false);
+        let outputs = network_outputs(0).into_iter()
+            .chain(pipeline_outputs(PipelineEventPositionV1::Network(0)))
+            .chain(pipeline_outputs(PipelineEventPositionV1::BlockApproved))
+            .chain(time_outputs());
+        for output in outputs {
+            assert!(!native_contract_emission_source_is_visible(&limited, &block, &output, &emission));
+            assert!(native_contract_emission_source_is_visible(&complete, &block, &output, &emission));
+        }
+    }
+    #[test]
+    fn external_core_feature_counts_actual_owned_receipt_body_reads() {
+        use iroha_core::{
+            state::World,
+            sumeragi::{
+                finality::NativeFinalityProofBudget,
+                test_chain::{CertifiedTestChain, TestChainConfig},
+            },
+        };
+        use iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES;
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+        chain.commit(Vec::new());
+        let frames = iroha_allocation::AllocationBudget::new(33_312_848);
+        let graphs = iroha_allocation::AllocationBudget::new(33_312_848);
+        let owner = NativeFinalityProofBudget::new(
+            frames, graphs,
+            norito::DecodeLimits::new(
+                2_562_487, MAX_FINALITY_BLOCK_BYTES, 33_312_848, 33_312_848,
+                norito::core::MAX_VALUE_NESTING_DEPTH,
+            ),
+        );
+        chain.kura().reset_canonical_query_reads_for_test();
+        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+        let receipt = chain.state().read_certified_ladder_receipt(
+            &owner, std::num::NonZeroU64::new(2).unwrap(),
+            std::num::NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            &std::sync::atomic::AtomicBool::new(false),
+        ).unwrap();
+        assert_eq!(receipt.as_ref().id(), chain.committed(2).id());
+        let (calls, bytes) = chain.kura().canonical_query_reads_for_test();
+        assert!(calls > 0, "the external Core dependency must count actual physical calls");
+        assert!(bytes > 0, "the request-owned receipt reads actual original body bytes");
+        drop(receipt);
+        chain.kura().reset_canonical_query_reads_for_test();
+        assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    }
+}
+
 /// GET /v1/events/sse – Server-Sent Events stream of JSON events.
 ///
 /// Notes:
@@ -49128,7 +49694,6 @@ fn faucet_pow_scrypt_params(
         faucet.pow_scrypt_log_n,
         faucet.pow_scrypt_r,
         faucet.pow_scrypt_p,
-        32,
     )
     .map_err(|_| faucet_invalid_request("invalid faucet pow scrypt configuration"))
 }
@@ -52658,6 +53223,125 @@ mod explorer_response_byte_budget_tests {
             bounded_explorer_json_response(&payload,exact)
         })).is_err(),"selection and output must not each spend an independent phase budget");
     }
+    #[tokio::test]
+    async fn public_domain_rows_charge_one_root_decode_not_one_per_counted_member() {
+        use iroha_data_model::block::consensus::SumeragiRootScope;
+        // Unsigned readers count each domain's accounts and assets under the committed root.
+        // Every counted member decoded that root's metadata inside the response phase, so a
+        // few ~200-byte rows of populous domains exhausted the smallest routed-read owner
+        // (Taira refused 3-row pages beside a 650-account domain).
+        const DOMAINS: usize = 5;
+        let owner_id = iroha_test_samples::ALICE_ID.clone();
+        let public = DataspaceReadVisibility::new(BTreeSet::from([DataSpaceId::UNIVERSAL]), false);
+        let domains: Vec<DomainId> = (0..DOMAINS)
+            .map(|index| DomainId::try_new(format!("populous{index}"), "universal").expect("fixture domain"))
+            .collect();
+        let definitions: Vec<AssetDefinitionId> = domains
+            .iter()
+            .map(|domain| AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().expect("asset name")))
+            .collect();
+        // One owner of every domain, and `holders` accounts that each hold every domain's coin.
+        let state = |holders: usize| {
+            let holders: Vec<AccountId> = (0..holders)
+                .map(|index| {
+                    let mut seed = vec![0x5A; 32];
+                    seed[..8].copy_from_slice(&u64::try_from(index).expect("holder index").to_be_bytes());
+                    AccountId::new(KeyPair::from_seed(seed, Algorithm::Ed25519).public_key().clone())
+                })
+                .collect();
+            let mut world = iroha_core::state::World::with_assets(
+                domains.iter().map(|domain| Domain::new(domain.clone()).build(&owner_id)),
+                std::iter::once(Account::new(owner_id.clone()).build(&owner_id))
+                    .chain(holders.iter().map(|holder| Account::new(holder.clone()).build(holder))),
+                definitions.iter().zip(&domains).map(|(definition, domain)| {
+                    AssetDefinition::numeric(
+                        definition.clone(),
+                        "coin".to_owned(),
+                        iroha_data_model::asset::AssetBalancePolicy::Global,
+                        Some(domain.clone()),
+                    )
+                    .build(&owner_id)
+                }),
+                holders.iter().flat_map(|holder| {
+                    definitions.iter().map(move |definition| {
+                        iroha_data_model::asset::Asset::new(
+                            AssetId::new(definition.clone(), holder.clone()),
+                            Quantity::from(1_u32),
+                        )
+                    })
+                }),
+                [],
+            );
+            crate::test_utils::bind_fixture_root(&mut world, SumeragiRootScope::Global);
+            Arc::new(CoreState::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                iroha_core::query::store::LiveQueryStore::start_test(),
+            ))
+        };
+        let unbounded = norito::DecodeLimits::new(
+            usize::MAX, usize::MAX, usize::MAX, usize::MAX, norito::core::MAX_VALUE_NESTING_DEPTH,
+        );
+        let small = state(1);
+        let (root, root_usage) = norito::core::with_decode_limits_measured(unbounded, || {
+            iroha_core::sumeragi::lanes::routing::committed_root_scope(&small.world_view())
+        });
+        assert_eq!(root, Some(SumeragiRootScope::Global));
+        let root_bytes = root_usage.total_allocated_bytes();
+        assert!(root_bytes > 0, "decoding the committed root charges the active budget");
+        let smallest_owner = crate::QueryFanoutMemoryEnvelope::for_body_admission(
+            crate::ROUTED_READ_OWNER_PHASE_UNITS[0] * crate::QUERY_FANOUT_PREBODY_UNITS
+                + crate::query_fanout_fixed_overhead_bytes().expect("fixed overhead"),
+        )
+        .expect("smallest routed-read owner")
+        .route_body_bytes;
+        // Twice the members whose one root decode each would alone exhaust that owner.
+        let holders = 2 * smallest_owner / (DOMAINS * root_bytes) + 1;
+        let large = state(holders);
+        let query = crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 };
+        // The page charges its rows; how many members each row counts is no part of it.
+        let charged = |state: &CoreState| {
+            let view = state.world_view();
+            let (rows, usage) = norito::core::with_decode_limits_measured(unbounded, || {
+                crate::explorer::domains_page_for_filters(&view, None, &public, &query, smallest_owner)
+                    .map(|page| page.items.len())
+            });
+            assert_eq!(rows.expect("domains page"), DOMAINS);
+            usage.total_allocated_bytes()
+        };
+        assert_eq!(charged(&small), charged(&large), "per-member root decodes reached the page charge");
+        let owner = crate::history_producer::HistoryProducerOwner::for_test();
+        let response = owner
+            .scope(|| {
+                handle_v1_explorer_domains_sync(&large, &public, &query, None, smallest_owner)
+            })
+            .expect("tiny domain rows fit the smallest routed-read owner");
+        let body = axum::body::to_bytes(response.into_body(), smallest_owner).await.unwrap();
+        let page: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let rows = page["items"].as_array().expect("domain rows");
+        assert_eq!(rows.len(), DOMAINS);
+        for row in rows {
+            assert_eq!(row["assets"].as_u64(), Some(u64::try_from(holders).unwrap()));
+            assert_eq!(row["accounts"].as_u64(), Some(0));
+        }
+        assert!(page["pagination"]["next_cursor"].is_null());
+        // A full accounts page counts every holder's assets under the same single decode.
+        let accounts = crate::explorer::ExplorerCursorQuery { cursor: None, limit: 100 };
+        let response = owner
+            .scope(|| {
+                handle_v1_explorer_accounts_sync(&large, &public, &accounts, None, None, smallest_owner)
+            })
+            .expect("a full public accounts page fits the smallest routed-read owner");
+        let body = axum::body::to_bytes(response.into_body(), smallest_owner).await.unwrap();
+        let page: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let rows = page["items"].as_array().expect("account rows");
+        assert_eq!(rows.len(), (holders + 1).min(100));
+        let every = Some(u64::try_from(DOMAINS).unwrap());
+        assert!(rows.iter().all(|row| {
+            let counts = (row["owned_assets"].as_u64(), row["owned_domains"].as_u64());
+            counts == (every, Some(0)) || counts == (Some(0), every)
+        }));
+    }
 }
 pub async fn handle_v1_explorer_accounts_admitted(
     state: Arc<CoreState>,
@@ -52940,6 +53624,13 @@ fn handle_v1_explorer_rwas_sync(
 
     })
 }
+/// Inclusive height range a block-feed walk visits; [`EXPLORER_BLOCK_HEIGHTS_ALL`]
+/// leaves it unbounded.
+pub type ExplorerBlockHeightRange = (u64, u64);
+
+/// The unbounded block-feed walk: from the snapshot tip down to genesis.
+pub const EXPLORER_BLOCK_HEIGHTS_ALL: ExplorerBlockHeightRange = (0, u64::MAX);
+
 #[cfg(test)]
 #[expect(clippy::unused_async, reason = "HTTP route entry points retain a Future interface for route dispatch and shared async handler tests") ]
 pub async fn handle_v1_explorer_blocks(
@@ -52947,9 +53638,32 @@ pub async fn handle_v1_explorer_blocks(
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
+    heights: ExplorerBlockHeightRange,
 ) -> Result<AxResponse, Error> {
-    crate::history_producer::HistoryProducerOwner::for_test().scope(|| {
-handle_v1_explorer_blocks_sync(&(state), &(telemetry), &(visibility), &(pagination))
+    let summaries = Arc::new(crate::explorer_history::ExplorerBlockSummaryCache::new(
+        crate::explorer_history::EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY,
+    ));
+    crate::history_producer::HistoryProducerOwner::for_test().physical_scope(|| {
+        handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination, (heights, &summaries))
+    })
+}
+
+#[cfg(test)]
+pub async fn handle_v1_explorer_blocks_with_summaries(
+    state: Arc<CoreState>,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    heights: ExplorerBlockHeightRange,
+    summaries: Arc<crate::explorer_history::ExplorerBlockSummaryCache>,
+) -> Result<AxResponse, Error> {
+    crate::history_producer::HistoryProducerOwner::for_test().physical_scope(|| {
+        handle_v1_explorer_blocks_sync(
+            state,
+            MaybeTelemetry::disabled(),
+            visibility,
+            pagination,
+            (heights, &summaries),
+        )
     })
 }
 
@@ -52958,68 +53672,192 @@ pub async fn handle_v1_explorer_blocks_admitted(
     telemetry: MaybeTelemetry,
     visibility: DataspaceReadVisibility,
     pagination: crate::explorer::ExplorerCursorQuery,
+    feed: (ExplorerBlockHeightRange, Arc<crate::explorer_history::ExplorerBlockSummaryCache>),
     admission: crate::QueryAdmissionPermit,
 ) -> Result<AxResponse, Error> {
-    run_admitted_blocking(admission, "Explorer block history worker failed", move || {
-        handle_v1_explorer_blocks_sync(&(state), &(telemetry), &(visibility), &(pagination))
-    })
-    .await
+    let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+        // This route has a separate source ceiling so a spent decode grant
+        // cannot consume its cursor/output reserve. Retain original admission
+        // throughout the worker; each phase installs its original owner explicitly.
+        let _admission = admission;
+        let owner = crate::history_producer::HistoryProducerOwner::from_admission(&_admission)?;
+        owner.physical_scope(|| {
+            let (heights, summaries) = feed;
+            handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination, (heights, &summaries))
+        })
+    });
+    crate::panic_recovery::join_recoverable(worker).await
+        .map_err(|_| query_internal_error("Explorer block history worker failed"))?
 }
 
-fn handle_v1_explorer_blocks_sync(
-    state: &Arc<CoreState>,
-    telemetry: &MaybeTelemetry,
+/// Bind a narrowed walk's range into its continuation so a cursor never
+/// resumes under different bounds; the unbounded walk keeps the plain digest.
+fn explorer_blocks_filter_digest(heights: ExplorerBlockHeightRange) -> Result<[u8; 32], Error> {
+    let collection = crate::explorer::ExplorerHistoryCollection::Blocks;
+    if heights == EXPLORER_BLOCK_HEIGHTS_ALL {
+        return Ok(crate::explorer::explorer_history_filter_digest(collection, &[]));
+    }
+    let text = |height| {
+        crate::explorer::explorer_history_scalar_text(height).map_err(explorer_history_cursor_error)
+    };
+    Ok(crate::explorer::explorer_history_filter_digest(
+        collection,
+        &[Some(text(heights.0)?), Some(text(heights.1)?)],
+    ))
+}
+
+/// The first block a page reads: the continuation (or snapshot tip) capped at
+/// the range's top, or nothing when that lies below the range's bottom.
+fn explorer_blocks_walk_start(
+    resume: Option<crate::explorer::ExplorerHistoryPosition>,
+    snapshot_height: u64,
+    heights: ExplorerBlockHeightRange,
+) -> Option<crate::explorer::ExplorerHistoryPosition> {
+    let start = resume.map_or(snapshot_height, |position| position.height);
+    let height = start.min(heights.1);
+    (height > 0 && height >= heights.0).then(|| crate::explorer::ExplorerHistoryPosition::block(height))
+}
+
+/// One block-feed row, or the request's history read budget running out
+/// before the row could be read.
+enum ExplorerFeedRow {
+    Row(crate::explorer_history::HistoryBlockRow),
+    BudgetSpent(Error),
+}
+
+/// Read one block-feed row. A summary cached by an earlier read serves it
+/// without a body read; a cold read fills the cache. A spent (not permanently
+/// exceeded) read budget is reported so the walk can end its page early.
+fn explorer_feed_block_row(
+    state: &CoreState,
+    height: NonZeroUsize,
     visibility: &DataspaceReadVisibility,
-    pagination: &crate::explorer::ExplorerCursorQuery,
+    summaries: &crate::explorer_history::ExplorerBlockSummaryCache,
+) -> Result<ExplorerFeedRow, Error> {
+    use iroha_core::execution_attempt::ExecutionAttemptError;
+    use iroha_data_model::query::error::{CanonicalHistoryError, QueryExecutionFail};
+    let height_u64 = u64::try_from(height.get())
+        .map_err(|_| conversion_error("block height exceeds u64".into()))?;
+    let owner = crate::history_producer::HistoryProducerOwner::current()?;
+    let read = (|| -> Result<crate::explorer_history::HistoryBlockRow, ExecutionAttemptError<QueryExecutionFail>> {
+        let source_token = state.canonical_history_summary_source_token(height)?;
+        if let Some(summary) = source_token.and_then(|token| {
+            state.committed_block_hash_at_height(height_u64)
+                .and_then(|hash| summaries.get(height_u64, hash, visibility.visible_route_set_digest(), token))
+        }) {
+            return Ok(summary.row());
+        }
+        let block = state.read_canonical_history_block(height, &owner.canonical_history_budget())?;
+        // An append or source change during decoding disables retention for
+        // this read; only equal before/after source images can warm the cache.
+        if let Some(token) = source_token {
+            if state.canonical_history_summary_source_token(height)? == Some(token) {
+                let summary = summaries.insert(crate::explorer_history::ExplorerBlockSummary::from_block(
+                    &block, visibility, token,
+                ));
+                return Ok(summary.row());
+            }
+        }
+        Ok(crate::explorer_history::HistoryBlockRow::from_block(
+            &block, |index| visibility.allows_external_entrypoint(&block, index),
+        ))
+    })();
+    match read {
+        Ok(row) => Ok(ExplorerFeedRow::Row(row)),
+        Err(ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(
+            CanonicalHistoryError::BodyUnavailable { .. },
+        ))) => explorer_hash_only_block_row(state, height_u64).map(ExplorerFeedRow::Row),
+        Err(ExecutionAttemptError::Deferred(deferred))
+            if crate::canonical_history::permanent_refusal(&deferred).is_none() =>
+        {
+            Ok(ExplorerFeedRow::BudgetSpent(crate::canonical_history::query_attempt_error(
+                ExecutionAttemptError::Deferred(deferred),
+            )))
+        }
+        Err(error) => Err(crate::canonical_history::query_attempt_error(error)),
+    }
+}
+
+/// Walk the block feed newest first from `start` down to `lowest`, filling
+/// `items` up to `limit` rows within the scan cap. A spent read budget ends a
+/// page that already holds rows; the returned continuation then names the
+/// unread height, so the next page resumes exactly there.
+fn walk_block_feed(
+    start: Option<crate::explorer::ExplorerHistoryPosition>,
+    (limit, lowest): (usize, u64),
+    items: &mut Vec<crate::explorer_history::HistoryBlockRow>,
+    mut read: impl FnMut(NonZeroUsize) -> Result<ExplorerFeedRow, Error>,
+) -> Result<Option<crate::explorer::ExplorerHistoryPosition>, Error> {
+    let mut next_position = start;
+    let mut scanned = 0_usize;
+    while items.len() < limit && scanned < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
+        let Some(position) = next_position else {
+            break;
+        };
+        let height_usize: usize = position
+            .height
+            .try_into()
+            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
+        let nonzero_height = NonZeroUsize::new(height_usize)
+            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
+        match read(nonzero_height)? {
+            ExplorerFeedRow::Row(row) => items.push(row),
+            ExplorerFeedRow::BudgetSpent(_) if !items.is_empty() => break,
+            ExplorerFeedRow::BudgetSpent(error) => return Err(error),
+        }
+        scanned = scanned.saturating_add(1);
+        next_position = position
+            .height
+            .checked_sub(1)
+            .filter(|height| *height > 0 && *height >= lowest)
+            .map(crate::explorer::ExplorerHistoryPosition::block);
+    }
+    Ok(next_position)
+}
+
+pub(crate) fn handle_v1_explorer_blocks_sync(
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    visibility: DataspaceReadVisibility,
+    pagination: crate::explorer::ExplorerCursorQuery,
+    (heights, summaries): (ExplorerBlockHeightRange, &crate::explorer_history::ExplorerBlockSummaryCache),
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let collection = crate::explorer::ExplorerHistoryCollection::Blocks;
-        let filter_digest = crate::explorer::explorer_history_filter_digest(collection, &[]);
-        let scope = resolve_explorer_history_request(
+        let owner = crate::history_producer::HistoryProducerOwner::current()?;
+        let scope = owner.scope(|| {
+            let filter_digest = explorer_blocks_filter_digest(heights)?;
+            resolve_explorer_history_request(
             state.as_ref(),
-            visibility,
-            pagination,
+            &visibility,
+            &pagination,
             collection,
-            filter_digest,
-        )?;
-        let mut next_position = scope.resume.or_else(|| {
-            (scope.snapshot_height > 0)
-                .then(|| crate::explorer::ExplorerHistoryPosition::block(scope.snapshot_height))
-        });
-        let mut items = crate::history_producer::HistoryProducerOwner::current()?.selected(scope.limit)?;
-        let mut scanned = 0_usize;
-        while items.len() < scope.limit && scanned < EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
-            let Some(position) = next_position else {
-                break;
-            };
-            let height_usize: usize = position.height.try_into().map_err(|_| {
-                conversion_error("block height exceeds host pointer width".into())
-            })?;
-            let nonzero_height = NonZeroUsize::new(height_usize)
-                .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-            let dto = explorer_history_block_row(state.as_ref(), nonzero_height, visibility)?;
-            items.push(dto);
-            scanned = scanned.saturating_add(1);
-            next_position = position
-                .height
-                .checked_sub(1)
-                .filter(|height| *height > 0)
-                .map(crate::explorer::ExplorerHistoryPosition::block);
-        }
-        let pagination_meta = explorer_history_meta(
+                filter_digest,
+            )
+        })?;
+        let mut items = owner.selected(scope.limit)?;
+        let response_reserve = owner.block_feed_output_reserve()?;
+        let source = owner.source_allocation_context(response_reserve)?;
+        let next_position = source.with(|| owner.scope(|| walk_block_feed(
+            explorer_blocks_walk_start(scope.resume, scope.snapshot_height, heights),
+            (scope.limit, heights.0),
+            &mut items,
+            |height| explorer_feed_block_row(state.as_ref(), height, &visibility, summaries),
+        )))?;
+        let pagination_meta = owner.scope(|| explorer_history_meta(
             collection,
-            pagination,
+            &pagination,
             &scope,
             next_position,
-        )?;
+        ))?;
         let body = crate::explorer_history::HistoryPage {
             pagination: pagination_meta,
             items,
         };
-        crate::history_producer::HistoryProducerOwner::current()?.json(&body)
+        owner.json_with_limit(&body, owner.source_frame_bytes())
     })();
-    record_explorer_endpoint_result(telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
+    record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
     response
 }
 }
@@ -53051,6 +53889,7 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
             cursor: None,
             limit: 1,
         },
+        EXPLORER_BLOCK_HEIGHTS_ALL,
     )
     .await
     .expect("hash-only explorer block list should succeed");
@@ -53116,6 +53955,182 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
         payload.get("hash"),
         Some(&second_json)
     );
+}
+#[cfg(all(test, feature = "app_api"))]
+pub(crate) fn explorer_blocks_seek_test_state(blocks: u8) -> Arc<CoreState> {
+    let state = Arc::new(CoreState::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    ));
+    {
+        let mut block_hashes = state.block_hashes.block();
+        for height in 1..=blocks {
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([height; Hash::LENGTH]),
+            ));
+        }
+        block_hashes.commit_for_tests();
+    }
+    state
+}
+#[cfg(all(test, feature = "app_api"))]
+async fn explorer_blocks_seek_page(
+    state: &Arc<CoreState>,
+    cursor: Option<String>,
+    limit: u32,
+    heights: ExplorerBlockHeightRange,
+) -> Result<(Vec<u64>, Option<String>), Error> {
+    let response = handle_v1_explorer_blocks(
+        state.clone(),
+        MaybeTelemetry::disabled(),
+        DataspaceReadVisibility::all_for_tests(),
+        crate::explorer::ExplorerCursorQuery { cursor, limit },
+        heights,
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let heights = payload
+        .get("items")
+        .and_then(norito::json::Value::as_array)
+        .expect("items")
+        .iter()
+        .map(|item| {
+            item.get("height")
+                .and_then(norito::json::Value::as_u64)
+                .expect("height")
+        })
+        .collect();
+    let next_cursor = payload
+        .get("pagination")
+        .and_then(|meta| meta.get("next_cursor"))
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned);
+    Ok((heights, next_cursor))
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async explorer_blocks_seek_a_height_range_instead_of_walking_from_the_tip
+    let state = explorer_blocks_seek_test_state(250);
+    let (tip, _) = explorer_blocks_seek_page(&state, None, 3, EXPLORER_BLOCK_HEIGHTS_ALL)
+        .await
+        .expect("unbounded page");
+    assert_eq!(tip, vec![250, 249, 248]);
+
+    let (range, next_cursor) = explorer_blocks_seek_page(&state, None, 100, (51, 100))
+        .await
+        .expect("narrowed page");
+    assert_eq!(range, (51..=100).rev().collect::<Vec<u64>>());
+    assert_eq!(next_cursor, None, "the walk ends at the range's bottom");
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async explorer_blocks_range_continuation_stays_inside_its_range
+    let state = explorer_blocks_seek_test_state(250);
+    let (first, cursor) = explorer_blocks_seek_page(&state, None, 30, (51, 100))
+        .await
+        .expect("first narrowed page");
+    assert_eq!(first, (71..=100).rev().collect::<Vec<u64>>());
+    let cursor = cursor.expect("continuation inside the range");
+
+    let (second, end) = explorer_blocks_seek_page(&state, Some(cursor.clone()), 30, (51, 100))
+        .await
+        .expect("second narrowed page");
+    assert_eq!(second, (51..=70).rev().collect::<Vec<u64>>());
+    assert_eq!(end, None);
+
+    for other in [EXPLORER_BLOCK_HEIGHTS_ALL, (1, 100), (51, 99)] {
+        assert!(
+            explorer_blocks_seek_page(&state, Some(cursor.clone()), 30, other).await.is_err(),
+            "a continuation is bound to the range that issued it: {other:?}"
+        );
+    }
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { async explorer_blocks_range_edges_clamp_or_select_nothing
+    let state = explorer_blocks_seek_test_state(250);
+    let (clamped, end) = explorer_blocks_seek_page(&state, None, 100, (240, 10_000))
+        .await
+        .expect("range above the tip");
+    assert_eq!(clamped, (240..=250).rev().collect::<Vec<u64>>());
+    assert_eq!(end, None);
+
+    for empty in [(10, 5), (251, u64::MAX), (0, 0), (u64::MAX, u64::MAX)] {
+        let (rows, end) = explorer_blocks_seek_page(&state, None, 100, empty)
+            .await
+            .expect("empty range");
+        assert!(rows.is_empty(), "{empty:?} selects no block");
+        assert_eq!(end, None, "{empty:?} has nothing to continue");
+    }
+
+    let (genesis, end) = explorer_blocks_seek_page(&state, None, 100, (0, 2))
+        .await
+        .expect("range reaching genesis");
+    assert_eq!(genesis, vec![2, 1]);
+    assert_eq!(end, None);
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync explorer_block_walk_ends_a_page_early_when_the_read_budget_is_spent
+    let at = |height| Some(crate::explorer::ExplorerHistoryPosition::block(height));
+    let row = |height: NonZeroUsize| {
+        let height = u64::try_from(height.get()).expect("test height");
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [u8::try_from(height % 251).expect("byte"); Hash::LENGTH],
+        ));
+        Ok(ExplorerFeedRow::Row(crate::explorer_history::HistoryBlockRow::from_hash_only(
+            height, hash, None,
+        )))
+    };
+    let spent = || Ok(ExplorerFeedRow::BudgetSpent(explorer_not_found()));
+    let heights = |items: &[crate::explorer_history::HistoryBlockRow]| {
+        items.iter().map(|item| item.height).collect::<Vec<u64>>()
+    };
+
+    // Rows 100 and 99 fit; the budget runs out at 98, which the continuation names.
+    let mut items = Vec::new();
+    let next = walk_block_feed(at(100), (30, 1), &mut items, |height| {
+        if height.get() > 98 { row(height) } else { spent() }
+    })
+    .expect("a short page");
+    assert_eq!(heights(&items), vec![100, 99]);
+    assert_eq!(next, at(98));
+
+    // A budget spent before any row is the request's failure, never an empty page.
+    let mut items = Vec::new();
+    assert!(walk_block_feed(at(100), (30, 1), &mut items, |_| spent()).is_err());
+
+    // Otherwise a page stops at its limit, at the range's bottom, or at genesis.
+    let mut items = Vec::new();
+    assert_eq!(walk_block_feed(at(100), (3, 1), &mut items, row).expect("full page"), at(97));
+    let mut items = Vec::new();
+    assert_eq!(walk_block_feed(at(100), (30, 95), &mut items, row).expect("range page"), None);
+    assert_eq!(heights(&items), (95..=100).rev().collect::<Vec<u64>>());
+    let mut items = Vec::new();
+    assert_eq!(walk_block_feed(at(2), (30, 0), &mut items, row).expect("genesis page"), None);
+    assert_eq!(heights(&items), vec![2, 1]);
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync explorer_blocks_walk_start_caps_at_the_range_top
+    let at = |height| Some(crate::explorer::ExplorerHistoryPosition::block(height));
+    assert_eq!(explorer_blocks_walk_start(None, 250, EXPLORER_BLOCK_HEIGHTS_ALL), at(250));
+    assert_eq!(explorer_blocks_walk_start(None, 250, (51, 100)), at(100));
+    assert_eq!(explorer_blocks_walk_start(at(70), 250, (51, 100)), at(70));
+    assert_eq!(explorer_blocks_walk_start(None, 40, (51, 100)), None);
+    assert_eq!(explorer_blocks_walk_start(None, 0, EXPLORER_BLOCK_HEIGHTS_ALL), None);
+    assert_eq!(explorer_blocks_walk_start(None, 250, (10, 5)), None);
+}
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync explorer_blocks_filter_digest_binds_only_narrowed_ranges
+    let plain = crate::explorer::explorer_history_filter_digest(
+        crate::explorer::ExplorerHistoryCollection::Blocks,
+        &[],
+    );
+    assert_eq!(explorer_blocks_filter_digest(EXPLORER_BLOCK_HEIGHTS_ALL).expect("digest"), plain);
+    let narrowed = explorer_blocks_filter_digest((51, 100)).expect("digest");
+    assert_ne!(narrowed, plain);
+    assert_ne!(narrowed, explorer_blocks_filter_digest((51, 99)).expect("digest"));
 }
 app_api_items! {
 #[expect(clippy::unused_async, reason = "HTTP route entry points retain a Future interface for route dispatch and shared async handler tests") ]
@@ -54459,9 +55474,8 @@ pub async fn handle_v1_explorer_account_detail(
             crate::explorer::ExplorerAccountDto::from_entry(
                 &(entry),
                 crate::explorer::account_counters_from_world(
-                    &world,
+                    &visibility.in_world(&world),
                     &account_id,
-                    &visibility,
                 ),
             )
         })
@@ -54505,7 +55519,10 @@ pub async fn handle_v1_explorer_domain_detail(
         .map(|domain| {
             crate::explorer::ExplorerDomainDto::from_domain(
                 domain,
-                crate::explorer::domain_counters_from_world(&world, &domain_id, &visibility),
+                crate::explorer::domain_counters_from_world(
+                    &visibility.in_world(&world),
+                    &domain_id,
+                ),
             )
         })
         .map_err(|_| explorer_not_found())?;
@@ -54532,9 +55549,8 @@ pub async fn handle_v1_explorer_asset_definition_detail(
     let mut dto = crate::explorer::ExplorerAssetDefinitionDto::from_definition_with_asset_count(
         &definition,
         crate::explorer::definition_instance_count_from_world(
-            &world,
+            &visibility.in_world(&world),
             &definition_id,
-            &visibility,
         ),
         asset_definition_dataspace_for_read(&world, &definition_id)?,
     );
@@ -56080,16 +57096,23 @@ fn explorer_history_block_row(
         Ok(block) => Ok(crate::explorer_history::HistoryBlockRow::from_block(&block,
             |index| visibility.allows_external_entrypoint(&block, index))),
         Err(ExecutionAttemptError::Rejected(QueryExecutionFail::CanonicalHistory(CanonicalHistoryError::BodyUnavailable { .. }))) => {
-            let height = height.get() as u64;
-            let hash = state.committed_block_hash_at_height(height).ok_or_else(explorer_not_found)?;
-            Ok(crate::explorer_history::HistoryBlockRow {
-                hash, height, created_at: crate::explorer_history::HistoryBlockTime(None),
-                prev_block_hash: height.checked_sub(1).filter(|height| *height > 0).and_then(|height| state.committed_block_hash_at_height(height)),
-                transactions_hash: None, transactions_rejected: 0, transactions_total: 0,
-            })
+            explorer_hash_only_block_row(state, height.get() as u64)
         }
         Err(error) => Err(crate::canonical_history::query_attempt_error(error)),
     }
+}
+/// Report only the committed journal's identity for a block whose body is unavailable;
+/// its time and counts stay unknown, never zero activity.
+fn explorer_hash_only_block_row(
+    state: &CoreState,
+    height: u64,
+) -> Result<crate::explorer_history::HistoryBlockRow, Error> {
+    let hash = state.committed_block_hash_at_height(height).ok_or_else(explorer_not_found)?;
+    Ok(crate::explorer_history::HistoryBlockRow {
+        hash, height, created_at: crate::explorer_history::HistoryBlockTime(None),
+        prev_block_hash: height.checked_sub(1).filter(|height| *height > 0).and_then(|height| state.committed_block_hash_at_height(height)),
+        transactions_hash: None, transactions_rejected: 0, transactions_total: 0,
+    })
 }
 fn parse_block_identifier(raw: &str) -> Result<ExplorerBlockIdentifier, Error> {
     let trimmed = raw.trim();

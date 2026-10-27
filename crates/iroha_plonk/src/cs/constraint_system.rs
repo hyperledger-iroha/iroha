@@ -11,7 +11,7 @@
 //!   `lookup_any` the input before the table. `enable_equality` interns
 //!   `(column, 0)`. The order fixes the descriptor, the proof layout and the
 //!   verifying key, so it equals halo2's.
-//! - The degree is `max(3, lookup degrees, gate degrees, minimum_degree)` and
+//! - The degree is `max(4, lookup degrees, gate degrees, minimum_degree)` and
 //!   the blinding factors are `max(3, max advice queries per column) + 2`.
 //! - Every instance column declares its exact length (spec S4).
 //!
@@ -481,7 +481,7 @@ impl<F: PastaField> ConstraintSystem<F> {
         index
     }
 
-    /// The circuit degree `max(3, lookup degrees, gate degrees, minimum)`.
+    /// The circuit degree `max(4, lookup degrees, gate degrees, minimum)`.
     #[must_use]
     pub fn degree(&self) -> usize {
         let mut degree = PermutationArgument::REQUIRED_DEGREE;

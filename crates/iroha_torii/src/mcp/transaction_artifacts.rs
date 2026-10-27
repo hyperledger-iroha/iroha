@@ -459,6 +459,10 @@ impl SignatureFailureCode {
 
 /// Signature verification outcome for an inspected artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    variant_size_differences,
+    reason = "the bounded Copy outcome borrows static diagnostics without adding heap allocation"
+)]
 pub enum SignatureVerification {
     /// Unsigned payloads have no authorization proof to verify.
     NotPresent,
@@ -1099,6 +1103,8 @@ mod tests {
 #[cfg(test)]
 #[test]
 fn unavailable_signature_inspection_is_neither_valid_nor_invalid() {
+    assert!(std::mem::size_of::<SignatureVerification>() <= 24);
+    assert!(!std::mem::needs_drop::<SignatureVerification>());
     let original = iroha_crypto::UnsupportedImplementation {
         algorithm: iroha_crypto::Algorithm::MlDsa,
         operation: iroha_crypto::CryptoOperation::VerifySignature,

@@ -15,15 +15,18 @@ fn assert_projection_rejected(proof: &ZkX509SegmentedStarkProofV1) {
 }
 #[derive(Debug)]
 struct MaxValueRng;
-impl RngCore for MaxValueRng {
-    fn next_u32(&mut self) -> u32 {
-        u32::MAX
+impl rand::TryRng for MaxValueRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(u32::MAX)
     }
-    fn next_u64(&mut self) -> u64 {
-        u64::MAX
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::MAX)
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        destination.fill(0xFF);
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+        Ok({
+            destination.fill(0xFF);
+        })
     }
 }
 #[test]

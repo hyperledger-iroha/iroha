@@ -1930,8 +1930,8 @@ CORE_MUTATIONS = [
       causes=(ExpectedFailure("the final incoming opening caller must acknowledge cancellation without dropping independent historical recovery", "crates/iroha_core/src/sumeragi/lanes/registry/isolation_tests.rs"),)),
 
     m("HC443", "Lane sweeps let later registrations consume original cleanup or retirement membership",
-      ['sumeragi::lanes::registry::tests::proposal_reads::cancelled_original_sweep_does_not_wait_for_new_disjoint_opening', 'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner'],
-      causes=(ExpectedFailure('original cancelled lane cleanup cannot wait for an unrelated newly registered opening', 'crates/iroha_core/src/sumeragi/lanes/registry/proposal_reads.rs'),
+      ['sumeragi::lanes::registry::tests::proposal_reads::original_lane_sweep_does_not_wait_for_new_disjoint_opening', 'sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner'],
+      causes=(ExpectedFailure('an original lane sweep cannot wait for an unrelated newly registered opening', 'crates/iroha_core/src/sumeragi/lanes/registry/proposal_reads.rs'),
           ExpectedFailure('an original lane sweep cannot retire a later same-key registration', 'crates/iroha_core/src/sumeragi/lanes/registry/proposal_reads.rs'),)),
 
     m("HC455", "Change capture encodes untouched cell values",
@@ -2806,8 +2806,8 @@ DEPLOY_MUTATIONS = [
     m("DEP2", "Managed AMX sources: accept same bytes from a replaced original file inode",
       ["bootstrap::amx_sources::tests::managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
        "bootstrap::amx_sources::tests::managed_amx_sources_feed_real_private_staging_and_exact_retained_generation"]),
-    m("DEP3", "Managed AMX sources: omit the live-release check after retained authentication",
-      ["bootstrap::amx_sources::tests::managed_amx_sources_recheck_release_after_retained_authentication_without_refetch"]),
+    m("DEP3", "Managed AMX sources: omit the original deadline check after retained authentication",
+      ["bootstrap::amx_sources::tests::managed_amx_sources_recheck_deadline_after_retained_authentication_without_refetch"]),
     m("DEP4", "Managed AMX sources: publish a new capsule after original acquisition expires",
       ["bootstrap::amx_sources::tests::managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication"]),
     m("DEP5", "Managed AMX sources: reopen replaced G1/H2 from an unchanged local record",

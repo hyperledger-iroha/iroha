@@ -22,6 +22,7 @@ accel = ["iroha_zkp_vole/accel"]
 diagnostics = []
 
 [dependencies]
+shake = { version = "0.1.0", default-features = false, features = ["zeroize"] }
 iroha_zkp_vole = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
@@ -34,7 +35,7 @@ norito = { workspace = true, default-features = false, features = ["json"] }
 # Independent SHA-3 implementation the digests and the in-crate Keccak rounds are
 # cross-checked against. All hashing of the library itself uses the backend's
 # erasing sponge.
-sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+sha3 = { version = "0.12.0", default-features = false, features = ["alloc"] }
 
 # The measurement and diagnostic tooling compares both rows.
 [[example]]

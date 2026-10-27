@@ -41,8 +41,8 @@ use iroha_primitives::numeric::Quantity;
 use norito::json::{Map, Value};
 use norito::{decode_from_bytes, json::JsonSerialize, to_bytes};
 use rand::{
-    RngCore, SeedableRng,
-    rand_core::{TryCryptoRng, TryRngCore},
+    Rng, SeedableRng,
+    rand_core::{TryCryptoRng, TryRng},
     rngs::StdRng,
 };
 use sorafs_manifest::{

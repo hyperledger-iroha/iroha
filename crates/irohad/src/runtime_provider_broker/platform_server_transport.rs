@@ -345,7 +345,7 @@ fn serve_client(
         return Ok(());
     }
     let mut session_id = [0_u8; 32];
-    rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut session_id)
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut session_id)
         .map_err(|_| BrokerError::Unavailable)?;
     if session_id == [0; 32] {
         return Err(BrokerError::Unavailable);
@@ -1166,7 +1166,7 @@ fn connect_broker_connection_before(
 ) -> Result<(BrokerConnection, Vec<ProviderObservationWireV1>), BrokerError> {
     let mut stream = connect_verified_before(policy, deadline)?;
     let mut client_nonce = [0_u8; 32];
-    rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut client_nonce)
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut client_nonce)
         .map_err(|_| BrokerError::Unavailable)?;
     if client_nonce == [0; 32] {
         return Err(BrokerError::Unavailable);

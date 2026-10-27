@@ -7,10 +7,8 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use std::path::PathBuf;
 
 pub(super) fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-    KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
-    )
-    .unwrap()
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(key.verifying_key().to_sec1_point(false).as_bytes())
+        .unwrap()
 }
 
 pub(super) fn certificate(
@@ -87,6 +85,7 @@ pub(super) fn provider(path: PathBuf) -> KagemushaEnrollmentProvider {
         service_origin_digest: [11; 32],
         observation_endpoint: "https://provider.example/eligibility".parse().unwrap(),
         observation_credential: path.with_file_name("transport"),
+        observation_tls_root: None,
         worker: iroha_config::parameters::actual::KagemushaEnrollmentWorker {
             python_executable: "/opt/issuer/python".into(),
             python_sha256: [41; 32],

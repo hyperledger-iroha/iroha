@@ -217,6 +217,7 @@ fn retain_current_send_checkpoint_once_without_monetary_replay() {
         &sources,
         &fixture,
         &frames,
+        &[212; 32],
         credited_original,
         decoded.signed_request().unwrap().credit_id(),
     );
@@ -261,6 +262,7 @@ fn retain_current_send_checkpoint_once_without_monetary_replay() {
         &sources,
         &fixture,
         &frames,
+        &[212; 32],
         credited_original,
         decoded.signed_request().unwrap().credit_id(),
     );

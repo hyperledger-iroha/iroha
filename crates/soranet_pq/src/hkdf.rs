@@ -1,4 +1,4 @@
-use hkdf::Hkdf;
+use hkdf::SimpleHkdf;
 use sha3::{Sha3_256, Sha3_512};
 use zeroize::Zeroizing;
 /// Enumerates the supported HKDF suites used by the `SoraNet` handshake.
@@ -12,14 +12,14 @@ pub enum HkdfSuite {
 impl HkdfSuite {
     fn expand(self, salt: Option<&[u8]>, ikm: &[u8]) -> HkdfVariant {
         match self {
-            HkdfSuite::Sha3_256 => HkdfVariant::Sha3_256(Hkdf::<Sha3_256>::new(salt, ikm)),
-            HkdfSuite::Sha3_512 => HkdfVariant::Sha3_512(Hkdf::<Sha3_512>::new(salt, ikm)),
+            HkdfSuite::Sha3_256 => HkdfVariant::Sha3_256(SimpleHkdf::<Sha3_256>::new(salt, ikm)),
+            HkdfSuite::Sha3_512 => HkdfVariant::Sha3_512(SimpleHkdf::<Sha3_512>::new(salt, ikm)),
         }
     }
 }
 enum HkdfVariant {
-    Sha3_256(Hkdf<Sha3_256>),
-    Sha3_512(Hkdf<Sha3_512>),
+    Sha3_256(SimpleHkdf<Sha3_256>),
+    Sha3_512(SimpleHkdf<Sha3_512>),
 }
 const HKDF_LABEL_SEPARATOR: &[u8] = b"\0";
 impl HkdfVariant {
@@ -188,7 +188,7 @@ mod tests {
         let labeled =
             derive_labeled_hkdf(HkdfSuite::Sha3_512, Some(&SALT), &IKM, domain, context, 64)
                 .expect("labeled HKDF output");
-        let legacy = Hkdf::<Sha3_512>::new(Some(&SALT), &IKM);
+        let legacy = SimpleHkdf::<Sha3_512>::new(Some(&SALT), &IKM);
         let mut legacy_okm = [0_u8; 64];
         legacy
             .expand(&legacy_info, &mut legacy_okm)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.31;
+pragma solidity 0.8.38;
 
 import {BLS12_381} from "../../lib/BLS12_381.sol";
 

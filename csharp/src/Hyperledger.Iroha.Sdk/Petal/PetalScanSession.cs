@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Hyperledger.Iroha.Petal;
 
 /// <summary>Limits of a scan session.</summary>
@@ -62,35 +64,77 @@ public sealed record PetalScanLimits
 /// <param name="Frames">Camera frames offered.</param>
 /// <param name="Located">Frames in which a code was located, whether or not a lane could be read.</param>
 /// <param name="Readable">Frames in which at least one lane decoded.</param>
-/// <param name="LaneP">Lane <c>P</c> successes.</param>
-/// <param name="LaneK">Lane <c>K</c> successes.</param>
 /// <param name="LaneD">Lane <c>D</c> successes.</param>
+/// <param name="FieldLanes">Field lane successes (up to four per frame).</param>
 /// <param name="Tracked">Frames read by tracking the previous pose instead of a full search.</param>
-/// <param name="Merges">Attempts to average two or more captures.</param>
-/// <param name="MergedP">Missing P lanes recovered by averaging.</param>
-/// <param name="MergedK">Missing K lanes recovered by averaging.</param>
 /// <param name="Inferred">Frames read with one corner finder hidden and inferred (a hint to move a thumb or the phone).</param>
+/// <param name="Merges">Merges of two or more captures of one shown frame.</param>
+/// <param name="MergedLanes">Field lanes recovered by merging captures.</param>
+/// <param name="TurnTries">Turn lanes tried (each at most once per shown frame).</param>
+/// <param name="TurnLanes">Turn lanes read.</param>
+/// <param name="KanaTries">Bands tried (each at most once per shown frame).</param>
+/// <param name="KanaLanes">Kana lanes read (up to four per shown frame).</param>
+/// <param name="SpareTurns">Captures whose bands read a lane that also tried the turn lanes, having time to spare.</param>
 public readonly record struct PetalScanStats(
     uint Frames,
     uint Located,
     uint Readable,
-    uint LaneP,
-    uint LaneK,
     uint LaneD,
+    uint FieldLanes,
     uint Tracked,
     uint Inferred,
     uint Merges,
-    uint MergedP,
-    uint MergedK);
+    uint MergedLanes,
+    uint TurnTries,
+    uint TurnLanes,
+    uint KanaTries,
+    uint KanaLanes,
+    uint SpareTurns);
+
+/// <summary>The kinds of a capture's work a <see cref="PetalScanSession"/> times (see <see cref="PetalWork"/>).</summary>
+public enum PetalWorkKind
+{
+    /// <summary>Finding the code by a full search and taking in the lanes read.</summary>
+    Search,
+
+    /// <summary>Following the code from the previous capture's pose and taking in the lanes read.</summary>
+    Track,
+
+    /// <summary>Merging the held captures of a shown frame.</summary>
+    Merge,
+
+    /// <summary>Reading the kana lanes of <see cref="PetalWork.Count"/> bands.</summary>
+    Bands,
+
+    /// <summary>Reading the turn lanes.</summary>
+    Turns,
+}
+
+/// <summary>
+/// A part of a capture's work, as a <see cref="PetalScanSession"/> times it to tell whether a capture
+/// has time to spare for the turn lanes (see the session's remarks).
+/// </summary>
+/// <param name="Kind">What the work is.</param>
+/// <param name="Count">The bands read for <see cref="PetalWorkKind.Bands"/>; one otherwise.</param>
+public readonly record struct PetalWork(PetalWorkKind Kind, int Count = 1);
 
 /// <summary>The result of offering one camera frame.</summary>
 public sealed class PetalScanOutcome
 {
-    internal PetalScanOutcome(PetalDecodeError? error, string lanes, string merged, PetalProgress progress, PetalCompletedPayload? completed)
+    internal PetalScanOutcome(
+        PetalDecodeError? error,
+        string lanes,
+        string merged,
+        string turned,
+        string kana,
+        PetalProgress progress,
+        PetalCompletedPayload? completed)
     {
         Error = error;
         Lanes = lanes;
         Merged = merged;
+        Turned = turned;
+        Kana = kana;
         Progress = progress;
         Completed = completed;
     }
@@ -102,11 +146,29 @@ public sealed class PetalScanOutcome
     /// </summary>
     public PetalDecodeError? Error { get; }
 
-    /// <summary>Lanes that decoded, as letters from <c>"PKD"</c>.</summary>
+    /// <summary>
+    /// Lanes that decoded in this capture alone, as letters: <c>D</c> and the sector digits
+    /// <c>0</c>–<c>3</c>.
+    /// </summary>
     public string Lanes { get; }
 
-    /// <summary>Lanes recovered by averaging captures, as letters from <c>"PK"</c>.</summary>
+    /// <summary>
+    /// Field lanes recovered by merging this capture with earlier captures of its shown frame,
+    /// as sector digits.
+    /// </summary>
     public string Merged { get; }
+
+    /// <summary>
+    /// Turn lanes read from this capture, as the sector digits of the field lanes they ride on
+    /// (see <see cref="PetalTurns"/>).
+    /// </summary>
+    public string Turned { get; }
+
+    /// <summary>
+    /// Kana lanes read from this capture, as their names in <see cref="PetalKana.Lanes"/> order
+    /// (<c>P0</c>, <c>K0</c>, <c>P1</c>, <c>K1</c>, concatenated; see <see cref="PetalKana"/>).
+    /// </summary>
+    public string Kana { get; }
 
     /// <summary>Receive progress after this frame.</summary>
     public PetalProgress Progress { get; }
@@ -127,11 +189,53 @@ public sealed class PetalScanOutcome
 /// pose is older than <see cref="TrackWindowMilliseconds"/>.
 /// </para>
 /// <para>
+/// A camera sees each shown frame two to four times, and noise, display banding or
+/// hand shake can cost every one of those captures a field lane. When a capture reads
+/// some lane but not every field lane, the session keeps its
+/// <see cref="PetalFieldEvidence"/> under the shown frame its decoded lane headers name
+/// (a capture whose lanes name different frames is not kept), for the last
+/// <see cref="MergeWindow"/> shown frames and at most <see cref="MergeCaptures"/>
+/// captures each. From the second such capture on, it merges them
+/// (<see cref="PetalDecoder.MergeFields"/>) and offers a recovered lane only when that
+/// lane's own header names the same frame. Replacing the active stream drops the held
+/// evidence.
+/// </para>
+/// <para>
+/// Every field lane a capture decodes also lets the session read the turn lane on top of it
+/// (<see cref="PetalTurns.ReadTurns"/>). A turn lane is tried once per shown frame: the session
+/// remembers the last <see cref="TurnMemory"/> it tried and does not look at those petals again.
+/// Reading turns costs a slow phone core several times a frame's decode, so after a try that
+/// reads no turn lane (a camera too soft or too shaky for the turns) the session passes over the
+/// next captures that would try one, one more after every such try, at most
+/// <see cref="TurnBackoff"/>, until a try reads a lane again.
+/// </para>
+/// <para>
+/// The katakana bands above and below the square are read the same way
+/// (<see cref="PetalKana.ReadKana"/>): each band once per shown frame (the last
+/// <see cref="KanaMemory"/> tried are remembered), with its own back-off of at most
+/// <see cref="KanaBackoff"/> captures after tries that read no kana lane (a camera that does not see
+/// the bands, or too blurred for their glyphs and polarity).
+/// </para>
+/// <para>
+/// The bands go first. A capture whose bands read a kana lane tries the turn lanes too only when it
+/// has time to spare: when the work it has done (finding or following the code, a merge, the bands)
+/// and what the session's last turn try took fit together in <see cref="CaptureBudgetMilliseconds"/>,
+/// a 30 fps camera's frame time (before the first turn try, twice the work done stands in for it).
+/// Otherwise the turn lanes of that shown frame wait for its next capture. On a slow phone core a
+/// turn try costs five tracked decodes and a band try one, so reading both on one capture overran the
+/// time a frame is shown at 12 fps and the session missed the next shown frames; a fast decoder reads
+/// both at once, which matters when its camera gives it few frames a second. A band try that reads
+/// nothing (bands out of view, too blurred, or a torn capture) leaves the turn lanes to the same
+/// capture.
+/// </para>
+/// <para>
+/// The session times its work on the monotonic clock (<see cref="Stopwatch"/>); a work cost given to
+/// the constructor puts a model's costs in place of the measured times, as tests do.
+/// </para>
+/// <para>
 /// A half-received stream is forgotten after <see cref="PetalScanLimits.IdleTimeout"/>
 /// without new independent atoms, or <see cref="PetalScanLimits.AbsoluteTimeout"/>
-/// after it started. Partial tile reads are averaged across at most four captures of
-/// each of six shown frames; independently decoded lane headers must agree, and a
-/// recovered lane must name the same frame. Instances are not thread-safe; see
+/// after it started. Instances are not thread-safe; see
 /// <see cref="PetalCameraAnalyzer"/> for a camera-callback wrapper.
 /// </para>
 /// </remarks>
@@ -140,23 +244,34 @@ public sealed class PetalScanSession
     /// <summary>How long (in milliseconds) a decoded pose stays usable for tracking the next frames.</summary>
     public const long TrackWindowMilliseconds = 500;
 
-    /// <summary>Maximum number of shown-frame sets retained.</summary>
+    /// <summary>Shown frames whose captures are held for merging.</summary>
     public const int MergeWindow = 6;
-    /// <summary>Maximum captures retained per shown frame; further captures replace the oldest.</summary>
+
+    /// <summary>Captures held per shown frame; a further capture replaces the oldest.</summary>
     public const int MergeCaptures = 4;
 
-    private sealed class Held(PetalLaneHeader shown)
-    {
-        public PetalLaneHeader Shown { get; } = shown;
-        public List<PetalTileEvidence> Evidence { get; } = new();
-        public bool PDone { get; set; }
-        public bool KDone { get; set; }
-    }
+    /// <summary>Turn lanes remembered as tried (the four of each of the last <see cref="MergeWindow"/> shown frames).</summary>
+    public const int TurnMemory = MergeWindow * PetalLayout.Sectors;
+
+    /// <summary>Most captures passed over after tries that read no turn lane.</summary>
+    public const int TurnBackoff = 8;
+
+    /// <summary>Bands remembered as tried (the two of each of the last <see cref="MergeWindow"/> shown frames).</summary>
+    public const int KanaMemory = MergeWindow * PetalLayout.KanaBands;
+
+    /// <summary>Most captures passed over after tries that read no kana lane.</summary>
+    public const int KanaBackoff = 8;
+
+    /// <summary>
+    /// The time a capture's work may take in milliseconds, turn lanes included, for a capture whose
+    /// bands read a lane to try the turn lanes too: a 30 fps camera's frame time, so a decoder that
+    /// keeps to it misses no camera frame.
+    /// </summary>
+    public const double CaptureBudgetMilliseconds = 1000.0 / 30.0;
 
     private readonly List<Held> held = new();
-    private uint merges;
-    private uint mergedP;
-    private uint mergedK;
+    private readonly Queue<(PetalLaneHeader Header, int Sector)> tried = new(TurnMemory);
+    private readonly Queue<(PetalLaneHeader Header, int Band)> kanaTried = new(KanaMemory);
     private readonly PetalStreamAssembler assembler;
     private long? startedMs;
     private long progressMs;
@@ -164,32 +279,57 @@ public sealed class PetalScanSession
     private uint frames;
     private uint located;
     private uint readable;
-    private uint laneP;
-    private uint laneK;
     private uint laneD;
+    private uint fieldLanes;
     private uint tracked;
     private uint inferred;
+    private uint merges;
+    private uint mergedLanes;
+    private uint turnTries;
+    private uint turnLanes;
+    private int turnMisses;
+    private int turnWait;
+    private uint kanaTries;
+    private uint kanaLanes;
+    private int kanaMisses;
+    private int kanaWait;
+    private uint spareTurns;
     private PetalDecodedFrame? lastPose;
     private long lastPoseMs;
 
+    /// <summary>What a part of a capture costs, given the milliseconds it took.</summary>
+    private readonly Func<PetalWork, double, double> workCost;
+
+    /// <summary>What the last turn try cost, in milliseconds.</summary>
+    private double? turnCostMs;
+
     /// <summary>Creates a session.</summary>
     /// <param name="limits">Limits; <see cref="PetalScanLimits.Default"/> when omitted.</param>
-    public PetalScanSession(PetalScanLimits? limits = null)
+    /// <param name="workCost">
+    /// What a part of a capture costs in milliseconds, given the milliseconds it took; the measured
+    /// time when omitted.
+    /// </param>
+    public PetalScanSession(PetalScanLimits? limits = null, Func<PetalWork, double, double>? workCost = null)
     {
         Limits = limits ?? PetalScanLimits.Default;
         assembler = new PetalStreamAssembler(Limits.Assembler);
+        this.workCost = workCost ?? (static (_, measuredMs) => measuredMs);
     }
 
     /// <summary>The limits in force.</summary>
     public PetalScanLimits Limits { get; }
 
     /// <summary>Diagnostic counters.</summary>
-    public PetalScanStats Stats => new(frames, located, readable, laneP, laneK, laneD, tracked, inferred, merges, mergedP, mergedK);
+    public PetalScanStats Stats =>
+        new(frames, located, readable, laneD, fieldLanes, tracked, inferred, merges, mergedLanes, turnTries, turnLanes, kanaTries, kanaLanes, spareTurns);
 
     /// <summary>Current progress.</summary>
     public PetalProgress Progress => assembler.Progress;
 
-    /// <summary>Drops all partial state and the pose used for tracking (counters are kept).</summary>
+    /// <summary>
+    /// Drops all partial state, the held captures, the turn lanes and bands remembered as tried, any
+    /// back-off and the pose used for tracking (counters are kept).
+    /// </summary>
     public void Reset()
     {
         assembler.Reset();
@@ -197,6 +337,7 @@ public sealed class PetalScanSession
         lastRank = 0;
         lastPose = null;
         held.Clear();
+        ForgetTurns();
     }
 
     /// <summary>Offers one camera luma plane captured at monotonic time <paramref name="nowMilliseconds"/>.</summary>
@@ -214,6 +355,7 @@ public sealed class PetalScanSession
         }
 
         frames++;
+        var pushStarted = Stopwatch.GetTimestamp();
         var followed = lastPose is not null && Elapsed(nowMilliseconds, lastPoseMs) <= TrackWindowMilliseconds
             ? PetalDecoder.Track(image, lastPose, Limits.Decode)
             : null;
@@ -222,6 +364,8 @@ public sealed class PetalScanSession
         var result = followed is not null ? PetalDecodeResult.Ok(followed) : PetalDecoder.Decode(image, Limits.Decode);
         var lanes = string.Empty;
         var merged = string.Empty;
+        var turnedLanes = string.Empty;
+        var kanaLanesRead = string.Empty;
         if (result.Success)
         {
             if (result.Frame.InferredCorner is not null)
@@ -229,7 +373,31 @@ public sealed class PetalScanSession
             lastPose = result.Frame;
             lastPoseMs = nowMilliseconds;
             lanes = Absorb(result.Frame);
+            var spent = Cost(new PetalWork(followed is not null ? PetalWorkKind.Track : PetalWorkKind.Search), pushStarted);
+            var mergesBefore = merges;
+            var partStarted = Stopwatch.GetTimestamp();
             merged = Merge(image, result.Frame);
+            if (merges > mergesBefore)
+                spent += Cost(new PetalWork(PetalWorkKind.Merge), partStarted);
+            var bandsBefore = kanaTries;
+            partStarted = Stopwatch.GetTimestamp();
+            kanaLanesRead = Kana(image, result.Frame);
+            var bands = (int)(kanaTries - bandsBefore);
+            if (bands > 0)
+                spent += Cost(new PetalWork(PetalWorkKind.Bands, bands), partStarted);
+            // a capture whose bands read a lane tries the turn lanes only with time to spare (see the
+            // class remarks)
+            if (kanaLanesRead.Length == 0)
+            {
+                turnedLanes = Turn(image, result.Frame);
+            }
+            else if (spent + (turnCostMs ?? 2 * spent) <= CaptureBudgetMilliseconds)
+            {
+                var triesBefore = turnTries;
+                turnedLanes = Turn(image, result.Frame);
+                if (turnTries > triesBefore)
+                    spareTurns++;
+            }
         }
 
         if (result.Error is not (PetalDecodeError.NoFinders or PetalDecodeError.UnsupportedImage))
@@ -242,49 +410,208 @@ public sealed class PetalScanSession
         }
 
         lastRank = progress.Rank;
-        return new PetalScanOutcome(result.Error, lanes, merged, progress, assembler.TakeCompleted());
+        return new PetalScanOutcome(result.Error, lanes, merged, turnedLanes, kanaLanesRead, progress, assembler.TakeCompleted());
     }
 
-    private string Absorb(PetalDecodedFrame frame)
+    /// <summary>What <paramref name="work"/> cost, given that it started at <paramref name="started"/> (a <see cref="Stopwatch"/> timestamp).</summary>
+    private double Cost(PetalWork work, long started) =>
+        workCost(work, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+
+    /// <summary>Counts the lanes of a decoded frame and feeds them to the assembler.</summary>
+    internal string Absorb(PetalDecodedFrame frame)
     {
-        if (frame.P is not null)
-            laneP++;
-        if (frame.K is not null)
-            laneK++;
+        var lanes = frame.Lanes;
         if (frame.D is not null)
             laneD++;
-        var lanes = frame.Lanes;
+        foreach (var field in frame.Fields)
+        {
+            if (field is not null)
+                fieldLanes++;
+        }
+
         if (lanes.Length > 0)
             readable++;
         var previousMeta = assembler.Progress.Meta;
         frame.Feed(assembler);
         if (previousMeta is not null && assembler.Progress.Meta != previousMeta)
+        {
             held.Clear();
+            ForgetTurns();
+        }
+
         return lanes;
     }
 
-    private static PetalLaneHeader? ShownFrame(PetalDecodedFrame frame)
+    /// <summary>
+    /// Tries the turn lanes on top of the field lanes this capture decoded, except those already
+    /// tried for their shown frame, and offers the atoms of those it reads; after tries that read
+    /// nothing it passes over the next captures that would try one (see the class remarks).
+    /// </summary>
+    internal string Turn(PetalLuma image, PetalDecodedFrame frame)
     {
-        PetalLaneHeader? shown = null;
-        foreach (var lane in new[] { frame.D, frame.P, frame.K })
+        Span<bool> skip = stackalloc bool[PetalLayout.Sectors];
+        Span<PetalLaneHeader> headers = stackalloc PetalLaneHeader[PetalLayout.Sectors];
+        var trying = false;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
         {
-            if (lane is null)
+            skip[sector] = true;
+            if (frame.Fields[sector] is not { Data.Length: >= PetalLanes.LaneHeaderLength } field)
                 continue;
-            if (lane.Data.Length < 3)
-                return null;
-            var header = new PetalLaneHeader(lane.Data[0], (ushort)((lane.Data[1] << 8) | lane.Data[2]));
-            if (shown is { } previous && previous != header)
-                return null;
-            shown = header;
+            headers[sector] = new PetalLaneHeader(field.Data[0], (ushort)((field.Data[1] << 8) | field.Data[2]));
+            skip[sector] = tried.Contains((headers[sector], sector));
+            trying |= !skip[sector];
         }
-        return shown;
+
+        if (!trying)
+            return string.Empty;
+        if (turnWait > 0)
+        {
+            turnWait--;
+            return string.Empty;
+        }
+
+        // a skipped sector is one without a header or one already tried
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            if (skip[sector])
+                continue;
+            if (tried.Count == TurnMemory)
+                tried.Dequeue();
+            tried.Enqueue((headers[sector], sector));
+            turnTries++;
+        }
+
+        var readStarted = Stopwatch.GetTimestamp();
+        var results = PetalTurns.ReadTurns(image, frame, skip);
+        turnCostMs = Cost(new PetalWork(PetalWorkKind.Turns), readStarted);
+        var letters = string.Empty;
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+        {
+            if (results[sector] is not { } result || PetalTurns.TurnPacket(headers[sector], sector, result.Data) is not { } packet)
+                continue;
+            assembler.PushAtoms(packet);
+            turnLanes++;
+            letters += PetalLanes.Letter(PetalLanes.Field(sector));
+        }
+
+        if (letters.Length == 0)
+        {
+            turnMisses = Math.Min(turnMisses + 1, TurnBackoff);
+            turnWait = turnMisses;
+        }
+        else
+        {
+            turnMisses = 0;
+        }
+
+        return letters;
     }
 
+    /// <summary>
+    /// Tries the bands not yet tried for this capture's shown frame and offers the atoms of the kana
+    /// lanes they read; after tries that read nothing it passes over the next captures that would try
+    /// one (see the class remarks).
+    /// </summary>
+    internal string Kana(PetalLuma image, PetalDecodedFrame frame)
+    {
+        if (ShownFrame(frame) is not { } header)
+            return string.Empty;
+        Span<bool> skip = stackalloc bool[PetalLayout.KanaBands];
+        var trying = false;
+        for (var band = 0; band < PetalLayout.KanaBands; band++)
+        {
+            skip[band] = kanaTried.Contains((header, band));
+            trying |= !skip[band];
+        }
+
+        if (!trying)
+            return string.Empty;
+        if (kanaWait > 0)
+        {
+            kanaWait--;
+            return string.Empty;
+        }
+
+        for (var band = 0; band < PetalLayout.KanaBands; band++)
+        {
+            if (skip[band])
+                continue;
+            if (kanaTried.Count == KanaMemory)
+                kanaTried.Dequeue();
+            kanaTried.Enqueue((header, band));
+            kanaTries++;
+        }
+
+        var results = PetalKana.ReadKana(image, frame, header, skip);
+        var names = string.Empty;
+        foreach (var lane in PetalKana.Lanes)
+        {
+            if (results[(int)lane] is not { } result || PetalKana.KanaPacket(result.Header, lane, result.Result.Data) is not { } packet)
+                continue;
+            assembler.PushAtoms(packet);
+            kanaLanes++;
+            names += PetalKana.Name(lane);
+        }
+
+        if (names.Length == 0)
+        {
+            kanaMisses = Math.Min(kanaMisses + 1, KanaBackoff);
+            kanaWait = kanaMisses;
+        }
+        else
+        {
+            kanaMisses = 0;
+        }
+
+        return names;
+    }
+
+    /// <summary>The bands remembered as tried as <c>(shown frame, band)</c>, oldest first (diagnostics and tests).</summary>
+    internal IReadOnlyCollection<(PetalLaneHeader Header, int Band)> TriedBands => kanaTried;
+
+    /// <summary>Tries in a row that read no kana lane, at most <see cref="KanaBackoff"/> (diagnostics and tests).</summary>
+    internal int KanaMisses => kanaMisses;
+
+    /// <summary>Captures that would try a band still to be passed over (diagnostics and tests).</summary>
+    internal int KanaWait
+    {
+        get => kanaWait;
+        set => kanaWait = value;
+    }
+
+    /// <summary>The turn lanes remembered as tried, oldest first (diagnostics and tests).</summary>
+    internal IReadOnlyCollection<(PetalLaneHeader Header, int Sector)> TriedLanes => tried;
+
+    /// <summary>Tries in a row that read no turn lane, at most <see cref="TurnBackoff"/> (diagnostics and tests).</summary>
+    internal int TurnMisses => turnMisses;
+
+    /// <summary>Captures that would try a turn lane still to be passed over (diagnostics and tests).</summary>
+    internal int TurnWait
+    {
+        get => turnWait;
+        set => turnWait = value;
+    }
+
+    /// <summary>Forgets the turn lanes and bands tried and any back-off.</summary>
+    private void ForgetTurns()
+    {
+        tried.Clear();
+        turnMisses = 0;
+        turnWait = 0;
+        kanaTried.Clear();
+        kanaMisses = 0;
+        kanaWait = 0;
+    }
+
+    /// <summary>
+    /// Holds this capture's field evidence under its shown frame and, from the second capture
+    /// on, merges the held captures of that frame.
+    /// </summary>
     internal string Merge(PetalLuma image, PetalDecodedFrame frame)
     {
         if (ShownFrame(frame) is not { } shown)
             return string.Empty;
-        var item = held.FirstOrDefault(h => h.Shown == shown);
+        var item = held.Find(h => h.Shown == shown);
         if (item is null)
         {
             if (held.Count == MergeWindow)
@@ -292,14 +619,16 @@ public sealed class PetalScanSession
             item = new Held(shown);
             held.Add(item);
         }
-        item.PDone |= frame.P is not null;
-        item.KDone |= frame.K is not null;
-        if (item.PDone && item.KDone)
+
+        for (var sector = 0; sector < PetalLayout.Sectors; sector++)
+            item.Done[sector] |= frame.Fields[sector] is not null;
+        if (item.AllDone)
         {
             item.Evidence.Clear();
             return string.Empty;
         }
-        if (PetalDecoder.TileEvidence(image, frame, Limits.Decode) is not { } evidence)
+
+        if (PetalDecoder.FieldEvidence(image, frame, Limits.Decode) is not { } evidence)
             return string.Empty;
         if (item.Evidence.Count == MergeCaptures)
             item.Evidence.RemoveAt(0);
@@ -307,33 +636,68 @@ public sealed class PetalScanSession
         if (item.Evidence.Count < 2)
             return string.Empty;
         merges++;
-        var (p, k) = PetalDecoder.MergeTiles(item.Evidence, Limits.Decode);
+        var results = PetalDecoder.MergeFields(item.Evidence, item.Done);
         var merged = string.Empty;
-        foreach (var (letter, lane, result) in new[] { ("P", PetalLane.P, p), ("K", PetalLane.K, k) })
+        foreach (var lane in PetalLanes.Fields)
         {
-            var done = lane == PetalLane.P ? item.PDone : item.KDone;
-            if (done || result is null || PetalStream.ParseAtomLane(lane, result.Data) is not { } packet || packet.Header != shown)
+            var sector = PetalLanes.Sector(lane);
+            if (results[sector] is not { } result || PetalStream.ParseAtomLane(lane, result.Data) is not { } packet)
                 continue;
-            if (lane == PetalLane.P)
-            {
-                item.PDone = true;
-                mergedP++;
-            }
-            else
-            {
-                item.KDone = true;
-                mergedK++;
-            }
+            // a merge offers only atoms of the shown frame it was made for
+            if (packet.Header != shown)
+                continue;
+            item.Done[sector] = true;
             assembler.PushAtoms(packet);
-            merged += letter;
+            mergedLanes++;
+            merged += PetalLanes.Letter(lane);
         }
-        if (item.PDone && item.KDone)
+
+        if (item.AllDone)
             item.Evidence.Clear();
         return merged;
+    }
+
+    /// <summary>The captures held for merging, oldest shown frame first (diagnostics and tests).</summary>
+    internal IReadOnlyList<Held> HeldFrames => held;
+
+    /// <summary>
+    /// The shown frame every decoded lane header of <paramref name="frame"/> names;
+    /// <see langword="null"/> when no lane decoded or the lanes of a torn capture name different
+    /// frames.
+    /// </summary>
+    private static PetalLaneHeader? ShownFrame(PetalDecodedFrame frame)
+    {
+        PetalLaneHeader? shown = null;
+        foreach (var lane in PetalLanes.DecodeOrder)
+        {
+            if (frame.Lane(lane) is not { } result)
+                continue;
+            if (result.Data.Length < PetalLanes.LaneHeaderLength)
+                return null;
+            var header = new PetalLaneHeader(result.Data[0], (ushort)((result.Data[1] << 8) | result.Data[2]));
+            if (shown is { } previous && previous != header)
+                return null;
+            shown = header;
+        }
+
+        return shown;
     }
 
     /// <summary>Saturating <c>now - since</c> (Rust <c>u64::saturating_sub</c>).</summary>
     private static ulong Elapsed(long now, long since) => now <= since ? 0 : unchecked((ulong)now - (ulong)since);
 
     private static ulong WholeMilliseconds(TimeSpan timeout) => (ulong)(timeout.Ticks / TimeSpan.TicksPerMillisecond);
+
+    /// <summary>The captures of one shown frame held for merging.</summary>
+    internal sealed class Held(PetalLaneHeader shown)
+    {
+        public PetalLaneHeader Shown { get; } = shown;
+
+        public List<PetalFieldEvidence> Evidence { get; } = new();
+
+        /// <summary>The field lanes already read from this shown frame, sector 0 first.</summary>
+        public bool[] Done { get; } = new bool[PetalLayout.Sectors];
+
+        public bool AllDone => Array.TrueForAll(Done, static done => done);
+    }
 }

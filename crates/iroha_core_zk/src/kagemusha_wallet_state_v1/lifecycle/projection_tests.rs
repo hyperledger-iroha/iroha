@@ -17,7 +17,7 @@ fn select_receiver_head(wallet: &mut Wallet, frozen: &FrozenTransition) {
             KagemushaWalletSigningDomainV1::Receipt,
             &owner.receipt_body(c, &capsule).unwrap(),
         ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     let record = owner.assemble(c, &capsule, &signature).unwrap();
     record.verify(&frozen.credential, c).unwrap();
@@ -110,7 +110,7 @@ fn select_receiver_head(wallet: &mut Wallet, frozen: &FrozenTransition) {
     wallet.publish_manifest(selected, &manifest).unwrap();
 }
 
-fn receive_projection_wallet(burn: bool) -> (Wallet, FrozenTransition, [u8; 32]) {
+pub(super) fn receive_projection_wallet(burn: bool) -> (Wallet, FrozenTransition, [u8; 32]) {
     let (payer, request, _) = originals();
     let payment: KagemushaWalletPaymentV1 = fixture("KagemushaWalletPaymentV1");
     let receiver = request.receiver_credential;
@@ -254,7 +254,7 @@ fn receiver_projection_rejects_foreign_mapping_and_unavailable_custody() {
     assert!(wallet.receive_credit_projection(&id).is_err());
 }
 
-fn originals() -> (
+pub(super) fn originals() -> (
     KagemushaWalletPayerCompanionV1,
     KagemushaWalletRequestV1,
     KagemushaWalletCreditedV1,
@@ -290,7 +290,7 @@ fn originals() -> (
 // The prior Send is a permanent tombstone; no historical Send capsule/source exists. Receipt
 // assembly still uses the real payer key and exact retained originals. No financial proof is
 // claimed: TestProofs alone admits this seeded history and the [1,2,3] fold proof.
-fn payer_projection_wallet(
+pub(super) fn payer_projection_wallet(
     core_pending: bool,
     folded_pending: Option<bool>,
 ) -> (Wallet, [u8; 32], Vec<u8>) {
@@ -391,7 +391,7 @@ fn payer_projection_wallet(
             KagemushaWalletSigningDomainV1::Receipt,
             &owner.receipt_body(c, &capsule).unwrap(),
         ));
-    let signature = signature.normalize_s().unwrap_or(signature);
+    let signature = signature.normalize_s();
     let signature = KagemushaDeviceSignatureV1::from_raw_bytes(&signature.to_bytes()).unwrap();
     let record = owner.assemble(c, &capsule, &signature).unwrap();
     let retained = Retained {
@@ -561,13 +561,13 @@ fn payer_projection_observes_later_credit_status_after_send_collection_without_a
         let (mut payer, send, anchor) = payer_projection_wallet(false, Some(false));
         assert_eq!(
             payer
-                .delivery_credit_projection(&send, &anchor, &[])
+                .delivery_credit_projection(&send, &anchor)
                 .unwrap()
                 .bytes()[2..5],
             [1, 2, 0]
         );
         let result = payer
-            .delivery_credit_projection(&send, &anchor, &newer)
+            .delivery_credit_projection_with_newer(&send, &anchor, &newer)
             .unwrap()
             .bytes();
         assert_eq!(result[2..5], [if burn { 3 } else { 2 }, 2, 0]);
@@ -576,14 +576,14 @@ fn payer_projection_observes_later_credit_status_after_send_collection_without_a
         let root = payer.manifest().unwrap().0;
         let limits = norito::DecodeLimits::new(usize::MAX, 0, usize::MAX, usize::MAX, 64);
         let refused = norito::with_decode_limits_scope(limits, || {
-            payer.delivery_credit_projection(&send, &anchor, &newer)
+            payer.delivery_credit_projection_with_newer(&send, &anchor, &newer)
         });
         assert!(matches!(refused, Err(Error::DecodeResource(ref cause))
             if cause.kind() == norito::core::DecodeLocalRefusalKind::EnclosingLimit));
         assert_eq!(payer.manifest().unwrap().0, root);
         assert_eq!(
             payer
-                .delivery_credit_projection(&send, &anchor, &newer)
+                .delivery_credit_projection_with_newer(&send, &anchor, &newer)
                 .unwrap()
                 .bytes(),
             result
@@ -596,7 +596,7 @@ fn payer_projection_observes_later_credit_status_after_send_collection_without_a
         );
         assert!(
             payer
-                .delivery_credit_projection(&[0x98; 32], &anchor, &newer)
+                .delivery_credit_projection_with_newer(&[0x98; 32], &anchor, &newer)
                 .is_err()
         );
         let mut foreign: KagemushaWalletCreditedV1 = archive::decode(&newer).unwrap();
@@ -606,13 +606,17 @@ fn payer_projection_observes_later_credit_status_after_send_collection_without_a
         status.opening.credit_id = field(99);
         assert!(
             payer
-                .delivery_credit_projection(&send, &anchor, &archive::encode(&foreign).unwrap())
+                .delivery_credit_projection_with_newer(
+                    &send,
+                    &anchor,
+                    &archive::encode(&foreign).unwrap()
+                )
                 .is_err()
         );
         payer.proofs.reject = true;
         assert!(
             payer
-                .delivery_credit_projection(&send, &anchor, &newer)
+                .delivery_credit_projection_with_newer(&send, &anchor, &newer)
                 .is_err(),
             "proof refusal is not a verdict"
         );
@@ -626,7 +630,7 @@ fn payer_projection_distinguishes_awaiting_removed_and_noop_from_current_core_me
             let (mut payer, send, anchor) = payer_projection_wallet(pending, folded);
             assert_eq!(
                 payer
-                    .delivery_credit_projection(&send, &anchor, &[])
+                    .delivery_credit_projection(&send, &anchor)
                     .unwrap()
                     .bytes()[2..5],
                 [1, expected, u8::from(pending)]
@@ -646,9 +650,7 @@ fn payer_projection_distinguishes_awaiting_removed_and_noop_from_current_core_me
                         .unwrap();
                     payer.publish_manifest(selected, &manifest).unwrap();
                     assert!(
-                        payer
-                            .delivery_credit_projection(&send, &anchor, &[])
-                            .is_err(),
+                        payer.delivery_credit_projection(&send, &anchor).is_err(),
                         "map must match verified fold root"
                     );
                 }
@@ -669,7 +671,7 @@ fn noop_later_candidate_uses_ordinary_native_preparation_and_never_reissues_send
     let (mut payer, send, anchor) = payer_projection_wallet(true, Some(true));
     assert_eq!(
         payer
-            .delivery_credit_projection(&send, &anchor, &newer)
+            .delivery_credit_projection_with_newer(&send, &anchor, &newer)
             .unwrap()
             .bytes()[3..5],
         [3, 1]
@@ -692,7 +694,7 @@ fn noop_later_candidate_uses_ordinary_native_preparation_and_never_reissues_send
         RequestStatusV1::Preparing
     ));
     assert!(matches!(
-        payer.accept_credited_for_send(&send, &newer),
+        lifecycle::fixture_archive_attempt(&mut payer, &send, &newer),
         Err(Error::Invalid("test action"))
     ));
     assert_eq!(payer.proofs.preparations.load(Ordering::SeqCst), 1);
@@ -717,9 +719,7 @@ fn verified_delivery_checks_a_new_receipt_before_any_archive_without_writing() {
         // A completed Archive of the same original is projected through its anchor.
         assert_eq!(
             payer.verified_delivery_projection(&send, &anchor).unwrap(),
-            payer
-                .delivery_credit_projection(&send, &anchor, &[])
-                .unwrap()
+            payer.delivery_credit_projection(&send, &anchor).unwrap()
         );
         let (companion, request, _) = originals();
         let payment = fixture("KagemushaWalletPaymentV1");
@@ -770,5 +770,30 @@ fn verified_delivery_checks_a_new_receipt_before_any_archive_without_writing() {
             "proof refusal is not a verdict"
         );
         assert_eq!(payer.manifest().unwrap().0, root);
+    }
+}
+
+#[test]
+fn credited_original_size_refusal_precedes_decoder_and_archive_dispatch() {
+    let (mut payer, send, _) = payer_projection_wallet(true, Some(true));
+    let selected = payer.manifest().unwrap().0;
+    let signatures = payer.custody.signatures;
+    // Neither input is a decodable Credited frame. The public intake and projection must
+    // report the explicit original-size refusal, before any incoming Norito decoding.
+    for original in [
+        Vec::new(),
+        vec![0; KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + 1],
+    ] {
+        assert!(matches!(
+            payer.observe_credited_for_send(&send, &original),
+            Err(Error::Invalid("deferred Credited size"))
+        ));
+        assert!(matches!(
+            payer.verified_delivery_projection(&send, &original),
+            Err(Error::Invalid("bound Credited input"))
+        ));
+        assert_eq!(payer.manifest().unwrap().0, selected);
+        assert_eq!(payer.custody.signatures, signatures);
+        assert_eq!(payer.proofs.preparations.load(Ordering::SeqCst), 0);
     }
 }

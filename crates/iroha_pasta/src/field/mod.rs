@@ -7,7 +7,7 @@
 //!
 //! Elements are four little-endian 64-bit limbs in Montgomery form
 //! (`a * 2^256 mod m`), always fully reduced. The canonical encoding is the
-//! 32-byte little-endian integer, identical to `pasta_curves` 0.5.2; decoding
+//! 32-byte little-endian integer, identical to `pasta_curves` 0.6.1; decoding
 //! rejects values `>= m`.
 //!
 //! Timing posture:
@@ -249,7 +249,7 @@ macro_rules! impl_pasta_field {
         use ff::{
             Field, FieldBits, FromUniformBytes, PrimeField, PrimeFieldBits, WithSmallOrderMulGroup,
         };
-        use rand_core_06::RngCore;
+        use rand_core::TryRng;
         use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
         use crate::field::cios;
@@ -480,12 +480,12 @@ macro_rules! impl_pasta_field {
             ///
             /// Reads eight `u64` words from `rng`, exactly as `pasta_curves`
             /// does, so a seeded RNG yields identical elements.
-            fn random(mut rng: impl RngCore) -> Self {
+            fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Self, R::Error> {
                 let mut limbs = [0u64; 8];
                 for limb in &mut limbs {
-                    *limb = rng.next_u64();
+                    *limb = rng.try_next_u64()?;
                 }
-                Self::from_u512(limbs)
+                Ok(Self::from_u512(limbs))
             }
 
             #[inline(always)]

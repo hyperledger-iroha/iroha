@@ -21,7 +21,7 @@ pub trait KeyExchangeScheme {
     fn new() -> Self;
     /// Create new keypairs. Prefer [`Self::try_keypair`] when the caller can
     /// propagate key generation failures. If
-    /// - `options` is [`Random`](KeyGenOption::Random), the keys are generated ephemerally from the [`OsRng`](rand::rngs::OsRng)
+    /// - `options` is [`Random`](KeyGenOption::Random), the keys are generated ephemerally from the [`SysRng`](rand::rngs::SysRng)
     /// - `options` is [`UseSeed`](KeyGenOption::UseSeed), the keys are generated ephemerally from the sha256 hash of the seed which is
     ///   then used to seed the [`ChaChaRng`](rand_chacha::ChaChaRng)
     /// - `options` is [`FromPrivateKey`](KeyGenOption::FromPrivateKey), the corresponding public key is returned. This should be used for

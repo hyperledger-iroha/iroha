@@ -23,7 +23,7 @@ impl ZkX509ProofInstanceV1 {
         rng: &mut crate::privacy_engines::prover_randomness::HealthCheckedTryCryptoRngV1<'_, R>,
     ) -> Result<Self, crate::privacy_engines::prover_randomness::TryCryptoProverRandomnessErrorV1>
     {
-        use rand::TryRngCore as _;
+        use rand::TryRng as _;
         // Clear partial bytes on failure or unwind; the returned copy is public.
         let mut nonce = zeroize::Zeroizing::new([0_u8; 32]);
         rng.try_fill_bytes(nonce.as_mut())?;
@@ -66,11 +66,12 @@ mod tests {
     };
     use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     use std::{cell::RefCell, rc::Rc};
 
     #[derive(Debug)]
     struct InjectedEntropyFailure;
+    impl std::error::Error for InjectedEntropyFailure {}
     impl core::fmt::Display for InjectedEntropyFailure {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected proof-instance entropy failure")
@@ -101,7 +102,7 @@ mod tests {
                 .wrapping_add(11)
         }
     }
-    impl TryRngCore for RecordingRng {
+    impl TryRng for RecordingRng {
         type Error = InjectedEntropyFailure;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("the original health owner must request canonical byte blocks")

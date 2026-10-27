@@ -51,7 +51,7 @@ proc-macro = true
 version = "1.0.11"
 
 [dependencies.quick-xml]
-version = "0.41"
+version = "0.42"
 
 [dependencies.quote]
 version = "1.0"

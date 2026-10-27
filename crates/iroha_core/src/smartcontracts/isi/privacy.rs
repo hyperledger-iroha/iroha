@@ -5727,7 +5727,6 @@ mod tests {
     use iroha_model_base::name::Name;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::Storage;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
     use std::{str::FromStr as _, sync::OnceLock};
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
@@ -5895,18 +5894,19 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for KatRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u32::from_be_bytes(bytes))
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             let mut bytes = [0; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+            self.try_fill_bytes(&mut bytes)?;
+            Ok(u64::from_be_bytes(bytes))
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for chunk in destination.chunks_mut(32) {
                 let mut hash = Sha256::new();
                 hash.update(b"iroha.privacy.pgc-runtime-test-rng.v1");
@@ -5916,13 +5916,10 @@ mod tests {
                 let block: [u8; 32] = hash.finalize().into();
                 chunk.copy_from_slice(&block[..chunk.len()]);
             }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());

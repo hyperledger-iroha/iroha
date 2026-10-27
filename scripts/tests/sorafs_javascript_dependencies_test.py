@@ -58,16 +58,16 @@ def _originals(*, alter=None):
     return _parse(value), originals
 
 
-def test_actual_candidate_lock_preserves_both_hashes_locations_and_exact_versions():
+def test_actual_candidate_lock_preserves_the_shared_hashes_owner_and_exact_versions():
     raw = (ROOT / "javascript/iroha_js/package-lock.json").read_bytes()
     parsed = dependencies.parse_dependency_lock(raw, expected_sha256=hashlib.sha256(raw).hexdigest())
     assert parsed.raw is raw
     assert parsed.sdk_version == _lock_value()["version"]
     assert [(row.location, row.version) for row in parsed.dependencies] == list(dependencies.VERSIONS.items())
     hashes = [row for row in parsed.dependencies if row.name == "@noble/hashes"]
-    assert [row.version for row in hashes] == ["1.8.0", "2.2.0"]
-    assert hashes[1].location == "node_modules/@scure/bip39/node_modules/@noble/hashes"
-    assert hashes[1].engines == (("node", ">= 20.19.0"),)
+    assert [row.version for row in hashes] == ["2.4.0"]
+    assert hashes[0].location == "node_modules/@noble/hashes"
+    assert hashes[0].engines == (("node", ">= 20.19.0"),)
 
 
 @pytest.mark.parametrize("pin", (None, False, "0" * 64, "G" * 64, "a" * 63, "sha256:" + "a" * 64))
@@ -86,7 +86,8 @@ def test_independent_lock_pin_is_required(pin):
     lambda row: row["packages"][""].update(dependencies={}),
     lambda row: row["packages"][""].update(workspaces=["other"]),
     lambda row: row["packages"].update({"node_modules/unowned": {"version": "1.0.0"}}),
-    lambda row: row["packages"].pop("node_modules/@scure/bip39/node_modules/@noble/hashes"),
+    lambda row: row["packages"].pop("node_modules/@noble/hashes"),
+    lambda row: row["packages"].update({"node_modules/@scure/bip39/node_modules/@noble/hashes": dict(row["packages"]["node_modules/@noble/hashes"])}),
     lambda row: row["packages"]["node_modules/@noble/hashes"].update(dev=1),
     lambda row: row["packages"]["node_modules/@noble/hashes"].update(dev=True),
     lambda row: row["packages"]["node_modules/@noble/hashes"].update(optional=True),
@@ -126,8 +127,8 @@ def test_original_archive_content_and_location_are_joined_without_io(monkeypatch
         patch.setattr(subprocess, "run", forbidden)
         patch.setattr(subprocess, "Popen", forbidden)
         parsed = dependencies.parse_dependency_archives(lock, originals)
-    assert len(parsed) == 9
-    assert sum(row.archive.tar_size for row in parsed) == 9 * 10240
+    assert len(parsed) == 7
+    assert sum(row.archive.tar_size for row in parsed) == 7 * 10240
     for row in parsed:
         assert row.archive.raw is originals[row.dependency.location]
         assert row.archive.files()["index.js"] == row.dependency.location.encode()
@@ -142,18 +143,18 @@ def test_original_inventory_integrity_and_nested_ownership_cannot_be_substituted
     if mutation == "renamed": originals["@noble/hashes"] = originals.pop(location)
     if mutation == "wrong_type": originals[location] = bytearray(originals[location])
     if mutation == "empty": originals[location] = b""
-    if mutation == "swapped": originals[location] = originals["node_modules/@scure/bip39/node_modules/@noble/hashes"]
+    if mutation == "swapped": originals[location] = originals["node_modules/@noble/ciphers"]
     if mutation == "changed": originals[location] += b"\0"
     with pytest.raises(dependencies.ArchiveError):
         dependencies.parse_dependency_archives(lock, originals)
 
 
-def test_correct_digests_cannot_relabel_root_hashes_as_nested_version():
+def test_correct_digests_cannot_relabel_ciphers_as_the_shared_hashes_owner():
     lock, originals = _originals()
-    nested = "node_modules/@scure/bip39/node_modules/@noble/hashes"
-    originals[nested] = originals["node_modules/@noble/hashes"]
+    location = "node_modules/@noble/hashes"
+    originals[location] = originals["node_modules/@noble/ciphers"]
     value = json.loads(lock.raw)
-    value["packages"][nested]["integrity"] = value["packages"]["node_modules/@noble/hashes"]["integrity"]
+    value["packages"][location]["integrity"] = value["packages"]["node_modules/@noble/ciphers"]["integrity"]
     with pytest.raises(dependencies.ArchiveError, match="metadata differs"):
         dependencies.parse_dependency_archives(_parse(value), originals)
 
@@ -216,9 +217,9 @@ def test_aggregate_compressed_and_inflated_capacity_exact_then_one_under(monkeyp
     lock, originals = _originals()
     compressed = sum(map(len, originals.values()))
     monkeypatch.setattr(dependencies, "MAX_ARCHIVES_BYTES", compressed)
-    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 9 * 10240)
-    assert len(dependencies.parse_dependency_archives(lock, originals)) == 9
-    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 9 * 10240 - 1)
+    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 7 * 10240)
+    assert len(dependencies.parse_dependency_archives(lock, originals)) == 7
+    monkeypatch.setattr(dependencies, "MAX_TARS_BYTES", 7 * 10240 - 1)
     with pytest.raises(dependencies.ArchiveError, match="tar byte bound"):
         dependencies.parse_dependency_archives(lock, originals)
     monkeypatch.setattr(dependencies, "MAX_ARCHIVES_BYTES", compressed - 1)
@@ -252,7 +253,7 @@ def test_metadata_admission_exact_then_over(monkeypatch):
     largest = max(len(row.archive.files()["package.json"])
                   for row in dependencies.parse_dependency_archives(lock, originals))
     monkeypatch.setattr(dependencies, "MAX_PACKAGE_JSON_BYTES", largest)
-    assert len(dependencies.parse_dependency_archives(lock, originals)) == 9
+    assert len(dependencies.parse_dependency_archives(lock, originals)) == 7
     monkeypatch.setattr(dependencies, "MAX_PACKAGE_JSON_BYTES", largest - 1)
     with pytest.raises(dependencies.ArchiveError, match="JSON byte bound"):
         dependencies.parse_dependency_archives(lock, originals)

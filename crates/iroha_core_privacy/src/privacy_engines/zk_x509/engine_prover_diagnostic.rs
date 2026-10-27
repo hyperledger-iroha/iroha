@@ -767,7 +767,7 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
             &PrivacyConsensusLimitsV1::taira_default(),
             genesis,
             &witness,
-            &mut rand::rngs::OsRng,
+            &mut rand::rngs::SysRng,
         )
     });
     drop(public_capture);
@@ -1225,7 +1225,7 @@ fn ordinary_holder_lifecycle_with_retained_public_receipt() {
             &limits,
             genesis,
             local_proving_start,
-            &mut rand::rngs::OsRng,
+            &mut rand::rngs::SysRng,
         )
     });
     let prove_elapsed = proving_start.elapsed();

@@ -13,7 +13,7 @@ fn signing_key(seed: u8) -> SigningKey {
 
 fn public_key(signing: &SigningKey) -> KagemushaDevicePublicKeyV1 {
     KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        signing.verifying_key().to_encoded_point(false).as_bytes(),
+        signing.verifying_key().to_sec1_point(false).as_bytes(),
     )
     .expect("canonical key")
 }
@@ -21,10 +21,10 @@ fn public_key(signing: &SigningKey) -> KagemushaDevicePublicKeyV1 {
 /// Low-S and high-S fixed-width forms of one signature over [`MESSAGE`].
 fn low_and_high(signing: &SigningKey) -> ([u8; 64], [u8; 64]) {
     let signature: P256Signature = signing.sign(MESSAGE);
-    let low = signature.normalize_s().unwrap_or(signature);
+    let low = signature.normalize_s();
     let high =
         P256Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes()).expect("high");
-    assert!(high.normalize_s().is_some());
+    assert!(high.normalize_s() != high);
     (
         low.to_bytes().as_slice().try_into().expect("64 bytes"),
         high.to_bytes().as_slice().try_into().expect("64 bytes"),
@@ -58,7 +58,7 @@ fn kagemusha_wallet_v1_device_keys_declare_wallet_schema_names() {
 fn kagemusha_wallet_v1_device_public_key_accepts_only_canonical_uncompressed_points() {
     let signing = signing_key(0x39);
     let key = public_key(&signing);
-    let uncompressed = signing.verifying_key().to_encoded_point(false);
+    let uncompressed = signing.verifying_key().to_sec1_point(false);
     assert_eq!(key.as_sec1_bytes().as_slice(), uncompressed.as_bytes());
     assert_eq!(key.as_ref(), uncompressed.as_bytes());
     key.validate().expect("canonical key validates");
@@ -71,7 +71,7 @@ fn kagemusha_wallet_v1_device_public_key_accepts_only_canonical_uncompressed_poi
         key
     );
 
-    let compressed = signing.verifying_key().to_encoded_point(true);
+    let compressed = signing.verifying_key().to_sec1_point(true);
     rejected_field(
         KagemushaDevicePublicKeyV1::from_sec1_bytes(compressed.as_bytes()),
         "device_public_key",

@@ -158,13 +158,13 @@ pub(super) fn run_vega_stage_v1(
     let device_signature: P256Signature = device_signing_key
         .sign_prehash(statement.device_authentication_digest.as_bytes())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let device_signature = device_signature.normalize_s().unwrap_or(device_signature);
+    let device_signature = device_signature.normalize_s();
     let (device_r, device_s) = device_signature.split_scalars();
     let device_high_s_signature =
         P256Signature::from_scalars(device_r.to_repr(), (-*device_s).to_repr())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    if issuer_high_s_signature.normalize_s().is_none()
-        || device_high_s_signature.normalize_s().is_none()
+    if issuer_high_s_signature.normalize_s() == issuer_high_s_signature
+        || device_high_s_signature.normalize_s() == device_high_s_signature
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
@@ -660,7 +660,7 @@ pub(super) fn vega_release_fixture_v1()
         PrivacyVegaIssuerRecordLifecycleV1::Active,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let device_uncompressed = device_signing_key.verifying_key().to_encoded_point(false);
+    let device_uncompressed = device_signing_key.verifying_key().to_sec1_point(false);
     let device_x = device_uncompressed
         .x()
         .ok_or(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -748,12 +748,12 @@ pub(super) fn vega_release_fixture_v1()
     let issuer_signature: P256Signature = issuer_signing_key
         .sign_prehash(&issuer_digest)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
+    let issuer_signature = issuer_signature.normalize_s();
     let (issuer_r, issuer_s) = issuer_signature.split_scalars();
     let issuer_high_s_signature =
         P256Signature::from_scalars(issuer_r.to_repr(), (-*issuer_s).to_repr())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    if issuer_high_s_signature.normalize_s().is_none() {
+    if issuer_high_s_signature.normalize_s() == issuer_high_s_signature {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     Ok(VegaReleaseFixtureV1 {
@@ -771,7 +771,7 @@ pub(super) fn vega_release_fixture_v1()
 fn vega_compressed_public_key_v1(
     signing_key: &P256SigningKey,
 ) -> Result<PrivacyP256PointV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     let bytes: [u8; 33] = encoded
         .as_bytes()
         .try_into()

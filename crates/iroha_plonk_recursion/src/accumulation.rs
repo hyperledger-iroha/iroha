@@ -1,7 +1,7 @@
 //! Committed-mask native fold with explicit private owners; staged diagnostic.
 
 use ff::{Field, PrimeField};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{
     PastaCurve, PastaField,
     fold::fold_generators_cancellable,
@@ -336,7 +336,9 @@ where
     params.require_k(K_U32).map_err(Error::Parameters)?;
     let digest = FieldGuard(input_digest_bound(params, inputs, &tape, purpose, binding));
     let d = AffineGuard::<C>(opening(params, digest.0, *tape.rho()).to_affine());
-    let mut transcript = PrivateWriter::<C, _>::new(BasePoseidonHash::with_domain(*b"pipa-as1"));
+    let mut transcript = PrivateWriter::<C, _>::new(BasePoseidonHash::with_domain(
+        iroha_plonk::contract::PIPA_AS_FOLD_DOMAIN,
+    ));
     prelude(transcript.writer(), params, inputs, purpose)?;
     transcript.writer().write_point(&d.0)?;
     let [alpha, z, zeta] = core::array::from_fn(|_| transcript.writer().squeeze_challenge());
@@ -473,7 +475,7 @@ where
     iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())?;
     params.require_k(K_U32).map_err(Error::Parameters)?;
     let mut transcript = TranscriptReader::<C, _>::new(
-        BasePoseidonHash::with_domain(*b"pipa-as1"),
+        BasePoseidonHash::with_domain(iroha_plonk::contract::PIPA_AS_FOLD_DOMAIN),
         &witness.bytes[..FOLD_BODY_BYTES],
     );
     let tape = witness.tape()?;

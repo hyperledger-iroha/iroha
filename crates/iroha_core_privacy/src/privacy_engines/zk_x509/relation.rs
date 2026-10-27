@@ -408,7 +408,7 @@ fn verify_p256_sha256_signature_v1(
     let normalized = signature.normalize_s();
     // RFC 5280 accepts both valid s halves.  RustCrypto verifies the
     // mathematically equivalent low-s representative for high-s inputs.
-    let signature = normalized.unwrap_or(signature);
+    let signature = normalized;
     key.verify(message, &signature)
         .map_err(|_| ZkX509RelationErrorV1::InvalidCertificateSignature)
 }
@@ -421,7 +421,7 @@ fn verify_p256_prehash_signature_v1(
         .map_err(|_| ZkX509RelationErrorV1::InvalidPublicKey)?;
     let signature = P256Signature::from_slice(signature_rs)
         .map_err(|_| ZkX509RelationErrorV1::InvalidWalletOwnership)?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s() != signature {
         return Err(ZkX509RelationErrorV1::InvalidWalletOwnership);
     }
     key.verify_prehash(message_digest, &signature)
@@ -906,7 +906,7 @@ pub(crate) mod tests {
         let high_s = -*s;
         let malleated = P256Signature::from_scalars(r.to_repr(), high_s.to_repr())
             .expect("valid high-s counterpart");
-        assert!(malleated.normalize_s().is_some());
+        assert!(malleated.normalize_s() != malleated);
         let mut witness = fixture.witness.clone();
         witness.wallet_ownership_signature_rs = malleated.to_bytes().into();
         assert_eq!(
@@ -919,13 +919,13 @@ pub(crate) mod tests {
         let key = p256_key(9);
         let message = b"exact certificate or CRL tbs";
         let signature: P256Signature = key.sign(message);
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         let (r, s) = signature.split_scalars();
         let high_s = P256Signature::from_scalars(r.to_repr(), (-*s).to_repr())
             .expect("valid high-s counterpart");
-        assert!(high_s.normalize_s().is_some());
+        assert!(high_s.normalize_s() != high_s);
         verify_p256_sha256_signature_v1(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
+            key.verifying_key().to_sec1_point(false).as_bytes(),
             message,
             high_s.to_der().as_bytes(),
         )
@@ -956,7 +956,7 @@ pub(crate) mod tests {
                 "malformed P-256 signature was accepted"
             );
         }
-        let compressed = key.verifying_key().to_encoded_point(true);
+        let compressed = key.verifying_key().to_sec1_point(true);
         let compressed_spki = sequence(&[
             ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
             bit_string(compressed.as_bytes(), 0),
@@ -1291,10 +1291,8 @@ pub(crate) mod tests {
         let ownership_signature: P256Signature = leaf_key
             .sign_prehash(&ownership_challenge)
             .expect("ownership prehash signing");
-        let ownership_signature = ownership_signature
-            .normalize_s()
-            .unwrap_or(ownership_signature);
-        assert!(ownership_signature.normalize_s().is_none());
+        let ownership_signature = ownership_signature.normalize_s();
+        assert!(ownership_signature.normalize_s() == ownership_signature);
         Fixture {
             statement,
             trust_anchor,
@@ -1414,7 +1412,7 @@ pub(crate) mod tests {
         ])
     }
     fn spki(key: &P256SigningKey) -> Vec<u8> {
-        let point = key.verifying_key().to_encoded_point(false);
+        let point = key.verifying_key().to_sec1_point(false);
         sequence(&[
             ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
             bit_string(point.as_bytes(), 0),

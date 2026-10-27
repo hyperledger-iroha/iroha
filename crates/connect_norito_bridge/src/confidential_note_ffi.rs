@@ -553,12 +553,12 @@ pub unsafe extern "C" fn connect_norito_confidential_merkle_path_advance_v3(
 mod jni_exports {
     use super::*;
     use jni::{
-        JNIEnv,
+        Env,
         objects::{JByteArray, JClass},
         sys::{JNI_FALSE, JNI_TRUE, jboolean, jbyteArray, jint, jlong},
     };
     fn read(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         value: JByteArray<'_>,
         maximum: usize,
     ) -> Option<Zeroizing<Vec<u8>>> {
@@ -569,7 +569,7 @@ mod jni_exports {
         env.convert_byte_array(&value).ok().map(Zeroizing::new)
     }
     fn read_allow_empty(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         value: JByteArray<'_>,
         maximum: usize,
     ) -> Option<Zeroizing<Vec<u8>>> {
@@ -579,23 +579,23 @@ mod jni_exports {
         }
         env.convert_byte_array(&value).ok().map(Zeroizing::new)
     }
-    fn output(env: &mut JNIEnv<'_>, digest: Result<[u8; DIGEST_BYTES], c_int>) -> jbyteArray {
+    fn output(env: &mut Env<'_>, digest: Result<[u8; DIGEST_BYTES], c_int>) -> jbyteArray {
         digest
             .ok()
             .and_then(|value| env.byte_array_from_slice(&value).ok())
             .map_or(ptr::null_mut(), JByteArray::into_raw)
     }
-    fn default_diversifier(env: &mut JNIEnv<'_>) -> jbyteArray {
+    fn default_diversifier(env: &mut Env<'_>) -> jbyteArray {
         output(env, Ok(derive_default_diversifier_v3()))
     }
-    fn diversifier(env: &mut JNIEnv<'_>, seed: JByteArray<'_>) -> jbyteArray {
+    fn diversifier(env: &mut Env<'_>, seed: JByteArray<'_>) -> jbyteArray {
         let Some(seed) = read(env, seed, MAX_DIVERSIFIER_SEED_BYTES) else {
             return ptr::null_mut();
         };
         output(env, derive_diversifier_v3(&seed))
     }
     fn owner_tag(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         spend_key: JByteArray<'_>,
         diversifier: JByteArray<'_>,
     ) -> jbyteArray {
@@ -607,20 +607,20 @@ mod jni_exports {
         };
         output(env, derive_owner_tag_v3(&spend_key, &diversifier))
     }
-    fn asset_tag(env: &mut JNIEnv<'_>, asset: JByteArray<'_>) -> jbyteArray {
+    fn asset_tag(env: &mut Env<'_>, asset: JByteArray<'_>) -> jbyteArray {
         let Some(asset) = read(env, asset, MAX_ASSET_DEFINITION_ID_BYTES) else {
             return ptr::null_mut();
         };
         output(env, derive_asset_tag_v3(&asset))
     }
-    fn network_tag(env: &mut JNIEnv<'_>, network_id: JByteArray<'_>) -> jbyteArray {
+    fn network_tag(env: &mut Env<'_>, network_id: JByteArray<'_>) -> jbyteArray {
         let Some(network_id) = read(env, network_id, DIGEST_BYTES) else {
             return ptr::null_mut();
         };
         output(env, derive_network_tag_v3(&network_id))
     }
     fn note_commitment(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         asset: JByteArray<'_>,
         amount: JByteArray<'_>,
         rho: JByteArray<'_>,
@@ -644,7 +644,7 @@ mod jni_exports {
         )
     }
     fn nullifier(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         network_id: JByteArray<'_>,
         asset: JByteArray<'_>,
         spend_key: JByteArray<'_>,
@@ -668,7 +668,7 @@ mod jni_exports {
         )
     }
     fn merkle_path(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         commitments: JByteArray<'_>,
         leaf_index: jlong,
     ) -> jbyteArray {
@@ -685,7 +685,7 @@ mod jni_exports {
             .map_or(ptr::null_mut(), JByteArray::into_raw)
     }
     fn verify_merkle_path(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         commitment: JByteArray<'_>,
         leaf_index: jlong,
         siblings: JByteArray<'_>,
@@ -718,7 +718,10 @@ mod jni_exports {
         ($name:ident) => {
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
-            pub unsafe extern "system" fn $name(_env: JNIEnv<'_>, _class: JClass<'_>) -> jint {
+            pub unsafe extern "system" fn $name(
+                _env: jni::EnvUnowned<'_>,
+                _class: JClass<'_>,
+            ) -> jint {
                 CONFIDENTIAL_NOTE_DERIVATION_CONTRACT_REVISION_V3 as jint
             }
         };
@@ -728,10 +731,10 @@ mod jni_exports {
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $name(
-                mut env: JNIEnv<'_>,
+                env: jni::EnvUnowned<'_>,
                 _class: JClass<'_>,
             ) -> jbyteArray {
-                default_diversifier(&mut env)
+                crate::platform_jni::with_java_env(env, |mut env| default_diversifier(&mut env))
             }
         };
     }
@@ -740,11 +743,11 @@ mod jni_exports {
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $name(
-                mut env: JNIEnv<'_>,
+                env: jni::EnvUnowned<'_>,
                 _class: JClass<'_>,
                 value: JByteArray<'_>,
             ) -> jbyteArray {
-                $derive(&mut env, value)
+                crate::platform_jni::with_java_env(env, |mut env| $derive(&mut env, value))
             }
         };
     }
@@ -753,12 +756,12 @@ mod jni_exports {
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $name(
-                mut env: JNIEnv<'_>,
+                env: jni::EnvUnowned<'_>,
                 _class: JClass<'_>,
                 first: JByteArray<'_>,
                 second: JByteArray<'_>,
             ) -> jbyteArray {
-                $derive(&mut env, first, second)
+                crate::platform_jni::with_java_env(env, |mut env| $derive(&mut env, first, second))
             }
         };
     }
@@ -767,14 +770,16 @@ mod jni_exports {
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $name(
-                mut env: JNIEnv<'_>,
+                env: jni::EnvUnowned<'_>,
                 _class: JClass<'_>,
                 first: JByteArray<'_>,
                 second: JByteArray<'_>,
                 third: JByteArray<'_>,
                 fourth: JByteArray<'_>,
             ) -> jbyteArray {
-                $derive(&mut env, first, second, third, fourth)
+                crate::platform_jni::with_java_env(env, |mut env| {
+                    $derive(&mut env, first, second, third, fourth)
+                })
             }
         };
     }
@@ -783,17 +788,19 @@ mod jni_exports {
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $derive_name(
-                mut env: JNIEnv<'_>,
+                env: jni::EnvUnowned<'_>,
                 _class: JClass<'_>,
                 commitments: JByteArray<'_>,
                 leaf_index: jlong,
             ) -> jbyteArray {
-                merkle_path(&mut env, commitments, leaf_index)
+                crate::platform_jni::with_java_env(env, |mut env| {
+                    merkle_path(&mut env, commitments, leaf_index)
+                })
             }
             #[allow(clippy::missing_safety_doc)]
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $verify_name(
-                mut env: JNIEnv<'_>,
+                env: jni::EnvUnowned<'_>,
                 _class: JClass<'_>,
                 commitment: JByteArray<'_>,
                 leaf_index: jlong,
@@ -801,7 +808,9 @@ mod jni_exports {
                 directions: JByteArray<'_>,
                 root: JByteArray<'_>,
             ) -> jboolean {
-                verify_merkle_path(&mut env, commitment, leaf_index, siblings, directions, root)
+                crate::platform_jni::with_java_env(env, |mut env| {
+                    verify_merkle_path(&mut env, commitment, leaf_index, siblings, directions, root)
+                })
             }
         };
     }

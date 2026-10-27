@@ -146,7 +146,7 @@ impl NativeCheckRoundV1 {
         // Mark spent before entropy; an error cannot be retried on this round.
         self.challenge = Some([0; 32]);
         let mut challenge = [0; 32];
-        rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut challenge)
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut challenge)
             .map_err(|_| Error::Entropy)?;
         if challenge == [0; 32] {
             return Err(Error::Entropy);

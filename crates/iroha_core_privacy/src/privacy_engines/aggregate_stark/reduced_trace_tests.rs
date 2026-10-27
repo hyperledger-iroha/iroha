@@ -274,7 +274,8 @@ fn supplemental_openings_of_original_auxiliary_columns_bind_through_real_fri() {
 }
 
 fn complete_oods_fixture_with_supplemental_v1(selected: Option<AggregateSupplementalColumnV1>) {
-    use rand::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
 
     let with_supplemental = selected.is_some();
     for trace_layout in [
@@ -390,7 +391,7 @@ fn complete_oods_fixture_with_supplemental_v1(selected: Option<AggregateSuppleme
             .iter()
             .map(PrivacyOuterMerkleTreeV1::root)
             .collect::<Vec<_>>();
-        let mut rng = StdRng::seed_from_u64(0x44_45_45_50);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x44_45_45_50);
         let masks = build_fri_mask_oracles_v1(parameters, &DOMAINS, &layout, &mut rng).unwrap();
         let fri_mask_roots = masks
             .iter()

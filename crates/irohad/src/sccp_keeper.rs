@@ -1689,9 +1689,12 @@ mod tests {
         let (state, queue) = node();
         let key = KeyPair::random();
         let advance = empty_advance(SccpNetworkV1::BscMainnet);
-        assert!(
-            submit_transaction(&state, &queue, &key, InstructionBox::from(advance)).is_err(),
-            "an advance on a node without SCCP is refused"
+        let error = submit_transaction(&state, &queue, &key, InstructionBox::from(advance))
+            .expect_err("an uninitialized node cannot admit a keeper transaction");
+        assert_eq!(
+            format!("{error:#}"),
+            "quote SCCP transaction: Rejected(ConfigInvalid(\"fee admission requires immutable root scope\"))",
+            "an uninitialized root must fail fee admission before SCCP verification"
         );
         let host = NodeHost {
             state,
@@ -1753,6 +1756,13 @@ mod tests {
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
+            block
+                .set_parameter_for_testing(
+                    crate::daemon_fixture_crypto_policy()
+                        .into_parameter()
+                        .expect("encode the explicit keeper fixture crypto policy"),
+                )
+                .expect("install the keeper fixture's committed crypto policy");
             block
                 .set_parameter_for_testing(Parameter::Custom(
                     iroha_config::parameters::defaults::nexus::fees::genesis_policy()

@@ -452,7 +452,7 @@ impl LaneStores {
         // Release that Arc and every native progress guard before acknowledging cleanup.
         drop(opening);
         if !cfg!(all(test, sumeragi_core_mutation = "HC439")) {
-            self.clean_cancelled_proposal_reads(false);
+            self.clean_cancelled_proposal_reads();
         }
         result
     }
@@ -653,10 +653,10 @@ impl LaneStores {
     /// A historical reader joining unfinished runtime recovery independently retains that
     /// same opening. Completed ready owners release their lock once readers and original
     /// read, batch or publication work are gone; certified disk frames remain available.
-    pub(super) fn release_retired(&self, lanes: &SumeragiLaneState) {
+    pub(in crate::sumeragi) fn release_retired(&self, lanes: &SumeragiLaneState) {
         // A reconciliation tick cleans cancelled slots but preserves its existing applied-
-        // incarnation retirement decision. Explicit request shutdown may release an idle cache.
-        self.clean_cancelled_proposal_reads(false);
+        // incarnation retirement decision.
+        self.clean_cancelled_proposal_reads();
         self.with_original_refunds(|| {
             // A destructor can register another owner. Select only registrations present
             // at this pass's start, so insertions cannot consume its original finite count.
@@ -708,9 +708,12 @@ impl LaneStores {
             }
         })
     }
-    fn clean_cancelled_proposal_reads(&self, release_idle: bool) {
+    fn clean_cancelled_proposal_reads(&self) {
         // Cancellation can occur with no running lane driver, including global Worker Drop.
         // Bound work by original membership; concurrent additions cannot hide an old cancellation.
+        // A Ready store stays registered for its applied incarnation even when idle: replay
+        // and nodes without a lane driver merge from it block after block, and reopening
+        // would authenticate the store again. Only retirement and explicit release drop it.
         self.with_original_refunds(|| {
             let (count, watermark) = self.original_sweep();
             let mut after = None;
@@ -741,26 +744,10 @@ impl LaneStores {
                 // Cancelled recovery owns its lock, original schedule and paid prefix.
                 // Drop those only after the registry guard; no native operation runs here.
                 drop(retired);
-                let Some(store) = ready else {
-                    continue;
-                };
-                store.release_cancelled_reads();
-                let retired = {
-                    let mut stores = self.stores.lock();
-                    let idle_original = release_idle
-                        && matches!(stores.get(&key), Some(StoreSlot::Ready(original))
-                        if Arc::ptr_eq(&original.store, &store) && Arc::strong_count(&original.store) == 2
-                            && !original.store.retains_pending_work());
-                    if idle_original {
-                        stores.remove(&key)
-                    } else {
-                        None
-                    }
-                };
-                // Two local Arcs can be the complete ownership set only after every live
-                // driver/joiner/historical call has left. Cache removal does not retire disk.
-                drop(retired);
-                drop(store);
+                if let Some(store) = ready {
+                    store.release_cancelled_reads();
+                    drop(store);
+                }
             }
         });
     }
@@ -825,7 +812,7 @@ impl LaneBlockSource for LaneStores {
             .wait_for(height, timeout))
     }
     fn release_cancelled_proposal_reads(&self) {
-        self.clean_cancelled_proposal_reads(true);
+        self.clean_cancelled_proposal_reads();
     }
 
     fn wait_for(

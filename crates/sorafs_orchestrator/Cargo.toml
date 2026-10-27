@@ -46,18 +46,18 @@ soranet_incentives = { workspace = true }
 blake3 = "1.8.2"
 hex = { workspace = true }
 base64 = { workspace = true }
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = [] }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
 tonic = { version = "0.14.6", default-features = false, features = ["server", "router", "codegen"], optional = true }
 tonic-prost = { version = "0.14.6", optional = true }
-reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
+reqwest = { workspace = true, features = ["rustls", "blocking"] }
 quinn = { version = "0.11.12", default-features = false, features = ["rustls", "runtime-tokio"], optional = true }
-rcgen = { version = "=0.14.5", optional = true }
+rcgen = { version = "=0.14.10", optional = true }
 futures = { workspace = true }
 tempfile = "3.23.0"
-sha2 = { version = "0.10.9", default-features = false, features = ["std"], optional = true }
-sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"], optional = true }
+sha3 = { version = "0.12.0", default-features = false, features = ["alloc"] }
 url = { workspace = true }
 iroha_version = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
@@ -75,7 +75,7 @@ iroha_logger = { workspace = true }
 futures = "0.3.31"
 hex = "0.4.3"
 assert_cmd = "2.1.1"
-httpmock = "0.8.2"
+httpmock = "0.9.0"
 rust_decimal = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"] }
 soranet_pq = { path = "../soranet_pq" }

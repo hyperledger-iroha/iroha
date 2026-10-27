@@ -14,10 +14,8 @@ use super::{
 use super::{
     parameters::JINDO_PARALLEL_REPETITIONS_V1, transcript::JindoSignedMonomialChallengeV1,
 };
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
 // Scalar arithmetic comes from the shared owner.
 use iroha_fhe::modular::{is_prime_u64, mod_pow_u64, mul_mod_u64};
 use std::sync::OnceLock;

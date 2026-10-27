@@ -30,7 +30,7 @@ use iroha_data_model::sorafs::pop_registry::{
     pop_revocation_nonce_commitment_v1,
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use rand::{rand_core::TryCryptoRng, rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rand_core::TryRng as _, rngs::SysRng};
 #[cfg(test)]
 use sorafs_manifest::hybrid_envelope::decrypt_payload;
 use sorafs_manifest::{
@@ -4150,7 +4150,7 @@ impl PopWalletVault {
 }
 fn fill_nonzero_random(output: &mut [u8]) -> Result<(), PopCredentialServiceError> {
     for _ in 0..8 {
-        OsRng
+        SysRng
             .try_fill_bytes(output)
             .map_err(|_| PopCredentialServiceError::Encryption)?;
         if output.iter().any(|byte| *byte != 0) {

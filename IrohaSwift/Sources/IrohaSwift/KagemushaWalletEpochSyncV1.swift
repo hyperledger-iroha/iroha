@@ -1,6 +1,6 @@
 import Foundation
 
-extension KagemushaWalletV1 {
+extension KagemushaWalletExchangeCallV1 {
   /// Synchronize bounded epoch transitions for this exact receipt, without changing value.
   /// Each successful boundary is durable; retry after cancellation or a page limit resumes it.
   /// A full batch may return partial progress; repeat while `boundaryHeight < original.blockHeight`.
@@ -11,13 +11,15 @@ extension KagemushaWalletV1 {
     maximumBoundaries: Int = 64,
     requireCurrentOwner: @escaping @Sendable () async throws -> Void
   ) async throws -> KagemushaWalletEpochProgressV1 {
-    try await kagemushaWalletSynchronizeEpochsV1(targetHeight: original.blockHeight,
-      maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner,
-      progress: { try self.epochProgress() },
-      fetch: { height in
-        try await transport.getKagemushaWalletLoadEpochOriginalV1(selection: original.selection,
-          boundaryHeight: height, canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
-      }, ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
+    return try await task.withUse {
+      try await kagemushaWalletSynchronizeEpochsV1(targetHeight: original.blockHeight,
+        maximumBoundaries: maximumBoundaries, requireCurrentOwner: requireCurrentOwner,
+        progress: { try self.wallet.epochProgress() },
+        fetch: { height in
+          try await transport.getKagemushaWalletLoadEpochOriginalV1(selection: original.selection,
+            boundaryHeight: height, canonicalAuth: canonicalAuth, requireCurrentOwner: requireCurrentOwner)
+        }, ingest: { epoch, bytes in try self.ingestEpochBoundary(expectedEpoch: epoch, original: bytes) })
+    }
   }
 }
 

@@ -28,7 +28,7 @@ use core::fmt;
 
 use blake2::{
     Blake2bVarCore,
-    digest::core_api::{Buffer, UpdateCore, VariableOutputCore},
+    digest::block_api::{Buffer, UpdateCore, VariableOutputCore},
 };
 use ff::{FromUniformBytes, PrimeField};
 use iroha_pasta::{Fp, Fq, PastaField};

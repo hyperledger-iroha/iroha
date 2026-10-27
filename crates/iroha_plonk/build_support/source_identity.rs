@@ -1,4 +1,4 @@
-//! Conservative workspace input identity shared by Cargo and focused freshness tests.
+//! Standalone workspace source provenance used by packaging and capture tooling.
 //!
 //! This is an identity of canonical native inputs and explicit special
 //! membership, not external dependency/toolchain attestation. Native mathematical
@@ -8,7 +8,9 @@
 //! Unrelated client owners and prose are omitted; native package trees and declared
 //! external inputs take precedence. Compiler/generated-input containment remains
 //! a separate build check, not a claim made by the conservative reference scan.
-//! Generated registry DATA is excluded from the digest to avoid a self-hash.
+//! Generated registry DATA is excluded from the digest to permit generation;
+//! packaging separately pins its exact bytes. This digest is never a proof ABI
+//! or a compiled admission condition.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -92,13 +94,13 @@ fn selected(name: &str, packages: &BTreeSet<String>) -> bool {
         && (!name.contains('/') || name.starts_with("docs/") || name.starts_with("specs/")))
 }
 
-/// A complete stable source observation, suitable for a generated compile-time constant.
+/// A complete stable source observation for an external provenance record.
 #[derive(Debug)]
 pub struct Snapshot {
     /// Domain-separated identity of sorted paths, kinds and complete contents.
     pub digest: [u8; 32],
     /// Individually observed inputs, including excluded generated DATA.
-    /// Membership is always rescanned by the build script, not directory watches.
+    /// Membership is rescanned explicitly by the provenance evaluator, never by a Cargo build script.
     pub watched_paths: BTreeSet<PathBuf>,
 }
 

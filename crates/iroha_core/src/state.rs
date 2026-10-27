@@ -410,6 +410,7 @@ use canonical_history::committed_block_from_kura;
 mod finality_proof_interval;
 pub use finality_proof_interval::FinalityProofIntervalReadError;
 
+pub(crate) use canonical_history::AuthenticatedExecutionIdentity;
 pub use canonical_history::{
     CanonicalHistoryCursor, CanonicalHistoryReadBudget, CanonicalHistorySource,
     CommittedOutcomeReadError, FinalizedEventReadError,
@@ -1499,8 +1500,8 @@ mod world_commit;
 mod world_journals;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
-    NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError,
-    WorldStateVerificationError,
+    NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
+    WorldStateSnapshotError, WorldStateVerificationError,
 };
 
 /// Exercise actual World capture while retaining journals through a test observation.
@@ -12138,6 +12139,8 @@ struct TieredSnapshotWorkerInner {
     pending: parking_lot::Mutex<TieredSnapshotPending>,
     cvar: parking_lot::Condvar,
     shutdown: AtomicBool,
+    // Only startup replay owns this scope, before any live execution is admitted.
+    startup_replay_active: AtomicBool,
     #[cfg(feature = "telemetry")]
     telemetry: Option<StateTelemetry>,
 }
@@ -12161,6 +12164,7 @@ impl TieredSnapshotWorker {
                 pending: parking_lot::Mutex::new(TieredSnapshotPending::default()),
                 cvar: parking_lot::Condvar::new(),
                 shutdown: AtomicBool::new(false),
+                startup_replay_active: AtomicBool::new(false),
                 #[cfg(feature = "telemetry")]
                 telemetry,
             }),
@@ -12178,6 +12182,7 @@ impl TieredSnapshotWorker {
             pending: parking_lot::Mutex::new(TieredSnapshotPending::default()),
             cvar: parking_lot::Condvar::new(),
             shutdown: AtomicBool::new(false),
+            startup_replay_active: AtomicBool::new(false),
             #[cfg(feature = "telemetry")]
             telemetry,
         });
@@ -14786,8 +14791,8 @@ pub struct StateView<'state> {
     pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
-    /// Creation timestamp to catch long-lived view guards.
-    created_at: Instant,
+    /// Lifetime diagnostic owner; keep last so snapshot fields release first.
+    created_at: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
@@ -15004,9 +15009,24 @@ impl<'state> StateQueryView<'state> {
         &self.world
     }
 }
+/// Runs lifetime diagnostics only after all snapshot fields have been released.
+struct StateViewLifetimeDiagnostic(Instant);
+
+impl From<Instant> for StateViewLifetimeDiagnostic {
+    fn from(created_at: Instant) -> Self {
+        Self(created_at)
+    }
+}
+
+// Keep the outer destructor so public snapshot fields cannot be moved out and
+// outlive the private tail diagnostic owner. Rust drops fields in declaration order.
 impl Drop for StateView<'_> {
+    fn drop(&mut self) {}
+}
+
+impl Drop for StateViewLifetimeDiagnostic {
     fn drop(&mut self) {
-        let held = self.created_at.elapsed();
+        let held = self.0.elapsed();
         if held > Duration::from_secs(1) {
             iroha_logger::warn!(
                 held_ms = held.as_millis(),
@@ -15016,6 +15036,9 @@ impl Drop for StateView<'_> {
         }
     }
 }
+#[cfg(test)]
+#[path = "state/state_view_diagnostic_tests.rs"]
+mod state_view_diagnostic_tests;
 fn derive_peer_consensus_key_id(
     public_key: &PublicKey,
     role: ConsensusKeyRole,
@@ -30957,8 +30980,57 @@ impl State {
         Ok(carrier)
     }
 
+    /// Identify the current inline canonical source for a derived block summary.
+    /// This performs only bounded metadata reads and enforces Kura's original
+    /// journal binding, poison and recovery checks. It grants no body authority:
+    /// a consumer must have read the exact same token through the canonical reader.
+    /// A new append invalidates old tokens; evicted bodies are never cacheable.
+    ///
+    /// # Errors
+    /// Preserves source corruption and original local resource refusal. Absent
+    /// journal bindings return `None` so the canonical reader owns availability.
+    pub fn canonical_history_summary_source_token(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<
+        Option<[u8; 32]>,
+        crate::execution_attempt::ExecutionAttemptError<
+            iroha_data_model::query::error::QueryExecutionFail,
+        >,
+    > {
+        use iroha_data_model::query::error::QueryExecutionFail;
+        let Some(expected) = self.block_hashes.view().get(height.get() - 1).copied() else {
+            return Ok(None);
+        };
+        if self.kura.is_canonical_body_missing(height) {
+            return Ok(None);
+        }
+        let token = match self
+            .kura
+            .canonical_summary_source_token(height.get() as u64, expected)
+        {
+            Ok(token) => token,
+            Err(crate::kura::Error::NativeJournalUnavailable(_, _)) => return Ok(None),
+            Err(error) => {
+                return Err(crate::execution_attempt::kura_read_attempt_error(
+                    error,
+                    |error| QueryExecutionFail::Conversion(error.to_string()),
+                ));
+            }
+        };
+        if self.block_hashes.view().get(height.get() - 1).copied() != Some(expected) {
+            return Err(QueryExecutionFail::Conversion(
+                "canonical summary source changed during read".into(),
+            )
+            .into());
+        }
+        Ok(token)
+    }
+
     /// Read an authenticated canonical summary source in the caller's original cold owner.
-    /// Unlike execution projections this checks only the committed header hash and height.
+    /// Capture only the committed hash journal: a block summary requires no World or
+    /// runtime projection, whose manifest decoding must not consume the page's source
+    /// allowance. Recheck canonical membership after the original bounded body read.
     ///
     /// # Errors
     /// Preserves original capacity refusal, absent body, corruption and header substitution.
@@ -30973,10 +31045,32 @@ impl State {
         >,
     > {
         read_budget.with(|| {
-            self.view()
-                .canonical_history()
-                .with_read_budget(read_budget)
-                .block_with_admission(height, |_, _| Ok(()))
+            let hashes = self.block_hashes.view();
+            let expected = hashes.get(height.get() - 1).copied();
+            let block = CanonicalHistorySource::new(
+                &self.kura,
+                &hashes,
+                None,
+                read_budget.frames().clone(),
+            )
+            .block_with_admission(height, |_, _| Ok(()))
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(deferred) => {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(
+                        deferred.at_history_target(),
+                    )
+                }
+                rejected => rejected,
+            })?;
+            if self.block_hashes.view().get(height.get() - 1).copied() != expected {
+                return Err(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                        "canonical history source changed during read".into(),
+                    )
+                    .into(),
+                );
+            }
+            Ok(block)
         })
     }
 
@@ -31778,7 +31872,7 @@ impl State {
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
-                created_at: Instant::now(),
+                created_at: Instant::now().into(),
             })
         }
     }
@@ -41099,7 +41193,7 @@ mod tiered_snapshot_diff_tests {
         source.commit(Vec::new());
         assert!(matches!(
             decode_state_snapshot_value(norito::json::to_value(source.state().as_ref()).unwrap()),
-            Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
+            Err(deserialize::StateRestoreError::SuccessorRequired { height: 2 })
         ));
         let mut replay = CertifiedTestChain::start(config()).expect("same signed genesis");
         replay

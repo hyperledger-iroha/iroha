@@ -30,7 +30,7 @@ state_test! { sync service_snapshot_roundtrip_preserves_state_hash_and_actual_re
     let snapshot = norito::json::to_value(state.as_ref()).unwrap();
     assert!(matches!(
         deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&state.kura)),
-        Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+        Err(super::deserialize::StateRestoreError::SuccessorRequired { height: 2 })
     ));
     let mut original_service = String::new();
     super::snapshot_service_state::serialize(&state.world, &mut original_service);

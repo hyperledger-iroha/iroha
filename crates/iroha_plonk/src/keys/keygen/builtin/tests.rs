@@ -59,7 +59,7 @@ impl<F: PastaField> Circuit<F> for Source<F> {
 }
 
 const PROFILE: &[u8] = b"complete synthetic strict native graph";
-const SOURCE_ID: [u8; 32] = [11; 32];
+const CONTRACT: [u8; 32] = [11; 32];
 const ROLE: &[u32] = &[3, 4, 2];
 
 fn blob(bytes: &[u8]) -> BuiltinBlob {
@@ -161,14 +161,14 @@ fn entries(members: Vec<BuiltinMemberEntry>) -> &'static [BuiltinProfileEntry] {
     Box::leak(
         vec![BuiltinProfileEntry {
             profile: blob(PROFILE),
-            source_identity: SOURCE_ID,
+            contract: CONTRACT,
             members: Box::leak(members.into_boxed_slice()),
         }]
         .into_boxed_slice(),
     )
 }
 fn profile(entries: &'static [BuiltinProfileEntry]) -> BuiltinSourceProfileV1 {
-    select_profile(entries, PROFILE, &SOURCE_ID, true, true, None).unwrap()
+    select_profile(entries, PROFILE, &CONTRACT, true, None).unwrap()
 }
 
 fn parity<C: PastaCurve>() {
@@ -249,11 +249,10 @@ fn compiled_member_preserves_original_and_verified_proof_bytes_on_both_curves() 
 fn profile_and_role_selection_are_closed_fresh_and_unambiguous() {
     let f = Fixture::<Ep>::new();
     let registry = entries(vec![f.entry()]);
-    for (actual, identity, complete, supported, expected) in [
+    for (actual, contract, supported, expected) in [
         (
             b"foreign graph".as_slice(),
-            SOURCE_ID,
-            true,
+            CONTRACT,
             true,
             BuiltinSourceErrorV1::UnsupportedProfile,
         ),
@@ -261,31 +260,22 @@ fn profile_and_role_selection_are_closed_fresh_and_unambiguous() {
             PROFILE,
             [12; 32],
             true,
-            true,
-            BuiltinSourceErrorV1::StaleSource,
+            BuiltinSourceErrorV1::ContractMismatch,
         ),
         (
             PROFILE,
-            SOURCE_ID,
-            false,
-            true,
-            BuiltinSourceErrorV1::IncompleteSourceClosure,
-        ),
-        (
-            PROFILE,
-            SOURCE_ID,
-            true,
+            CONTRACT,
             false,
             BuiltinSourceErrorV1::UnsupportedTarget,
         ),
     ] {
         assert_eq!(
-            select_profile(registry, actual, &identity, complete, supported, None).err(),
+            select_profile(registry, actual, &contract, supported, None).err(),
             Some(expected)
         );
     }
     assert_eq!(
-        select_profile(&[], PROFILE, &SOURCE_ID, true, true, None).err(),
+        select_profile(&[], PROFILE, &CONTRACT, true, None).err(),
         Some(BuiltinSourceErrorV1::UnsupportedProfile)
     );
     let selected = profile(registry);
@@ -311,19 +301,19 @@ fn profile_and_role_selection_are_closed_fresh_and_unambiguous() {
         vec![
             BuiltinProfileEntry {
                 profile: blob(PROFILE),
-                source_identity: SOURCE_ID,
+                contract: CONTRACT,
                 members: registry[0].members,
             },
             BuiltinProfileEntry {
                 profile: blob(PROFILE),
-                source_identity: SOURCE_ID,
+                contract: CONTRACT,
                 members: registry[0].members,
             },
         ]
         .into_boxed_slice(),
     );
     assert_eq!(
-        select_profile(duplicate_profiles, PROFILE, &SOURCE_ID, true, true, None).err(),
+        select_profile(duplicate_profiles, PROFILE, &CONTRACT, true, None).err(),
         Some(BuiltinSourceErrorV1::UnsupportedProfile)
     );
 }
@@ -449,8 +439,7 @@ fn mutations<C: PastaCurve>() {
         select_profile(
             entries(vec![f.entry()]),
             PROFILE,
-            &SOURCE_ID,
-            true,
+            &CONTRACT,
             true,
             Some(&cancelled)
         )
@@ -555,3 +544,10 @@ fn declared_registry_hashes_do_not_bypass_canonical_original_parsing() {
 
 #[path = "tests/metadata.rs"]
 mod metadata;
+
+#[test]
+fn generated_registry_pins_current_mathematical_contract() {
+    for entry in generated::PROFILES {
+        assert_eq!(entry.contract, builtin_contract_v1());
+    }
+}

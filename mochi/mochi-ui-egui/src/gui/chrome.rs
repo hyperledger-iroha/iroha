@@ -56,7 +56,14 @@ impl Desktop {
                 self.theme_toggle(ui);
                 self.workspace_menu(ui);
                 if self.busy && self.foreground {
-                    ui.label(RichText::new("Working…").color(palette.muted));
+                    // Quick work shows no counter; longer work shows that it is still moving.
+                    let running = self.busy_since.elapsed();
+                    let label = if running.as_secs() < 2 {
+                        "Working…".to_owned()
+                    } else {
+                        format!("Working… {}", widgets::elapsed(running))
+                    };
+                    ui.label(RichText::new(label).color(palette.muted));
                     ui.add(egui::Spinner::new().color(palette.sakura));
                 }
             });
@@ -294,7 +301,7 @@ impl Desktop {
                 });
                 widgets::stat(ui, "Validators", |ui| {
                     ui.horizontal(|ui| {
-                        widgets::validator_dots(ui, selected.running, prepared.peers.len());
+                        widgets::validator_dots(ui, &selected.validators, prepared.peers.len());
                         ui.label(
                             RichText::new(format!("{}/{}", selected.running, prepared.peers.len()))
                                 .strong()
@@ -382,6 +389,10 @@ impl Desktop {
             };
             if widgets::nav_item(ui, self.view == view, view.icon(), view.label(), badge).clicked()
             {
+                // Choosing Blocks again leaves an opened block for the list.
+                if view == View::Blocks && self.view == View::Blocks {
+                    self.block_view = None;
+                }
                 self.view = view;
             }
         }

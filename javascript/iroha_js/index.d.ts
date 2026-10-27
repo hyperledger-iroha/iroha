@@ -155,7 +155,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 31;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 33;
 
 export interface SignedTransactionResult {
   /** Exact canonical VersionedSignedTransaction V1 bytes. */
@@ -423,10 +423,14 @@ export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
+  /** Also return `approvals`, when each approval of each proposal landed. */
+  includeApprovals?: boolean;
 }
 
 export interface MultisigProposalsResolveRequest extends MultisigAccountSelector {
   proposalId: string;
+  /** Also return `approvals`, when each approval landed. */
+  includeApprovals?: boolean;
 }
 
 export type MultisigProposeInstructionInput =
@@ -592,12 +596,25 @@ export interface MultisigSpecResponse {
   spec: JsonValue;
 }
 
+/**
+ * When one signer's approval of a multisig proposal landed, as the node read it from committed
+ * blocks: the proposer's with its proposal, every other signer's with its first approval.
+ */
+export interface MultisigProposalApproval {
+  approver: string;
+  /** Block creation time in Unix milliseconds; null when the node did not see the approval. */
+  approved_at_ms: number | null;
+  block_height: number | null;
+}
+
 export interface MultisigProposalEntry {
   proposal_id: string;
   instructions_hash: string;
   operation_type: string;
   intent: JsonValue | null;
   proposal: JsonValue;
+  /** One per approver in `proposal.approvals`, in landing order; only when `includeApprovals` was set. */
+  approvals?: ReadonlyArray<MultisigProposalApproval>;
   status: MultisigProposalStatus;
   terminal_at_ms: number | null;
 }
@@ -3302,6 +3319,10 @@ type ToriiRuntimeNamespaceExport =
   | "ToriiStreamGapError"
   | "ListQueryError"
   | "FilterSyntaxError"
+  | "ACCOUNT_ALIAS_FIELDS"
+  | "ACCOUNT_ALIAS_ROW_FIELDS"
+  | "ASSET_MOVEMENT_KINDS"
+  | "ASSET_MOVEMENT_ROW_FIELDS"
   | "AGGREGATE_FUNCTIONS"
   | "CURSOR_MAX_BYTES"
   | "FIELD_PATH_MAX_BYTES"
@@ -3320,6 +3341,12 @@ type ToriiRuntimeNamespaceExport =
   | "ListQuery"
   | "SortKey"
   | "ToriiCollection"
+  | "accountAliasScope"
+  | "accountsInAliasScope"
+  | "decodeAccountAliasRows"
+  | "decodeAccountAliases"
+  | "decodeAssetMovementRow"
+  | "decodeAssetMovementRows"
   | "decodePage"
   | "field"
   | "isDecimalText"
@@ -9447,6 +9474,148 @@ export interface Page<T> {
 /** Decode a `{"items", "next_cursor", "total"}` page envelope. */
 export declare function decodePage<T = ToriiJsonValue>(value: unknown, context?: string): Page<T>;
 
+/**
+ * Account rows can join the alias bindings the caller may read. Torii computes the two fields
+ * only for queries that mention them; every other accounts read keeps today's rows.
+ */
+export declare const ACCOUNT_ALIAS_FIELDS: readonly ["alias_scopes", "aliases"];
+
+/** Fields `accountsInAliasScope` selects; `decodeAccountAliasRows` requires exactly these. */
+export declare const ACCOUNT_ALIAS_ROW_FIELDS: readonly ["id", "uaid", "aliases"];
+
+/** One active alias binding of an account, as `POST /v1/aliases/by-account` lists it. */
+export interface ToriiAccountAliasBinding {
+  readonly alias: string;
+  readonly dataspace: string;
+  readonly domain: string | null;
+  readonly is_primary: boolean;
+}
+
+/** One account row read by `accountsInAliasScope`. */
+export interface ToriiAccountAliasRow {
+  readonly id: string;
+  readonly uaid: string | null;
+  readonly aliases: ReadonlyArray<ToriiAccountAliasBinding>;
+}
+
+export interface AccountsInAliasScopeOptions {
+  limit?: number;
+  cursor?: string;
+  /** Read this one account (a point lookup) instead of the whole scope. */
+  accountId?: string;
+}
+
+/** The text after `@` of an alias literal: `domain.dataspace`, or `dataspace`. */
+export declare function accountAliasScope(alias: string): string;
+
+/**
+ * Query for the accounts holding an active alias in `scope` (`domain.dataspace`, or
+ * `dataspace`), selecting `id`, `uaid` and `aliases`. Page it with `torii.accounts.pages(query)`
+ * or a signed `GET` of `query.toQueryPairs()`, then decode `page.items` with
+ * `decodeAccountAliasRows`.
+ */
+export declare function accountsInAliasScope(
+  scope: string,
+  options?: AccountsInAliasScopeOptions,
+): ListQuery;
+
+/** Decode an `aliases` field exactly; unknown members and wrong types are `invalid_response`. */
+export declare function decodeAccountAliases(
+  value: unknown,
+  context?: string,
+): ToriiAccountAliasBinding[];
+
+/** Decode the items of a page read with `accountsInAliasScope`. */
+export declare function decodeAccountAliasRows(
+  items: unknown,
+  context?: string,
+): ToriiAccountAliasRow[];
+
+/** What one asset movement moved (`/v1/assets/{definition_id}/movements`). */
+export type ToriiAssetMovementKind =
+  | "TRANSFER"
+  | "MINT"
+  | "BURN"
+  | "OFFLINE_LOAD"
+  | "OFFLINE_UNLOAD"
+  | "OFFLINE_FEE"
+  | "OFFLINE_CHARGE";
+
+/** Every movement kind, in the order Torii documents them. */
+export declare const ASSET_MOVEMENT_KINDS: readonly [
+  "TRANSFER",
+  "MINT",
+  "BURN",
+  "OFFLINE_LOAD",
+  "OFFLINE_UNLOAD",
+  "OFFLINE_FEE",
+  "OFFLINE_CHARGE",
+];
+
+/** Fields of a complete movement row; `decodeAssetMovementRow` requires every one. */
+export declare const ASSET_MOVEMENT_ROW_FIELDS: readonly [
+  "id",
+  "kind",
+  "timestamp_ms",
+  "from_account_id",
+  "to_account_id",
+  "asset_definition_id",
+  "amount",
+  "tx_hash",
+  "authority",
+  "block_height",
+  "block_index",
+  "movement_index",
+  "result_ok",
+];
+
+/**
+ * One committed movement of an asset definition, from the node's movement index. `TRANSFER`,
+ * `MINT` and `BURN` are instruction legs, applied batch receipts and executed multisig transfers;
+ * `OFFLINE_LOAD`, `OFFLINE_UNLOAD` and `OFFLINE_FEE` are KAGEMUSHA Loads (payer to reserve),
+ * paid Unloads (reserve to the unloading account) and paid fee claims; `OFFLINE_CHARGE` is the
+ * online charge of a Load or an Unload, paid to the charge beneficiary. A failed transaction's
+ * attempted movement has `result_ok: false`.
+ */
+export interface ToriiAssetMovementRow {
+  /** `<tx_hash>:<movement_index>`. */
+  readonly id: string;
+  readonly kind: ToriiAssetMovementKind;
+  /** Creation time of the transaction, Unix milliseconds. */
+  readonly timestamp_ms: number;
+  /** Null only for `MINT`. */
+  readonly from_account_id: string | null;
+  /** Null only for `BURN`. */
+  readonly to_account_id: string | null;
+  readonly asset_definition_id: string;
+  /** Exact canonical decimal text. */
+  readonly amount: string;
+  readonly tx_hash: string;
+  /** Signer of the transaction. */
+  readonly authority: string;
+  readonly block_height: number;
+  readonly block_index: number;
+  /** Position among the transaction's movements. */
+  readonly movement_index: number;
+  readonly result_ok: boolean;
+}
+
+/**
+ * Decode one complete movement row exactly: unknown kinds, non-canonical amounts, a null
+ * account outside `MINT`/`BURN`, non-integer coordinates and a failed KAGEMUSHA row are
+ * `invalid_response`; fields Torii adds later are ignored.
+ */
+export declare function decodeAssetMovementRow(
+  row: unknown,
+  context?: string,
+): ToriiAssetMovementRow;
+
+/** Decode the items of an asset movement page read without `select`. */
+export declare function decodeAssetMovementRows(
+  items: unknown,
+  context?: string,
+): ToriiAssetMovementRow[];
+
 export interface CollectionRequestOptions {
   /** Abort the request (and, for `pages()`/`iterate()`, further paging). */
   signal?: AbortSignal;
@@ -9998,6 +10167,8 @@ export declare class ToriiBrowserClient {
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiBrowserCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiBrowserCollectionRequestOptions>;
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`). */
+  assetMovements(assetDefinitionId: string): ToriiHistoryCollection<ToriiAssetMovementRow, ToriiBrowserCollectionRequestOptions>;
   /** Committed transactions, newest first (`POST /v1/transactions/query`). */
   readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiBrowserCollectionRequestOptions>;
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
@@ -10310,6 +10481,8 @@ export declare class ToriiClient {
   accountAssets(accountId: string): ToriiCollection<ToriiAccountAssetRow, ToriiCollectionRequestOptions>;
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId: string): ToriiCollection<ToriiAssetHolderRow, ToriiCollectionRequestOptions>;
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`). */
+  assetMovements(assetDefinitionId: string): ToriiHistoryCollection<ToriiAssetMovementRow, ToriiCollectionRequestOptions>;
   /** Committed transactions, newest first (`POST /v1/transactions/query`). */
   readonly transactions: ToriiHistoryCollection<ToriiTransactionRow, ToriiCollectionRequestOptions>;
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`). */
@@ -11990,7 +12163,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 31;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 33;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(

@@ -6,6 +6,7 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 
 /** Authenticated historical Global successor; persistence remains guarded by the caller's owner/runtime lease. */
 class VerifiedFiCheckpointAdvance private constructor(
@@ -60,7 +61,7 @@ class NativeFinalityCheckpointAdvanceBridge private constructor() {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val nativeAvailable: Boolean = try {
             System.loadLibrary(LIBRARY_NAME)
-            nativeBridgeAbiVersion() == 31 && nativeVerifierContractVersion() == 1
+            nativeBridgeAbiVersion() == NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION && nativeVerifierContractVersion() == 1
         } catch (_: UnsatisfiedLinkError) { false } catch (_: SecurityException) { false }
         @JvmStatic fun isNativeAvailable(): Boolean = nativeAvailable
 

@@ -240,6 +240,88 @@ struct CapturedSnapshot {
     _charges: ChargedBuffer<AllocationCharge>,
 }
 
+/// One currently acquired names cut retained without a World writer during proof work.
+/// The immutable view and funded complete pre-tail snapshot belong to the same
+/// original native publication. This owner cannot be constructed from decoded data.
+pub struct NativeResourceNamesSnapshotV1<'a> {
+    snapshot: CapturedSnapshot,
+    view: StateView<'a>,
+    state: &'a State,
+    authority: &'a AccountId,
+    budget: &'a AllocationBudget,
+}
+
+impl<'a> NativeResourceNamesSnapshotV1<'a> {
+    /// Original coherent view to use for the matching certified tip and attestation.
+    #[must_use]
+    pub fn view(&self) -> &StateView<'a> {
+        &self.view
+    }
+
+    /// Publish only complete originals from this retained certified cut.
+    /// Later commits cannot mix newer rows into this response. Permission is
+    /// checked again against current State before and after encoding; the HTTP
+    /// owner must also retain its challenge freshness and final egress checks.
+    ///
+    /// # Errors
+    /// A foreign tip/root, incomplete or changed original, revoked permission,
+    /// failed current permission read, or the original allocation/encoding refusal.
+    pub fn with_native_resource_names_snapshot_v1<T>(
+        &self,
+        tip: &CommittedBlock,
+        consume: impl FnOnce(
+            &WorldStateSnapshotV1,
+            &[(&AssetDefinitionId, &AssetDefinitionAliasBindingRecord)],
+            &[&iroha_model_base::state_path::StatePath],
+            &[(&iroha_model_base::state_path::StatePath, &Vec<u8>)],
+        ) -> Result<T, String>,
+    ) -> Result<T, WorldStateSnapshotError> {
+        require_cut(&self.view, tip)?;
+        if tip.commitment().schedule.current.network_id != *self.view.network_id()
+            || self
+                .snapshot
+                .snapshot
+                .root()
+                .map_err(|error| error.to_string())?
+                != tip.commitment().execution.world_state_root
+        {
+            return Err("World names retained snapshot differs from certified tip".into());
+        }
+        require_names_read_authority(&self.state.try_view_once()?.world, self.authority)?;
+        let result = with_names_originals(
+            &self.snapshot.snapshot,
+            &self.view.world,
+            self.budget,
+            consume,
+        )?;
+        require_names_read_authority(&self.state.try_view_once()?.world, self.authority)?;
+        Ok(result)
+    }
+}
+
+fn require_same_names_capture(
+    original: &StateView<'_>,
+    current: &StateView<'_>,
+) -> Result<(), WorldStateSnapshotError> {
+    let requested_height = original.native_world_snapshot_height_v1()?;
+    let observed_height = current.native_world_snapshot_height_v1()?;
+    if requested_height != observed_height {
+        return Err(WorldStateSnapshotError::CutChanged {
+            requested_height,
+            observed_height,
+        });
+    }
+    if original.native_execution_tip() != current.native_execution_tip()
+        || !is_stable_state_view_generation(
+            original.publication_generation,
+            current.publication_generation,
+        )
+    {
+        return Err("World names snapshot publication generation changed during capture".into());
+    }
+    Ok(())
+}
+
 fn capture(
     world: &WorldBlock<'_>,
     expected: &WorldStateAccumulator,
@@ -321,6 +403,81 @@ fn reconstruct(
         return Err("World cut complete preimages do not reconstruct certified R".into());
     }
     Ok(reconstructed)
+}
+
+fn with_names_originals<T>(
+    snapshot: &WorldStateSnapshotV1,
+    world: &impl WorldReadOnly,
+    budget: &AllocationBudget,
+    consume: impl FnOnce(
+        &WorldStateSnapshotV1,
+        &[(&AssetDefinitionId, &AssetDefinitionAliasBindingRecord)],
+        &[&iroha_model_base::state_path::StatePath],
+        &[(&iroha_model_base::state_path::StatePath, &Vec<u8>)],
+    ) -> Result<T, String>,
+) -> Result<T, WorldStateSnapshotError> {
+    let aliases_len = world.asset_definition_alias_bindings().iter().count();
+    let keys_len = world.smart_contract_state().iter().count();
+    let _prefix_charge = budget
+        .try_reserve_bytes(64)
+        .map_err(|error| error.to_string())?;
+    let mut prefix = String::new();
+    prefix
+        .try_reserve_exact(64)
+        .map_err(|error| error.to_string())?;
+    use std::fmt::Write as _;
+    write!(
+        &mut prefix,
+        "sns/records/{}/",
+        iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID
+    )
+    .map_err(|error| error.to_string())?;
+    let sns_len = world
+        .smart_contract_state()
+        .iter()
+        .filter(|(key, _)| key.as_ref().starts_with(&prefix))
+        .count();
+    require_complete_table_count(
+        snapshot,
+        "world.asset_definition_alias_bindings",
+        aliases_len,
+    )?;
+    require_complete_table_count(snapshot, "world.smart_contract_state", keys_len)?;
+    let mut aliases = ChargedBuffer::new(aliases_len, budget).map_err(|e| e.to_string())?;
+    let mut keys = ChargedBuffer::new(keys_len, budget).map_err(|e| e.to_string())?;
+    let mut sns = ChargedBuffer::new(sns_len, budget).map_err(|e| e.to_string())?;
+    for (key, value) in world.asset_definition_alias_bindings().iter() {
+        require_target(
+            snapshot,
+            "world.asset_definition_alias_bindings",
+            WorldStateElementKindV1::Table,
+            Some(hash_value(key)?),
+            hash_value(value)?,
+        )?;
+        aliases.push_reserved((key, value));
+    }
+    for (key, value) in world.smart_contract_state().iter() {
+        // Even withheld values must match this cut: no post-tail key or
+        // value can be relabeled as an original certified projection.
+        require_target(
+            snapshot,
+            "world.smart_contract_state",
+            WorldStateElementKindV1::Table,
+            Some(hash_value(key)?),
+            hash_value(value)?,
+        )?;
+        keys.push_reserved(key);
+        if key.as_ref().starts_with(&prefix) {
+            sns.push_reserved((key, value));
+        }
+    }
+    consume(
+        snapshot,
+        aliases.as_slice(),
+        keys.as_slice(),
+        sns.as_slice(),
+    )
+    .map_err(WorldStateSnapshotError::from)
 }
 
 fn require_target(
@@ -458,6 +615,57 @@ fn require_cut(view: &StateView<'_>, tip: &CommittedBlock) -> Result<(), WorldSt
 }
 
 impl State {
+    /// Capture one current names cut before doing certificate or attestation work.
+    /// The complete World and native pre-tail journal are checked while the short
+    /// physical overlay is held. Both original height/generation fences run before
+    /// it returns; only immutable readers and funded snapshot bytes remain alive.
+    ///
+    /// # Errors
+    /// Missing native execution/cut, concurrent publication, revoked read authority,
+    /// original physical acquisition refusal, or the finite snapshot allocation bound.
+    pub fn capture_native_resource_names_snapshot_v1<'a>(
+        &'a self,
+        authority: &'a AccountId,
+        budget: &'a AllocationBudget,
+    ) -> Result<NativeResourceNamesSnapshotV1<'a>, WorldStateSnapshotError> {
+        let view = self.try_view_once()?;
+        if view.native_world_snapshot_height_v1()? < 2 {
+            return Err("World names snapshot requires a certified successor".into());
+        }
+        let cut = self.native_world_cut.lock().as_ref().cloned()
+            .ok_or("World snapshot has no original certified pre-tail capture; restored state requires native replay")?;
+        if cut.generation != view.publication_generation
+            || Some(cut.tip) != view.native_execution_tip()
+        {
+            return Err(capture_mismatch_error(|| {
+                require_same_names_capture(&view, &self.try_view_once()?)
+            }));
+        }
+        require_names_read_authority(&view.world, authority)?;
+        let snapshot = {
+            let execution_budget = self.ivm_execution_budget();
+            let world = self
+                .world
+                .try_block(&execution_budget)
+                .map_err(WorldStateSnapshotError::Acquisition)?;
+            let expected = world.state_accumulator.get();
+            if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
+                return Err("World snapshot acquired another complete applied World".into());
+            }
+            require_names_read_authority(&world, authority)?;
+            let captured = capture(&world, expected, budget)?;
+            reconstruct(&captured, &cut, budget)?
+        };
+        require_same_names_capture(&view, &self.try_view_once()?)?;
+        Ok(NativeResourceNamesSnapshotV1 {
+            snapshot,
+            view,
+            state: self,
+            authority,
+            budget,
+        })
+    }
+
     /// Exact schema commitment of this build's canonical native World registry.
     /// Consumers must compare it with the authenticated snapshot before assigning
     /// typed meaning to a field or proving that a typed key is absent.
@@ -793,71 +1001,7 @@ impl State {
             tip,
             Some(authority),
             budget,
-            |snapshot, world| {
-                let aliases_len = world.asset_definition_alias_bindings.iter().count();
-                let keys_len = world.smart_contract_state.iter().count();
-                let _prefix_charge = budget
-                    .try_reserve_bytes(64)
-                    .map_err(|error| error.to_string())?;
-                let mut prefix = String::new();
-                prefix
-                    .try_reserve_exact(64)
-                    .map_err(|error| error.to_string())?;
-                use std::fmt::Write as _;
-                write!(
-                    &mut prefix,
-                    "sns/records/{}/",
-                    iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID
-                )
-                .map_err(|error| error.to_string())?;
-                let sns_len = world
-                    .smart_contract_state
-                    .iter()
-                    .filter(|(key, _)| key.as_ref().starts_with(&prefix))
-                    .count();
-                require_complete_table_count(
-                    snapshot,
-                    "world.asset_definition_alias_bindings",
-                    aliases_len,
-                )?;
-                require_complete_table_count(snapshot, "world.smart_contract_state", keys_len)?;
-                let mut aliases =
-                    ChargedBuffer::new(aliases_len, budget).map_err(|e| e.to_string())?;
-                let mut keys = ChargedBuffer::new(keys_len, budget).map_err(|e| e.to_string())?;
-                let mut sns = ChargedBuffer::new(sns_len, budget).map_err(|e| e.to_string())?;
-                for (key, value) in world.asset_definition_alias_bindings.iter() {
-                    require_target(
-                        snapshot,
-                        "world.asset_definition_alias_bindings",
-                        WorldStateElementKindV1::Table,
-                        Some(hash_value(key)?),
-                        hash_value(value)?,
-                    )?;
-                    aliases.push_reserved((key, value));
-                }
-                for (key, value) in world.smart_contract_state.iter() {
-                    // Even withheld values must match this cut: no post-tail key or
-                    // value can be relabeled as an original certified projection.
-                    require_target(
-                        snapshot,
-                        "world.smart_contract_state",
-                        WorldStateElementKindV1::Table,
-                        Some(hash_value(key)?),
-                        hash_value(value)?,
-                    )?;
-                    keys.push_reserved(key);
-                    if key.as_ref().starts_with(&prefix) {
-                        sns.push_reserved((key, value));
-                    }
-                }
-                consume(
-                    snapshot,
-                    aliases.as_slice(),
-                    keys.as_slice(),
-                    sns.as_slice(),
-                )
-                .map_err(WorldStateSnapshotError::from)
-            },
+            |snapshot, world| with_names_originals(snapshot, world, budget, consume),
         )
     }
 

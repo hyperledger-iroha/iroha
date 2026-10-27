@@ -692,8 +692,7 @@ pub enum WorldStateVerificationError {
 
 impl crate::state::State {
     /// Check the stored World state accumulator against a cold capture of the complete
-    /// committed World, in `O(N)` (startup after replay, and any restored World before use).
-    /// Returns the verified World state root.
+    /// committed World, in `O(N)` (startup after replay). Returns the verified World state root.
     ///
     /// # Errors
     /// The stored accumulator differs from the World it claims to commit, the World cannot be
@@ -703,19 +702,42 @@ impl crate::state::State {
     ) -> Result<Hash, WorldStateVerificationError> {
         // The value every reader of the committed World sees.
         let stored = self.view().world.state_accumulator.get().clone();
-        let block = self
-            .world
-            .try_block(&self.ivm_execution_budget())
-            .map_err(|error| {
-                if cfg!(all(test, sumeragi_core_mutation = "HC82")) {
-                    WorldStateVerificationError::Capture(error.to_string())
-                } else {
-                    WorldStateVerificationError::Acquisition(error)
-                }
-            })?;
+        self.world
+            .verify_captured_accumulator(&stored, &self.ivm_execution_budget())
+    }
+}
+
+impl crate::state::World {
+    /// Check the stored World state accumulator against a cold capture of this complete World,
+    /// in `O(N)`; a restored World is checked before any State is built on it. Returns the
+    /// verified World state root.
+    ///
+    /// # Errors
+    /// The stored accumulator differs from the World it claims to commit, the World cannot be
+    /// acquired or a value cannot be encoded.
+    pub(crate) fn verify_state_accumulator(
+        &self,
+        execution_budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Hash, WorldStateVerificationError> {
+        let stored = self.state_accumulator.view().get().clone();
+        self.verify_captured_accumulator(&stored, execution_budget)
+    }
+
+    fn verify_captured_accumulator(
+        &self,
+        stored: &WorldStateAccumulator,
+        execution_budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<Hash, WorldStateVerificationError> {
+        let block = self.try_block(execution_budget).map_err(|error| {
+            if cfg!(all(test, sumeragi_core_mutation = "HC82")) {
+                WorldStateVerificationError::Capture(error.to_string())
+            } else {
+                WorldStateVerificationError::Acquisition(error)
+            }
+        })?;
         let captured =
             WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
-        if stored != captured {
+        if *stored != captured {
             return Err(WorldStateVerificationError::Mismatch {
                 stored_root: stored
                     .root()
@@ -746,7 +768,8 @@ mod inventory_tests;
 #[path = "world_state_snapshot.rs"]
 mod world_state_snapshot;
 pub use world_state_snapshot::{
-    NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1, WorldStateSnapshotError,
+    NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
+    WorldStateSnapshotError,
 };
 
 #[path = "world_state_cut.rs"]

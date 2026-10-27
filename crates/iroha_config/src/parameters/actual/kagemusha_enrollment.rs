@@ -54,6 +54,9 @@ pub struct KagemushaEnrollmentProvider {
     pub observation_endpoint: Url,
     /// Existing private transport credential file, opened by the authenticated transport owner.
     pub observation_credential: PathBuf,
+    /// Optional private file containing exactly one DER TLS trust anchor, at most 16 KiB.
+    /// Native system roots and hostname verification remain enabled; absence adds no root.
+    pub observation_tls_root: Option<PathBuf>,
     /// Exact operator-selected local private verifier installation.
     pub worker: KagemushaEnrollmentWorker,
     /// Existing private file containing exactly one canonical 32-byte big-endian P-256 scalar.

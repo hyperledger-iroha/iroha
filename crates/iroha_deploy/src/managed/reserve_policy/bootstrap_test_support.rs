@@ -2,11 +2,8 @@
 use super::*;
 use crate::managed::native_operation::Fees;
 use crate::managed::native_operation::attempts::metadata;
-use crate::managed::native_operation::test_support::native_fixture::{
-    NativeFixture, NativeReadHttp,
-};
+use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
 use iroha_fs::PublishMode;
-use std::sync::Arc;
 
 impl ManagedInitialReservePolicy {
     pub(in crate::managed) fn bootstrap_native(
@@ -64,8 +61,7 @@ impl ManagedInitialReservePolicy {
             iroha_wallet::operations::NativePreparationPhase::RequestOnly,
         );
         let retained_request = std::fs::read(path.join("preparation.json")).unwrap();
-        let mut http =
-            NativeReadHttp::start_config(&self.authority.config, Arc::clone(native.chain.state()));
+        let mut http = native.read_http(&self.authority.config);
         wallet
             .prepare_initial_reserve_policy(
                 &original.request(original.terms.signing_deadline(options.deadline).unwrap()),

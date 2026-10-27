@@ -31,7 +31,8 @@ use std::{collections::HashSet, vec::Vec};
 use blst::{blst_fp, blst_fp12};
 use blstrs::{G1Affine, G2Affine, G2Projective, Scalar};
 use group::{Curve as _, Group as _, prime::PrimeCurveAffine as _};
-use rand_core::{OsRng, TryCryptoRng};
+use rand::rngs::SysRng;
+use rand_core::TryCryptoRng;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -1151,7 +1152,7 @@ impl TimedOvnRegistrationSecretV1 {
         session: &TimedOvnSessionV1,
         participant_hash: [u8; 32],
     ) -> Result<(Self, TimedOvnRegistrationV1), TimedOvnError> {
-        Self::generate_with_rng(session, participant_hash, &mut OsRng)
+        Self::generate_with_rng(session, participant_hash, &mut SysRng)
     }
 
     /// Generate secrets and proofs using an explicit cryptographic RNG.
@@ -1999,7 +2000,7 @@ impl TimedOvnRegistrationSecretV1 {
         survivors: &TimedOvnSurvivorRosterV1,
         choice: TimedOvnChoiceV1,
     ) -> Result<TimedOvnMaskedBallotV1, TimedOvnError> {
-        self.cast_ballot_with_rng(survivors, choice, &mut OsRng)
+        self.cast_ballot_with_rng(survivors, choice, &mut SysRng)
     }
 
     /// Cast a choice using an explicit cryptographic proof RNG.
@@ -3550,20 +3551,23 @@ mod tests {
     fn zero_rng_and_single_survivor_fail_before_ballot_admission() {
         #[derive(Debug)]
         struct ZeroRng;
-        impl rand_core::RngCore for ZeroRng {
-            fn next_u32(&mut self) -> u32 {
-                0
+        impl rand::TryRng for ZeroRng {
+            type Error = core::convert::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok(0)
             }
 
-            fn next_u64(&mut self) -> u64 {
-                0
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Ok(0)
             }
 
-            fn fill_bytes(&mut self, destination: &mut [u8]) {
-                destination.fill(0);
+            fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+                Ok({
+                    destination.fill(0);
+                })
             }
         }
-        impl rand_core::CryptoRng for ZeroRng {}
+        impl rand::TryCryptoRng for ZeroRng {}
 
         let fixture = fixture(24);
         assert!(matches!(

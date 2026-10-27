@@ -190,7 +190,7 @@ mod tests {
         {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
-        U512::from_le_bytes(bytes)
+        U512::from_le_bytes(bytes.into())
     }
     fn joint_acceptance_exceeds(
         first: usize,
@@ -201,7 +201,7 @@ mod tests {
         // M_i is pinned as A_i / 2^256.  Joint baseline acceptance is
         // 1/(M_first*M_second), so p > n/d iff
         // n*A_first*A_second < d*2^512.
-        let product: U1024 = rejection_m_q256(first).mul(&rejection_m_q256(second));
+        let product: U1024 = rejection_m_q256(first).concatenating_mul(&rejection_m_q256(second));
         let lhs = product.wrapping_mul(&U1024::from_u64(numerator));
         let rhs = U1024::from_u64(denominator).shl_vartime(512);
         lhs < rhs

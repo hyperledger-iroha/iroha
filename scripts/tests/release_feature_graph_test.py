@@ -1040,6 +1040,12 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
     else:  # pragma: no cover - failure branch
         raise AssertionError("alternate AppImage derivation was accepted")
 
+    wrong_entrypoint = source.replace('executable = "iroha3d";', 'executable = "iroha3";', 1)
+    assert wrong_entrypoint != source
+    (tmp_path / checker.NIX_RELEASE_OWNER).write_text(wrong_entrypoint, encoding="utf-8")
+    with pytest.raises(RuntimeError, match="reviewed entrypoint"):
+        checker.nix_shipping_targets(tmp_path, catalog)
+
     quoted_output = source.replace(
         "packages.default = packages.iroha3;",
         'packages."fixture" = mkIroha { features = []; };\n\n'
@@ -1077,21 +1083,22 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
             raise AssertionError("opaque Nix shipping surface was accepted")
 
     helper_source = helper.read_text(encoding="utf-8")
-    helper.write_text(
-        helper_source.replace(
-            "closure = pkgs.writeReferencesToFile drv;",
-            "closure = pkgs.writeReferencesToFile packages.runtime;",
-            1,
-        ),
-        encoding="utf-8",
-    )
     (tmp_path / checker.NIX_RELEASE_OWNER).write_text(source, encoding="utf-8")
-    try:
-        checker.nix_shipping_targets(tmp_path, catalog)
-    except RuntimeError as error:
-        assert "AppImage derivation provenance contract changed" in str(error)
-    else:  # pragma: no cover - failure branch
-        raise AssertionError("AppImage helper detached from drv was accepted")
+    for roots in ("packages.runtime", "drv packages.runtime"):
+        helper.write_text(
+            helper_source.replace(
+                "rootPaths = [ drv ];",
+                f"rootPaths = [ {roots} ];",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        try:
+            checker.nix_shipping_targets(tmp_path, catalog)
+        except RuntimeError as error:
+            assert "AppImage derivation provenance contract changed" in str(error)
+        else:  # pragma: no cover - failure branch
+            raise AssertionError("AppImage helper detached from drv was accepted")
 
 
 def test_feature_graph_queries_all_targets(monkeypatch, tmp_path: Path) -> None:
@@ -2268,13 +2275,17 @@ def test_pr_workflow_runs_release_feature_graph_guard() -> None:
 
 def test_release_publishers_depend_on_feature_graph_guard() -> None:
     guarded_jobs = {
-        Path(".github/workflows/publish.yml"): (
-            "candidate-no-profiling",
-            "candidate-with-profiling",
-        ),
-        Path(".github/workflows/publish_custom.yml"): ("image",),
-        Path(".github/workflows/publish_dev.yml"): ("dev_image",),
-        Path(".github/workflows/publish_xx.yml"): ("image",),
+        Path(".github/workflows/publish.yml"): {
+            "candidate-no-profiling": {"release-feature-graph"},
+            "candidate-with-profiling": {"release-feature-graph", "ci_image"},
+        },
+        Path(".github/workflows/publish_custom.yml"): {
+            "image": {"release-feature-graph", "ci_image"},
+        },
+        Path(".github/workflows/publish_dev.yml"): {
+            "dev_image": {"release-feature-graph", "ci_image"},
+        },
+        Path(".github/workflows/publish_xx.yml"): {"image": {"release-feature-graph"}},
     }
     for relative, jobs in guarded_jobs.items():
         workflow = (REPO / relative).read_text(encoding="utf-8")
@@ -2283,12 +2294,16 @@ def test_release_publishers_depend_on_feature_graph_guard() -> None:
             == 1
         )
         assert re.search(r"(?m)^  release-feature-graph:\s*$", workflow)
-        for job in jobs:
+        for job, expected_needs in jobs.items():
             pattern = (
                 rf"(?m)^  {re.escape(job)}:\s*\n"
-                r"    needs: release-feature-graph\s*$"
+                r"    needs: ([^\n]+)$"
             )
-            assert re.search(pattern, workflow), f"{relative}:{job} bypasses guard"
+            match = re.search(pattern, workflow)
+            assert match, f"{relative}:{job} bypasses guard"
+            needs = [item.strip() for item in match.group(1).strip("[]").split(",")]
+            assert set(needs) == expected_needs, f"{relative}:{job} changes guard dependencies"
+            assert len(needs) == len(expected_needs), f"{relative}:{job} repeats guard dependencies"
 
     for relative in (
         Path(".github/workflows/sorafs-cli-release.yml"),

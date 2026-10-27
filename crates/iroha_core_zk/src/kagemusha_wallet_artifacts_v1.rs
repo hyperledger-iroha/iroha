@@ -8,21 +8,22 @@
 //!
 //! The one signed identity includes the complete producer-catalog commitment; a
 //! verifier-only view need not hold that catalog's original proving tables.
-//! TODO(G3/G4): qualify every original against its complete Q/A/W/terminal source
-//! and connect the native preparation/fold owner. This type grants no wallet-open capability;
+//! The native state owner connects preparation and folding through separately admitted
+//! `QualifiedWalletSourcesV1`. Regenerated artifacts and genuine operations still require
+//! qualification on the current candidate. This type grants no wallet-open capability;
 //! there is no boolean or argument that upgrades verifier-only admission to producer readiness.
 
 use ff::PrimeField;
 use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
-use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, params::PARAMS_DOMAIN, poseidon};
+#[cfg(test)]
+use iroha_pasta::Fq;
+use iroha_pasta::{Ep, Eq, Fp, PastaCurve};
 use iroha_plonk::{
     DescriptorBinding, Protocol, VerifyingKey,
     cs::{
         CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2,
         descriptor::{PROTOCOL_VERSION, pinned_params_digest},
     },
-    keys::VK_VERSION,
-    transcript::INSTANCE_FRAME_TAG,
 };
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, FOLD_BODY_BYTES, K, transcript::Domain};
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize};
@@ -209,51 +210,17 @@ fn put_frame(bytes: &mut Vec<u8>, frame: &[u8]) -> Result<(), Error> {
 fn native_protocol_transcript(curve: CurveV1) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&KAGEMUSHA_WALLET_VERSION_V1.to_le_bytes());
-    bytes.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
-    bytes.push(match curve {
-        CurveV1::Pallas => 0,
-        CurveV1::Vesta => 1,
-    });
-    bytes.extend_from_slice(&curve.base_modulus());
-    bytes.extend_from_slice(&curve.scalar_modulus());
-    // V2 schema and personas are frozen by the current explicit native constructors.
-    put_frame(&mut bytes, b"iroha.plonk.pipa.circuit_descriptor.v2")?;
-    bytes.extend_from_slice(b"PIPA-v2-CircDesc");
-    bytes.push(VK_VERSION);
-    bytes.extend_from_slice(b"Iroha-PlonkVK-v2");
-    bytes.extend_from_slice(b"kgwvkey1");
-    bytes.extend_from_slice(&Domain::Proof.tag());
-    bytes.extend_from_slice(&Domain::Fold.tag());
-    bytes.extend_from_slice(&INSTANCE_FRAME_TAG);
-    for value in [
-        poseidon::WIDTH,
-        poseidon::RATE,
-        poseidon::FULL_ROUNDS,
-        poseidon::PARTIAL_ROUNDS,
-        poseidon::SECURE_MDS,
-    ] {
-        put_u32(&mut bytes, value)?;
-    }
-    // Hash the actual pinned native table serialized by its own constructor, not a
-    // caller's name/hash or newly generated table.
-    let table = match curve {
-        CurveV1::Pallas => <Fp as poseidon::PoseidonField>::rp57().to_table(),
-        CurveV1::Vesta => <Fq as poseidon::PoseidonField>::rp57().to_table(),
-    };
-    put_u32(&mut bytes, table.len())?;
-    bytes.extend_from_slice(&Sha256::digest(&table));
-    put_frame(&mut bytes, PARAMS_DOMAIN.as_bytes())?;
-    put_u32(&mut bytes, 5)?;
-    for k in 12_u8..=16 {
-        bytes.push(k);
-        bytes.extend_from_slice(&pinned_params_digest(curve, u32::from(k)).ok_or(Error::Profile)?);
-    }
-    // Scalar absorption: Pallas low128/high127 pair, Vesta exact Fp integer.
-    // Challenge map: Pallas Fp->Fq identity, Vesta Fq->Fp one subtraction.
-    bytes.extend_from_slice(match curve {
-        CurveV1::Pallas => &[2, 0],
-        CurveV1::Vesta => &[1, 1],
-    });
+    // The proof engine owns its semantic contract. The wallet adds only its
+    // existing version prefix and the actual recursion domains, preserving the
+    // exact signed Eq/Ep preimages across source-only implementation changes.
+    bytes.extend_from_slice(
+        &iroha_plonk::contract::pipa_r_protocol_transcript_v1(
+            curve,
+            Domain::Proof.tag(),
+            Domain::Fold.tag(),
+        )
+        .map_err(|_| Error::Profile)?,
+    );
     Ok(bytes)
 }
 

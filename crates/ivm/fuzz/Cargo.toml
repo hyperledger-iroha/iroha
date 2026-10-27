@@ -8,8 +8,8 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = { version = "0.4.10", features = ["arbitrary-derive"] }
-arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = { version = "0.4.13", features = ["arbitrary-derive"] }
+arbitrary = { version = "1.5.0", features = ["derive"] }
 ivm = { path = ".." }
 ivm_abi = { path = "../../ivm_abi" }
 kotodama_lang = { path = "../../kotodama_lang" }
@@ -22,9 +22,11 @@ iroha_allocation = { path = "../../iroha_allocation" }
 members = ["."]
 
 [patch.crates-io]
-# Preserve the root workspace's fallible native-digit allocation handoff.
-num-bigint = { path = "../../../vendor/num-bigint-0.4.6" }
-
+# Preserve applicable root workspace source and allocation custody patches.
+num-bigint = { path = "../../../vendor/num-bigint-0.5.1" }
+ark-ff = { path = "../../../vendor/ark-ff-0.5.0" }
+ark-bls12-381 = { path = "../../../vendor/ark-bls12-381-0.5.0" }
+halo2curves = { path = "../../../vendor/halo2curves-0.10.0" }
 [[bin]]
 name = "tlv_validate"
 path = "fuzz_targets/tlv_validate.rs"

@@ -22,6 +22,14 @@ const CONTROL_B_SEED: u8 = 114;
 const ALL: u32 = KAGEMUSHA_WALLET_CONTROLS_DEFINED_MASK_V1;
 const LEASE_EXPIRES: u64 = 12000;
 
+// No production request uses this nonuniform identity; these checks issue and drop reviews
+// only, so every control refusal still examines an actually unbound request.
+fn unbound_review_id() -> [u8; 32] {
+    let mut id = [0x52; 32];
+    id[31] = 0x91;
+    id
+}
+
 fn permitted(mut f: Fixture) -> Fixture {
     f.config.policy.regulatory_policy = KagemushaWalletRegulatoryPolicyV1 {
         permitted_controls: ALL,
@@ -262,7 +270,12 @@ fn review_refused(wallet: &mut Wallet, device: &HostDevice, request: &[u8], acco
     let signatures = device.platform.with(|state| state.sign_calls);
     for _ in 0..2 {
         assert!(matches!(
-            wallet.review_send(request, account),
+            wallet.review_send(
+                unbound_review_id(),
+                request,
+                account,
+                state::ReviewExpectationV1::Fresh
+            ),
             Err(state::Error::Proof("native operation source or proof"))
         ));
         assert_eq!(wallet.snapshot().unwrap(), before);
@@ -310,7 +323,12 @@ fn send_blocked(
     );
     for _ in 0..2 {
         assert!(matches!(
-            wallet.review_send(request, account),
+            wallet.review_send(
+                unbound_review_id(),
+                request,
+                account,
+                state::ReviewExpectationV1::Fresh
+            ),
             Err(state::Error::Blocked("request.receiver_account_digest"))
         ));
         assert!(matches!(
@@ -352,6 +370,8 @@ fn send(
     sources: &Sources,
     frames: &[Vec<u8>; 4],
     request: &[u8],
+    destination_account: &[u8],
+    expectation: state::ReviewExpectationV1,
     mask: u32,
     id: &mut u8,
     output: &Path,
@@ -366,7 +386,82 @@ fn send(
             request: request.to_vec(),
         },
     );
-    let bytes = complete(a.execute(intent.clone()).unwrap());
+    let signatures_before_review = device.platform.with(|state| state.sign_calls);
+    assert!(matches!(
+        a.review_send(
+            [0; 32],
+            request,
+            destination_account,
+            state::ReviewExpectationV1::Fresh
+        ),
+        Err(state::Error::Invalid(_))
+    ));
+    let state::ReviewDecisionV1::Ready(initial_review) = a
+        .review_send(intent.request_id, request, destination_account, expectation)
+        .unwrap()
+    else {
+        panic!("fresh Send review");
+    };
+    let projection = initial_review.projection().clone();
+    drop(initial_review);
+    let mut wrong_projection = projection.clone();
+    wrong_projection.fee += 1;
+    assert!(matches!(
+        a.review_send(
+            intent.request_id,
+            request,
+            destination_account,
+            state::ReviewExpectationV1::OriginalUnstarted(wrong_projection)
+        ),
+        Err(state::Error::OperationConflict)
+    ));
+    assert_eq!(
+        a.retry_request(&intent.request_id).unwrap(),
+        state::RequestStatusV1::Unknown
+    );
+    assert_eq!(a.snapshot().unwrap(), before);
+    assert_eq!(
+        device.platform.with(|state| state.sign_calls),
+        signatures_before_review
+    );
+    let state::ReviewDecisionV1::Ready(review) = a
+        .review_send(
+            intent.request_id,
+            request,
+            destination_account,
+            state::ReviewExpectationV1::OriginalUnstarted(projection.clone()),
+        )
+        .unwrap()
+    else {
+        panic!("identical unstarted Send");
+    };
+    // Two live reviews can observe absence. Only the first may bind the request; the second
+    // must return the exact existing outcome without adopting or executing that binding.
+    let state::ReviewDecisionV1::Ready(competing) = a
+        .review_send(
+            intent.request_id,
+            request,
+            destination_account,
+            state::ReviewExpectationV1::OriginalUnstarted(projection),
+        )
+        .unwrap()
+    else {
+        panic!("second still-unbound Send review");
+    };
+    let bytes = match a.execute_reviewed(review).unwrap() {
+        state::ReviewedExecutionV1::Executed(completion) => complete(completion),
+        other => panic!("fresh reviewed Send: {other:?}"),
+    };
+    assert_eq!(
+        device.platform.with(|state| state.sign_calls),
+        signatures_before_review + 1
+    );
+    assert!(matches!(a.execute_reviewed(competing).unwrap(),
+        state::ReviewedExecutionV1::Existing(state::BoundRequestStatusV1::Outcome(state::Completion::Complete(ref exact))) if exact == &bytes));
+    assert_eq!(
+        device.platform.with(|state| state.sign_calls),
+        signatures_before_review + 1
+    );
     let payment: KagemushaWalletPaymentV1 = decode(&bytes);
     records.push(message_census::record(
         output,
@@ -420,11 +515,9 @@ fn receive_and_check(
     let request: KagemushaWalletRequestV1 = decode(request);
     // Keep the exact companion passed to Receive for the SDK carrier census.
     // It pairs with the retained Payment envelope; no wallet reconstruction is needed.
-    records.push(original(
-        output,
-        &format!("{label}-companion.norito"),
-        payer_companion,
-    ));
+    let (measurement, _) =
+        message_census::retain_companion(output, &format!("{label}-companion"), payer_companion);
+    records.push(measurement);
     let before = b.snapshot().unwrap();
     let intent = receive(payment, payer_companion, next(id));
     let bytes = complete(b.execute(intent.clone()).unwrap());
@@ -702,13 +795,34 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
     );
     let (request40, setup40) =
         request(&mut a, &mut b, 40, &mut id, &output, "mask-3", &mut records);
-    a.review_send(&request40, &frames_b[2]).unwrap();
+    let state::ReviewDecisionV1::Ready(first_review) = a
+        .review_send(
+            [id; 32],
+            &request40,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh,
+        )
+        .unwrap()
+    else {
+        panic!("initial Send review before restart");
+    };
+    let first_send_expectation =
+        state::ReviewExpectationV1::OriginalUnstarted(first_review.projection().clone());
+    drop(first_review);
+    assert_eq!(
+        a.retry_request(&[id; 32]).unwrap(),
+        state::RequestStatusV1::Unknown
+    );
+    drop(a);
+    a = sources.open(&device_a, &f, &frames_a);
     let (send40, payment40) = send(
         &mut a,
         &device_a,
         &sources,
         &frames_a,
         &request40,
+        &frames_b[2],
+        first_send_expectation,
         3,
         &mut id,
         &output,
@@ -786,7 +900,15 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         "mask-3",
         &mut records,
     );
-    let (reopened, archived) = archive::exercise(a, &device_a, &sources, &f, &frames_a, &ack);
+    let (reopened, archived) = archive::exercise(
+        a,
+        &device_a,
+        &sources,
+        &f,
+        &frames_a,
+        &send40.request_id,
+        &ack,
+    );
     a = reopened;
     records.push(original(&output, "mask-3-archive.norito", &archived));
     assert_eq!(
@@ -823,7 +945,16 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         &output,
         &mut records,
     );
-    a.review_send(&request7, &frames_b[2]).unwrap();
+    assert!(matches!(
+        a.review_send(
+            unbound_review_id(),
+            &request7,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
     install_list(
         &mut a,
         &device_a,
@@ -845,7 +976,16 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         "a-list-3",
         &mut records,
     );
-    a.review_send(&request7, &frames_b[2]).unwrap();
+    assert!(matches!(
+        a.review_send(
+            unbound_review_id(),
+            &request7,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
 
     // One funded incarnation covers every current Send mask, with genuine Receive and
     // ArchiveReceive for each Payment.
@@ -869,13 +1009,24 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         } else {
             request(&mut a, &mut b, 7, &mut id, &output, &label, &mut records).0
         };
-        a.review_send(&request, &frames_b[2]).unwrap();
+        assert!(matches!(
+            a.review_send(
+                unbound_review_id(),
+                &request,
+                &frames_b[2],
+                state::ReviewExpectationV1::Fresh
+            )
+            .unwrap(),
+            state::ReviewDecisionV1::Ready(_)
+        ));
         let (intent, payment) = send(
             &mut a,
             &device_a,
             &sources,
             &frames_a,
             &request,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh,
             mask,
             &mut id,
             &output,
@@ -895,7 +1046,15 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
             &label,
             &mut records,
         );
-        let (reopened, archived) = archive::exercise(a, &device_a, &sources, &f, &frames_a, &ack);
+        let (reopened, archived) = archive::exercise(
+            a,
+            &device_a,
+            &sources,
+            &f,
+            &frames_a,
+            &intent.request_id,
+            &ack,
+        );
         a = reopened;
         records.push(original(
             &output,
@@ -933,7 +1092,16 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         "after-expiry",
         &mut records,
     );
-    a.review_send(&request39, &frames_b[2]).unwrap();
+    assert!(matches!(
+        a.review_send(
+            unbound_review_id(),
+            &request39,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
 
     // Same signed anchor, forward-only simulated monotonic clock: U is exactly the
     // lease deadline, the only failing active condition.
@@ -956,10 +1124,28 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         "a-policy-6",
         &mut records,
     );
-    a.review_send(&request39, &frames_b[2]).unwrap();
+    assert!(matches!(
+        a.review_send(
+            unbound_review_id(),
+            &request39,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
     // The held local list has no age rule: time passing alone refuses nothing.
     device_a.platform.with(|state| state.monotonic = Ok(11001));
-    a.review_send(&request39, &frames_b[2]).unwrap();
+    assert!(matches!(
+        a.review_send(
+            unbound_review_id(),
+            &request39,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
     device_a.platform.with(|state| state.boot = Ok([0xbc; 32]));
     review_refused(&mut a, &device_a, &request39, &frames_b[2]);
     execute_refused(&mut a, &device_a, &request39, &mut id);
@@ -976,13 +1162,24 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         "anchor-after-boot",
         &mut records,
     );
-    a.review_send(&request39, &frames_b[2]).unwrap();
+    assert!(matches!(
+        a.review_send(
+            unbound_review_id(),
+            &request39,
+            &frames_b[2],
+            state::ReviewExpectationV1::Fresh
+        )
+        .unwrap(),
+        state::ReviewDecisionV1::Ready(_)
+    ));
     let (intent, payment) = send(
         &mut a,
         &device_a,
         &sources,
         &frames_a,
         &request39,
+        &frames_b[2],
+        state::ReviewExpectationV1::Fresh,
         KAGEMUSHA_WALLET_CONTROL_QUOTAS_V1,
         &mut id,
         &output,
@@ -1002,7 +1199,15 @@ fn actual_native_all_control_masks_preserve_committed_payment_and_conservation()
         "after-expiry",
         &mut records,
     );
-    let (reopened, archived) = archive::exercise(a, &device_a, &sources, &f, &frames_a, &ack);
+    let (reopened, archived) = archive::exercise(
+        a,
+        &device_a,
+        &sources,
+        &f,
+        &frames_a,
+        &intent.request_id,
+        &ack,
+    );
     a = reopened;
     records.push(original(&output, "after-expiry-archive.norito", &archived));
     completed_sends.push((intent, payment));

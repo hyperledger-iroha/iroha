@@ -115,7 +115,7 @@ Python 3.12 executable when the fixed Homebrew/system locators are unavailable.
 MOBILE_SDK_RUSTUP_BINARY may select the absolute canonical, non-symbolic rustup
 executable used by Apple source authentication.
 Source-authenticated packaging invokes scripts/check_mobile_sdk_artifacts.sh
-and therefore also requires exact Rust 1.93.1 RUSTC/RUSTDOC plus one canonical
+and therefore also requires exact Rust 1.99.1 RUSTC/RUSTDOC plus one canonical
 writable external CARGO_TARGET_DIR. Apple operations require an explicit
 --lockfile-path naming the root lock or the exact reviewed external release lock.
 Apple packaging additionally requires an explicit canonical SOURCE_DATE_EPOCH;

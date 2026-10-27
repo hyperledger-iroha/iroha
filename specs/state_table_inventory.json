@@ -19,9 +19,9 @@
     "table_catalog_readers": 212,
     "commitments": 36,
     "application_accumulators": 6,
-    "classified_domain_literals": 1104,
+    "classified_domain_literals": 1109,
     "construction_users": 54,
-    "state_hash_functions": 215,
+    "state_hash_functions": 219,
     "protocol_carriers": 11,
     "witness_families": 9,
     "open_defects": 11
@@ -216,6 +216,7 @@
       {"path":"crates/iroha_core/src/state.rs","function":"axt_execution_policy_snapshot","count":3,"roots":["axt_policy_snapshot"]},
       {"path":"crates/iroha_core/src/state.rs","function":"axt_policy_snapshot","count":4,"roots":["axt_policy_snapshot"]},
       {"path":"crates/iroha_core/src/state.rs","function":"block_proofs_for_entry","count":1,"use":"block_content","reason":"Merkle proofs of a transaction entrypoint and its result inside their block: block content"},
+      {"path":"crates/iroha_core/src/state.rs","function":"canonical_history_summary_source_token","count":1,"use":"local_artifact","reason":"Returns Kura's original canonical block file and journal metadata fingerprint for derived-summary cache invalidation; no State root or body authority"},
       {"path":"crates/iroha_core/src/state.rs","function":"captured_fastpq_transcript_sources","count":1,"use":"record","reason":"Returns the identifier, content hash or stored digest of one record, transaction or message: no digest over a table or cell"},
       {"path":"crates/iroha_core/src/state.rs","function":"committed_block_hash_for_proof","count":1,"use":"record","reason":"Reads committed block hashes or the hash of the current block header: authenticated history and block identity, not a digest of State content"},
       {"path":"crates/iroha_core/src/state.rs","function":"compute_confidential_feature_digest","count":1,"roots":["confidential_feature_digest"]},
@@ -319,6 +320,7 @@
       {"path":"crates/iroha_core/src/state/execution_commitment_test_support.rs","function":"execution_commitment_for_testing","count":1,"use":"test","reason":"Table accessors and fixtures compiled for tests or under a test-only feature"},
       {"path":"crates/iroha_core/src/state/fastpq_quantity_capture.rs","function":"validate_quantity_retirement_invocation","count":1,"use":"record","reason":"Returns the identifier, content hash or stored digest of one record, transaction or message: no digest over a table or cell"},
       {"path":"crates/iroha_core/src/state/native_execution_tip.rs","function":"restored_genesis_record","count":1,"use":"result_binding","reason":"Carries the certified block identity and R of a committed height (the execution tip or a finality proof): it binds the listed roots and digests no State content of its own"},
+      {"path":"crates/iroha_core/src/state/native_execution_tip.rs","function":"restored_successor_world_root","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/state/native_execution_tip.rs","function":"validate_native_execution_authorization","count":1,"use":"result_binding","reason":"Carries the certified block identity and R of a committed height (the execution tip or a finality proof): it binds the listed roots and digests no State content of its own"},
       {"path":"crates/iroha_core/src/state/native_execution_tip/finalized_world.rs","function":"predecessor_world_receipt_once","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/state/native_lane_state.rs","function":"sumeragi_lane_state_commitment","count":1,"roots":["native_lane_state_commitment"]},
@@ -334,6 +336,8 @@
       {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"capture","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"run","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"state_transition","count":1,"roots":["world_state_root"]},
+      {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"verify_captured_accumulator","count":1,"roots":["world_state_root"]},
+      {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"verify_state_accumulator","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"verify_world_state_accumulator","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/state/world_state_accumulator.rs","function":"world_state_transition","count":1,"roots":["world_state_root"]},
       {"path":"crates/iroha_core/src/sumeragi/certified_chain.rs","function":"instance","count":1,"use":"seed","reason":"Derives a sampling seed or an identifier from committed records or from the current block"},
@@ -502,6 +506,7 @@
       {"literal":"ipfs:bag/id@v1","owner":"use:record","sources":{"crates/iroha_data_model/src/sorafs/moderation_ledger.rs":1}},
       {"literal":"iroha 2026-09-30 world-state lthash16 element v1","owner":"root:world_state_root","sources":{"crates/iroha_data_model/src/sumeragi_finality/world_state.rs":1}},
       {"literal":"iroha-bootle-lantern-anoncred-v1","owner":"use:name","sources":{"crates/iroha_data_model/src/privacy.rs":3,"crates/iroha_data_model/src/privacy/protocol.rs":1}},
+      {"literal":"iroha-canonical-summary-source-v1","owner":"use:local_artifact","sources":{"crates/iroha_core/src/kura/native_execution_reads.rs":1}},
       {"literal":"iroha-demo-kaigi-chain-signal/v1","owner":"use:test","sources":{"crates/iroha_core/src/kura.rs":1,"crates/iroha_core/src/smartcontracts/isi/tx.rs":1}},
       {"literal":"iroha-election-v1","owner":"use:name","sources":{"crates/iroha_data_model/src/isi/zk.rs":1}},
       {"literal":"iroha-ivm-private-note-stark-v1","owner":"use:name","sources":{"crates/iroha_data_model/src/privacy.rs":3,"crates/iroha_data_model/src/privacy/protocol.rs":2}},
@@ -611,6 +616,9 @@
       {"literal":"iroha.kagemusha.eligibility.request.v1","owner":"use:name","sources":{"crates/iroha_data_model/src/kagemusha/enrollment_eligibility_v1.rs":1}},
       {"literal":"iroha.kagemusha.eligibility.response.v1","owner":"use:name","sources":{"crates/iroha_data_model/src/kagemusha/enrollment_eligibility_v1.rs":1}},
       {"literal":"iroha.kagemusha.eligibility.response_body.v1","owner":"use:name","sources":{"crates/iroha_data_model/src/kagemusha/enrollment_eligibility_v1.rs":1}},
+      {"literal":"iroha.kagemusha.enrollment-cohort-finality.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/cohort.rs":1}},
+      {"literal":"iroha.kagemusha.enrollment-cohort-setup.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/cohort.rs":1}},
+      {"literal":"iroha.kagemusha.enrollment-cohort-target.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/cohort.rs":1}},
       {"literal":"iroha.kagemusha.enrollment.expiry-proof.body.v1","owner":"use:name","sources":{"crates/iroha_data_model/src/kagemusha/kagemusha_enrollment_permit_v1.rs":1}},
       {"literal":"iroha.kagemusha.enrollment.expiry-proof.v1","owner":"use:name","sources":{"crates/iroha_data_model/src/kagemusha/kagemusha_enrollment_permit_v1.rs":1}},
       {"literal":"iroha.kagemusha.enrollment.permit.body.v1","owner":"use:name","sources":{"crates/iroha_data_model/src/kagemusha/kagemusha_enrollment_permit_v1.rs":1}},
@@ -624,6 +632,7 @@
       {"literal":"iroha.kagemusha.executed-terminal-registration.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/registration/export.rs":1}},
       {"literal":"iroha.kagemusha.executed-unload-settlement.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/funding/settlement.rs":1}},
       {"literal":"iroha.kagemusha.fee-payout-evidence.v1","owner":"use:name","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/funding/settlement/fee.rs":1}},
+      {"literal":"iroha.kagemusha.hundred-payers-merchant.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/hundred_payers.rs":1}},
       {"literal":"iroha.kagemusha.native-abc-result.v1","owner":"use:name","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/funding/settlement.rs":1}},
       {"literal":"iroha.kagemusha.native-fee-result.v1","owner":"use:name","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/funding/settlement/fee.rs":1}},
       {"literal":"iroha.kagemusha.native-load-target.v1","owner":"use:test","sources":{"crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/funding.rs":1}},
@@ -1677,10 +1686,14 @@
         "iroha:kagemusha:issuer-journal-request:v1\\0",
         "iroha:kagemusha:issuer-permit-dispatch:v1\\0"
       ]},
-      {"use":"test","reason":"CertifiedTestChain KAGEMUSHA monetary acceptance chain identity and executed setup/registration/load-target/settlement fixture receipt schemas. The containing setup module is cfg(test); fixture certificates are component evidence and these literals are neither State roots nor deployed-network or device qualification","literals":[
+      {"use":"test","reason":"CertifiedTestChain KAGEMUSHA monetary acceptance chain identity and executed setup/registration/load-target/settlement, enrollment-cohort and hundred-payer fixture receipt schemas. The containing setup module is cfg(test); fixture certificates are component evidence and these literals are neither State roots nor deployed-network or device qualification","literals":[
+        "iroha.kagemusha.enrollment-cohort-finality.v1",
+        "iroha.kagemusha.enrollment-cohort-setup.v1",
+        "iroha.kagemusha.enrollment-cohort-target.v1",
         "iroha.kagemusha.executed-ledger-setup.v1",
         "iroha.kagemusha.executed-terminal-registration.v1",
         "iroha.kagemusha.executed-unload-settlement.v1",
+        "iroha.kagemusha.hundred-payers-merchant.v1",
         "iroha.kagemusha.native-load-target.v1",
         "kagemusha-native-monetary-acceptance-v1"
       ]},
@@ -1853,6 +1866,9 @@
         "iroha:kura:bound-progress-append:v1\\0",
         "iroha:kura:eviction-file:v1\\0",
         "iroha:kura:lane-storage-instance:v1\\0"
+      ]},
+      {"use":"local_artifact","reason":"Fingerprint of an inline canonical block's original file and journal metadata, height and header hash. It invalidates derived summary caches after source changes; it grants no body authority and commits no canonical State entry","literals":[
+        "iroha-canonical-summary-source-v1"
       ]},
       {"use":"local_artifact","reason":"Framing of the journal witness of the telemetry status classifier: a digest of a bounded suffix of the committed block-hash journal (heights and header hashes of the history field state.block_hashes), compared inside one process. It digests authenticated history and no canonical State entry, and it is never stored or carried","literals":[
         "iroha:telemetry:classified-journal:v1\\0"

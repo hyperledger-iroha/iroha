@@ -22,7 +22,7 @@ iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
 iroha_telemetry = { workspace = true }
-aead = { version = "0.6.0-rc.3", default-features = false }
+aead = { version = "0.6.1", default-features = false }
 soranet_pq = { workspace = true }
 
 rand = { workspace = true }
@@ -46,7 +46,7 @@ socket2 = "0.6.3"
 # QUIC is the only optional transport.
 quinn = { version = "0.11.12", optional = true }
 rcgen = "0.14.5"
-rustls = { version = "0.23.35", default-features = false, features = ["ring", "std"] }
+rustls = { workspace = true, features = ["ring"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 
 [features]

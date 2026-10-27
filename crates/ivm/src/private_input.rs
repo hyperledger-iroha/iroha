@@ -5,10 +5,7 @@
 //! full-width commitment path below may declassify it.
 use crate::{PointerType, VMError, pointer_abi};
 use blstrs::Scalar;
-use crypto_bigint::{
-    Encoding, U256,
-    subtle::{ConditionallySelectable, ConstantTimeLess},
-};
+use crypto_bigint::{CtLt, CtSelect, Encoding, U256};
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,
@@ -188,7 +185,7 @@ fn reduce_bls_scalar(integer: U256) -> U256 {
     let subtract_once = |value: U256| {
         let difference = value.wrapping_sub(&BLS_SCALAR_MODULUS);
         let at_least_modulus = !value.ct_lt(&BLS_SCALAR_MODULUS);
-        U256::conditional_select(&value, &difference, at_least_modulus)
+        value.ct_select(&difference, at_least_modulus)
     };
     subtract_once(subtract_once(integer))
 }
@@ -200,9 +197,9 @@ fn valcom_scalar(role: u8, kind: PrivateInputKindV1, envelope: &[u8]) -> Scalar 
     material.push(role);
     material.extend_from_slice(&projection);
     let digest: [u8; 32] = Hash::new(&material).into();
-    let integer = U256::from_le_bytes(digest);
+    let integer = U256::from_le_bytes(digest.into());
     let reduced = reduce_bls_scalar(integer);
-    Scalar::from_bytes_le(&reduced.to_le_bytes())
+    Scalar::from_bytes_le(&reduced.to_le_bytes().into())
         .into_option()
         .expect("modular reduction produces a canonical BLS scalar")
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { ed25519 } from "@noble/curves/ed25519";
+import { ed25519 } from "@noble/curves/ed25519.js";
 
 import { AccountAddress } from "../src/address.js";
 import { parseCanonicalContractAddress } from "../src/contractAddress.js";

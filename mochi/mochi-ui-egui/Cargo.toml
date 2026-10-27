@@ -12,12 +12,17 @@ path = "src/main.rs"
 
 [features]
 default = []
-gui = ["dep:eframe"]
+gui = ["dep:eframe", "dep:egui", "dep:winit"]
 
 [dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 mochi-core = { path = "../mochi-core" }
-eframe = { version = "0.33.0", default-features = true, optional = true }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"], optional = true }
+# Keep the bundled navigation glyphs: egui 0.37 makes its emoji fonts opt-in.
+egui = { version = "0.37.0", default-features = false, features = ["monochrome_emoji_fonts"], optional = true }
+# Keep native Wayland title-bar text through the platform font backend. The
+# default ab_glyph backend brings the retired ttf-parser implementation.
+winit = { version = "0.30.13", default-features = false, features = ["wayland-csd-adwaita-crossfont"], optional = true }
 tokio = { workspace = true, features = ["signal"] }
 hex = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

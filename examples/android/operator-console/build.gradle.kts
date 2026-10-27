@@ -40,7 +40,7 @@ val defaultTelemetryExporter = "operator-console"
 
 android {
     namespace = "org.hyperledger.iroha.samples.operator"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "org.hyperledger.iroha.samples.operator"
@@ -180,7 +180,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(kotlin("test-junit"))
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260814")
     androidTestImplementation(libs.androidxTestExtJunit)
     androidTestImplementation(libs.androidxTestEspressoCore)
 }

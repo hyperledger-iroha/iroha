@@ -105,7 +105,7 @@ state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_pred
         assert!(!snapshot.as_object().unwrap().contains_key("lane_consensus_contexts"));
         assert!(matches!(
             deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(chain.kura())),
-            Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
+            Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
         ));
         let decoded = validated_lane_snapshot_projection(&snapshot, state)
             .expect("decode both complete actual lane component cuts");

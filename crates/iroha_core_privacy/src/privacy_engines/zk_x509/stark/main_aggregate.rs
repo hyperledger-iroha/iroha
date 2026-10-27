@@ -343,7 +343,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
 /// This is phase one only. The returned state cannot commit auxiliary columns
 /// until the credential layer combines its joined base root with the compact-CA
 /// root and supplies the resulting opaque 272-challenge X5B1 binding.
-pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
+pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRng>(
     proof_instance: ZkX509ProofInstanceV1,
     statement: &'a IrohaZkX509StarkP256StatementV1,
     assembly: &'a ZkX509MainTraceAssemblyV1,
@@ -480,7 +480,7 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Consume phase one, bind all challenge-dependent children with one X5B1
     /// capability, commit all six auxiliary groups in one ordered row tree, absorb terminal
     /// claims, and sample the complete per-registration alpha schedule.
-    pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRngCore>(
+    pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRng>(
         self,
         binding: &ZkX509CredentialPreAuxBindingV1,
         rng: &mut R,
@@ -1832,7 +1832,7 @@ fn evaluate_main_composition_columns_v1(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn main_composition_material_with_ca_v1<R: TryRngCore>(
+fn main_composition_material_with_ca_v1<R: TryRng>(
     layout: &AggregateProofLayoutV1,
     base_polynomials: &MainTracePolynomialSetV1,
     aux_polynomials: &MainTracePolynomialSetV1,

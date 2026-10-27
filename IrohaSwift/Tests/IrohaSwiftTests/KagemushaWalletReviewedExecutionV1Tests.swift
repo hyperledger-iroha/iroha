@@ -82,4 +82,47 @@ final class KagemushaWalletReviewedExecutionV1Tests: XCTestCase {
     }, close: { cleanupCalls += 1 })
     XCTAssertEqual(cleanupCalls, 0)
   }
+  func testConsumedCleanupSuccessDoesNotCloseOrQuarantine() throws {
+    let value = try KagemushaWalletConsumedCleanupV1.run(cleanup: { 17 },
+      close: { XCTFail("successful cleanup closed owner") },
+      retain: { _, _ in XCTFail("successful cleanup retained failure"); return Failure.close })
+    XCTAssertEqual(value, 17)
+  }
+
+  func testConsumedCleanupFailureClosesExactOwnerAndPreservesPrimary() {
+    for primary in [Failure.execution(-2), .execution(-5), .malformedReply] {
+      var events: [String] = []
+      XCTAssertThrowsError(try KagemushaWalletConsumedCleanupV1.run(cleanup: { () throws -> Void in
+        events.append("cleanup"); throw primary
+      }, close: { events.append("close") }, retain: { _, _ in
+        XCTFail("acknowledged close cannot quarantine"); return Failure.close
+      })) { XCTAssertEqual($0 as? Failure, primary) }
+      XCTAssertEqual(events, ["cleanup", "close"])
+    }
+  }
+
+  func testConsumedCleanupFailedCloseRetainsBothFailuresAndExactResource() {
+    final class RetainedFailure: Error {
+      let primary: Error, cleanup: Error, owner: NSObject
+      init(_ primary: Error, _ cleanup: Error, _ owner: NSObject) {
+        self.primary = primary; self.cleanup = cleanup; self.owner = owner
+      }
+    }
+    let owner = NSObject()
+    var retained: RetainedFailure?
+    var events: [String] = []
+    XCTAssertThrowsError(try KagemushaWalletConsumedCleanupV1.run(cleanup: { () throws -> Void in
+      events.append("cleanup"); throw Failure.malformedReply
+    }, close: { events.append("close"); throw Failure.close }, retain: { primary, cleanup in
+      events.append("retain"); let failure = RetainedFailure(primary, cleanup, owner)
+      retained = failure; return failure
+    })) { error in
+      XCTAssertTrue((error as? RetainedFailure) === retained)
+    }
+    XCTAssertEqual(events, ["cleanup", "close", "retain"])
+    XCTAssertTrue(retained?.owner === owner)
+    XCTAssertEqual(retained?.primary as? Failure, .malformedReply)
+    XCTAssertEqual(retained?.cleanup as? Failure, .close)
+  }
+
 }

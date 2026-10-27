@@ -5,7 +5,7 @@ use crate::{
     backend::{air::WorkLimits, compact_transfer_air::CompactTransferAir},
     gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
 };
-use rand::{SeedableRng, TryRngCore, rngs::StdRng};
+use rand::{SeedableRng, TryRng, rngs::StdRng};
 
 #[path = "diagnostic_artifact.rs"]
 mod diagnostic_artifact;
@@ -63,19 +63,27 @@ fn statement() -> PublicStatement {
     }
 }
 struct NoEntropy(usize);
-impl TryRngCore for NoEntropy {
-    type Error = &'static str;
+#[derive(Debug)]
+struct NoEntropyError;
+impl core::fmt::Display for NoEntropyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("unexpected entropy")
+    }
+}
+impl std::error::Error for NoEntropyError {}
+impl TryRng for NoEntropy {
+    type Error = NoEntropyError;
     fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
         self.0 += 1;
-        Err("unexpected entropy")
+        Err(NoEntropyError)
     }
     fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
         self.0 += 1;
-        Err("unexpected entropy")
+        Err(NoEntropyError)
     }
     fn try_fill_bytes(&mut self, _: &mut [u8]) -> std::result::Result<(), Self::Error> {
         self.0 += 1;
-        Err("unexpected entropy")
+        Err(NoEntropyError)
     }
 }
 impl TryCryptoRng for NoEntropy {}

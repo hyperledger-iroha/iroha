@@ -179,16 +179,19 @@ rebound at terminal closure. The proof source is explicit messages outside the
 complete Receive schema, and its exact active tape triple plus fixed-owner
 opening within that schema.
 
-The Load schedule is lean (owner decision 2026-10-17): A1 (hard predecessor and
-the Load transition itself: arithmetic, unchanged fields and D32 recovery), W1,
-A2 (hard own receipt signature Q and the exact receipt binding). There is no own
-Q_sigma; A's context still commits the own statement, and the part folded by W1
-is the pinned trivial filler. The credential and Enrollment certificate are
-carried by continuity, so no current-credential leaf exists. One signed object
-tape and the exact 282-byte ordinary Load receipt enter the same context. The
+Load uses one terminal A with no W continuation or own Q_sigma. It checks the
+hard predecessor and own Advance signature Q, proves the Load transition
+(arithmetic, unchanged fields and D32 recovery), and binds the exact receipt
+in that same stage. The credential and Enrollment certificate are carried by
+continuity, so no current-credential leaf exists. The signed Advance and exact
+282-byte ordinary Load receipt are decoded from their original tapes; the
 receipt digest, scheme, asset, wallet, ordinal, amount and charge are constrained
-to the exact Load effect. No finality source key, proof or deferred finality claim
-enters the circuit.
+to the exact Load effect. The single-stage closer binds the predecessor and Q
+cells directly and emits the final 69-word frame with a pinned trivial Vesta
+part. It forms no circuit continuation context or object-tape commitments.
+The native durable checkpoint identity separately binds the fixed schema,
+statement, states, transported claims, Q instances and both original tapes.
+No finality source key, proof or deferred finality claim enters the circuit.
 
 The native owner verifies BLS finality and receipt inclusion before requesting
 the signed Advance. Offline lineage authenticates this decision through that
@@ -283,15 +286,20 @@ Request asset or recipient remains soft, because the own asset/wallet are
 already fixed by authenticated state. Otherwise a prover could pair a valid
 fixed Payment with a different own effect merely to force a burn.
 
-Canonical Payment envelopes reserve 1,723 bytes outside the two raw proofs,
-leaving a joint 8,277-byte budget. The total incoming buffer bounds are therefore
-8,597 bytes for Omega (including its 320-byte public transcript) and 8,277 bytes
-for sigma, including cases where the other malformed proof is empty. Active
-length and exact descriptor checks remain soft predicates; padding never enters
-the original digest. The explicit descriptor-capacity chain is a smaller
-composition diagnostic. A separate fixed-maximum chain must qualify these
-canonical capacities before total ingestion is claimed. Inputs exceeding the
-10,000-byte canonical envelope are rejected before Advance.
+Canonical Payment envelopes reserve 1,394 bytes outside the Omega transport
+proof and sigma, leaving a joint 8,640-byte proof budget within the 10,034-byte
+envelope. The source-role capacities are separate: Omega transport is at most
+5,120 bytes and sigma at most 3,520 bytes. The internal Omega tape adds its
+320-byte public transcript, so incoming raw capacities are 5,440 bytes for
+Omega and 3,520 bytes for sigma, with an independent joint raw bound of 8,960
+bytes. A role cannot borrow the other role's unused capacity, including when
+that other malformed proof is empty. Native intake checks these structural
+bounds before allocation; active original length and exact descriptor checks
+within the admitted tapes remain soft predicates. Padding never enters the
+original digest. A descriptor-capacity chain is a smaller composition diagnostic;
+the current fixed-maximum chain, original-key import and final catalog still
+require qualification. Inputs exceeding the 10,034-byte canonical envelope are
+rejected before Advance.
 
 For this fixed nine-slot Receive schema, continuations may retain opaque
 proposals `(object digest, UInt32 original length, tape commitment)` instead

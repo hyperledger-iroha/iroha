@@ -9,10 +9,10 @@ use crate::{
     Ep, Eq,
     msm::{MemoryBudget, SharedMemoryBudget, msm_secret_with_shared_budget},
 };
-use group::{GroupEncoding, prime::PrimeCurveAffine};
+use group::{CurveAffine, GroupEncoding};
 use rand_chacha::{
     ChaCha20Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 use sha2::{Digest, Sha256};
 use std::{

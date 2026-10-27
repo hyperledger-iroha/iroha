@@ -1,7 +1,7 @@
 #![cfg(feature = "simd-accel")]
 //! Cross-validate hardware_crc64 against the portable fallback across sizes and alignments.
 use norito::core::{crc64_fallback, hardware_crc64};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 #[test]
 fn crc64_simd_matches_fallback_small_sizes() {
     for n in 0..256usize {

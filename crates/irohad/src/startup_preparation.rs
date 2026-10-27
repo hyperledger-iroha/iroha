@@ -446,6 +446,26 @@ impl PreparedStartup {
         }
         let fastpq_replay_seed = if emergency_fast {
             None
+        } else if loaded_state_from_snapshot {
+            // The isolated FASTPQ replay starts again from signed genesis, so it takes the
+            // configured pre-genesis lane policy, not the catalogs of the restored height.
+            let (nexus, manifests) = iroha_core::state::pregenesis_lane_policy(
+                config.nexus.clone(),
+                &configured_lane_manifests,
+            )
+            .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+            Some(
+                iroha_core::sumeragi::node::NativeReplaySeed::capture_restored(
+                    &state,
+                    config.kura.clone(),
+                    AccountId::new(effective_genesis_public_key.clone()),
+                    signed_consensus_mode,
+                    nexus,
+                    manifests,
+                    frozen_startup_lane_compliance.clone(),
+                )
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?,
+            )
         } else {
             Some(
                 iroha_core::sumeragi::node::NativeReplaySeed::capture(
@@ -467,7 +487,8 @@ impl PreparedStartup {
         let state: Arc<State> = Arc::from(state);
         lifetime.state = Some(Arc::clone(&state));
         // Sumeragi rebuilds the state: it applies (fresh chain) or re-executes (restart) the
-        // signed genesis and replays every block Kura holds against its commit certificate.
+        // signed genesis, or resumes the authenticated snapshot State, and replays every block
+        // Kura holds above it against its commit certificate.
         let prepared_sumeragi = if emergency_fast {
             None
         } else {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 import { AccountAddress } from "./address.js";
 import { canonicalizeMultihashHex } from "./normalizers.js";
 import { publicKeyFromPrivate, signEd25519 } from "./crypto.js";

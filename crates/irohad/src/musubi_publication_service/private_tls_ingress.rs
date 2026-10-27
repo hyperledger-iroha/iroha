@@ -628,16 +628,22 @@ mod tests {
                 .expect("test TLS identity");
         let certificate = cert.der().clone();
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
-        let mut server = ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate.clone()], key)
-            .expect("test server config");
+        let mut server =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("test TLS provider")
+                .with_no_client_auth()
+                .with_single_cert(vec![certificate.clone()], key)
+                .expect("test server config");
         server.max_early_data_size = 4_096;
         let mut roots = RootCertStore::empty();
         roots.add(certificate).expect("test root");
-        let client = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        let client =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("test TLS provider")
+                .with_root_certificates(roots)
+                .with_no_client_auth();
         (Arc::new(server), Arc::new(client))
     }
     fn settings() -> MusubiPublicationPrivateTlsSettingsV1 {

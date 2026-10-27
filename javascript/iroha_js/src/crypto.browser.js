@@ -1,6 +1,6 @@
 import { Buffer } from "buffer";
-import { ed25519 } from "@noble/curves/ed25519";
-import { sha256 } from "@noble/hashes/sha256";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
 import {
   entropyToMnemonic,
@@ -37,7 +37,7 @@ export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 export const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 export const PRIVACY_FFI_VERSION_V1 = 1;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 31;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 33;
 export const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES = 256 * 1024;
 export const PRIVACY_COMPILED_PROFILE_CATALOG_VALIDATION_STATUS_V1 = Object.freeze({
   VALID: 0,
@@ -125,7 +125,7 @@ export function generateKeyPair(options = {}) {
   }
   const seed =
     options.seed === undefined
-      ? Buffer.from(ed25519.utils.randomPrivateKey())
+      ? Buffer.from(ed25519.utils.randomSecretKey())
       : normalizeSeed(options.seed);
   return {
     algorithm: "ed25519",

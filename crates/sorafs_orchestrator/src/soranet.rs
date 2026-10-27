@@ -18,7 +18,7 @@ use iroha_data_model::soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicy
 use norito::{
     DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
 };
-use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::SysRng};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
@@ -1124,7 +1124,7 @@ struct GuardCacheTag {
 }
 impl GuardCacheTag {
     fn generate(key: &GuardCacheKey, payload: &[u8]) -> Result<Self, GuardSetPersistenceError> {
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         Self::generate_with_rng(key, payload, &mut rng)
     }
     fn generate_with_rng<R: TryCryptoRng>(
@@ -2778,8 +2778,8 @@ mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::numeric::Quantity;
-    use rand::rand_core::TryRngCore;
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::rand_core::TryRng;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -2798,12 +2798,13 @@ mod tests {
     struct FailingTryRng;
     #[derive(Debug)]
     struct FailingTryRngError;
+    impl std::error::Error for FailingTryRngError {}
     impl fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("failing guard cache RNG")
         }
     }
-    impl TryRngCore for FailingTryRng {
+    impl TryRng for FailingTryRng {
         type Error = FailingTryRngError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)

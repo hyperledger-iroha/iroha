@@ -36,7 +36,7 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
             path.mkdir(mode=0o700)
         self.write(self.root / 'kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/crypto/NativeSignerBridge.kt',
                    b'external fun inspect(input: ByteArray): ByteArray\n')
-        self.write(self.ndk / 'source.properties', b'Pkg.Revision = 28.0.12674087\n')
+        self.write(self.ndk / 'source.properties', b'Pkg.Desc = Android NDK\nPkg.Revision = 30.0.16248370\nPkg.BaseRevision = 30.0.16248370\nPkg.ReleaseName = r30\n')
         self.strip = self.ndk / 'toolchains/llvm/prebuilt/fixture/bin/llvm-strip'
         self.nm = self.strip.with_name('llvm-nm')
         self.write(self.strip, b'fixture strip tool\n')
@@ -58,7 +58,7 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
                 'source_commit': ORIGINAL_COMMIT, 'source_fingerprint_sha256': 'c' * 64},
             'build-environment.json': {
                 'environment_profile': 'android-cargo', 'cargo_build_jobs': 1,
-                'rust_toolchain_channel': '1.93.1', 'wallet_runtime_authority': 'fixture-authority',
+                'rust_toolchain_channel': '1.99.1', 'wallet_runtime_authority': 'fixture-authority',
                 'wallet_runtime_trust_ed25519_hex': 'd' * 64,
                 'android_ndk_source_properties_sha256': MODULE.digest((self.ndk / 'source.properties').read_bytes())},
             'producer-receipt.json': {
@@ -86,7 +86,7 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
         self.receipt = {
             'schema': MODULE.SCHEMA, 'artifact_scope': 'physical-device-demo',
             'status': 'qualified-arm64-device-demo', 'abi': MODULE.ABI,
-            'target': MODULE.TARGET, 'native_bridge_abi_version': 31,
+            'target': MODULE.TARGET, 'native_bridge_abi_version': 33,
             'native_signer_contract_revision': 7, 'source_root': str(self.root),
             'source_commit': ORIGINAL_COMMIT, 'source_fingerprint_sha256': 'c' * 64,
             'producer_artifact_root': str(self.producer),
@@ -137,6 +137,7 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
 
     def test_matching_head_remains_strict_by_default(self):
         result = self.validate()
+        self.assertEqual(result['native_bridge_abi_version'], 33)
         report = result['consumer_validation']
         self.assertFalse(report['allow_source_head_drift'])
         self.assertFalse(report['source_head_drifted'])
@@ -227,11 +228,16 @@ class DeviceDemoHeadDriftTests(unittest.TestCase):
             self.validate(True)
 
     def test_drift_preserves_abi_version(self):
-        self.head = NEW_HEAD
-        self.receipt['native_bridge_abi_version'] = 32
-        self.save_receipt()
-        with self.assertRaisesRegex(ValueError, 'Wrong native ABI'):
-            self.validate(True)
+        for allow_drift in (False, True):
+            self.head = NEW_HEAD if allow_drift else ORIGINAL_COMMIT
+            for version in (31, 32, 34, '33', 33.0, True):
+                with self.subTest(allow_drift=allow_drift, version=version):
+                    self.receipt['native_bridge_abi_version'] = version
+                    self.save_receipt()
+                    with self.assertRaisesRegex(ValueError, 'Wrong native ABI'):
+                        self.validate(allow_drift)
+        self.check_output.assert_not_called()
+        self.run.assert_not_called()
 
     def test_drift_preserves_physical_probe_binding(self):
         self.head = NEW_HEAD

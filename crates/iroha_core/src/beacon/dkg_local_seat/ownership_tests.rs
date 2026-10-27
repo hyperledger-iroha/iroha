@@ -1156,7 +1156,7 @@ fn original_dealer_entropy_failures_remain_local_threshold_causes() {
         unavailable: bool,
         calls: usize,
     }
-    impl rand::TryRngCore for Entropy {
+    impl rand::TryRng for Entropy {
         type Error = std::io::Error;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             let mut bytes = [0; 4];

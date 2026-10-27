@@ -1,4 +1,5 @@
 //! End-point querying logic, including custom public and authenticated routes.
+mod account_alias_readers;
 mod authority_originals;
 pub(crate) mod bounded_async_response;
 #[cfg(test)]
@@ -43,6 +44,7 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod resource_names_state;
+pub use resource_names_state::NativeReadHttpError;
 pub use authority_originals::NativeAuthorityOriginalsReadV1;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.
@@ -3690,9 +3692,7 @@ fn decode_account_alias_resolution(
             )
             .map(Some)
         }
-        status => Err(eyre!(
-            "account-alias resolution failed with HTTP status {status}"
-        )),
+        _ => Err(crate::error::http_error("account.alias.resolve", response.clone()).into()),
     }
 }
 fn decode_account_alias_index_resolution(
@@ -14935,13 +14935,13 @@ impl Client {
         )
     }
     fn signed_request_nonce() -> Result<String> {
-        Self::signed_request_nonce_with_rng(&mut rand::rngs::OsRng)
+        Self::signed_request_nonce_with_rng(&mut rand::rngs::SysRng)
     }
     fn signed_request_nonce_with_rng<R: rand::rand_core::TryCryptoRng>(
         rng: &mut R,
     ) -> Result<String> {
         let mut nonce_bytes = [0_u8; 12];
-        rand::rand_core::TryRngCore::try_fill_bytes(rng, &mut nonce_bytes)
+        rand::rand_core::TryRng::try_fill_bytes(rng, &mut nonce_bytes)
             .map_err(|error| eyre!("signed request nonce OS RNG failed: {error}"))?;
         let encoded_len = (nonce_bytes.len() / 3)
             .checked_mul(4)
@@ -15220,7 +15220,7 @@ impl AccountClient {
         rng: &mut R,
     ) -> core::result::Result<NonZeroU32, TransactionPreparationError> {
         for _ in 0..16 {
-            let value = rand::rand_core::TryRngCore::try_next_u32(rng).map_err(|error| {
+            let value = rand::rand_core::TryRng::try_next_u32(rng).map_err(|error| {
                 TransactionPreparationError::NonceEntropy {
                     details: error.to_string(),
                 }
@@ -15260,7 +15260,7 @@ impl AccountClient {
         &self,
         draft: AccountTransactionDraft,
     ) -> crate::Result<TransactionPayload> {
-        self.prepare_transaction_with_rng(draft, &mut rand::rngs::OsRng)
+        self.prepare_transaction_with_rng(draft, &mut rand::rngs::SysRng)
     }
 
     fn prepare_transaction_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
@@ -17814,11 +17814,14 @@ impl Client {
         let body = norito::json::to_vec(&AccountAliasResolveRequestWireV1 {
             alias: alias.to_string(),
         })?;
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let request = self
+            .account_signed_request(HttpMethod::POST, url, body)?
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .build()?;
+        let response = self
+            .send_prepared_request(request)
+            .map_err(|error| dispatch::transport_error("account.alias.resolve", error))?;
         decode_account_alias_resolution(&response, alias)
     }
     /// Resolve an exact alias index without account authentication.
@@ -18164,11 +18167,14 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/spec");
         let body = norito::json::to_vec(request)?;
-        let resp = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let prepared = self
+            .account_signed_request(HttpMethod::POST, url, body)?
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .build()?;
+        let resp = self
+            .send_prepared_request(prepared)
+            .map_err(|error| dispatch::transport_error("multisig.spec", error))?;
         if resp.status() != StatusCode::OK {
             return Err(crate::error::http_error("multisig.spec", resp).into());
         }
@@ -23757,14 +23763,101 @@ mod blocks_api {
 mod tests {
     use super::consensus::tests::sample_sumeragi_diagnostics;
     use super::{
-        default_alias_policy,
+        ACCEPT_NORITO_PREFERRED, ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1, APPLICATION_JSON,
+        APPLICATION_JSON_UTF8, APPLICATION_NORITO, Account, AccountAliasIndexResolutionWireV1,
+        AccountAliasListItemWireV1, AccountAliasResolutionV1, AccountAliasResolutionWireV1,
+        AccountAliasesByAccountRequestV1, AccountAliasesByAccountWireV1, AccountClient,
+        AccountFaucetClaimV1, AccountFaucetPolicyV1, AccountFaucetPrepareRequestV1,
+        AccountFaucetPreparedSignaturePayloadV1, AccountFaucetPreparedTransactionV1,
+        AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
+        AccountOnboardingCurrentStateV1, AccountOnboardingPlanBodyV1,
+        AccountOnboardingPlanReceiptV1, AccountOnboardingPlanRequestV1,
+        AccountOnboardingPrepareRequestV1, AccountOnboardingPreparedSignaturePayloadV1,
+        AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
+        AccountSigningCapability, AccountTransactionDraft, AliasAssetTotalV1, AliasIndex,
+        AnonymityPolicy, AuthorityContextError, CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1,
+        CANONICAL_REQUEST_MAX_METHOD_BYTES_V1, CANONICAL_REQUEST_MAX_NONCE_BYTES_V1,
+        CANONICAL_REQUEST_MAX_PATH_BYTES_V1, CANONICAL_REQUEST_MAX_QUERY_PAIRS_V1,
+        CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1, CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1,
+        CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1,
+        CANONICAL_REQUEST_WITNESS_MAX_HEADER_BYTES_V1, CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1,
+        CANONICAL_REQUEST_WITNESS_VERSION_V1, CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES,
+        CONTRACT_CODE_ARTIFACT_MAX_BYTES, CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES,
+        CanonicalRequestWitnessV1, CapabilityProbeError, ChainId, Client, ClientBuilder,
+        ContractCodeBytesResponse, ContractManifestResponse, DATA_MODEL_VERSION, DaIngestParams,
+        DaIngestReceipt, DaIngestRequest, DaIngestResponsePayload, DaPinScopeV1,
+        DataModelCompatibility, DataModelCompatibilityError, DefaultHttpTransport,
+        DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1, ErrorEnvelope,
+        Executable, FEE_QUOTE_RESPONSE_MAX_BYTES, FEE_SPONSOR_PROGRAM_RESPONSE_MAX_BYTES,
+        FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeeQuoteBackpressure, FeeQuoteRequest,
+        FeeQuoteResponse, FeeQuoteWireRequest, FeeSponsorProgram, FeeSponsorProgramId,
+        GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES, GovernanceProposalInstructionDraftV1,
+        HEADER_ACCOUNT, HEADER_NONCE, HEADER_OPERATOR_NONCE, HEADER_OPERATOR_PUBLIC_KEY,
+        HEADER_OPERATOR_SIGNATURE, HEADER_OPERATOR_TIMESTAMP_MS, HEADER_SIGNATURE,
+        HEADER_TIMESTAMP_MS, HEADER_WITNESS, InstructionBox, Json, JsonDeserialize, JsonSerialize,
+        JsonValue, KeyPair, LaneCatalog, LaneLifecycleStatusV1, Level, Log, Metadata,
+        MultisigProposalsQueryRequest, NODE_CAPABILITIES_RESPONSE_MAX_BYTES,
+        NORITO_V1_WEBSOCKET_SUBPROTOCOL, NetworkId, NonZeroU64,
+        PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES, PinStatusKindV1,
+        PipelineTransactionStatusResponse, PreparedOperationBindingV1,
+        PreparedSignatureTranscriptV1, PreparedTransactionOutcomeV1, PreparedTransactionPayload,
+        PreparedTransactionSubmitResponseWireV1, Quantity, Register, RequestBuilder, Response,
+        ResponseReport, Result, RetailFeeQuoteResponseV1, RetailFeeStatusResponseV1, RolloutPhase,
+        SIGNED_TRANSACTION_HASH_HEADER, SORACLOUD_STATUS_RESPONSE_MAX_BYTES,
+        SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1,
+        SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1, SORAFS_MODERATION_TRANSACTION_TTL,
+        SccpRouteGovernanceProposalDraftRequestV1, SccpRouteGovernanceProposalDraftResponseV1,
+        SdkError, Sha256, SignedTransaction, SorafsAliasListFilter,
+        SorafsAppealFinanceReadbackFilter, SorafsBillingAcknowledgementProof,
+        SorafsBillingStatementListFilter, SorafsHedgingProjectionFilter,
+        SorafsModerationBallotEventsFilter, SorafsModerationBallotsFilter,
+        SorafsModerationCommandRoute, SorafsModerationModelRegistryFilter,
+        SorafsModerationQuarantineFilter, SorafsModerationQuarantineObjectStoreRequest,
+        SorafsModerationQuarantineReleaseRequest, SorafsModerationQuarantineReviewRequest,
+        SorafsModerationScreeningResultRequest, SorafsModerationScreeningResultsFilter,
+        SorafsPinFinalizedAnchor, SorafsPinListFilter, SorafsRepairCommandRoute,
+        SorafsRepairEventsFilter, SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter,
+        SorafsReplicationListFilter, SorafsReplicationStatus, SorafsReserveCommandRoute,
+        SorafsReserveEventsReadbackFilter, SorafsReserveFinalizedAnchor,
+        SorafsReserveMovementReadbackFilter, SorafsTransparencyReadbackFilter, Status,
+        SumeragiStatus, TRANSACTION_DISPATCH_OUTCOME_UNKNOWN_ENVELOPE_CODE,
+        TRANSACTION_DISPATCH_OUTCOME_UNKNOWN_REJECT_CODE, TRANSACTION_ENTRYPOINT_HASH_HEADER,
+        TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES, TransactionBatchAdmissionError,
+        TransactionBuilder, TransactionDispatchOutcomeUnknownError,
+        TransactionDispatchOutcomeUnknownIdentity, TransactionDomain, TransactionEntrypoint,
+        TransactionPayload, TransactionPreparationError, TransactionResponseHandler,
+        TransactionSchemaCompatibilityError, TransactionSigningError,
+        TransactionSubmissionDisposition, TxGossipSnapshot, UaidBindingsQuery,
+        UaidBindingsResponse, UaidManifestRecord, UaidManifestStatus, UaidPortfolioQuery,
+        UaidPortfolioResponse, Uptime, Url, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES, ValidationFeeCurrentPolicyProofRequestV1,
+        WireFormatPreference, account_onboarding_test_fixture, apply_fee_quote_intent,
+        attach_client_fixture_outputs, blocks_api, canonical_network_request_hash,
+        canonical_network_request_message, canonical_network_request_signature_message,
+        canonical_norito_websocket_headers, canonical_request_signature_header_value,
+        canonical_request_witness_header_value, canonical_request_witness_message,
+        canonicalize_uaid_literal, capabilities_body_with, checked_random_keypair,
+        client_fixture_network_output, compatible_capabilities_body,
+        decode_account_alias_index_resolution, decode_account_alias_resolution,
+        decode_account_aliases_by_account, decode_and_verify_account_onboarding_plan_for_request,
+        decode_canonical_prepared_transaction, decode_from_bytes, decode_parameters_for_test,
+        default_alias_policy, encode_bounded_canonical_base64_value, events_api,
         evidence_http_tests::{
             SnapshotStore, assert_signed_headers, assert_signed_json_headers,
             assert_single_accept_header, base_url, capability_gated_responder, capture_request,
             capture_requests, client_with_base_url, empty_response, json_response,
             mark_data_model_compatible, respond_with, with_mock_http,
         },
-        *,
+        expected_prepared_transaction_metadata, eyre, faucet_claim_hash, fmt, join_torii_url,
+        join_torii_url_with_path_segments, mk_response, parse_canonical_i105_account_id,
+        parse_canonical_validation_fee_u64, parse_prepared_submit_response, parse_required_u64,
+        sccp_route_governance_proposal_kind, signed_transaction_schema_hash_hex, status,
+        test_network_id, to_bytes, torii_routes, transaction_batch_outcomes,
+        tx_rejection_to_report, validate_account_faucet_claim,
+        validate_canonical_request_account_literal, validate_prepared_semantic_binding,
+        validate_public_prepared_transaction_lifetime,
+        validate_sccp_route_governance_draft_request,
+        validate_sccp_route_governance_draft_response,
     };
     use crate::http::ws::conn_flow::Events as _;
     use crate::http_default::RequestSnapshot;
@@ -23777,6 +23870,7 @@ mod tests {
         },
         secrecy::SecretString,
     };
+    use base64::Engine as _;
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
     use iroha_data_model::{
         account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
@@ -23825,6 +23919,8 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;
+    use iroha_version::codec::EncodeVersioned as _;
+    use sha2::Digest as _;
     use std::{
         collections::HashMap,
         fs,
@@ -25123,12 +25219,13 @@ mod tests {
     struct FailingClientRng;
     #[derive(Debug)]
     struct FailingClientRngError;
+    impl std::error::Error for FailingClientRngError {}
     impl std::fmt::Display for FailingClientRngError {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("failing client RNG")
         }
     }
-    impl rand::rand_core::TryRngCore for FailingClientRng {
+    impl rand::rand_core::TryRng for FailingClientRng {
         type Error = FailingClientRngError;
         fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
             Err(FailingClientRngError)
@@ -33640,7 +33737,10 @@ mod tests {
             error.downcast_ref::<norito::json::Error>().is_some(),
             "response context must preserve the native strict decoder cause: {error:#}"
         );
-        assert!(format!("{error:#}").contains("unknown field `message`"));
+        assert!(
+            format!("{error:#}").contains("unknown parameter field"),
+            "strict parameter decoding must reject the unknown envelope field: {error:#}"
+        );
 
         let mut wrong_media = response.clone();
         wrong_media

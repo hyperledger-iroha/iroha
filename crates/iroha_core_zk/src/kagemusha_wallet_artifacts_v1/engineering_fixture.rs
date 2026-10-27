@@ -117,10 +117,8 @@ fn original<C: PastaCurve, const LINEAGE: bool>(
 }
 
 fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-    KagemushaDevicePublicKeyV1::from_sec1_bytes(
-        key.verifying_key().to_encoded_point(false).as_bytes(),
-    )
-    .expect("actual P256 fixture point")
+    KagemushaDevicePublicKeyV1::from_sec1_bytes(key.verifying_key().to_sec1_point(false).as_bytes())
+        .expect("actual P256 fixture point")
 }
 
 fn sign(key: &SigningKey, message: &[u8]) -> KagemushaWalletSignerOutputV1<'static> {

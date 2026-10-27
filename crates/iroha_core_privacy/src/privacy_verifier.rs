@@ -6058,7 +6058,6 @@ pub mod test_fixtures {
         Signature as P256Signature, SigningKey as P256SigningKey,
         signature::hazmat::PrehashSigner as _,
     };
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
     use std::{str::FromStr as _, sync::OnceLock};
     const TEST_CONSENSUS_LIMITS: PrivacyConsensusLimitsV1 =
@@ -6077,34 +6076,39 @@ pub mod test_fixtures {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            for chunk in destination.chunks_mut(32) {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.privacy.verifier.kat-rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                chunk.copy_from_slice(&block[..chunk.len()]);
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                for chunk in destination.chunks_mut(32) {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.privacy.verifier.kat-rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    chunk.copy_from_slice(&block[..chunk.len()]);
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     pub(super) fn fcmp_scalar(value: u64) -> [u8; 32] {
         let mut scalar = [0_u8; 32];
         scalar[..8].copy_from_slice(&value.to_le_bytes());
@@ -6392,7 +6396,7 @@ pub mod test_fixtures {
             let issuer_signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
                 .expect("ZK-AMS issuer signing key");
             let issuer_public_key = {
-                let encoded = issuer_signing_key.verifying_key().to_encoded_point(true);
+                let encoded = issuer_signing_key.verifying_key().to_sec1_point(true);
                 PrivacyP256PointV1::new(
                     encoded
                         .as_bytes()
@@ -6547,7 +6551,7 @@ pub mod test_fixtures {
                     let signature: P256Signature = issuer_signing_key
                         .sign_prehash(credential.digest().as_bytes())
                         .expect("ZK-AMS issuer signature");
-                    let signature = signature.normalize_s().unwrap_or(signature);
+                    let signature = signature.normalize_s();
                     <[u8; 64]>::from(signature.to_bytes())
                 })
                 .collect::<Vec<_>>();

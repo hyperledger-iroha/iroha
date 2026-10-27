@@ -28,7 +28,7 @@ use curve25519_dalek::{
     traits::{Identity as _, IsIdentity as _, MultiscalarMul as _, VartimeMultiscalarMul as _},
 };
 use p256::elliptic_curve::bigint::{Encoding as _, U256};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest as _, Sha256};
 use sha3::Keccak256;
 use std::{
@@ -422,7 +422,7 @@ fn monero_hash_to_point(bytes: [u8; 32]) -> Result<EdwardsPoint, FcmpNativeError
     let mut hashed_bytes = keccak256(&bytes);
     let high_bit = hashed_bytes[31] >> 7;
     hashed_bytes[31] &= 0x7f;
-    let mut reduced = U256::from_le_bytes(hashed_bytes);
+    let mut reduced = U256::from_le_bytes(hashed_bytes.into());
     if high_bit == 1 {
         // 2^255 = 19 (mod 2^255-19).
         reduced = reduced.wrapping_add(&U256::from(19_u8));
@@ -1054,7 +1054,7 @@ impl SecretMultiexpBuilder {
     }
 }
 fn random_nonzero_scalar(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
 ) -> Result<Zeroizing<Scalar>, FcmpNativeErrorV1> {
     for _ in 0..MAX_SCALAR_SAMPLING_ATTEMPTS_V1 {
         let mut wide = Zeroizing::new([0_u8; 64]);
@@ -1309,7 +1309,7 @@ fn next_wip_generators(
     reason = "Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it."
 )]
 fn prove_wip(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     generators: BpPlusGenerators,
     commitment: EdwardsPoint,
     weight: Scalar,
@@ -1635,7 +1635,7 @@ fn verify_wip(
     Ok(())
 }
 fn prove_range_once(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     mode: TranscriptMode,
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
@@ -1781,7 +1781,7 @@ fn preflight_fcmp_range_v1(
 /// # Errors
 /// Rejects invalid openings, unhealthy randomness, proof construction failures, or a failed prover self-check.
 pub fn prove_fcmp_range_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
@@ -1793,7 +1793,7 @@ pub fn prove_fcmp_range_v1(
     Ok(proof)
 }
 pub(super) fn prove_fcmp_range_with_checked_rng_v1(
-    rng: &mut (impl RngCore + CryptoRng),
+    rng: &mut (impl TryRng + TryCryptoRng),
     context_hash: [u8; 32],
     openings: &[FcmpOutputCommitmentOpeningV1],
 ) -> Result<FcmpRangeProofV1, FcmpNativeErrorV1> {
@@ -1861,7 +1861,8 @@ pub fn verify_fcmp_range_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::fcmp_plus_plus::FailingRngV1;
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -2422,17 +2423,16 @@ mod tests {
         try_fill_calls: usize,
         bytes_filled: usize,
     }
-    impl RngCore for PeriodicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PeriodicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("FCMP++ range prover must reject the periodic prefix")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("FCMP++ range prover must reject the periodic prefix")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("FCMP++ range prover must use fallible entropy")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             for byte in destination {
                 *byte = (self.cursor % self.period).to_le_bytes()[0]
                     .wrapping_mul(59)
@@ -2442,18 +2442,17 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for PeriodicRng {}
-    impl RngCore for ZeroReductionRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryCryptoRng for PeriodicRng {}
+    impl rand::TryRng for ZeroReductionRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("FCMP++ range prover must use fallible entropy")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("FCMP++ range prover must use fallible entropy")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("FCMP++ range prover must use fallible entropy")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             assert_eq!(
                 destination.len(),
                 ZERO_REDUCTION_BLOCK_V1.len(),
@@ -2465,7 +2464,7 @@ mod tests {
             Ok(())
         }
     }
-    impl CryptoRng for ZeroReductionRng {}
+    impl rand::TryCryptoRng for ZeroReductionRng {}
     fn hex32(value: &str) -> [u8; 32] {
         assert_eq!(value.len(), 64);
         let mut bytes = [0_u8; 32];
@@ -2918,7 +2917,7 @@ mod tests {
     fn native_standard_transcript_proof_is_upstream_compatible() {
         let opening = opening(1, 9, 17);
         let output = opening.output();
-        let mut rng = StdRng::seed_from_u64(0x0fcb_0000);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x0fcb_0000);
         let proof = prove_range_once(&mut rng, TranscriptMode::PinnedUpstream, &[opening])
             .expect("native standard-transcript proof");
         verify_range_with_mode(TranscriptMode::PinnedUpstream, &[output], &proof)
@@ -2947,7 +2946,7 @@ mod tests {
             .map(FcmpOutputCommitmentOpeningV1::output)
             .collect::<Vec<_>>();
         let context = [0x52; 32];
-        let mut rng = StdRng::seed_from_u64(0x0fcb_0001);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x0fcb_0001);
         let proof =
             prove_fcmp_range_v1(&mut rng, context, &openings).expect("valid aggregate proof");
         assert_eq!(
@@ -3013,7 +3012,7 @@ mod tests {
         FcmpOutputCommitmentOpeningV1::new(zero_mask_output, 2, Scalar::ZERO.to_bytes())
             .expect("zero masks are part of the verifier relation");
         let context = [0x53; 32];
-        let mut rng = StdRng::seed_from_u64(0x0fcb_0002);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x0fcb_0002);
         let proof =
             prove_fcmp_range_v1(&mut rng, context, &[valid]).expect("valid strict-positive proof");
         // C = mask*G + 2^64*H is the first integer outside the u64 range.

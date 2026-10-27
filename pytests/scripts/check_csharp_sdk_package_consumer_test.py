@@ -116,7 +116,7 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
         "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=\"${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1}\"",
         "DOTNET_GLOBAL_JSON=\"${CSHARP_SDK_PACKAGE_CONSUMER_GLOBAL_JSON:-${ROOT_DIR}/csharp/global.json}\"",
         "stage_pinned_dotnet_global_json()",
-        'run_dotnet "${app_dir}" new console --framework net8.0 --output . --no-restore',
+        'run_dotnet "${app_dir}" new console --framework net10.0 --output . --no-restore',
         'run_dotnet "${app_dir}" add package Hyperledger.Iroha.Sdk',
         'run_dotnet "${app_dir}" build "${project_file}"',
         'run_dotnet "${app_dir}" run --project "${project_file}"',
@@ -257,13 +257,13 @@ def test_native_package_consumer_rejects_retail_fee_probe_drift(
 def test_csharp_sdk_package_consumer_stages_and_uses_pinned_dotnet_sdk(
     tmp_path: Path,
 ) -> None:
-    """The temporary consumer must select .NET 8 even when .NET 10 is newer."""
+    """The temporary consumer must select .NET 10 even when .NET 11 is installed."""
 
     app_dir = tmp_path / "consumer"
     app_dir.mkdir()
     pinned_global_json = tmp_path / "pinned-global.json"
     pinned_global_json.write_text(
-        '{"sdk":{"version":"8.0.419","rollForward":"latestFeature"}}\n',
+        '{"sdk":{"version":"10.0.402","rollForward":"latestFeature"}}\n',
         encoding="utf-8",
     )
     fake_dotnet = tmp_path / "dotnet"
@@ -273,9 +273,9 @@ set -euo pipefail
 case "${1:-}" in
   --version)
     if [[ -f "${PWD}/global.json" ]]; then
-      printf '8.0.419\\n'
+      printf '10.0.402\\n'
     else
-      printf '10.0.400\\n'
+      printf '11.0.100\\n'
     fi
     ;;
   --info)
@@ -302,7 +302,7 @@ esac
             _bash_function_source("stage_pinned_dotnet_global_json"),
             _bash_function_source("require_dotnet"),
             'if require_dotnet "${app_dir}"; then',
-            "  echo 'error: unpinned .NET 10 unexpectedly accepted' >&2",
+            "  echo 'error: unpinned .NET 11 unexpectedly accepted' >&2",
             "  exit 1",
             "fi",
             'stage_pinned_dotnet_global_json "${app_dir}"',
@@ -329,9 +329,9 @@ esac
         text=True,
     )
 
-    assert "dotnet version: 10.0.400" in completed.stdout
-    assert "got 10.0.400" in completed.stderr
-    assert "dotnet version: 8.0.419" in completed.stdout
+    assert "dotnet version: 11.0.100" in completed.stdout
+    assert "got 11.0.100" in completed.stderr
+    assert "dotnet version: 10.0.402" in completed.stdout
     assert "fake dotnet info from pinned directory" in completed.stdout
     assert (app_dir / "global.json").read_bytes() == pinned_global_json.read_bytes()
 

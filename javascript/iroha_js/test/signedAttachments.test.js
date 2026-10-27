@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 import {
   SIGNED_ATTACHMENT_LIMITS_V1, actionStatementDigestV1,
   decodeSignedAttachmentsV1, encodeSignedAttachmentsV1,

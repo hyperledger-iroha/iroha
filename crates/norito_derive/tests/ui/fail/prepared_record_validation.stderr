@@ -10,13 +10,15 @@ note: expected this to be `u8`
 21 |     type Value = ();
    |                  ^^
 note: required for `Checked` to implement `DecodeValueFields<Destination>`
-  --> tests/ui/fail/prepared_record_validation.rs:6:10
+  --> tests/ui/fail/prepared_record_validation.rs:8:8
    |
  6 | #[derive(norito::DeserializePayload)]
-   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced in this `derive` macro
+   |          -------------------------- type parameter would need to implement `DecodeValueFields<Destination>`
  7 | #[norito(decode_fields, validate = "Self::validate")]
  8 | struct Checked {
    |        ^^^^^^^
+   = help: consider manually implementing `DecodeValueFields<Destination>` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
    = note: associated types for the current `impl` cannot be restricted in `where` clauses
    = note: associated types for the current `impl` cannot be restricted in `where` clauses
 note: required by a bound in `requires_actual_value`
@@ -24,4 +26,3 @@ note: required by a bound in `requires_actual_value`
    |
 30 |     fn requires_actual_value<T: DecodeValueFields<Destination>>() {}
    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `requires_actual_value`
-   = note: this error originates in the derive macro `norito::DeserializePayload` (in Nightly builds, run with -Z macro-backtrace for more info)

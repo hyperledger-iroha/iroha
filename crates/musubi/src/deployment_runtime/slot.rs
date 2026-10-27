@@ -187,6 +187,34 @@ impl DeploymentSlot {
         }
     }
 
+    /// The authenticated journal a resume would start from: the active one, or a published
+    /// candidate whose publication still needs recovery. Nothing is reconciled or repaired.
+    pub(super) fn resumable(
+        &self,
+        service: &DeploymentService,
+    ) -> Result<Option<(PathBuf, DeploymentPreflight)>> {
+        let journal = match self.read_state()? {
+            Publication::Empty => None,
+            Publication::Active { journal } => Some(journal),
+            Publication::Preparing {
+                candidate,
+                previous,
+            } => {
+                if self.writer.open_child_optional(&candidate)?.is_some() {
+                    Some(candidate)
+                } else {
+                    previous
+                }
+            }
+        };
+        let Some(journal) = journal else {
+            return Ok(None);
+        };
+        let journal = self.writer.path().join(journal);
+        let preflight = self.authenticate(service, &journal)?;
+        Ok(Some((journal, preflight)))
+    }
+
     fn authenticate(
         &self,
         service: &DeploymentService,

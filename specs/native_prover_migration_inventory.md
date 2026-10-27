@@ -117,8 +117,8 @@ Post-retirement guards and rebuilt release consumers remain separate checks.
 | Consumer | Stack | Use | Live exposure | Milestone |
 | --- | --- | --- | --- | --- |
 | `iroha_zkp_poseidon` (`pasta.rs`, `poseidon.rs`; native-field cross-check in `pasta/tests.rs`) | halo2curves 0.9; dev iroha_pasta | T H | Shared proof-system primitives; the paired-key authority helper is deleted | Direct vendored field and parameter-generator edges removed; all20 primitive tests pass with the independent field cross-check and captured RP56 banks. The retained Python implementation independently rederives every parameter field. |
-| `iroha_zkp_halo2` (native Pallas/BN254 IPA, SHA3 transcript; used by `ivm`, `iroha_core` `zk-ipa-native`, `iroha_cli`, `iroha_torii`, `iroha_core_privacy`, `fastpq_prover`, `iroha_core_zk`, `iroha_python_rs`) | halo2curves 0.9 (optional) | P V T | Non-optional dependency of `iroha_core`, so every node | Owner: converge or keep separate |
-| `iroha_core_privacy` `privacy_engines/orchard.rs`; `iroha_core` feature `privacy-release-evidence` | orchard 0.15.4 (git rev `9d07047d`, a non-optional dependency of `iroha_core_privacy`), Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 | V | Taira privacy catalog `orchard-halo2-actions-v1`, `activation_state: not-executed` (`privacy_bootstrap_plan.json`) | Carve-out: stays after M7; separate package identities retained by `scripts/check_no_vendored_halo2.py` |
+| `iroha_zkp_halo2` (native Pallas/BN254 IPA, SHA3 transcript; direct consumers: `ivm`, `iroha_core` `zk-ipa-native`, `iroha_torii`, `iroha_core_privacy`, `fastpq_prover`, `iroha_core_zk`, `iroha_python_rs`; `iroha_cli` retains transitive exposure through its current dependencies, with no direct edge) | halo2curves 0.9 (optional) | P V T | Non-optional dependency of `iroha_core`, so every node | Owner: converge or keep separate |
+| `iroha_core_privacy` `privacy_engines/orchard.rs`; `iroha_core` feature `privacy-release-evidence` | orchard 0.15.4 (git rev `9d07047d`, a non-optional dependency of `iroha_core_privacy`), Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 | P V | Taira privacy catalog `orchard-halo2-actions-v1`, `activation_state: not-executed` (`privacy_bootstrap_plan.json`) | Carve-out: stays after M7; separate package identities retained by `scripts/check_no_vendored_halo2.py` |
 | Orchard linkers (through `iroha_core_privacy`): `connect_norito_bridge` (iOS/Android), `irohad`, `iroha_torii`, `iroha_cli`, `iroha_kagami`, `iroha_js_host`, `zk_ace_prover`, `integration_tests`, and `python/iroha_python/iroha_python_rs` (`privacy_wallet_bundle.rs`, `privacy_native_actions.rs` build Orchard spend/change prover inputs) | orchard, Zcash `halo2_proofs` 0.3.4, `pasta_curves` 0.5.2 (linked, not imported) | P V T | Every node binary, the mobile bridge, npm and PyPI wheels | Carve-out with Orchard; binary-size and seal reports count it |
 | `vendor/vega-prover` (Microsoft Vega; `src/provider/pasta.rs`) | Own `ff` 0.13 Pasta provider; not a workspace member | T | Reference for the `iroha_zkp_halo2` Vega fixtures (`vega/canonical_mc_exact.rs`, `vega/microsoft_mc/*`) | Out of the halo2 M7 scope; owner decides whether those KATs move to `iroha_pasta` |
 | `ivm` (BN254 `poseidon.rs`, `bn254_vec.rs`); ZK verify syscalls reach `iroha_core_zk` through the `iroha_core` host | halo2curves 0.9 BN254 | H | All nodes | No direct change; follows M2(d) dispatch |
@@ -283,11 +283,12 @@ Retired formats, verifiers and compatibility paths are not retained in the relea
   `target/qualification/retained-rp56-native-20261007/unit/provenance.json` passes
   23 Kaigi and 38 PoP tests without source or binary drift. Kaigi framing and raw
   field encoding retain their independent KATs.
-- The PR guard walks actual all-feature Cargo normal/build edges for every workspace
-  root and rejects the retired Axiom packages, parameter generator and any path
-  into the temporary oracle. Only the exact nonpublishable oracle root is exempt;
-  dev-only edges and the distinct Orchard/Zcash package identities remain allowed.
-  The current graph and nine regression tests covering direct/transitive/build/platform/alias paths pass.
+- The PR guard walks actual all-feature Cargo normal/build/development edges for
+  every workspace root and every target, rejecting the retired Axiom packages,
+  parameter generator and any path into the temporary oracle. No oracle root or
+  development edge is exempt; the distinct Orchard/Zcash package identities
+  remain allowed. The recorded graph check and nine regression tests covering
+  direct/transitive/build/platform/alias paths passed.
 - The succinct oracle capture now compares all original snark-verifier and Halo2
   challenges, exact BGH19 accumulator G/xi fields, and both final decisions for
   eight Sigma/Wide cases across both Pasta curves and seeds 42/43. The frozen
@@ -305,5 +306,6 @@ Retired formats, verifiers and compatibility paths are not retained in the relea
 - Still to capture (TODO): remaining per-family relation goldens and tamper corpora
   and the current complete KAGEMUSHA catalog. The earlier 45 non-measurement oracle
   tests and 73 companion cases passed on both instruction targets; hardware and
-  timing gates remain separate. These component results do not authorize M7
-  deletion while its retained-consumer, operation and release gates remain open.
+  timing gates remain separate. M7 source retirement is installed; these historical
+  component results do not qualify the current retained-consumer, operation or
+  release gates.

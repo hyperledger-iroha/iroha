@@ -34,23 +34,23 @@ use iroha_data_model::{
         },
     },
 };
-use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 use sha2::{Digest, Sha256};
 use std::{num::NonZeroU32, sync::OnceLock, time::Duration};
 
 struct KatRng(u64);
-impl RngCore for KatRng {
-    fn next_u32(&mut self) -> u32 {
+impl rand::TryRng for KatRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_le_bytes(bytes))
     }
-    fn fill_bytes(&mut self, output: &mut [u8]) {
+    fn try_fill_bytes(&mut self, output: &mut [u8]) -> Result<(), Self::Error> {
         for chunk in output.chunks_mut(32) {
             let mut hash = Sha256::new();
             hash.update(b"iroha.i3.pgc-bootstrap.custody.test.v1");
@@ -58,13 +58,10 @@ impl RngCore for KatRng {
             self.0 = self.0.checked_add(1).unwrap();
             chunk.copy_from_slice(&hash.finalize()[..chunk.len()]);
         }
-    }
-    fn try_fill_bytes(&mut self, output: &mut [u8]) -> Result<(), RngError> {
-        self.fill_bytes(output);
         Ok(())
     }
 }
-impl CryptoRng for KatRng {}
+impl rand::TryCryptoRng for KatRng {}
 fn key(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }

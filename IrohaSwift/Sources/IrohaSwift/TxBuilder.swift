@@ -111,7 +111,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
                   wireName == PrivacyExact12FixtureCodecV1.instructionWireId(for: privacyProtocolId) else {
                 throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
             }
-            // Re-run the ABI31 catalog getter+validator and the exact manifest/
+            // Re-run the ABI33 catalog getter+validator and the exact manifest/
             // request/envelope tuple comparison at final encoding. A previously issued
             // token cannot turn a missing or stale native artifact into authority.
             try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(

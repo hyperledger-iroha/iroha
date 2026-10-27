@@ -12,7 +12,7 @@ default = []
 accel = ["iroha_parliament_ballot_proof/accel", "iroha_zkp_vole/accel"]
 
 [dependencies]
-libfuzzer-sys = "=0.4.10"
+libfuzzer-sys = "=0.4.13"
 # The parsers and replay compare both rows, so the diagnostic comparator row is enabled.
 iroha_parliament_ballot_proof = { path = "..", features = ["diagnostics"] }
 iroha_zkp_vole = { path = "../../iroha_zkp_vole" }
@@ -22,8 +22,8 @@ iroha_zkp_vole = { path = "../../iroha_zkp_vole" }
 members = ["."]
 
 [patch.crates-io]
+# Preserve applicable root workspace source and allocation custody patches.
 aes = { path = "../../../vendor/aes" }
-
 [[bin]]
 name = "parsers"
 path = "fuzz_targets/parsers.rs"

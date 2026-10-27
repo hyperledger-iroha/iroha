@@ -333,7 +333,7 @@ mod native {
         request: &ControlRequest,
     ) -> std::result::Result<T, RequestFailure> {
         let deadline = Instant::now()
-            + if request.action == "down" {
+            + if request.action == ControlAction::Down {
                 STOP_OBSERVATION_MAXIMUM
             } else {
                 IO_TIMEOUT
@@ -805,7 +805,7 @@ mod native {
                 &directory,
                 &ControlRequest {
                     token: "c".repeat(64),
-                    action: "status".into(),
+                    action: ControlAction::Status,
                 },
             );
             let elapsed = started.elapsed();
@@ -849,7 +849,10 @@ mod native {
                     assert!(Instant::now() < accepted_before);
                     thread::sleep(Duration::from_millis(1));
                 };
-                assert_eq!(connection.receive().unwrap().action, "startup_expired");
+                assert_eq!(
+                    connection.receive().unwrap().action,
+                    ControlAction::StartupExpired
+                );
                 connection.0.write_all(&4_u32.to_be_bytes()).unwrap();
                 connection.0.write_all(b"a").unwrap();
                 for byte in b"bcd" {
@@ -865,7 +868,7 @@ mod native {
                 &directory,
                 &ControlRequest {
                     token: "c".repeat(64),
-                    action: "startup_expired".into(),
+                    action: ControlAction::StartupExpired,
                 },
             );
             let elapsed = started.elapsed();
@@ -880,7 +883,11 @@ mod native {
         #[test]
         fn foreground_control_replies_keep_the_callers_absolute_deadline() {
             let _resources = super::super::super::native_test_guard();
-            for action in ["status", "attachment_start", "attachment_status"] {
+            for action in [
+                ControlAction::Status,
+                ControlAction::AttachmentStart,
+                ControlAction::AttachmentStatus,
+            ] {
                 let temporary = tempfile::tempdir().unwrap();
                 let directory =
                     PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
@@ -909,7 +916,7 @@ mod native {
                     &directory,
                     &ControlRequest {
                         token: "c".repeat(64),
-                        action: action.into(),
+                        action,
                     },
                     started + Duration::from_millis(180),
                 );
@@ -957,7 +964,7 @@ mod native {
                 PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
             let request = ControlRequest {
                 token: "d".repeat(64),
-                action: "down".into(),
+                action: ControlAction::Down,
             };
             let listener = Listener::bind(&directory).unwrap();
             drop(listener);
@@ -1151,7 +1158,7 @@ mod native {
             assert_eq!(connection.0.write_timeout().unwrap(), Some(IO_TIMEOUT));
             let request = ControlRequest {
                 token: "d".repeat(64),
-                action: "status".into(),
+                action: ControlAction::Status,
             };
             write_frame(&mut client, &encode(&request).unwrap()).unwrap();
             let actual = connection.receive().unwrap();
@@ -1181,7 +1188,7 @@ mod native {
             assert!(listener.accept().unwrap().is_none());
             let request = ControlRequest {
                 token: "c".repeat(64),
-                action: "status".into(),
+                action: ControlAction::Status,
             };
             let mut frame = Vec::new();
             write_frame(&mut frame, &encode(&request).unwrap()).unwrap();
@@ -1360,7 +1367,10 @@ mod tests {
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             loop {
                 if let Some(mut connection) = listener.accept().unwrap() {
-                    assert_eq!(connection.receive().unwrap().action, "attachment_status");
+                    assert_eq!(
+                        connection.receive().unwrap().action,
+                        ControlAction::AttachmentStatus
+                    );
                     connection.reply(&reply).unwrap();
                     return;
                 }
@@ -1372,7 +1382,7 @@ mod tests {
             &directory,
             &ControlRequest {
                 token: "c".repeat(64),
-                action: "attachment_status".into(),
+                action: ControlAction::AttachmentStatus,
             },
         )
         .unwrap();

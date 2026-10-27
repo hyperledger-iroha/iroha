@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { blake2b } from "@noble/hashes/blake2b";
+import { blake2b } from "@noble/hashes/blake2.js";
 import { networkIdBytes } from "./networkId.js";
 
 const SID_PREFIX = Buffer.from("iroha-connect|sid|");

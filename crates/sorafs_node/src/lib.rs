@@ -552,7 +552,7 @@ use orderbook_transaction_forwarder::{
     OrderbookTransactionForwarderPolicyV1, OrderbookTransactionPendingV1,
     OrderbookTransactionSigningRequestV1,
 };
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{rand_core::TryRng as _, rngs::SysRng};
 use repair_transaction_forwarder::{
     REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1, RepairOperationV1, RepairTransactionContextV1,
     RepairTransactionEnqueueResultV1, RepairTransactionForwarder, RepairTransactionForwarderError,
@@ -1494,7 +1494,7 @@ fn set_local_private_file_permissions(_path: &Path) -> io::Result<()> {
 }
 fn local_checkpoint_tmp_path(path: &Path) -> io::Result<PathBuf> {
     let mut nonce = [0_u8; 16];
-    OsRng.try_fill_bytes(&mut nonce).map_err(|err| {
+    SysRng.try_fill_bytes(&mut nonce).map_err(|err| {
         io::Error::other(format!(
             "failed to generate checkpoint temporary-file nonce: {err}"
         ))

@@ -251,23 +251,25 @@ fn sha256_v1(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 struct UnavailableIssuanceRngV1;
-impl RngCore for UnavailableIssuanceRngV1 {
-    fn next_u32(&mut self) -> u32 {
-        0
+impl rand::TryRng for UnavailableIssuanceRngV1 {
+    type Error = std::io::Error;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Err(std::io::Error::other(
+            "cached Bootle/Lantern issuance must not read randomness",
+        ))
     }
-    fn next_u64(&mut self) -> u64 {
-        0
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Err(std::io::Error::other(
+            "cached Bootle/Lantern issuance must not read randomness",
+        ))
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
-        destination.fill(0);
-    }
-    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError06> {
-        Err(RngError06::new(
+    fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+        Err(std::io::Error::other(
             "cached Bootle/Lantern issuance must not read randomness",
         ))
     }
 }
-impl CryptoRng for UnavailableIssuanceRngV1 {}
+impl rand::TryCryptoRng for UnavailableIssuanceRngV1 {}
 struct EvidenceRng06 {
     seed: [u8; 32],
     counter: u64,
@@ -277,18 +279,19 @@ impl EvidenceRng06 {
         Self { seed, counter: 0 }
     }
 }
-impl RngCore for EvidenceRng06 {
-    fn next_u32(&mut self) -> u32 {
+impl rand::TryRng for EvidenceRng06 {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_be_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_be_bytes(bytes))
     }
-    fn next_u64(&mut self) -> u64 {
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
         let mut bytes = [0_u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_be_bytes(bytes)
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_be_bytes(bytes))
     }
-    fn fill_bytes(&mut self, destination: &mut [u8]) {
+    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
         let mut offset = 0;
         while offset < destination.len() {
             let mut hash = Sha256::new();
@@ -301,13 +304,10 @@ impl RngCore for EvidenceRng06 {
             destination[offset..offset + take].copy_from_slice(&block[..take]);
             offset += take;
         }
-    }
-    fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError06> {
-        self.fill_bytes(destination);
         Ok(())
     }
 }
-impl CryptoRng for EvidenceRng06 {}
+impl rand::TryCryptoRng for EvidenceRng06 {}
 struct EvidenceRng09 {
     seed: [u8; 32],
     counter: u64,
@@ -317,7 +317,7 @@ impl EvidenceRng09 {
         Self { seed, counter: 0 }
     }
 }
-impl rand::TryRngCore for EvidenceRng09 {
+impl rand::TryRng for EvidenceRng09 {
     type Error = core::convert::Infallible;
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0_u8; 4];

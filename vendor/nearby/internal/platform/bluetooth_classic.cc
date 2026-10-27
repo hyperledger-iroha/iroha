@@ -1,0 +1,157 @@
+// Copyright 2020 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "internal/platform/bluetooth_classic.h"
+
+#include <memory>
+#include <string>
+#include <utility>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/synchronization/mutex.h"
+#include "internal/platform/bluetooth_adapter.h"
+#include "internal/platform/cancellation_flag.h"
+#include "internal/platform/implementation/bluetooth_classic.h"
+#include "internal/platform/logging.h"
+#include "internal/platform/output_stream.h"
+#include "internal/platform/socket.h"
+
+namespace nearby {
+using location::nearby::proto::connections::Medium;
+
+MediumSocket* BluetoothSocket::CreateVirtualSocket(
+    const std::string& salted_service_id_hash_key, OutputStream* outputstream,
+    Medium medium,
+    absl::flat_hash_map<std::string, std::shared_ptr<MediumSocket>>*
+        virtual_sockets_ptr) {
+  if (IsVirtualSocket()) {
+    LOG(WARNING)
+        << "Creating the virtual socket on a virtual socket is not allowed.";
+    return nullptr;
+  }
+
+  auto virtual_socket = std::make_shared<BluetoothSocket>(outputstream);
+  virtual_socket->impl_ = this->impl_;
+  LOG(WARNING) << "Created the virtual socket for Medium: "
+               << Medium_Name(virtual_socket->GetMedium());
+
+  if (virtual_sockets_ptr_ == nullptr) {
+    virtual_sockets_ptr_ = virtual_sockets_ptr;
+  }
+
+  (*virtual_sockets_ptr_)[salted_service_id_hash_key] = virtual_socket;
+  LOG(INFO) << "virtual_sockets_ size: " << virtual_sockets_ptr_->size();
+  return virtual_socket.get();
+}
+
+BluetoothClassicMedium::~BluetoothClassicMedium() {
+  StopDiscovery();
+  LOG(INFO) << "eof ~BluetoothClassicMedium";
+}
+
+BluetoothSocket BluetoothClassicMedium::ConnectToService(
+    BluetoothDevice& remote_device, const std::string& service_uuid,
+    CancellationFlag* cancellation_flag) {
+  LOG(INFO) << "BluetoothClassicMedium::ConnectToService: "
+               "service_uuid="
+            << service_uuid
+            << ", device=" << remote_device.GetAddress().ToString()
+            << ", [impl=" << &remote_device.GetImpl() << "]";
+  return BluetoothSocket(impl_->ConnectToService(
+      remote_device.GetImpl(), service_uuid, cancellation_flag));
+}
+
+bool BluetoothClassicMedium::StartDiscovery(DiscoveryCallback callback) {
+  LOG(INFO) << "BluetoothClassicMedium::StartDiscovery";
+  absl::MutexLock lock(mutex_);
+  if (discovery_enabled_) {
+    LOG(INFO) << "BT Discovery already enabled; impl=" << &GetImpl();
+    return false;
+  }
+
+  devices_.clear();
+  bool success = impl_->StartDiscovery({
+      .device_discovered_cb =
+          [this](api::BluetoothDevice& device) {
+            VLOG(1) << "BT .device_discovered_cb for " << device.GetName();
+            absl::MutexLock lock(mutex_);
+            if (!discovery_enabled_) return;
+            auto pair = devices_.emplace(
+                &device, std::make_unique<DeviceDiscoveryInfo>());
+            auto& context = *pair.first->second;
+            if (!pair.second) {
+              LOG(INFO) << "Adding (again) device="
+                        << context.device.GetAddress().ToString()
+                        << ",impl=" << &device;
+              return;
+            }
+            context.device = BluetoothDevice(&device);
+            LOG(INFO) << "Adding device="
+                      << context.device.GetAddress().ToString()
+                      << ",impl=" << &device;
+            discovery_callback_.device_discovered_cb(context.device);
+          },
+      .device_name_changed_cb =
+          [this](api::BluetoothDevice& device) {
+            VLOG(1) << "BT .device_name_changed_cb for " << device.GetName();
+            absl::MutexLock lock(mutex_);
+            if (!discovery_enabled_) return;
+            // If the device is not already in devices_, we should not be able
+            // to change its name.
+            if (devices_.find(&device) == devices_.end()) return;
+            auto& context = *devices_[&device];
+            LOG(INFO) << "Renaming device="
+                      << context.device.GetAddress().ToString()
+                      << ",impl=" << &device;
+            discovery_callback_.device_name_changed_cb(context.device);
+          },
+      .device_lost_cb =
+          [this](api::BluetoothDevice& device) {
+            VLOG(1) << "BT .device_lost_cb for "
+                    << device.GetMacAddress().ToString();
+            absl::MutexLock lock(mutex_);
+            if (!discovery_enabled_) return;
+            auto item = devices_.extract(&device);
+            if (!item) {
+              LOG(WARNING) << "Removing unknown device: "
+                           << device.GetMacAddress().ToString();
+              return;
+            }
+            auto& context = *item.mapped();
+            LOG(INFO) << "Removing device="
+                      << context.device.GetAddress().ToString()
+                      << ",impl=" << &device;
+            discovery_callback_.device_lost_cb(context.device);
+          },
+  });
+  if (success) {
+    discovery_callback_ = std::move(callback);
+    discovery_enabled_ = true;
+  }
+  LOG(INFO) << "BT StartDiscovery result:" << success
+            << ", impl=" << &GetImpl();
+  return success;
+}
+
+bool BluetoothClassicMedium::StopDiscovery() {
+  LOG(INFO) << "BT StopDiscovery; impl=" << &GetImpl();
+  absl::MutexLock lock(mutex_);
+  if (!discovery_enabled_) return true;
+  discovery_enabled_ = false;
+  discovery_callback_ = {};
+  LOG(INFO) << "BT Discovery disabled: impl=" << &GetImpl();
+  return impl_->StopDiscovery();
+}
+
+}  // namespace nearby

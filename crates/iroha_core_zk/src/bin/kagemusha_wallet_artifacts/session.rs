@@ -9,7 +9,7 @@ use base64::{
 };
 use iroha_crypto::{PrivateKey, Signature as EdSignature};
 use norito::json::Value;
-use rand::rand_core::TryRngCore as _;
+use rand::rand_core::TryRng as _;
 use zeroize::Zeroizing;
 
 #[derive(JsonDeserialize)]
@@ -254,7 +254,7 @@ fn uuid(value: &str) -> bool {
 fn random_uuid() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     checked(
-        rand::rngs::OsRng.try_fill_bytes(&mut bytes),
+        rand::rngs::SysRng.try_fill_bytes(&mut bytes),
         "nonce entropy",
     )?;
     bytes[6] = (bytes[6] & 15) | 64;
@@ -321,7 +321,7 @@ fn issue(
     {
         return Err(invalid("issuer custody differs from pinned runtime"));
     }
-    let point = dpop.verifying_key().to_encoded_point(false);
+    let point = dpop.verifying_key().to_sec1_point(false);
     if point.as_bytes() != point_from_request(request)?.as_sec1_bytes() {
         return Err(invalid("DPoP custody differs from selected device binding"));
     }

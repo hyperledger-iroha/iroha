@@ -30,7 +30,8 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::metadata::Metadata;
-use rand_core_06::{CryptoRng, OsRng, RngCore};
+use rand::rngs::SysRng;
+use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
 #[cfg(test)]
 fn network_id_from_genesis_hash_bytes(hash: [u8; 32]) -> NetworkId {
@@ -720,7 +721,7 @@ pub fn prepare_jindo_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<JindoPreparedPrivacyActionV1, JindoPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if canonical_genesis_hash == [0; 32] {
         return Err(JindoPrivacyActionBuildErrorV1::ZeroGenesisHash);
@@ -858,7 +859,7 @@ pub fn prepare_jindo_privacy_action_v1(
     witness: JindoPrivacyActionWitnessV1,
     canonical_genesis_hash: [u8; 32],
 ) -> Result<JindoPreparedPrivacyActionV1, JindoPrivacyActionBuildErrorV1> {
-    prepare_jindo_privacy_action_with_rng_v1(context, witness, canonical_genesis_hash, &mut OsRng)
+    prepare_jindo_privacy_action_with_rng_v1(context, witness, canonical_genesis_hash, &mut SysRng)
 }
 /// Sign a payload returned by the canonical pure Jindo prover.
 ///
@@ -934,7 +935,7 @@ pub fn build_signed_privacy_action_with_rng_v1<R>(
     rng: &mut R,
 ) -> Result<SignedJindoPrivacyActionV1, JindoPrivacyActionBuildErrorV1>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     validate_signing_authority_v1(&context.authority, private_key)?;
     let prepared =
@@ -960,7 +961,7 @@ pub fn build_signed_privacy_action_v1(
         witness,
         canonical_genesis_hash,
         private_key,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 #[cfg(test)]
@@ -974,53 +975,55 @@ mod tests {
         transaction::{Executable, FeePaymentIntent},
     };
     use iroha_model_base::metadata::Metadata;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct TestRng(u64);
     impl TestRng {
         const fn new(seed: u64) -> Self {
             Self(seed)
         }
     }
-    impl RngCore for TestRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::try_from(self.next_u64() & u64::from(u32::MAX)).expect("low word fits u32")
+    impl rand::TryRng for TestRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::try_from(self.try_next_u64()? & u64::from(u32::MAX))
+                .expect("low word fits u32"))
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut value = self.0;
-            value ^= value >> 12;
-            value ^= value << 25;
-            value ^= value >> 27;
-            self.0 = value;
-            value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut value = self.0;
+                value ^= value >> 12;
+                value ^= value << 25;
+                value ^= value >> 27;
+                self.0 = value;
+                value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            for chunk in destination.chunks_mut(8) {
-                let bytes = self.next_u64().to_le_bytes();
-                chunk.copy_from_slice(&bytes[..chunk.len()]);
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                for chunk in destination.chunks_mut(8) {
+                    let bytes = self.try_next_u64()?.to_le_bytes();
+                    chunk.copy_from_slice(&bytes[..chunk.len()]);
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for TestRng {}
+    impl rand::TryCryptoRng for TestRng {}
     struct PanicRng;
-    impl RngCore for PanicRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for PanicRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("invalid boundary input reached native randomness")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("invalid boundary input reached native randomness")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("invalid boundary input reached native randomness")
-        }
-        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             panic!("invalid boundary input reached native randomness")
         }
     }
-    impl CryptoRng for PanicRng {}
+    impl rand::TryCryptoRng for PanicRng {}
     fn field(value: u64) -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         encoding[..8].copy_from_slice(&value.to_le_bytes());

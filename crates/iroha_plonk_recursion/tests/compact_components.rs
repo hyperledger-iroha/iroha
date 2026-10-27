@@ -429,10 +429,15 @@ fn exercise<C: PastaCurve>() {
             if phased { 5 } else { 6 }
         );
         if phased {
-            assert_eq!(protocol.shape().degree, 9);
+            assert_eq!(protocol.shape().degree, 10);
             assert_eq!(protocol.shape().num_fixed, 11);
             assert_eq!(protocol.shape().advice_queries, 26);
-            assert_eq!(protocol.proof_length() + 1088, 4768);
+            assert_eq!(protocol.shape().permutation_sets, 2);
+            assert_eq!(protocol.plan().sets().len(), 5);
+            // This component uses the unpacked CRT and scalar range table:
+            // 61 point plus 60 scalar messages in the norm-product protocol.
+            assert_eq!(protocol.proof_length(), (61 + 60) * 32);
+            assert_eq!(protocol.proof_length() + 1088, 4960);
             assert!(
                 undetected_tampers(
                     &Prototype {

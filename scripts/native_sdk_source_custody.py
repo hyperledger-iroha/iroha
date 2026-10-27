@@ -7,12 +7,18 @@ import hashlib
 import json
 import argparse
 import os
+import re
 import tomllib
 from pathlib import Path
 
-SUPPORTED_GIT_SOURCES = {
-    "git+https://github.com/zcash/orchard.git?rev=9d07047d32c4787e1b7964b4cf4fa0286c93824c#9d07047d32c4787e1b7964b4cf4fa0286c93824c",
-}
+REGISTRY_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+
+
+def external_source_prefix(source):
+    """Admit only the canonical registry after Orchard moved to its release archive."""
+    if source != REGISTRY_SOURCE:
+        raise RuntimeError("Unreviewed external source identity")
+    return "registry:"
 
 EXCLUDED_OUTPUT_DIRECTORIES = {".git", "__pycache__"}
 NATIVE_PACKAGE_OWNERS = {"connect_norito_bridge", "iroha_js_host"}
@@ -25,7 +31,7 @@ RUNTIME_INPUT_PREFIXES = ("fixtures/", "data_model/", "tests/interop/",
                           "crates/connect_norito_bridge/include/", "crates/soranet_pq/include/")
 
 
-# cc/PQClean native inputs are not enumerated by rustc's Make dep-info. Bind
+# cc-built native inputs are not enumerated by rustc's Make dep-info. Bind
 # their complete captured package-owned source/recipe sets conservatively.
 NATIVE_BUILD_INPUT_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".h++",
@@ -59,7 +65,7 @@ def native_build_input_keys(packages, seen, root, names):
             prefix = str(manifest.parent.relative_to(root))
             prefix = prefix + "/" if prefix != "." else ""
         else:
-            kind = "registry:" if package["source"].startswith("registry+") else "git:"
+            kind = external_source_prefix(package["source"])
             prefix = kind + str(manifest.parent) + "/"
         prefixes.append(prefix)
         explicit.update(prefix + name for name in PACKAGE_BUILD_DATA_INPUTS.get(package["name"], ()))
@@ -97,7 +103,7 @@ def consumed_source_projection(metadata, root, originals, current, receipts,
         if manifest.is_relative_to(root):
             explicit.add(str(manifest.relative_to(root)))
         else:
-            kind = "registry:" if package["source"].startswith("registry+") else "git:"
+            kind = external_source_prefix(package["source"])
             explicit.add(kind + str(manifest))
     consumed = {row["path"] for receipt in receipts for item in receipt["dep_info"]
                 for row in item["matched_originals"]}
@@ -217,12 +223,7 @@ def source_identity(metadata, root, selected_names, digest):
         if package["source"] is None:
             continue
         source = package["source"]
-        if source == "registry+https://github.com/rust-lang/crates.io-index":
-            key_kind = "registry:"
-        elif source in SUPPORTED_GIT_SOURCES:
-            key_kind = "git:"
-        else:
-            raise RuntimeError("Unreviewed external source identity")
+        key_kind = external_source_prefix(source)
         if (package["name"], package["version"], source) not in locked_external_owners:
             raise RuntimeError("External metadata owner is absent from the actual Cargo.lock")
         directory = original_directory(Path(package["manifest_path"]).parent)
@@ -302,10 +303,15 @@ def dep_info_names(message):
         else:
             names.add(Path(str(path) + ".d"))
         if message["target"]["kind"] == ["custom-build"]:
+            target_name = message["target"].get("name", "")
+            source_stem = Path(message["target"].get("src_path", "")).stem
+            if (target_name != "build-script-" + source_stem
+                    or not re.fullmatch(r"build-script-[A-Za-z0-9_-]+", target_name)):
+                raise RuntimeError("Custom-build target identity differs")
             suffix = path.parent.name.rsplit("-", 1)[-1]
-            if path.name != "build-script-build" or len(suffix) != 16 or any(c not in "0123456789abcdef" for c in suffix):
+            if path.name != target_name or len(suffix) != 16 or any(c not in "0123456789abcdef" for c in suffix):
                 raise RuntimeError("Custom-build owner identity differs")
-            names.add(path.parent / ("build_script_build-" + suffix + ".d"))
+            names.add(path.parent / (target_name.replace("-", "_") + "-" + suffix + ".d"))
     return {str(path) for path in names}
 
 
@@ -409,21 +415,32 @@ def dep_files(message):
                 raise RuntimeError('actual library dep-info lacks exact compiled output owner')
             found.add(candidate)
     if not found and message['target']['kind'] == ['custom-build']:
-        # Cargo exposes a copied build-script-build alias, while rustc's dep-info
-        # retains its underscore crate name and the exact emitted owner-directory hash.
+        # Cargo names custom builds after the selected source (build.rs or e.g.
+        # aws-lc-sys's builder/main.rs). Bind the alias to that exact target;
+        # rustc retains its underscore crate name and the owner-directory hash.
+        target_name = message['target'].get('name', '')
+        source_stem = Path(message['target'].get('src_path', '')).stem
+        if (target_name != 'build-script-' + source_stem
+                or not re.fullmatch(r'build-script-[A-Za-z0-9_-]+', target_name)):
+            raise RuntimeError('custom-build target identity differs')
         for filename in message['filenames']:
             alias = Path(filename)
             suffix = alias.parent.name.rsplit('-', 1)[-1]
-            if alias.name != 'build-script-build' or len(suffix) != 16 or any(c not in '0123456789abcdef' for c in suffix):
+            if alias.name != target_name or len(suffix) != 16 or any(c not in '0123456789abcdef' for c in suffix):
                 raise RuntimeError('custom-build owner identity differs')
-            compiled = alias.parent / ('build_script_build-' + suffix)
+            compiled = alias.parent / (target_name.replace('-', '_') + '-' + suffix)
             candidate = Path(str(compiled) + '.d')
-            if alias.is_symlink() or compiled.is_symlink() or not alias.is_file() or not compiled.is_file():
+            if any(not path.is_file() or any(owner.is_symlink() for owner in (path, *path.parents))
+                   for path in (alias, compiled, candidate)):
                 raise RuntimeError('actual custom-build aliases are not retained originals')
             if hashlib.sha256(alias.read_bytes()).digest() != hashlib.sha256(compiled.read_bytes()).digest():
                 raise RuntimeError('Cargo custom-build alias differs from rustc emitted bytes')
-            if candidate.is_file() and not candidate.is_symlink():
-                found.add(candidate)
+            rules = candidate.read_text().replace('\\\n', '').splitlines()
+            outputs = {word for line in rules if ': ' in line
+                       for word in make_words(line.split(': ', 1)[0])}
+            if str(compiled) not in outputs:
+                raise RuntimeError('actual custom-build dep-info lacks exact compiled output owner')
+            found.add(candidate)
     if not found:
         raise RuntimeError('no actual emitted Rust dep-info located')
     return sorted(found)

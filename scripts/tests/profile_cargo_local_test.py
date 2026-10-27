@@ -38,9 +38,8 @@ def test_cargo_arguments_reject_ambiguous_measurement_controls(arguments):
 
 def test_phase_times_and_summary_keep_failed_or_rebuilt_samples():
     phases = local.phase_times('ordinary stderr\n[cargo-fast-timings] '
-        '{"cargo_seconds": 2, "discovery_seconds": 1, "preflight_before_seconds": 3, '
-        '"preflight_after_seconds": 4, "lock_seconds": 7}\n')
-    assert phases["source_preflight_seconds"] == 8
+        '{"cargo_seconds": 2}\n')
+    assert phases == {"cargo_seconds": 2}
     samples = [{**phases, "elapsed_seconds": value, "returncode": code, "compiled": compiled}
                for value, code, compiled in ((20, 0, 0), (30, 1, 2))]
     result = local.summarize(samples)
@@ -53,6 +52,7 @@ def test_phase_times_and_summary_keep_failed_or_rebuilt_samples():
     '[cargo-fast-timings] {"cargo_seconds": -1}',
     '[cargo-fast-timings] {"cargo_seconds": true}',
     '[cargo-fast-timings] {"cargo_seconds": NaN}',
+    '[cargo-fast-timings] {"cargo_seconds": 1, "preflight_before_seconds": 1}',
     '[cargo-fast-timings] {"cargo_seconds": 1}\n[cargo-fast-timings] {"cargo_seconds": 2}'])
 def test_phase_times_reject_missing_or_invalid_evidence(record):
     with pytest.raises(ValueError):
@@ -101,13 +101,11 @@ def measured_run(tmp_path, monkeypatch):
                     "overflow_checks": True, "test": False},
     }
     state.messages = [state.artifact, {"reason": "build-finished", "success": True}]
-    state.phases = {"cargo_seconds": 1, "discovery_seconds": 0.1,
-                    "preflight_before_seconds": 0.2, "preflight_after_seconds": 0.2}
+    state.phases = {"cargo_seconds": 1}
     for key in ("RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(local, "host_load", lambda: {"load_average": [0, 0, 0], "compiler_processes": []})
     monkeypatch.setattr(local.platform, "platform", lambda: "fixture-host")
-    monkeypatch.setattr(local, "native_snapshot", lambda *_: {"required": False})
     monkeypatch.setattr(api, "tracked_and_untracked_paths", lambda *_: ["lib.rs"])
     monkeypatch.setattr(api, "git_index_entries", lambda *_: ())
     monkeypatch.setattr(api, "validate_git_worktree", lambda *_: None)
@@ -180,21 +178,21 @@ def test_invalid_cargo_evidence_cannot_claim_a_fresh_success(measured_run, kind)
     assert not report.get("summary", {}).get("zero_rebuilt_artifacts", False)
 
 
-@pytest.mark.parametrize("phases", [{}, {"discovery_seconds": 0.1, "preflight_before_seconds": 0.2}])
-def test_failed_preflight_keeps_sample_and_log_without_cargo_timing(measured_run, monkeypatch, phases):
+@pytest.mark.parametrize("phases", [{}, {"cargo_seconds": 0.1}])
+def test_failed_command_keeps_sample_and_log(measured_run, monkeypatch, phases):
     case = measured_run
     case.messages = []
     case.phases = phases
     run = local.subprocess.run
 
-    def fail_preflight(command, **kwargs):
+    def fail_command(command, **kwargs):
         completed = run(command, **kwargs)
         if Path(command[0]).name == "cargo_fast.sh":
-            kwargs["stderr"].write("cargo-fast: native source preflight failed: source changed\n")
+            kwargs["stderr"].write("cargo-fast: command failed: source changed\n")
             completed.returncode = 3
         return completed
 
-    monkeypatch.setattr(local.subprocess, "run", fail_preflight)
+    monkeypatch.setattr(local.subprocess, "run", fail_command)
     result, report = case.invoke()
     assert result == 3 and not report["valid"]
     assert len(report["samples"]) == 1
@@ -207,50 +205,15 @@ def test_failed_preflight_keeps_sample_and_log_without_cargo_timing(measured_run
     assert len(case.calls) == 2
 
 
-def test_missing_native_evaluator_refuses_measurement(tmp_path, monkeypatch):
-    monkeypatch.setattr(local.native, "output_roots", lambda *_: [tmp_path / "target"])
-    monkeypatch.setattr(local.native, "find_probe", lambda *_: None)
-    monkeypatch.setattr(local.native, "evaluate", lambda *_: pytest.fail("missing evaluator was executed"))
-    with pytest.raises(ValueError, match="native evaluator is not ready"):
-        local.native_snapshot(tmp_path, ["check"], {})
-
-
-def test_native_snapshot_uses_the_complete_maintained_record(tmp_path, monkeypatch):
-    probe = (tmp_path / "receipt", {"executable_sha256": "ab" * 32})
-    outputs = [tmp_path / "target"]
-    monkeypatch.setattr(local.native, "output_roots", lambda *_: outputs)
-    monkeypatch.setattr(local.native, "find_probe", lambda *_: probe)
-    calls = []
-
-    def evaluate(selected, root, selected_outputs):
-        calls.append((selected, root, selected_outputs))
-        return (f"{local.native.STAMP_HEADER}\nroot={os.fsencode(root).hex()}\n"
-                f"digest={'ab' * 32}\nwatches={'cd' * 32}\n")
-
-    monkeypatch.setattr(local.native, "evaluate", evaluate)
-    snapshot = local.native_snapshot(tmp_path, ["check"], {})
-    assert snapshot == {"required": True, "root": os.fsencode(tmp_path).hex(),
-                        "digest": "ab" * 32, "watches": "cd" * 32}
-    assert calls == [(probe, tmp_path, outputs)]
-
-
-@pytest.mark.parametrize("change", ["source", "native", "toolchain", "missing-native-phases"])
-def test_source_native_or_toolchain_drift_invalidates_saved_report(measured_run, monkeypatch, change):
+@pytest.mark.parametrize("change", ["source", "toolchain"])
+def test_source_or_toolchain_drift_invalidates_saved_report(measured_run, change):
     case = measured_run
     if change == "source":
         case.on_cargo = lambda: (case.root / "lib.rs").write_text("//! Changed source.\n")
         error = "local source changed"
-    elif change == "toolchain":
+    else:
         case.on_cargo = lambda: case.compiler.write_bytes(b"changed compiler")
         error = "toolchain changed"
-    else:
-        snapshots = iter([{"required": True, "digest": "ab" * 32},
-                          {"required": True, "digest": "cd" * 32}])
-        monkeypatch.setattr(local, "native_snapshot", lambda *_: next(snapshots))
-        error = "native census changed"
-        if change == "missing-native-phases":
-            case.phases = {"cargo_seconds": 1, "discovery_seconds": 0.1}
-            error = "omitted complete pre/post census"
     result, report = case.invoke()
     assert result == 3 and not report["valid"]
     assert error in report["error"]
@@ -490,7 +453,7 @@ def test_real_local_profile_reuses_compiler_and_target_and_refuses_report_overwr
     root = tmp_path / "workspace"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("cargo_fast.sh", "cargo_local_source_identity.py", "check_cargo_target_owner.py"):
+    for name in ("cargo_fast.sh", "check_cargo_target_owner.py"):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     shutil.copy2(ROOT / "rust-toolchain.toml", root / "rust-toolchain.toml")
     (root / "Cargo.toml").write_text('[package]\nname="local_profile_fixture"\nversion="0.1.0"\nedition="2024"\n[lib]\npath="lib.rs"\n')

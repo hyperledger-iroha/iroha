@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.31;
+pragma solidity 0.8.38;
 
 /// @title BLS12_381
 /// @notice BLS12-381 operations of the SCCP v1 destination over the EIP-2537

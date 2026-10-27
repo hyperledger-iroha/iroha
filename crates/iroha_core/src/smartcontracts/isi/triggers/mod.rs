@@ -1639,6 +1639,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
     use std::{str::FromStr, time::Duration};
+    include!("applying_time_register_tests.rs");
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }

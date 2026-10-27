@@ -133,7 +133,9 @@ impl FoldJobV1 {
     /// Prove the prepared sub-proof; call it without the wallet owner. A payment, activity or
     /// close signal cancels it at a cooperative boundary and releases its work; an ingest or
     /// status read never does. A finished proof releases the background slot before its
-    /// publication, so a payment never waits for that publication's wallet owner.
+    /// publication, so a payment holding the wallet owner never waits for that publication;
+    /// only a fair payment, which holds no owner, waits for it after bounded fairness found
+    /// the fold starved.
     ///
     /// # Errors
     /// `Cancelled` on preemption, or a native proof error. Nothing is published.
@@ -508,7 +510,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     native,
                 }));
             }
-            Ok(ControlFlow::Break(ended)) => Ok(ended),
+            Ok(ControlFlow::Break(ended)) => {
+                // An adopted publication is durable fold progress for bounded fairness.
+                guard.adopted(ended.status);
+                Ok(ended)
+            }
             Err(error) => Err(error),
         };
         guard.report(turn, result.as_ref().map(|ended| ended.status));
@@ -610,6 +616,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             self.proofs
                 .fold_schedule(&step, predecessor.as_ref(), view.as_mut())?
         };
+        // Observation only: the head's checkpoints and its Ω.
+        turn.stages(schedule.len() + 1);
         for layout in &schedule {
             layout.record_limit()?;
         }

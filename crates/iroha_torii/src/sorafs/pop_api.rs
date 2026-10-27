@@ -14,7 +14,7 @@ use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production
 #[cfg(test)]
 use iroha_crypto::HybridSecretKey;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
-use rand::rngs::OsRng;
+use rand::rngs::SysRng;
 use sorafs_manifest::{
     hybrid_envelope::HybridPayloadEnvelopeV1,
     pop_credentials::{
@@ -1378,7 +1378,7 @@ impl PopCredentialToriiRuntimeV1 {
             if draft.request_id != request_id {
                 return Err(PopCredentialServiceError::InvalidIssuance);
             }
-            service.issue(draft, now_epoch, &mut OsRng)
+            service.issue(draft, now_epoch, &mut SysRng)
         }
         .await;
         self.provider_registry.finish(result)
@@ -3259,7 +3259,7 @@ mod tests {
         });
         let approver_a = ed25519(0x42);
         let approver_b = ed25519(0x43);
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let enrollment_recipient =
             HybridKeyPair::generate(&mut rng).expect("enrollment recipient key");
         let wallet_recipient = HybridKeyPair::generate(&mut rng).expect("wallet recipient key");
@@ -4152,7 +4152,7 @@ mod tests {
             "runtime:pop:providers:primary",
             "runtime:pop:providers:primary",
         );
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let substituted_wallet_recipient =
             HybridKeyPair::generate(&mut rng).expect("substituted wallet recipient key");
         registry
@@ -4218,7 +4218,7 @@ mod tests {
             "runtime:pop:providers:primary",
             "runtime:pop:providers:primary",
         );
-        let mut rng = OsRng;
+        let mut rng = SysRng;
         let substituted_enrollment_recipient =
             HybridKeyPair::generate(&mut rng).expect("substituted enrollment recipient key");
         registry

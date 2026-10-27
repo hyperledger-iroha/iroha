@@ -9,7 +9,7 @@ import {
   JS_TYPE_STRING,
   UTF8_ENCODING,
 } from "./commonLiterals.js";
-import { blake3 } from "@noble/hashes/blake3";
+import { blake3 } from "@noble/hashes/blake3.js";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";

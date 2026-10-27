@@ -2646,7 +2646,8 @@ class Checker:
                 self.error(f"{label}: {function} circuit_id maps {actual}, recorded {expected}")
         delegate = code_only(fn_body(text, "circuit_id") or "")
         expected_delegate = ("self.kaigi().map_or_else( "
-                             "|| self.confidential().expect().circuit_id(), KaigiRelation::circuit_id, )")
+                             "|| self.confidential().expect().circuit_id(), "
+                             "KaigiRelation::circuit_id, )")
         if re.sub(r"\s+", "", delegate) != re.sub(r"\s+", "", expected_delegate):
             self.error(f"{label}: circuit_id must delegate to its selected native kind")
         identifiers = []

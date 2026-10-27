@@ -32,9 +32,14 @@ concurrency:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: 1.93.1
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
+  ci_image:
+    uses: ./.github/workflows/ci_image_preflight.yml
+    permissions:
+      contents: read
+
   # Diagnostic jobs are independent of the release build. Nightly runs collect
   # them automatically; push, manual, and reusable runs default to build only.
   format:
@@ -44,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -59,12 +64,12 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           components: rustfmt
-          toolchain: 1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Install pinned workflow-test dependency
@@ -77,13 +82,14 @@ jobs:
           cargo fmt --all -- --check
 
   build:
+    needs: ci_image
     name: Workspace build
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -98,29 +104,30 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: workspace-release-build-1.93.1
+          shared-key: workspace-release-build-1.99.1
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Build the full workspace
         run: cargo build --locked --offline --workspace
 
   release-diagnostics:
+    needs: ci_image
     name: Selected release diagnostics
     if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
     continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -135,15 +142,15 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: workspace-release-diagnostics-1.93.1
-      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
+          shared-key: workspace-release-diagnostics-1.99.1
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Run the release-gate test profile
@@ -160,15 +167,16 @@ jobs:
           -p iroha_test_network
 
   doc:
+    needs: ci_image
     name: Workspace documentation
     if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
     continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -183,30 +191,31 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: workspace-release-doc-1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          shared-key: workspace-release-doc-1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Document every supported workspace feature
         run: python3 scripts/rust_ci.py run --workspace --checks doc
 
   test:
+    needs: ci_image
     name: Workspace tests
     if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
     continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -221,14 +230,14 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: workspace-release-test-1.93.1
+          shared-key: workspace-release-test-1.99.1
       - name: Enforce data-model compile-unit budget
         run: >-
           python3 scripts/check_compile_unit_budget.py
@@ -243,7 +252,7 @@ jobs:
           --json-out target/ci/iroha-data-model-compile-units.json
       - name: Upload data-model compile-unit evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: workspace-release-compile-units
           path: target/ci/iroha-data-model-compile-units.json
@@ -252,18 +261,19 @@ jobs:
         run: cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures
 
   coverage:
+    needs: ci_image
     name: Workspace coverage
     if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
     continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 360
     env:
       LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
       IROHA_TEST_REQUIRE_NETWORK: "1"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -278,17 +288,17 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           components: llvm-tools-preview
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: workspace-release-coverage-1.93.1
-      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
-      - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955
+          shared-key: workspace-release-coverage-1.99.1
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
       - name: Collect workspace test coverage
         run: >-
           mold --run cargo llvm-cov nextest
@@ -304,28 +314,29 @@ jobs:
           --ignore-filename-regex 'iroha_cli|iroha_torii'
           --lcov --output-path lcov.info
       - name: Upload LCOV report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: report-coverage
           path: lcov.info
           if-no-files-found: error
       - name: Upload coverage to Coveralls
-        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329
         with:
           file: lcov.info
           format: lcov
           github-token: ${{ github.token }}
 
   clippy:
+    needs: ci_image
     name: Strict workspace Clippy
     if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}
     continue-on-error: true
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ needs.ci_image.outputs.image }}
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -340,16 +351,16 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
           components: clippy
-          toolchain: 1.93.1
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
-          shared-key: workspace-release-clippy-1.93.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+          shared-key: workspace-release-clippy-1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Lint every workspace target and supported feature
@@ -367,7 +378,7 @@ jobs:
       FUZZ_RSS_LIMIT_MB: "3072"
       FUZZ_CODEGEN_UNITS: "16"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -382,13 +393,13 @@ jobs:
           source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source_sha"
           test "$WORKFLOW_SHA" = "$source_sha"
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
-          toolchain: nightly-2025-05-08
+          toolchain: nightly-2026-10-23
       - name: Install pinned cargo-fuzz
         run: |
-          cargo +nightly-2025-05-08 install cargo-fuzz \
+          cargo +nightly-2026-10-23 install cargo-fuzz \
             --version 0.13.2 \
             --locked
           test "$(cargo-fuzz --version)" = "cargo-fuzz 0.13.2"
@@ -403,7 +414,7 @@ jobs:
         run: scripts/fuzz_smoke.sh --strict
       - name: Archive fuzz crash artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: workspace-release-fuzz-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

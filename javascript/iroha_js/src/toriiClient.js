@@ -200,6 +200,7 @@ import {
   isIdempotentSubmissionRejection,
 } from "./toriiErrors.js";
 import { createToriiCollections } from "./query/collections.js";
+import { decodeAssetMovementRow } from "./query/assetMovements.js";
 import { decodePage, decodePageText, stringifyRequestJson } from "./query/page.js";
 import { filterQueryText } from "./query/listQuery.js";
 import { decodeEventFrames } from "./toriiEventStream.js";
@@ -1579,6 +1580,7 @@ export class ToriiClient {
         uaidManifest: (row, uaid) => normalizeUaidManifestRecord(row, uaid, "uaid manifest row"),
         contractActivity: (row) => normalizeContractActivityListItem(row, "contract activity row"),
         contractEvents: (row) => normalizeContractEventListItem(row, "contract event row"),
+        assetMovement: (row) => decodeAssetMovementRow(row, "asset movement row"),
         explorerRwas: (row) => {
           normalizeExplorerRwaRecord(row, "explorer rwa row");
           return row;
@@ -1708,6 +1710,16 @@ export class ToriiClient {
    */
   assetHolders(assetDefinitionId) {
     return this.#collections.assetHolders(assetDefinitionId);
+  }
+
+  /**
+   * Every committed movement of one asset definition, newest first
+   * (`POST /v1/assets/{definition_id}/movements/query`). A history collection whose
+   * rows are decoded with `decodeAssetMovementRow` unless the query has `select`.
+   * @param {string} assetDefinitionId asset definition id or alias
+   */
+  assetMovements(assetDefinitionId) {
+    return this.#collections.assetMovements(assetDefinitionId);
   }
 
   /**
@@ -19318,7 +19330,20 @@ function normalizeMultisigProposalsQueryRequest(input, context) {
       { allowZero: false },
     );
   }
-  return payload;
+  return withMultisigApprovalTimesFlag(payload, record, context);
+}
+
+// `includeApprovals: true` asks Torii for `approvals`, when each approval landed. Only a true
+// flag is sent, so a read that does not ask keeps its original body.
+function withMultisigApprovalTimesFlag(payload, record, context) {
+  const flag = pickOverride(record, "include_approvals", "includeApprovals");
+  if (flag === undefined || flag === null) {
+    return payload;
+  }
+  if (typeof flag !== "boolean") {
+    rejectType(`${context}.include_approvals must be a boolean`);
+  }
+  return flag ? { ...payload, include_approvals: true } : payload;
 }
 
 function normalizeMultisigProposeInstructionInput(value, context) {
@@ -19769,6 +19794,9 @@ function normalizeMultisigProposalEntry(payload, context) {
         ? null
         : cloneJsonValue(record.intent, `${context}.intent`),
     proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    ...(record.approvals === undefined
+      ? {}
+      : { approvals: normalizeMultisigProposalApprovals(record.approvals, `${context}.approvals`) }),
     status: normalizeMultisigProposalStatus(record.status, `${context}.status`),
     terminal_at_ms:
       record.terminal_at_ms === undefined || record.terminal_at_ms === null
@@ -19779,6 +19807,45 @@ function normalizeMultisigProposalEntry(payload, context) {
             { allowZero: true },
           ),
   };
+}
+
+// When each approval in `proposal.approvals` landed, as the node read it from committed blocks:
+// one closed record per approver; an approval the node did not see has a null time and height.
+function normalizeMultisigProposalApprovals(value, context) {
+  if (!Array.isArray(value)) {
+    rejectType(`${context} must be an array`);
+  }
+  const approvers = new Set();
+  return value.map((item, index) => {
+    const itemContext = `${context}[${index}]`;
+    const record = exactEnumerableDataRecord(
+      item,
+      ["approver", "approved_at_ms", "block_height"],
+      itemContext,
+    );
+    const approver = requireExactAccountId(record.approver, `${itemContext}.approver`);
+    if (approvers.has(approver)) {
+      rejectType(`${context} repeats approver ${approver}`);
+    }
+    approvers.add(approver);
+    const timed = record.approved_at_ms !== null;
+    if (timed !== (record.block_height !== null)) {
+      rejectType(`${itemContext} must give its time and block height together`);
+    }
+    return {
+      approver,
+      approved_at_ms: timed
+        ? ToriiClient._normalizeUnsignedInteger(
+            record.approved_at_ms,
+            `${itemContext}.approved_at_ms`,
+            { allowZero: true },
+          )
+        : null,
+      block_height: timed
+        ? ToriiClient._normalizeUnsignedInteger(record.block_height, `${itemContext}.block_height`)
+        : null,
+    };
+  });
 }
 
 function normalizeMultisigProposalsQueryResponse(
@@ -19808,7 +19875,11 @@ function normalizeMultisigProposalsQueryResponse(
 function normalizeMultisigProposalsResolveRequest(input) {
   const record = ensureRecord(input, "resolveMultisigProposal request");
   if (record.instructions_hash !== undefined || record.instructionsHash !== undefined) rejectType("resolveMultisigProposal requires occurrence ID only");
-  return {...normalizeMultisigAccountSelector(record, "resolveMultisigProposal request"), proposal_id: requireMultisigId(record.proposal_id ?? record.proposalId)};
+  return withMultisigApprovalTimesFlag(
+    {...normalizeMultisigAccountSelector(record, "resolveMultisigProposal request"), proposal_id: requireMultisigId(record.proposal_id ?? record.proposalId)},
+    record,
+    "resolveMultisigProposal request",
+  );
 }
 
 function normalizeMultisigProposalResolveResponse(

@@ -8973,8 +8973,8 @@ fn run_real_process_leakage_campaign(
             // capsule key/nonce material across invocations.  OS entropy changes
             // only fixed-width cryptographic values and therefore preserves the
             // public shape, padding, and packet/message/record-count comparison.
-            let mut output_rng = rand_core_06::OsRng;
-            let mut capsule_rng = rand::rngs::OsRng;
+            let mut output_rng = rand::rngs::SysRng;
+            let mut capsule_rng = rand::rngs::SysRng;
             if ordinal == 0 {
                 prepare_leg_with_private_data_and_rngs(
                     ordinal,

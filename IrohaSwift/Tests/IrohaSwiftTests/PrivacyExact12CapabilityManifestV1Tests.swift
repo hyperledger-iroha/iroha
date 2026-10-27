@@ -21,7 +21,7 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
     }
 
     func testSecurityClaimCanonicalArchiveMatchesCurrentRustOwner() throws {
-        // Exact canonical archive re-emitted by the current ABI31 Rust source.
+        // Exact canonical archive emitted by the Rust fixture owner.
         let claim = securityClaim(protocolId: .zkAcePqAuthorizationV1, digestByte: 0x31)
         XCTAssertEqual(exact12CatalogCommitment().count, 32)
         let expected = try XCTUnwrap(Data(hexString:

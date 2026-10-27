@@ -780,6 +780,9 @@ fn assert_state_carrier_metadata_refusal_is_local(event: bool, cause: &str) {
     use crate::execution_attempt::ExecutionAttemptError;
     use ivm::error::ExecutionDeferral;
 
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let mut chain = chain();
     while chain.height() < 3 {
         chain.commit(Vec::new());
@@ -892,6 +895,9 @@ fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
     use crate::execution_attempt::ExecutionAttemptError;
     use ivm::error::ExecutionDeferral;
 
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let (expected, expected_wire_len) = {
         let target = chain.committed(2);
@@ -955,6 +961,9 @@ fn bounded_native_extent_preserves_original_cumulative_metadata_refusal() {
 #[test]
 fn completed_retained_carrier_rejects_reentry_without_reclassifying_committed_source() {
     use crate::execution_attempt::ExecutionAttemptError;
+    // Keep retired fixture State cells in the original pool baseline until the
+    // reader's exact refund assertions finish; worker shutdown does not drain EBR.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let state = std::sync::Arc::clone(chain.state());
     let pool = state.ivm_execution_budget();

@@ -3505,6 +3505,15 @@ impl Iroha {
                 handle.startup_recovery(),
                 supervisor.shutdown_signal(),
             ));
+            // Current attestations read only their tip pair once this child has
+            // minted the retained authority after the same completed recovery.
+            supervisor.monitor(
+                iroha_core::sumeragi::finality::RetainedAttestationProducer::start(
+                    Arc::clone(&state),
+                    handle.startup_recovery(),
+                    supervisor.shutdown_signal(),
+                ),
+            );
         }
         let sorafs_storage_config = if emergency_fast {
             sorafs_node::config::StorageConfig::builder()
@@ -8600,7 +8609,7 @@ impl DisposableValidationRoot {
         let parent = env::temp_dir();
         for _ in 0..32 {
             let mut nonce = [0_u8; 16];
-            rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+            rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
                 .map_err(|error| {
                     std::io::Error::other(format!(
                         "operating-system randomness unavailable for temporary validation storage: {error}"
@@ -12322,6 +12331,8 @@ mod tests {
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
             );
             assert!(
                 state

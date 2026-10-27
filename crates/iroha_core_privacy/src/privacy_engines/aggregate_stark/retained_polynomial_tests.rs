@@ -1,5 +1,6 @@
 use super::*;
-use rand::{SeedableRng as _, rngs::StdRng};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha12Rng;
 const DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
     PrivacyProtocolIdV1::PqMaspStarkV1,
     b"retained-polynomial-test-v1",
@@ -20,7 +21,7 @@ fn retained_polynomial_batches_are_byte_exact_across_thread_counts() {
             .build()
             .expect("bounded test pool")
             .install(|| {
-                let mut rng = StdRng::from_seed([0xD7; 32]);
+                let mut rng = ChaCha12Rng::from_seed([0xD7; 32]);
                 let (commitment, polynomials) = commit_masked_trace_polynomial_columns_v1(
                     DIGEST_CONTEXT_V1,
                     b"aggregate-retained-batch-leaf",
@@ -63,7 +64,7 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
         indices: &[usize],
     ) {
         let calls = std::cell::Cell::new(0_usize);
-        let mut rng = StdRng::from_seed([0xD2; 32]);
+        let mut rng = ChaCha12Rng::from_seed([0xD2; 32]);
         assert_eq!(
             commit_masked_trace_polynomial_columns_v1(
                 DIGEST_CONTEXT_V1,
@@ -207,7 +208,7 @@ fn retained_polynomial_commitment_rejects_before_witness_source_work() {
         &[],
     );
     let calls = std::cell::Cell::new(0_usize);
-    let mut rng = StdRng::from_seed([0xD3; 32]);
+    let mut rng = ChaCha12Rng::from_seed([0xD3; 32]);
     assert_eq!(
         commit_masked_trace_polynomial_columns_v1(
             DIGEST_CONTEXT_V1,

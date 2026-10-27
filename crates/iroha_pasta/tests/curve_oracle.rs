@@ -1,16 +1,16 @@
 //! Differential tests of the Pallas and Vesta implementations against
-//! `pasta_curves` 0.5.2: encodings, the group law, scalar multiplication, the
+//! `pasta_curves` 0.6.1: encodings, the group law, scalar multiplication, the
 //! GLV endomorphism and hash-to-curve.
 //!
 //! Hash-to-curve is checked for every `Halo2-Parameters` generator index
 //! below 2^16 on both curves, plus the `w`/`u` messages and other domains.
 
 use ff::{Field, PrimeField, WithSmallOrderMulGroup};
-use group::{Curve, Group, GroupEncoding, prime::PrimeCurveAffine};
+use group::{Curve, CurveAffine, Group, GroupEncoding};
 use iroha_pasta::{PastaAffine, PastaCurve};
 use pasta_curves::arithmetic::CurveExt;
 use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::rand_core::{Rng, SeedableRng};
 use rayon::prelude::*;
 
 macro_rules! curve_suite {

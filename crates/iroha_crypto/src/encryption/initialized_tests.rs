@@ -6,15 +6,15 @@ struct NonceRng {
     byte: u8,
     draws: usize,
 }
-impl TryRngCore for NonceRng {
-    type Error = OsError;
-    fn try_next_u32(&mut self) -> Result<u32, OsError> {
+impl TryRng for NonceRng {
+    type Error = SysError;
+    fn try_next_u32(&mut self) -> Result<u32, SysError> {
         unreachable!()
     }
-    fn try_next_u64(&mut self) -> Result<u64, OsError> {
+    fn try_next_u64(&mut self) -> Result<u64, SysError> {
         unreachable!()
     }
-    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), OsError> {
+    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), SysError> {
         self.draws += 1;
         bytes.fill(self.byte);
         Ok(())

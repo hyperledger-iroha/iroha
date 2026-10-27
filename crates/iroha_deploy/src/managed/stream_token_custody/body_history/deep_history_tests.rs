@@ -15,12 +15,13 @@ use iroha_wallet::operations::NativePreparationPhase;
 use std::{path::PathBuf, time::Duration};
 
 // This exercises history depth and custody, not a short-window signing latency target.
-// All 64 bodies expire naturally: 640 seconds of expiry pacing leaves 560 seconds in
+// All 64 bodies expire naturally: 1,920 seconds of expiry pacing leaves 600 seconds in
 // the original finite campaign for fixture setup, native retirement, proofs and assertions.
+// Deep debug histories can spend over ten seconds on original admission and retirement.
 // Focused short-expiry tests retain their own 500 ms / two-second authorizations.
-const BODY_VALIDITY_MS: u64 = 10_000;
-const CAMPAIGN_BUDGET: Duration = Duration::from_secs(1_200);
-const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(12);
+const BODY_VALIDITY_MS: u64 = 30_000;
+const CAMPAIGN_BUDGET: Duration = Duration::from_secs(2_520);
+const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(32);
 
 struct OriginalBytes {
     body: PathBuf,
@@ -150,7 +151,14 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         fixture.options.deadline = (Instant::now() + Duration::from_secs(120)).min(complete_before);
         assert!(Fees::from_options(&fixture.options).unwrap() == original_fees);
         refresh_old_anchor(fixture);
+        // Observe the deepest startup and successor's original errors before fixed mapping.
+        // Keep the guard through finish/unwind; successful output follows all timed work.
+        let body_diagnostic = (ordinal == 64)
+            .then(crate::managed::native_operation::deadline_diagnostics::Observer::begin);
         let mut turn = fixture.renewal_turn();
+        if let Some(diagnostic) = &body_diagnostic {
+            diagnostic.successor();
+        }
         let (checkpoint, current) = fixture.current();
         assert_eq!(current.current().unwrap().record(), &original_native);
         assert_eq!(current.current().unwrap().control().next_sequence, 2);
@@ -356,6 +364,9 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         );
         // Report only after finite request retention and this body's existing assertions.
         eprintln!("body {ordinal} inclusive_finish_phases={finish_phases:?}");
+        // Successful diagnostic output follows measured selection, finish and retention work.
+        // On any earlier panic, RAII still emits the original observed failure while unwinding.
+        drop(body_diagnostic);
     }
 
     let history = retained.unwrap();

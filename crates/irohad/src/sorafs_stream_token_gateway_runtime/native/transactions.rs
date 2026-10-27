@@ -116,7 +116,7 @@ impl NativeTransactions {
         // A fresh full-width signed submission identity makes first mutation versus exact
         // replay unambiguous even when two identical actions are signed in the same millisecond.
         let mut nonce = [0u8; 32];
-        rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+        rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut nonce)
             .map_err(|_| Error::Unavailable)?;
         if nonce == [0; 32] {
             return Err(Error::Unavailable);

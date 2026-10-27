@@ -6838,10 +6838,8 @@ fn p256_main_signed_witness_for_test_v1(
     let signature: Signature = key
         .sign_prehash(&digest)
         .map_err(|_| P256AggregateAdapterErrorV1::Topology)?;
-    let signature = signature
-        .normalize_s()
-        .map_or(signature, |normalized| normalized);
-    let encoded = key.verifying_key().to_encoded_point(false);
+    let signature = signature.normalize_s();
+    let encoded = key.verifying_key().to_sec1_point(false);
     let mut horizontal = [0_u8; 32];
     let mut vertical = [0_u8; 32];
     horizontal.copy_from_slice(encoded.x().ok_or(P256AggregateAdapterErrorV1::Topology)?);

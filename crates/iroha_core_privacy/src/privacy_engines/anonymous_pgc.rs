@@ -16,7 +16,7 @@ use super::p256::{
 #[cfg(test)]
 use super::p256::{TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar};
 use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
-use rand_core_06::{CryptoRng, RngCore};
+use rand_core::{TryCryptoRng, TryRng};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -409,7 +409,7 @@ impl TwistedElGamalKeyPairV1 {
     /// Returns an error if scalar sampling or fixed parameter derivation fails.
     pub fn generate<R>(rng: &mut R) -> Result<Self, AnonymousPgcError>
     where
-        R: CryptoRng + RngCore,
+        R: TryCryptoRng + TryRng,
     {
         let secret = SecretScalarV1::generate(rng)?;
         Self::from_secret(secret)
@@ -705,7 +705,7 @@ pub fn encrypt<R>(
     rng: &mut R,
 ) -> Result<(TwistedElGamalCiphertextV1, SecretScalarV1), AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     for _ in 0..MAX_PROVER_RESTARTS {
         let randomness = SecretScalarV1::generate(rng)?;
@@ -900,7 +900,7 @@ pub fn prove_key_possession<R>(
     rng: &mut R,
 ) -> Result<PgcKeyPossessionProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     let parameters = AnonymousPgcParametersV1::get()?;
     if CompressedPointV1::from_projective(parameters.g * secret.expose_scalar())?
@@ -1065,7 +1065,7 @@ pub fn prove_ciphertext_opening<R>(
     rng: &mut R,
 ) -> Result<PgcCiphertextOpeningProofV1, AnonymousPgcError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng + TryRng,
 {
     if encrypt_with_randomness(statement.public_key, message, randomness)? != statement.ciphertext {
         return Err(AnonymousPgcError::CiphertextOpeningMismatch);
@@ -1202,7 +1202,7 @@ fn ciphertext_opening_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    use std::io::Error as RngError;
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1212,37 +1212,42 @@ mod tests {
             Self { seed, counter: 0 }
         }
     }
-    impl RngCore for KatRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0_u8; 4];
-            self.fill_bytes(&mut bytes);
-            u32::from_be_bytes(bytes)
+    impl rand::TryRng for KatRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 4];
+                self.try_fill_bytes(&mut bytes)?;
+                u32::from_be_bytes(bytes)
+            })
         }
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0_u8; 8];
-            self.fill_bytes(&mut bytes);
-            u64::from_be_bytes(bytes)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut bytes = [0_u8; 8];
+                self.try_fill_bytes(&mut bytes)?;
+                u64::from_be_bytes(bytes)
+            })
         }
-        fn fill_bytes(&mut self, destination: &mut [u8]) {
-            let mut offset = 0;
-            while offset < destination.len() {
-                let mut hash = Sha256::new();
-                hash.update(b"iroha.anonymous-pgc.kat.rng.v1");
-                hash.update(self.seed);
-                hash.update(self.counter.to_be_bytes());
-                self.counter = self.counter.wrapping_add(1);
-                let block: [u8; 32] = hash.finalize().into();
-                let take = (destination.len() - offset).min(block.len());
-                destination[offset..offset + take].copy_from_slice(&block[..take]);
-                offset += take;
-            }
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
-            self.fill_bytes(destination);
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+            {
+                let mut offset = 0;
+                while offset < destination.len() {
+                    let mut hash = Sha256::new();
+                    hash.update(b"iroha.anonymous-pgc.kat.rng.v1");
+                    hash.update(self.seed);
+                    hash.update(self.counter.to_be_bytes());
+                    self.counter = self.counter.wrapping_add(1);
+                    let block: [u8; 32] = hash.finalize().into();
+                    let take = (destination.len() - offset).min(block.len());
+                    destination[offset..offset + take].copy_from_slice(&block[..take]);
+                    offset += take;
+                }
+            };
             Ok(())
         }
     }
-    impl CryptoRng for KatRng {}
+    impl rand::TryCryptoRng for KatRng {}
     #[derive(Clone, Copy)]
     enum AdversarialRngMode {
         Periodic,
@@ -1250,17 +1255,16 @@ mod tests {
         Panic,
     }
     struct AdversarialRng(AdversarialRngMode);
-    impl RngCore for AdversarialRng {
-        fn next_u32(&mut self) -> u32 {
+    impl rand::TryRng for AdversarialRng {
+        type Error = std::io::Error;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             panic!("Anonymous-PGC must use the fallible RNG interface")
         }
-        fn next_u64(&mut self) -> u64 {
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             panic!("Anonymous-PGC must use the fallible RNG interface")
         }
-        fn fill_bytes(&mut self, _destination: &mut [u8]) {
-            panic!("Anonymous-PGC must use the fallible RNG interface")
-        }
-        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
             match self.0 {
                 AdversarialRngMode::Periodic => {
                     for (index, byte) in destination.iter_mut().enumerate() {
@@ -1275,7 +1279,7 @@ mod tests {
                     for (index, byte) in destination.iter_mut().take(23).enumerate() {
                         *byte = index.to_le_bytes()[0];
                     }
-                    Err(RngError::new(
+                    Err(RngError::other(
                         "injected partial Anonymous-PGC entropy failure",
                     ))
                 }
@@ -1285,7 +1289,7 @@ mod tests {
             }
         }
     }
-    impl CryptoRng for AdversarialRng {}
+    impl rand::TryCryptoRng for AdversarialRng {}
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[31] = value;

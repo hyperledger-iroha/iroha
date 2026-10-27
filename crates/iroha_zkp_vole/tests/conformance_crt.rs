@@ -98,7 +98,7 @@ const DIGESTS: [[&str; 5]; 8] = [
 fn digest(matrix: &BitMatrix<'_>) -> String {
     use sha3::digest::{ExtendableOutput, Update, XofReader};
 
-    let mut sponge = sha3::Shake256::default();
+    let mut sponge = shake::Shake256::default();
     for word in matrix.as_words() {
         sponge.update(&word.to_le_bytes());
     }

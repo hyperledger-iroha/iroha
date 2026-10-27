@@ -39,12 +39,12 @@ fn nfc_heap_and_stable_sort_audit_is_bound_to_the_reviewed_sources() {
     assert!(
         toolchain
             .lines()
-            .any(|line| line.trim() == "channel = \"1.93.1\""),
+            .any(|line| line.trim() == "channel = \"1.99.1\""),
         "re-audit stable-sort scratch before updating the toolchain"
     );
     for package in [
-        "name = \"icu_normalizer\"\nversion = \"2.2.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"c56e5ee99d6e3d33bd91c5d85458b6005a22140021cc324cea84dd0e72cff3b4\"",
-        "name = \"smallvec\"\nversion = \"1.15.1\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03\"",
+        "name = \"icu_normalizer\"\nversion = \"2.4.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"404a3b8c486f205c87fe7f23ab6894d84a4ad76d6e4671ae1981ba7def87c599\"",
+        "name = \"smallvec\"\nversion = \"1.16.4\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8\"",
     ] {
         assert!(
             lock.split("[[package]]\n")

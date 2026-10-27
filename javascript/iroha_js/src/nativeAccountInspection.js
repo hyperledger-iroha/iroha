@@ -1,4 +1,4 @@
-import { sha256 as hashBytes } from "@noble/hashes/sha256";
+import { sha256 as hashBytes } from "@noble/hashes/sha2.js";
 import { networkIdBytes } from "./networkId.js";
 import { getCurveEntryByAlgorithm } from "./curveRegistry.js";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";

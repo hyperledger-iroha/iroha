@@ -12,6 +12,9 @@
 //! ```
 //!
 //! Each view is written as a binary PPM image; the generation is stopped afterwards.
+//! `live_walkthrough_with_a_real_generation` uses the same variables and writes to `live/`: it
+//! drives fee-quoted quick actions, an automatically approved deployment, the call card and
+//! the Resume list through genuine validators, with no fixture observations.
 
 use super::*;
 use eframe::egui::{Color32, ColorImage, Pos2, Rect, TextureId, Theme, Vec2, epaint::Primitive};
@@ -55,19 +58,21 @@ impl Renderer {
             .entry(egui::ViewportId::ROOT)
             .or_default()
             .native_pixels_per_point = Some(self.pixels_per_point);
-        let output = self.context.run(input, |context| desktop.show(context));
-        for (id, delta) in &output.textures_delta.set {
-            let egui::ImageData::Color(image) = &delta.image;
-            match delta.pos {
-                None => {
-                    self.textures.insert(*id, (**image).clone());
-                }
-                Some([x, y]) => {
-                    let target = self.textures.get_mut(id).expect("patched texture exists");
-                    for row in 0..image.size[1] {
-                        for column in 0..image.size[0] {
-                            target.pixels[(y + row) * target.size[0] + x + column] =
-                                image.pixels[row * image.size[0] + column];
+        let mut output = self.context.run_ui(input, |context| desktop.show(context));
+        for (id, deltas) in &output.textures_delta.set {
+            for delta in deltas {
+                let egui::ImageData::Color(image) = &delta.image;
+                match delta.pos {
+                    None => {
+                        self.textures.insert(*id, (**image).clone());
+                    }
+                    Some([x, y]) => {
+                        let target = self.textures.get_mut(id).expect("patched texture exists");
+                        for row in 0..image.size[1] {
+                            for column in 0..image.size[0] {
+                                target.pixels[(y + row) * target.size[0] + x + column] =
+                                    image.pixels[row * image.size[0] + column];
+                            }
                         }
                     }
                 }
@@ -76,6 +81,8 @@ impl Renderer {
         for id in &output.textures_delta.free {
             self.textures.remove(id);
         }
+        // Every update above has been applied to the software renderer's texture store.
+        output.textures_delta.clear();
         output
     }
 
@@ -233,6 +240,24 @@ fn rasterize(
     }
 }
 
+#[test]
+fn software_renderer_consumes_font_texture_updates() {
+    let mut renderer = Renderer::new(Theme::Dark);
+    let mut desktop = Desktop::model(PathBuf::from("unused"));
+    for _ in 0..2 {
+        let output = renderer.frame(&mut desktop);
+        assert!(!output.shapes.is_empty());
+        assert!(output.textures_delta.is_empty());
+        assert!(
+            renderer
+                .textures
+                .values()
+                .any(|image| !image.pixels.is_empty())
+        );
+        assert!(!desktop.busy);
+    }
+}
+
 fn wait_until(
     desktop: &mut Desktop,
     timeout: Duration,
@@ -364,7 +389,7 @@ fn fixture_observations(desktop: &mut Desktop, network: &ManagedNetwork) {
     for height in 1..=14_u64 {
         let hash = format!(
             "{:064x}",
-            u128::from(height) * 0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834
+            u128::from(height).wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834)
         );
         let summary = mochi_core::BlockSummary {
             height,
@@ -384,6 +409,7 @@ fn fixture_observations(desktop: &mut Desktop, network: &ManagedNetwork) {
         ledger::record_block(
             &mut desktop.blocks_feed,
             &summary,
+            None,
             1200 + height as usize * 37,
         );
         push_activity(
@@ -413,6 +439,22 @@ fn fixture_observations(desktop: &mut Desktop, network: &ManagedNetwork) {
         "Data · Account Created · 233 bytes · new developer test account".into(),
     );
     desktop.latest_height = Some(14);
+    // Every validator reports block 14; reads are paused so nothing replaces the fixture.
+    desktop.block_tips = home::BlockTips {
+        observed: vec![fixture_tip(14); 4],
+        settled: 14,
+        pending: false,
+        started: Some(Instant::now() + Duration::from_secs(3600)),
+    };
+}
+
+/// A validator's newest block for the Home cards; the hash is a fixture, like the blocks.
+fn fixture_tip(height: u64) -> home::TipObservation {
+    use iroha_data_model::prelude::{Hash, HashOf};
+    Ok(Some(mochi_core::state::BlockTip {
+        height,
+        hash: HashOf::from_untyped_unchecked(Hash::new(height.to_be_bytes())),
+    }))
 }
 
 #[test]
@@ -461,10 +503,17 @@ fn design_previews_with_a_real_generation() {
     // Running-network views on the real generation, with staged phases and fixture
     // observations. Automatic observation and streams are paused so nothing replaces them.
     let stage = |desktop: &mut Desktop, phase, failure: Option<String>| {
+        let running: u8 = if phase == ManagedPhase::Ready { 4 } else { 0 };
         desktop.install_selection(Selection {
             network: network.clone(),
             phase,
-            running: if phase == ManagedPhase::Ready { 4 } else { 0 },
+            running: usize::from(running),
+            validators: (0..running)
+                .map(|index| ManagedValidatorStatus {
+                    index,
+                    state: mochi_core::developer::ManagedValidatorState::Running,
+                })
+                .collect(),
             failure,
             attachment: Ok(None),
         });
@@ -478,6 +527,10 @@ fn design_previews_with_a_real_generation() {
     stage(&mut desktop, ManagedPhase::Ready, None);
     fixture_observations(&mut desktop, &network);
     light.capture(&mut desktop, &out.join("05-home.ppm"));
+    // Validator 4 is still two blocks short of the height an earlier read saw.
+    desktop.block_tips.observed[3] = fixture_tip(12);
+    light.capture(&mut desktop, &out.join("05b-home-validator-behind.ppm"));
+    desktop.block_tips.observed[3] = fixture_tip(14);
     desktop.view = View::Accounts;
     light.capture(&mut desktop, &out.join("06-accounts.ppm"));
     let developer = network.prepared().context.account_id.clone();
@@ -489,6 +542,13 @@ fn design_previews_with_a_real_generation() {
     desktop.quick.fund = "250".into();
     desktop.quick.generated = Some(mochi_core::GeneratedAccount::generate());
     desktop.review_quick_action();
+    // The validator quotes fees in the background before anything is signed.
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(60), |desktop| {
+            desktop.preview.is_some() || desktop.error.is_some()
+        }),
+        "fee quote finished"
+    );
     assert!(desktop.error.is_none(), "{:?}", desktop.error);
     assert!(desktop.preview.is_some(), "a genuine signed preview");
     light.capture(&mut desktop, &out.join("07-accounts-review.ppm"));
@@ -537,4 +597,526 @@ fn design_previews_with_a_real_generation() {
     light.capture(&mut desktop, &out.join("18-home-stopped.ppm"));
     stage(&mut desktop, ManagedPhase::Failed, failure);
     light.capture(&mut desktop, &out.join("19-home-failed.ppm"));
+}
+
+/// A setup hook with a parameter, a mutable entrypoint and two views, so the call card's
+/// prefill, Call and View all run against the genuine validators.
+const LIVE_CONTRACT: &str = "seiyaku Coffee { state int served; hajimari(int start) { served = start; } kotoage fn brew(int cups) authorize(anyone) { served = served + cups; } view fn quote(int cups) authorize(anyone) -> int { return cups * 10; } view fn total() authorize(anyone) -> int { return served; } }";
+
+/// Wait out background observation, as the disabled controls of a busy desktop would.
+fn settle(desktop: &mut Desktop) {
+    assert!(
+        wait_until(desktop, Duration::from_secs(60), |desktop| !desktop.busy),
+        "background work finished"
+    );
+}
+
+/// Read every validator's newest block as Home does on arrival, until all of them report
+/// the newest block the observed validator streamed.
+fn fresh_block_tips(desktop: &mut Desktop) {
+    assert!(
+        wait_until(desktop, Duration::from_secs(30), |desktop| {
+            let observed = &desktop.block_tips.observed;
+            !observed.is_empty()
+                && observed.iter().all(
+                    |tip| matches!(tip, Ok(Some(tip)) if Some(tip.height) == desktop.latest_height),
+                )
+        }),
+        "every validator reports the newest streamed block: {:?}",
+        desktop.block_tips.observed
+    );
+}
+
+/// Render `frames` more frames (0.1 s of animation each), then capture.
+fn capture_after(renderer: &mut Renderer, desktop: &mut Desktop, frames: usize, path: &Path) {
+    for _ in 0..frames {
+        let _ = renderer.frame(desktop);
+    }
+    renderer.capture(desktop, path);
+}
+
+/// One View or Call through the call card's own action; returns its shown result.
+fn run_call(desktop: &mut Desktop, entrypoint: &str, arguments: &str, mutate: bool) -> String {
+    settle(desktop);
+    desktop.call.entrypoint = entrypoint.into();
+    desktop.call.arguments = arguments.into();
+    desktop.run_contract(mutate);
+    assert!(
+        wait_until(desktop, Duration::from_secs(120), |desktop| desktop
+            .call
+            .output
+            .is_some()),
+        "{entrypoint} finished"
+    );
+    match desktop.call.output.clone() {
+        Some(Ok(output)) => output,
+        other => panic!("{entrypoint} failed: {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "starts genuine validators; set MOCHI_PREVIEW_RUNTIME and MOCHI_PREVIEW_OUT"]
+fn live_walkthrough_with_a_real_generation() {
+    let Some(runtime) = std::env::var_os("MOCHI_PREVIEW_RUNTIME") else {
+        eprintln!("MOCHI_PREVIEW_RUNTIME is unset; nothing rendered");
+        return;
+    };
+    let out = PathBuf::from(std::env::var_os("MOCHI_PREVIEW_OUT").expect("MOCHI_PREVIEW_OUT"))
+        .join("live");
+    std::fs::create_dir_all(&out).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("coffee-shop");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("coffee.ko"), LIVE_CONTRACT).unwrap();
+    let workspace = DeveloperWorkspace::with_runtime(
+        &temporary.path().join("state"),
+        &project,
+        InstalledRuntime::from_directory(Path::new(&runtime)).unwrap(),
+    )
+    .unwrap();
+    let mut desktop = Desktop::model(project.clone());
+    desktop.install_opened(inspect_workspace(workspace.clone()).unwrap());
+    let mut light = Renderer::new(Theme::Light);
+    desktop.brand = brand::Brand::load(&light.context);
+
+    // Genuine Quickstart; the header and welcome card count its elapsed time.
+    let started = Instant::now();
+    desktop.quickstart();
+    assert!(desktop.busy && desktop.foreground, "Quickstart dispatched");
+    std::thread::sleep(Duration::from_secs(3));
+    light.capture(&mut desktop, &out.join("01-quickstart-elapsed.ppm"));
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(180), |desktop| !desktop
+            .busy),
+        "localnet creation finished"
+    );
+    eprintln!("LIVE quickstart outcome after {:?}", started.elapsed());
+    assert!(desktop.error.is_none(), "{:?}", desktop.error);
+    assert!(desktop.ready(), "Quickstart selects the Ready localnet");
+    let network = workspace.network(Some("local")).unwrap();
+    let _stop = StopOnDrop(Some((workspace.clone(), network.clone())));
+    capture_after(
+        &mut light,
+        &mut desktop,
+        8,
+        &out.join("02-ready-petals.ppm"),
+    );
+
+    // Genuine observation: canonical streams and collection reads, no fixtures.
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(60), |desktop| {
+            desktop.ledger.is_some() || desktop.ledger_error.is_some()
+        }),
+        "ledger read finished"
+    );
+    assert!(desktop.ledger_error.is_none(), "{:?}", desktop.ledger_error);
+    // Home reads every genuine validator's newest block; none is out of sync.
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(30), |desktop| {
+            !desktop.block_tips.observed.is_empty()
+        }),
+        "block tips read"
+    );
+    let tips = &desktop.block_tips;
+    eprintln!("LIVE block tips: {:?}", tips.observed);
+    let sync = home::tip_sync(&tips.observed, tips.settled);
+    assert!(
+        sync.iter().all(|sync| *sync == home::TipSync::Current),
+        "{sync:?}"
+    );
+    let developer = network.prepared().context.account_id.clone();
+    let ledger = desktop.ledger.as_ref().unwrap();
+    let funding = ledger.holdings_of(&developer).first().map(|holding| {
+        eprintln!(
+            "LIVE ledger: {} accounts; developer holds {} {}",
+            ledger.accounts.entries.len(),
+            holding.value,
+            ledger.asset_label(holding.definition)
+        );
+        holding.asset.to_owned()
+    });
+    let funding = funding.expect("the generated developer account is funded");
+    settle(&mut desktop);
+    light.capture(&mut desktop, &out.join("03-home-live.ppm"));
+
+    // A quick action previews with the validator's fee quote, then commits.
+    desktop.view = View::Accounts;
+    desktop.quick.kind = accounts::QuickKind::NewAccount;
+    desktop.quick.asset = funding;
+    desktop.quick.fund = "25".into();
+    desktop.quick.generated = Some(mochi_core::GeneratedAccount::generate());
+    desktop.review_quick_action();
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(60), |desktop| {
+            desktop.preview.is_some() || desktop.error.is_some()
+        }),
+        "fee quote finished"
+    );
+    assert!(desktop.error.is_none(), "{:?}", desktop.error);
+    let fees = desktop.preview.as_ref().unwrap().fees().to_vec();
+    eprintln!("LIVE quoted fees: {fees:?}");
+    assert!(!fees.is_empty(), "the observed validator quoted fees");
+    // Tall enough to show the review card and its signed fee limits.
+    light.size.y = 1500.0;
+    light.capture(&mut desktop, &out.join("04-accounts-quoted-review.ppm"));
+    light.size.y = 840.0;
+    let height = desktop.latest_height;
+    let outcome = submit_and_settle(&mut desktop);
+    assert!(
+        matches!(outcome, Ok(SubmissionOutcome::Applied { .. })),
+        "{outcome:?}"
+    );
+    eprintln!("LIVE submission: {:?}", desktop.notice);
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(60), |desktop| desktop
+            .latest_height
+            > height),
+        "the committed block reached the stream"
+    );
+    let newest = desktop.blocks_feed.front().unwrap();
+    eprintln!(
+        "LIVE newest block #{}: {} transactions, {} rejected",
+        newest.height, newest.transactions, newest.rejected
+    );
+    assert_eq!(newest.rejected, 0, "the quoted transaction applied");
+    desktop.view = View::Home;
+    settle(&mut desktop);
+    fresh_block_tips(&mut desktop);
+    light.capture(&mut desktop, &out.join("05-home-pulse.ppm"));
+
+    // Automatic approval: the deployment dispatches without the dialog and Activity says why.
+    desktop.view = View::Contracts;
+    desktop.contract_path = "coffee.ko".into();
+    desktop.auto_approve = true;
+    desktop.auto_approve_cap = "1000".into();
+    settle(&mut desktop);
+    desktop.deploy(false);
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(300), |desktop| {
+            desktop.receipt.is_some() || desktop.error.is_some() || desktop.review.is_some()
+        }),
+        "deployment finished"
+    );
+    if let Some(review) = &desktop.review {
+        panic!("automatic approval still asked: {:?}", review.summary);
+    }
+    assert!(desktop.error.is_none(), "{:?}", desktop.error);
+    let approval = desktop
+        .activity
+        .iter()
+        .find(|line| line.contains("automatically"))
+        .cloned();
+    eprintln!("LIVE {approval:?}");
+    assert!(
+        approval.is_some(),
+        "Activity records the automatic approval"
+    );
+    capture_after(
+        &mut light,
+        &mut desktop,
+        8,
+        &out.join("06-deployed-petals.ppm"),
+    );
+
+    // The call card is filled in from the deployment's alias and declared setup hook.
+    eprintln!(
+        "LIVE call card: {} {} {}",
+        desktop.call.alias, desktop.call.entrypoint, desktop.call.arguments
+    );
+    assert!(!desktop.call.alias.is_empty());
+    assert_eq!(desktop.call.entrypoint, "hajimari");
+    assert_eq!(desktop.call.arguments, "{\"start\": \"0\"}");
+    light.size.y = 1500.0;
+    light.capture(&mut desktop, &out.join("07-call-card-prefilled.ppm"));
+    eprintln!(
+        "LIVE hajimari: {}",
+        run_call(&mut desktop, "hajimari", "{\"start\": \"2\"}", true)
+    );
+    eprintln!(
+        "LIVE brew: {}",
+        run_call(&mut desktop, "brew", "{\"cups\": \"3\"}", true)
+    );
+    let total = run_call(&mut desktop, "total", "{}", false);
+    assert!(total.contains('5'), "2 + 3 cups served: {total}");
+    let quote = run_call(&mut desktop, "quote", "{\"cups\": \"3\"}", false);
+    assert!(quote.contains("30"), "{quote}");
+    light.capture(&mut desktop, &out.join("08-call-card-view.ppm"));
+
+    // The Resume card lists the saved deployment without a typed path.
+    settle(&mut desktop);
+    desktop.saved_deployments = None;
+    let _ = light.frame(&mut desktop);
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(30), |desktop| desktop
+            .saved_deployments
+            .is_some()),
+        "saved deployments read"
+    );
+    let saved = desktop.saved_deployments.clone().unwrap().unwrap();
+    eprintln!("LIVE saved deployments: {saved:?}");
+    assert_eq!(saved.len(), 1);
+    assert!(saved[0].has_receipt);
+    desktop.journal_path = saved[0].journal.display().to_string();
+    light.capture(&mut desktop, &out.join("09-resume-picker.ppm"));
+    light.size.y = 840.0;
+
+    // Every State listing reads through a path the node admits, with genuine rows.
+    desktop.view = View::State;
+    for kind in StateQueryKind::all() {
+        settle(&mut desktop);
+        desktop.query = kind;
+        desktop.page = None;
+        desktop.fetch_state(false);
+        assert!(
+            wait_until(&mut desktop, Duration::from_secs(30), |desktop| {
+                desktop.page.is_some() || desktop.error.is_some()
+            }),
+            "{kind:?} read finished"
+        );
+        assert!(desktop.error.is_none(), "{kind:?}: {:?}", desktop.error);
+        let page = desktop.page.as_ref().unwrap();
+        eprintln!(
+            "LIVE state {kind:?}: {} entries, {} remaining, more: {}",
+            page.entries.len(),
+            page.remaining,
+            page.cursor.is_some()
+        );
+        assert!(!page.entries.is_empty(), "{kind:?} lists genuine state");
+    }
+    light.capture(&mut desktop, &out.join("09b-state-peers.ppm"));
+
+    // The wider live chain pulse over the genuine blocks, then Home in both themes.
+    desktop.view = View::Blocks;
+    light.capture(&mut desktop, &out.join("10-blocks-live.ppm"));
+    desktop.view = View::Home;
+    fresh_block_tips(&mut desktop);
+    light.capture(&mut desktop, &out.join("11-home-final.ppm"));
+    let mut dark = Renderer::new(Theme::Dark);
+    desktop.brand = brand::Brand::load(&dark.context);
+    dark.capture(&mut desktop, &out.join("12-home-final-dark.ppm"));
+}
+
+/// Review the selected quick action through the observed validator's fee quote.
+fn review_quick(desktop: &mut Desktop) {
+    settle(desktop);
+    desktop.review_quick_action();
+    assert!(
+        wait_until(desktop, Duration::from_secs(60), |desktop| {
+            desktop.preview.is_some() || desktop.error.is_some()
+        }),
+        "review finished"
+    );
+    assert!(desktop.error.is_none(), "{:?}", desktop.error);
+}
+
+/// Submit the reviewed transaction once and wait for the network to settle it.
+fn submit_and_settle(desktop: &mut Desktop) -> UiResult<SubmissionOutcome> {
+    settle(desktop);
+    desktop.submit_reviewed();
+    assert!(
+        wait_until(desktop, Duration::from_secs(90), |desktop| desktop
+            .submission
+            .as_ref()
+            .is_some_and(|submission| submission.outcome.is_some())),
+        "submission settled"
+    );
+    desktop
+        .submission
+        .as_ref()
+        .and_then(|submission| submission.outcome.clone())
+        .expect("settled outcome")
+}
+
+/// Wait until the developer's observed balance of `definition` reads `value`.
+fn wait_for_balance(desktop: &mut Desktop, developer: &str, definition: &str, value: &str) {
+    assert!(
+        wait_until(desktop, Duration::from_secs(60), |desktop| {
+            desktop.ledger.as_ref().is_some_and(|ledger| {
+                ledger
+                    .holdings_of(developer)
+                    .iter()
+                    .any(|holding| holding.definition == definition && holding.value == value)
+            })
+        }),
+        "the developer holds {value} of {definition}"
+    );
+}
+
+#[test]
+#[ignore = "starts genuine validators; set MOCHI_PREVIEW_RUNTIME and MOCHI_PREVIEW_OUT"]
+fn live_mint_walkthrough_with_a_real_generation() {
+    let Some(runtime) = std::env::var_os("MOCHI_PREVIEW_RUNTIME") else {
+        eprintln!("MOCHI_PREVIEW_RUNTIME is unset; nothing rendered");
+        return;
+    };
+    let out = PathBuf::from(std::env::var_os("MOCHI_PREVIEW_OUT").expect("MOCHI_PREVIEW_OUT"))
+        .join("mint");
+    std::fs::create_dir_all(&out).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("mint-shop");
+    std::fs::create_dir(&project).unwrap();
+    let workspace = DeveloperWorkspace::with_runtime(
+        &temporary.path().join("state"),
+        &project,
+        InstalledRuntime::from_directory(Path::new(&runtime)).unwrap(),
+    )
+    .unwrap();
+    let mut desktop = Desktop::model(project.clone());
+    desktop.install_opened(inspect_workspace(workspace.clone()).unwrap());
+    let mut light = Renderer::new(Theme::Light);
+    desktop.brand = brand::Brand::load(&light.context);
+    desktop.quickstart();
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(180), |desktop| !desktop
+            .busy),
+        "localnet creation finished"
+    );
+    assert!(desktop.error.is_none(), "{:?}", desktop.error);
+    assert!(desktop.ready(), "Quickstart selects the Ready localnet");
+    let network = workspace.network(Some("local")).unwrap();
+    let _stop = StopOnDrop(Some((workspace.clone(), network.clone())));
+    assert!(
+        wait_until(&mut desktop, Duration::from_secs(60), |desktop| {
+            desktop.ledger.is_some() || desktop.ledger_error.is_some()
+        }),
+        "ledger read finished"
+    );
+    assert!(desktop.ledger_error.is_none(), "{:?}", desktop.ledger_error);
+    let developer = network.prepared().context.account_id.clone();
+    assert!(
+        !desktop.owns_mintable_token(),
+        "a fresh developer owns no token, so Home's Mint opens New token"
+    );
+    desktop.view = View::Accounts;
+    light.size.y = 1500.0;
+
+    // Genesis owns XOR: the form warns before review and the network says why it refuses.
+    let xor = {
+        let ledger = desktop.ledger.as_ref().unwrap();
+        let xor = ledger
+            .definitions_for(&developer)
+            .into_iter()
+            .find(|definition| ledger.asset_label(definition) == "XOR")
+            .expect("the fee asset is listed")
+            .to_owned();
+        assert_eq!(
+            ledger.mint_right(&xor, &developer),
+            accounts::MintRight::NotOwner
+        );
+        xor
+    };
+    desktop.quick.kind = accounts::QuickKind::Mint;
+    desktop.quick.definition = xor.clone();
+    desktop.quick.quantity = "100".into();
+    settle(&mut desktop);
+    light.capture(&mut desktop, &out.join("01-mint-xor-warning.ppm"));
+    review_quick(&mut desktop);
+    let fees = desktop.preview.as_ref().unwrap().fees().to_vec();
+    eprintln!("LIVE quoted fees: {fees:?}");
+    let xor_balance = |desktop: &Desktop| {
+        desktop.ledger.as_ref().and_then(|ledger| {
+            ledger
+                .holdings_of(&developer)
+                .iter()
+                .find(|holding| holding.definition == xor)
+                .map(|holding| holding.value.to_owned())
+        })
+    };
+    let before = xor_balance(&desktop);
+    match submit_and_settle(&mut desktop) {
+        Ok(SubmissionOutcome::Rejected { reason }) => {
+            eprintln!("LIVE XOR mint rejected: {reason}");
+            assert!(
+                reason.contains("Can't mint an asset without owning its definition"),
+                "{reason}"
+            );
+        }
+        other => panic!("minting genesis-owned XOR must be rejected: {other:?}"),
+    }
+    assert!(desktop.error.is_none(), "{:?}", desktop.error);
+    light.capture(&mut desktop, &out.join("02-mint-xor-rejected.ppm"));
+    settle(&mut desktop);
+    wait_until(&mut desktop, Duration::from_secs(10), |desktop| {
+        xor_balance(desktop) != before
+    });
+    eprintln!(
+        "LIVE developer XOR around the rejection: {before:?} -> {:?}",
+        xor_balance(&desktop)
+    );
+
+    // New token: lease coffee.universal, register Coffee there and mint the first supply.
+    desktop.preview = None;
+    desktop.submission = None;
+    desktop.quick.kind = accounts::QuickKind::NewToken;
+    desktop.quick.token.name = "Coffee".into();
+    desktop.quick.token.label = "coffee".into();
+    desktop.quick.token.supply = "1000".into();
+    review_quick(&mut desktop);
+    let preview = desktop.preview.clone().unwrap();
+    eprintln!(
+        "LIVE token review: lease {:?}; {:?}",
+        preview.lease(),
+        preview.summaries()
+    );
+    assert!(
+        preview.lease().is_some_and(|lease| lease.amount.is_some()),
+        "a fresh domain is leased at a quoted price"
+    );
+    assert_eq!(preview.instructions().len(), 3, "lease, registration, mint");
+    light.capture(&mut desktop, &out.join("03-new-token-review.ppm"));
+    let outcome = submit_and_settle(&mut desktop);
+    assert!(
+        matches!(outcome, Ok(SubmissionOutcome::Applied { .. })),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        desktop.quick.kind,
+        accounts::QuickKind::Mint,
+        "the new token is the one to mint next"
+    );
+    let coffee = desktop.quick.definition.clone();
+    wait_for_balance(&mut desktop, &developer, &coffee, "1000");
+    assert_eq!(
+        desktop
+            .ledger
+            .as_ref()
+            .unwrap()
+            .mint_right(&coffee, &developer),
+        accounts::MintRight::Owner
+    );
+    assert!(desktop.owns_mintable_token());
+    light.capture(&mut desktop, &out.join("04-new-token-applied.ppm"));
+
+    // As its owner, the developer mints more.
+    desktop.preview = None;
+    desktop.submission = None;
+    desktop.quick.recipient.clear();
+    desktop.quick.quantity = "250".into();
+    review_quick(&mut desktop);
+    let outcome = submit_and_settle(&mut desktop);
+    assert!(
+        matches!(outcome, Ok(SubmissionOutcome::Applied { .. })),
+        "{outcome:?}"
+    );
+    wait_for_balance(&mut desktop, &developer, &coffee, "1250");
+    light.capture(&mut desktop, &out.join("05-mint-coffee-applied.ppm"));
+    let mut dark = Renderer::new(Theme::Dark);
+    dark.size.y = 1500.0;
+    desktop.brand = brand::Brand::load(&dark.context);
+    dark.capture(&mut desktop, &out.join("06-mint-coffee-applied-dark.ppm"));
+
+    // Creating the same token again is refused before review.
+    desktop.preview = None;
+    desktop.submission = None;
+    desktop.quick.kind = accounts::QuickKind::NewToken;
+    let discriminant = network.address_discriminant();
+    let _address_profile =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
+    assert_eq!(
+        desktop
+            .quick
+            .problem(discriminant, &developer, desktop.ledger.as_ref())
+            .as_deref(),
+        Some("Coffee already exists in coffee.universal: mint more from Mint.")
+    );
 }

@@ -18,13 +18,13 @@ workspace = true
 # external package. pasta_curves is a differential test oracle only and never
 # appears in this crate's public types.
 [dependencies]
-# Fp, Fq, Pallas and Vesta implement the ff 0.13 and group 0.13 traits so that
+# Fp, Fq, Pallas and Vesta implement the ff 0.14 and group 0.14 traits so that
 # consumers port mechanically from the vendored halo2curves types.
-ff = "0.13.1"
-group = "0.13"
+ff = "0.14.0"
+group = "0.14.0"
 # Caller-supplied randomness (`Field::random`, ChaCha streams) uses the
-# rand_core 0.6 traits shared with ff 0.13.
-rand_core_06 = { workspace = true }
+# rand_core 0.10 traits shared with ff 0.14.
+rand_core = { workspace = true }
 # Constant-time selection and equality for secret-dependent arithmetic.
 subtle = { version = "2.6.1", default-features = false }
 # MSM, fold and FFT kernels run on the caller's Rayon pool.
@@ -36,13 +36,13 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 # Differential oracle for encodings, field, curve and hash-to-curve results.
-pasta_curves = "0.5.2"
+pasta_curves = "0.6.1"
 # Cross-implementation encoding KATs against the halo2curves Pasta implementation.
 halo2curves = { workspace = true }
 # Deterministic seeded loops replace property-test generators.
-rand_chacha = "0.3.1"
+rand_chacha = "0.10.0"
 # Golden digests of params and key bytes.
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 # Microbenchmarks under benches/ (field, msm, fold, fft).
 criterion = { workspace = true }
 

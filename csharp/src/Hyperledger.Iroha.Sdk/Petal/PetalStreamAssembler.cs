@@ -4,9 +4,9 @@ namespace Hyperledger.Iroha.Petal;
 public sealed record PetalAssemblerLimits
 {
     private readonly int maxPayloadLength = PetalStream.DefaultMaxPayloadLength;
-    private readonly int maxPendingAtoms = 128;
+    private readonly int maxPendingAtoms = 512;
 
-    /// <summary>Default limits: 64 KiB payloads, 128 pending atoms.</summary>
+    /// <summary>Default limits: 64 KiB payloads, 512 pending atoms.</summary>
     public static PetalAssemblerLimits Default { get; } = new();
 
     /// <summary>Largest payload the receiver accepts; larger beacons are ignored.</summary>

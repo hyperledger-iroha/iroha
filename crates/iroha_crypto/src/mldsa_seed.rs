@@ -7,9 +7,8 @@
 pub mod mldsa65 {
     use crate::{Algorithm, Error, PrivateKey, PublicKey};
     use hkdf::Hkdf;
-    use pqcrypto_traits::sign::SecretKey as _;
     #[cfg(feature = "rand")]
-    use rand::rngs::OsRng;
+    use rand::rngs::SysRng;
     #[cfg(feature = "rand")]
     use rand_core::TryCryptoRng;
     use sha2::Sha512;
@@ -30,7 +29,7 @@ pub mod mldsa65 {
     /// Generate a canonical ML-DSA-65 keypair using the operating-system RNG.
     #[cfg(feature = "rand")]
     pub fn random_keypair() -> Result<(PublicKey, PrivateKey), Error> {
-        random_keypair_from_rng(&mut OsRng)
+        random_keypair_from_rng(&mut SysRng)
     }
     #[cfg(feature = "rand")]
     fn random_keypair_from_rng<R>(rng: &mut R) -> Result<(PublicKey, PrivateKey), Error>
@@ -44,12 +43,9 @@ pub mod mldsa65 {
         keypair_from_fips_seed(&seed_material)
     }
     /// Reconstruct and validate the public key committed by a canonical ML-DSA-65 secret key.
-    pub fn public_key_from_secret(
-        secret_key: &pqcrypto_mldsa::mldsa65::SecretKey,
-    ) -> Result<PublicKey, Error> {
-        let public_key =
-            mldsa_public_key_from_secret_key(MlDsaSuite::MlDsa65, secret_key.as_bytes())
-                .map_err(|err| Error::KeyGen(err.to_string()))?;
+    pub fn public_key_from_secret(secret_key: &[u8]) -> Result<PublicKey, Error> {
+        let public_key = mldsa_public_key_from_secret_key(MlDsaSuite::MlDsa65, secret_key)
+            .map_err(|err| Error::KeyGen(err.to_string()))?;
         PublicKey::from_bytes(Algorithm::MlDsa, &public_key)
             .map_err(|err| Error::KeyGen(err.to_string()))
     }
@@ -92,11 +88,9 @@ pub mod mldsa65 {
         use super::*;
         #[cfg(feature = "rand")]
         use core::fmt;
-        use pqcrypto_mldsa::{mldsa44, mldsa65, mldsa87};
-        use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, VerificationError};
-        use rand_core::RngCore as _;
+        use rand_core::Rng as _;
         #[cfg(feature = "rand")]
-        use rand_core::{TryCryptoRng, TryRngCore};
+        use rand_core::{TryCryptoRng, TryRng};
         const RELEASE_KAT_FIPS_SEED: [u8; 32] =
             hex_literal::hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         const RELEASE_KAT_SIGNING_SEED: [u8; 32] =
@@ -152,6 +146,7 @@ pub mod mldsa65 {
         #[cfg(feature = "rand")]
         #[derive(Debug)]
         struct FailingTryRngError;
+        impl std::error::Error for FailingTryRngError {}
         #[cfg(feature = "rand")]
         impl fmt::Display for FailingTryRngError {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -159,7 +154,7 @@ pub mod mldsa65 {
             }
         }
         #[cfg(feature = "rand")]
-        impl TryRngCore for FailingTryRng {
+        impl TryRng for FailingTryRng {
             type Error = FailingTryRngError;
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 Err(FailingTryRngError)
@@ -178,7 +173,7 @@ pub mod mldsa65 {
             byte: u8,
         }
         #[cfg(feature = "rand")]
-        impl TryRngCore for FixedTryRng {
+        impl TryRng for FixedTryRng {
             type Error = core::convert::Infallible;
             fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
                 Ok(u32::from_le_bytes([self.byte; 4]))
@@ -218,80 +213,42 @@ pub mod mldsa65 {
             soranet_pq::sign_mldsa(suite, secret_key, context, RELEASE_KAT_MESSAGE, &mut rng)
                 .expect("native ML-DSA signing with fixed nonzero coins must succeed")
         }
-        fn pqcrypto_verify(
+        fn rustcrypto_verify(
             suite: MlDsaSuite,
             public_key: &[u8],
             context: &[u8],
             message: &[u8],
             signature: &[u8],
-        ) -> Result<(), VerificationError> {
-            match suite {
-                MlDsaSuite::MlDsa44 => {
-                    let public_key =
-                        mldsa44::PublicKey::from_bytes(public_key).expect("ML-DSA-44 public key");
-                    let signature = mldsa44::DetachedSignature::from_bytes(signature)
-                        .expect("ML-DSA-44 signature");
-                    mldsa44::verify_detached_signature_ctx(
-                        &signature,
-                        message,
-                        context,
-                        &public_key,
-                    )
-                }
-                MlDsaSuite::MlDsa65 => {
-                    let public_key =
-                        mldsa65::PublicKey::from_bytes(public_key).expect("ML-DSA-65 public key");
-                    let signature = mldsa65::DetachedSignature::from_bytes(signature)
-                        .expect("ML-DSA-65 signature");
-                    mldsa65::verify_detached_signature_ctx(
-                        &signature,
-                        message,
-                        context,
-                        &public_key,
-                    )
-                }
-                MlDsaSuite::MlDsa87 => {
-                    let public_key =
-                        mldsa87::PublicKey::from_bytes(public_key).expect("ML-DSA-87 public key");
-                    let signature = mldsa87::DetachedSignature::from_bytes(signature)
-                        .expect("ML-DSA-87 signature");
-                    mldsa87::verify_detached_signature_ctx(
-                        &signature,
-                        message,
-                        context,
-                        &public_key,
-                    )
-                }
-            }
+        ) -> Result<(), soranet_pq::MlDsaError> {
+            soranet_pq::verify_mldsa(suite, public_key, context, message, signature)
         }
-        fn pqcrypto_sign(
+        fn rustcrypto_sign(
             suite: MlDsaSuite,
             secret_key: &[u8],
             context: &[u8],
             message: &[u8],
         ) -> Vec<u8> {
+            macro_rules! sign {
+                ($parameter:ty) => {{
+                    #[allow(deprecated)]
+                    let expanded =
+                        ml_dsa::ExpandedSigningKeyBytes::<$parameter>::try_from(secret_key)
+                            .unwrap();
+                    #[allow(deprecated)]
+                    let key = ml_dsa::ExpandedSigningKey::<$parameter>::from_expanded(&expanded);
+                    let header = [0, u8::try_from(context.len()).unwrap()];
+                    key.sign_internal(
+                        &[&header, context, message],
+                        &ml_dsa::B32::from(RELEASE_KAT_SIGNING_COINS),
+                    )
+                    .encode()
+                    .to_vec()
+                }};
+            }
             match suite {
-                MlDsaSuite::MlDsa44 => {
-                    let secret_key =
-                        mldsa44::SecretKey::from_bytes(secret_key).expect("ML-DSA-44 secret key");
-                    mldsa44::detached_sign_ctx(message, context, &secret_key)
-                        .as_bytes()
-                        .to_vec()
-                }
-                MlDsaSuite::MlDsa65 => {
-                    let secret_key =
-                        mldsa65::SecretKey::from_bytes(secret_key).expect("ML-DSA-65 secret key");
-                    mldsa65::detached_sign_ctx(message, context, &secret_key)
-                        .as_bytes()
-                        .to_vec()
-                }
-                MlDsaSuite::MlDsa87 => {
-                    let secret_key =
-                        mldsa87::SecretKey::from_bytes(secret_key).expect("ML-DSA-87 secret key");
-                    mldsa87::detached_sign_ctx(message, context, &secret_key)
-                        .as_bytes()
-                        .to_vec()
-                }
+                MlDsaSuite::MlDsa44 => sign!(ml_dsa::MlDsa44),
+                MlDsaSuite::MlDsa65 => sign!(ml_dsa::MlDsa65),
+                MlDsaSuite::MlDsa87 => sign!(ml_dsa::MlDsa87),
             }
         }
         fn assert_malformed_eta_rejected(error: &soranet_pq::MlDsaError, suite: MlDsaSuite) {
@@ -308,7 +265,7 @@ pub mod mldsa65 {
             );
         }
         #[test]
-        fn native_backend_release_kats_are_exact_and_pqcrypto_verifiable() {
+        fn native_backend_release_kats_are_exact_and_rustcrypto_verifiable() {
             assert_eq!(
                 release_kat_signing_coins(),
                 RELEASE_KAT_SIGNING_COINS,
@@ -334,18 +291,18 @@ pub mod mldsa65 {
                     expected_signature,
                     "{suite:?} signature SHA-256 drifted"
                 );
-                pqcrypto_verify(
+                rustcrypto_verify(
                     suite,
                     keypair.public_key(),
                     RELEASE_KAT_CONTEXT,
                     RELEASE_KAT_MESSAGE,
                     signature.as_bytes(),
                 )
-                .expect("native release KAT signature must verify with pqcrypto");
+                .expect("native release KAT signature must verify with rustcrypto");
             }
         }
         #[test]
-        fn native_and_pqcrypto_signers_interoperate_for_every_parameter_set() {
+        fn native_and_rustcrypto_signers_interoperate_for_every_parameter_set() {
             for suite in [
                 MlDsaSuite::MlDsa44,
                 MlDsaSuite::MlDsa65,
@@ -354,7 +311,7 @@ pub mod mldsa65 {
                 let keypair = release_kat_keypair(suite);
                 let native_signature =
                     release_kat_native_signature(suite, keypair.secret_key(), RELEASE_KAT_CONTEXT);
-                pqcrypto_verify(
+                rustcrypto_verify(
                     suite,
                     keypair.public_key(),
                     RELEASE_KAT_CONTEXT,
@@ -362,24 +319,29 @@ pub mod mldsa65 {
                     native_signature.as_bytes(),
                 )
                 .unwrap_or_else(|error| {
-                    panic!("{suite:?} native signature failed pqcrypto verification: {error}")
+                    panic!("{suite:?} native signature failed rustcrypto verification: {error}")
                 });
-                let pqcrypto_signature = pqcrypto_sign(
+                let rustcrypto_signature = rustcrypto_sign(
                     suite,
                     keypair.secret_key(),
                     RELEASE_KAT_CONTEXT,
                     RELEASE_KAT_MESSAGE,
+                );
+                assert_eq!(
+                    native_signature.as_bytes(),
+                    rustcrypto_signature.as_slice(),
+                    "{suite:?} deterministic signatures differ between independent implementations"
                 );
                 soranet_pq::verify_mldsa(
                     suite,
                     keypair.public_key(),
                     RELEASE_KAT_CONTEXT,
                     RELEASE_KAT_MESSAGE,
-                    &pqcrypto_signature,
+                    &rustcrypto_signature,
                 )
                 .unwrap_or_else(|error| {
                     panic!(
-                        "{suite:?} pqcrypto signature failed native-wrapper verification: {error}"
+                        "{suite:?} rustcrypto signature failed native-wrapper verification: {error}"
                     )
                 });
             }
@@ -484,8 +446,7 @@ pub mod mldsa65 {
         fn seeded_public_key_recovers_from_secret_key() {
             let (public, private) =
                 keypair_from_seed(b"iroha:ml-dsa-seed:recover").expect("seeded keypair");
-            let secret = mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
-                .expect("valid ML-DSA secret bytes");
+            let secret = private.to_bytes().1;
             let recovered = public_key_from_secret(&secret).expect("recover public key");
             assert_eq!(public, recovered);
         }
@@ -561,8 +522,7 @@ pub mod mldsa65 {
             let mut rng = FixedTryRng { byte: 0x42 };
             let (public, private) =
                 random_keypair_from_rng(&mut rng).expect("nonzero ML-DSA random seed material");
-            let secret = mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
-                .expect("valid ML-DSA secret bytes");
+            let secret = private.to_bytes().1;
             let recovered = public_key_from_secret(&secret).expect("recover public key");
             assert_eq!(public, recovered);
         }
@@ -575,16 +535,14 @@ pub mod mldsa65 {
                 .last_mut()
                 .expect("ML-DSA secret key has at least one byte");
             *last ^= 0x01;
-            let secret = mldsa65::SecretKey::from_bytes(&secret_bytes)
-                .expect("length-valid ML-DSA secret bytes");
+            let secret = secret_bytes;
             let err = public_key_from_secret(&secret).expect_err("tampered secret is inconsistent");
             assert!(matches!(err, Error::KeyGen(message) if message.contains("inconsistent")));
         }
         #[test]
         fn public_key_from_secret_rejects_all_zero_secret_material() {
             let secret_bytes = vec![0u8; MlDsaSuite::MlDsa65.secret_key_len()];
-            let secret = mldsa65::SecretKey::from_bytes(&secret_bytes)
-                .expect("length-valid all-zero ML-DSA secret bytes");
+            let secret = secret_bytes;
             let err = public_key_from_secret(&secret)
                 .expect_err("all-zero ML-DSA secret material must fail");
             assert!(matches!(err, Error::KeyGen(message) if message.contains("all zero")));
@@ -596,8 +554,7 @@ pub mod mldsa65 {
             let mut secret_bytes = private.to_bytes().1;
             let tr_offset = 2 * FIPS_SEED_BYTES;
             secret_bytes[tr_offset] ^= 0x01;
-            let secret = mldsa65::SecretKey::from_bytes(&secret_bytes)
-                .expect("length-valid ML-DSA secret bytes");
+            let secret = secret_bytes;
             let err = public_key_from_secret(&secret).expect_err("tampered tr is inconsistent");
             assert!(matches!(err, Error::KeyGen(message) if message.contains("tr does not match")));
         }

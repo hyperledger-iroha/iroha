@@ -706,7 +706,8 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
-    use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
+    use rand::{SeedableRng as _, TryCryptoRng, TryRng};
+    use rand_chacha::ChaCha12Rng;
     use soranet_pq::{generate_mldsa_keypair_from_seed, generate_mlkem_keypair_from_seed};
     use std::str::FromStr as _;
     fn raw(byte: u8) -> [u8; 32] {
@@ -714,6 +715,7 @@ mod tests {
     }
     #[derive(Debug)]
     struct InjectedWalletEntropyError;
+    impl std::error::Error for InjectedWalletEntropyError {}
     impl core::fmt::Display for InjectedWalletEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected PQ-MASP wallet entropy failure")
@@ -722,7 +724,7 @@ mod tests {
     struct AdversarialWalletRng {
         fail: bool,
     }
-    impl TryRngCore for AdversarialWalletRng {
+    impl TryRng for AdversarialWalletRng {
         type Error = InjectedWalletEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedWalletEntropyError)
@@ -920,7 +922,7 @@ mod tests {
             &statement,
             &note,
             recipient_keys.public_key(),
-            &mut StdRng::from_seed([0x27; 32]),
+            &mut ChaCha12Rng::from_seed([0x27; 32]),
         )
         .expect("public wallet facade encrypts");
         assert_eq!(

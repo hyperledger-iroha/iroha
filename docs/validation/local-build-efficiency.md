@@ -1,19 +1,19 @@
 # Local build-efficiency validation
 
 The [local goals L1–L6](../../specs/compile_bloat_optimization_goals.md#active-local-build-goals)
-remain open. The implementation includes stable local metadata and native source
-preflight, matching incremental dev/test profiles, smaller Peer/Swarm dependency
-boundaries, extracted Core test bodies, and a persistent-target profiler. These
-changes require no CI adoption or workflow changes.
+remain open. The implementation includes stable local metadata, matching
+incremental dev/test profiles, smaller Peer/Swarm dependency boundaries,
+extracted Core test bodies, and a persistent-target profiler. These changes
+require no CI adoption or workflow changes.
 
-The native scanner preserves complete source capture and conservative reference
-selection. Delimiter searches replace repeated substring scans, and exact
-ancestor lookups replace repeated package-list scans. All 28 source-identity
-tests pass, including differential tests against the previous algorithms.
-Evaluator refusals retain their underlying diagnostics; failed preflight runs
-remain invalid reports with their original samples and logs.
-The eight profiler/wrapper/native-audit regression suites pass all 472 tests,
-including their isolated Cargo fixtures, without skips or deselection.
+The PLONK source-identity build script and its private local stamp corridor are
+removed. Runtime admission uses explicit proof ABI and exact artifact identities.
+The native scanner remains an independent packaging-provenance evaluator used by
+`audit_native_source_inputs.py`. The local profiler records Cargo wall time,
+complete selected-source snapshots before and after measurement, source-drift
+refusal, toolchain identity, and actual compiler evidence. Current-source
+qualification must use these owners; the preflight timings below describe the
+recorded earlier baseline.
 
 ## Accepted baseline
 

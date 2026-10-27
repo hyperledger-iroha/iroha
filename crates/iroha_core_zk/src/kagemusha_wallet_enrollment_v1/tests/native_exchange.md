@@ -72,8 +72,10 @@ asset incarnation or old genesis fixture.
    `KAGEMUSHA_EXECUTED_LOAD_CAPTURE` / `_SHA256` and
    `KAGEMUSHA_EXECUTED_LOAD_RECEIPT_SHA256`. It requalifies sources and reopens the SAME
    persisted A custody and original key. It never reenrolls A or reconstructs its Bootstrap.
-   Before Load, it confirms the already committed Activate through the native activation
-   cursor using the exact signed transaction and complete H1-through-activation finality originals. A complete host
+   Before Load, it retains the exact signed Activate transaction and confirms it from
+   one native finality original containing that block's certificate and transaction/output
+   membership under the wallet's authenticated epoch. The certified prefix still
+   establishes the producer's setup and installation. A complete host
    owner restart must retain this confirmation without another payment signature. The fixture
    first asserts the unconfirmed activation refusal, then retains the strict proof-rejection
    checks for changed receipt, QC and event evidence after confirmation.
@@ -89,6 +91,15 @@ folded; neither refusal nor folding may sign another payment or alter the origin
 It exports the exact canonical
 Unload claim for separate node execution. Its result explicitly does **not** claim ledger
 settlement, four-validator network qualification, physical attestation or phone gates.
+
+After reopening C's fully folded Receive custody, the same request ID is also
+retried with each original changed independently: another genuine Payment,
+another genuine payer credential, or a canonical empty certificate set used only
+as a non-authorizing negative input. Each candidate must pass structural intake
+validation and then return `OperationConflict`, with no new derivation or payment
+signature and unchanged snapshot. The original request/status still recover the
+exact completed Receive. These assertions remain artifact-dependent host coverage
+with simulated hardware, not phone execution.
 
 The pending-Send continuation requires B and C's original saved keys, all four
 public frames and selected E5/E6 enrollment custody. It uses the same strict
@@ -128,7 +139,9 @@ has an unburned opening and does not qualify burned-status execution.
 The exchange retains six **complete canonical envelopes**: Request, Payment and
 Credited for each leg. Requests are the exact receiver-issued open originals;
 the payer companions are separately retained bounded canonical originals beside
-the Payment. The census never reconstructs or signs them. `message_envelopes`
+the Payment. `payer_companions` records their exact byte counts, hashes and
+2,048-byte limit separately from the peer envelopes. The census never reconstructs
+or signs them. `message_envelopes`
 records each envelope's role, byte count, SHA-256 and bound. Each frame and its
 measurement are synced before checking the bound so oversized failures remain
 inspectable. A naked Payment's length does not establish its envelope or
@@ -145,7 +158,11 @@ fee/control variants or physical carrier acceptance.
 The controls, fee and renewal producers require exactly three carrying-frame
 roles per executed exchange through `complete_exchange_roles`. Their separate
 raw predecessor Lineage proofs remain diagnostic originals, not peer messages.
-The fee producer retains its payer companion in `producer_originals`. Renewal
+The fee producer retains its payer companion in `producer_originals`, with its
+separate `payer_companion` measurement. Controls and renewal record the same
+companion measurements beside their envelopes. Each companion original and size
+measurement is synced before bound or canonical-decoding refusal; a within-bound
+row alone is not a canonicality or proof verdict. Renewal
 also exercises recovery of the original Payment companion after a selected
 credential renewal and process restart, before delivery. Retirement refuses a
 new open Request while retaining outgoing Payment and companion recovery.
@@ -198,7 +215,9 @@ folds or Unload; missing originals are never replaced by another operation.
 The ordinary `message_census` regressions use structural vectors, not genuine
 proof evidence. They check exact open Request linkage, altered companion and
 same-receiver Request rejection, predecessor/manifest pins, Request and Payment
-envelope bounds, and retained oversized failure frames. Both Credited forms
+envelope bounds, and retained oversized failure frames. Companion cases retain
+the exact original and measurement on oversized, malformed and trailing-byte
+refusals. Both Credited forms
 are checked against altered Request/Payment linkage. Exchange inventories
 reject missing, duplicated, mislabeled and failed-bound roles.
 

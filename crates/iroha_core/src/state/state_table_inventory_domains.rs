@@ -378,11 +378,15 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Test,
-        reason: "CertifiedTestChain KAGEMUSHA monetary acceptance chain identity and executed setup/registration/load-target/settlement fixture receipt schemas. The containing setup module is cfg(test); fixture certificates are component evidence and these literals are neither State roots nor deployed-network or device qualification",
+        reason: "CertifiedTestChain KAGEMUSHA monetary acceptance chain identity and executed setup/registration/load-target/settlement, enrollment-cohort and hundred-payer fixture receipt schemas. The containing setup module is cfg(test); fixture certificates are component evidence and these literals are neither State roots nor deployed-network or device qualification",
         literals: &[
+            r"iroha.kagemusha.enrollment-cohort-finality.v1",
+            r"iroha.kagemusha.enrollment-cohort-setup.v1",
+            r"iroha.kagemusha.enrollment-cohort-target.v1",
             r"iroha.kagemusha.executed-ledger-setup.v1",
             r"iroha.kagemusha.executed-terminal-registration.v1",
             r"iroha.kagemusha.executed-unload-settlement.v1",
+            r"iroha.kagemusha.hundred-payers-merchant.v1",
             r"iroha.kagemusha.native-load-target.v1",
             r"kagemusha-native-monetary-acceptance-v1",
         ],
@@ -602,6 +606,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:kura:eviction-file:v1\0",
             r"iroha:kura:lane-storage-instance:v1\0",
         ],
+    },
+    OtherDomains {
+        usage: Use::LocalArtifact,
+        reason: "Fingerprint of an inline canonical block's original file and journal metadata, height and header hash. It invalidates derived summary caches after source changes; it grants no body authority and commits no canonical State entry",
+        literals: &[r"iroha-canonical-summary-source-v1"],
     },
     OtherDomains {
         usage: Use::LocalArtifact,

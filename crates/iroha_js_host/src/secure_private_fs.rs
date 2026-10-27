@@ -5,7 +5,7 @@
 //! every object identity and reject indirection before publishing security-sensitive state.
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
-use rand_core_06::{OsRng, RngCore as _};
+use rand::{TryRng as _, rngs::SysRng};
 use std::{
     fmt, fs, io,
     io::{Read, Seek, SeekFrom, Write},
@@ -565,7 +565,13 @@ fn create_private_temporary_file(
 ) -> Result<(TemporaryPath, fs::File), SecureFsError> {
     for _ in 0..TEMP_NAME_ATTEMPTS {
         let mut random = [0_u8; 24];
-        OsRng.fill_bytes(&mut random);
+        SysRng.try_fill_bytes(&mut random).map_err(|source| {
+            SecureFsError::io(
+                "obtain secure private temporary entropy",
+                root,
+                std::io::Error::other(source),
+            )
+        })?;
         let path = root.join(format!(".secure-private-{}.tmp", hex::encode(random)));
         match platform::create_private_file(&path) {
             Ok(file) => {

@@ -233,7 +233,7 @@ pub(super) fn time_tlv_v1(unix_seconds: u64) -> Result<Vec<u8>, &'static str> {
     Ok(tlv(tag, encoded.as_bytes()))
 }
 pub(super) fn spki(key: &P256SigningKey) -> Vec<u8> {
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     sequence(&[
         ZK_X509_P256_PUBLIC_KEY_ALGORITHM_IDENTIFIER_DER_V1.to_vec(),
         bit_string(point.as_bytes(), 0),

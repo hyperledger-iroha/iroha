@@ -423,7 +423,7 @@ automatic-outcome lists follow `fixtures/governance/parliament_api_v1.json`, and
 certificate that contains a private-jury body is rejected until the anonymous-ballot
 result binding has a Kotlin-owned parser. The replacement anonymous ballot gets new
 Kotlin-owned paths later; Java consumers will call them directly, and no facade,
-alias or fallback remains. Both SDKs pin native bridge ABI 30.
+alias or fallback remains. Both SDKs pin native bridge ABI 33.
 
 ## Java attempt-draft, identifier and OMAPI ownership (2026-09-30)
 

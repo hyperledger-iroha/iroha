@@ -70,7 +70,7 @@ use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},
 };
-use rand::{Rng, RngCore, rngs::StdRng, seq::IndexedRandom};
+use rand::{Rng, RngExt, rngs::StdRng, seq::IndexedRandom};
 use sorafs_manifest::{
     DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder,
     capacity::{

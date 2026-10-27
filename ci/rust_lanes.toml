@@ -139,6 +139,7 @@ packages = [
 [lanes.tooling]
 description = "Code generators, developer tools, samples, benchmarks, and Python bindings."
 packages = [
+  "oss-scanner-build-features",
   "executor_custom_data_model",
   "iroha_python_rs",
   "iroha_schema_gen",

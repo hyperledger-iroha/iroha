@@ -950,7 +950,8 @@ mod tests {
             PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
         },
     };
-    use rand_08::{SeedableRng as _, rngs::StdRng};
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha12Rng;
 
     fn signature_entry(
         signer: &KeyPair,
@@ -1047,7 +1048,7 @@ mod tests {
         historical_commitments.sort_unstable();
         let mut frontier = build_proof_managed_frontier_v1(namespace, &historical_commitments)
             .expect("one governed origin");
-        let mut rng = StdRng::seed_from_u64(0x4150_535f_434f_4e54);
+        let mut rng = ChaCha12Rng::seed_from_u64(0x4150_535f_434f_4e54);
         let recipient = KeyPair::from_seed(vec![0x39; 32], Algorithm::Ed25519);
         let sponsor = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
         let mut previous_dummy_nullifier = None;

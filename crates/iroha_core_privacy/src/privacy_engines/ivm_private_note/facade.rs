@@ -15,7 +15,7 @@ use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
     PrivacyNativeConsensusBindingValidationErrorV1,
 };
-use rand::{TryCryptoRng, rngs::OsRng};
+use rand::{TryCryptoRng, rngs::SysRng};
 use thiserror::Error;
 /// Failure constructing or checking a complete IVM private-note proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -149,7 +149,7 @@ pub fn prove_ivm_private_note_v1(
         consensus_binding,
         consensus_limits,
         witness,
-        &mut OsRng,
+        &mut SysRng,
     )
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -186,9 +186,10 @@ mod tests {
         PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
         PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
-    use rand::{TryCryptoRng, TryRngCore};
+    use rand::{TryCryptoRng, TryRng};
     #[derive(Debug)]
     struct InjectedEntropyError;
+    impl std::error::Error for InjectedEntropyError {}
     impl core::fmt::Display for InjectedEntropyError {
         fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             formatter.write_str("injected IVM private-note entropy failure")
@@ -200,7 +201,7 @@ mod tests {
         Repeated,
     }
     struct AdversarialRng(EntropyMode);
-    impl TryRngCore for AdversarialRng {
+    impl TryRng for AdversarialRng {
         type Error = InjectedEntropyError;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(InjectedEntropyError)

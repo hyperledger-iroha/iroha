@@ -9417,6 +9417,39 @@ fn ivm_zk_roots_inventory_tracks_current_owner_and_refuses_extra_constructions()
     }
 }
 
+/// Restored World verification serves the same root as the State startup verifier.
+#[test]
+fn restored_world_accumulator_inventory_tracks_current_verifiers() {
+    let path = "crates/iroha_core/src/state/world_state_accumulator.rs";
+    let text = source(path);
+    let scan = scan_sources([(path, text.as_str())]);
+    assert!(
+        scan.unlisted_functions.is_empty(),
+        "{:?}",
+        scan.unlisted_functions
+    );
+    for name in [
+        "verify_captured_accumulator",
+        "verify_state_accumulator",
+        "verify_world_state_accumulator",
+    ] {
+        assert_eq!(
+            scan.state_hash_functions
+                .get(&(path.to_owned(), name.to_owned())),
+            Some(&1),
+            "{name}"
+        );
+        let listed = STATE_HASH_FUNCTIONS
+            .iter()
+            .find(|listed| listed.path == path && listed.name == name)
+            .expect("every restored and startup verifier is listed");
+        assert!(matches!(
+            listed.owner,
+            UseOwner::Roots(["world_state_root"])
+        ));
+    }
+}
+
 /// A test-only argument cannot hide the next original AMX State-reader method.
 #[test]
 fn state_hash_scan_cfg_arguments_preserve_original_amx_complete() {

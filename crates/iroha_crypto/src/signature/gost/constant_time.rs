@@ -8,7 +8,7 @@ use super::{AffinePoint as OuterAffinePoint, CurveParams as OuterCurveParams};
 use crate::Algorithm;
 use crypto_bigint::{
     Odd, U256, U512, Uint,
-    modular::{MontyForm, MontyParams},
+    modular::{FixedMontyForm, FixedMontyParams},
 };
 use num_bigint::BigUint;
 use num_traits::Zero;
@@ -17,22 +17,22 @@ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 /// Field element represented in Montgomery form with constant-time operations.
 #[derive(Clone, Copy)]
 struct FieldElement<const LIMBS: usize> {
-    residue: MontyForm<LIMBS>,
+    residue: FixedMontyForm<LIMBS>,
 }
 impl<const LIMBS: usize> FieldElement<LIMBS> {
-    fn zero(params: MontyParams<LIMBS>) -> Self {
+    fn zero(params: FixedMontyParams<LIMBS>) -> Self {
         Self {
-            residue: MontyForm::zero(params),
+            residue: FixedMontyForm::zero(&params),
         }
     }
-    fn one(params: MontyParams<LIMBS>) -> Self {
+    fn one(params: FixedMontyParams<LIMBS>) -> Self {
         Self {
-            residue: MontyForm::one(params),
+            residue: FixedMontyForm::one(&params),
         }
     }
-    fn from_uint(value: Uint<LIMBS>, params: MontyParams<LIMBS>) -> Self {
+    fn from_uint(value: Uint<LIMBS>, params: FixedMontyParams<LIMBS>) -> Self {
         Self {
-            residue: MontyForm::new(&value, params),
+            residue: FixedMontyForm::new(&value, &params),
         }
     }
     fn as_uint(&self) -> Uint<LIMBS> {
@@ -88,7 +88,7 @@ impl<const LIMBS: usize> FieldElement<LIMBS> {
     }
     fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
         Self {
-            residue: MontyForm::conditional_select(&a.residue, &b.residue, choice),
+            residue: FixedMontyForm::conditional_select(&a.residue, &b.residue, choice),
         }
     }
 }
@@ -109,14 +109,14 @@ struct JacobianPoint<const LIMBS: usize> {
     z: FieldElement<LIMBS>,
 }
 impl<const LIMBS: usize> JacobianPoint<LIMBS> {
-    fn infinity(params: MontyParams<LIMBS>) -> Self {
+    fn infinity(params: FixedMontyParams<LIMBS>) -> Self {
         Self {
             x: FieldElement::zero(params),
             y: FieldElement::one(params),
             z: FieldElement::zero(params),
         }
     }
-    fn from_affine(point: &AffinePoint<LIMBS>, params: MontyParams<LIMBS>) -> Self {
+    fn from_affine(point: &AffinePoint<LIMBS>, params: FixedMontyParams<LIMBS>) -> Self {
         Self {
             x: point.x,
             y: point.y,
@@ -218,27 +218,30 @@ impl<const LIMBS: usize> JacobianPoint<LIMBS> {
     }
 }
 struct CurveParameters<const LIMBS: usize> {
-    field_params: MontyParams<LIMBS>,
+    field_params: FixedMontyParams<LIMBS>,
     a: FieldElement<LIMBS>,
     b: FieldElement<LIMBS>,
     generator: AffinePoint<LIMBS>,
     scalar_modulus: Uint<LIMBS>,
-    scalar_params: MontyParams<LIMBS>,
+    scalar_params: FixedMontyParams<LIMBS>,
     name: &'static str,
 }
 impl<const LIMBS: usize> CurveParameters<LIMBS> {
     fn generator(&self) -> JacobianPoint<LIMBS> {
         JacobianPoint::from_affine(&self.generator, self.field_params)
     }
-    fn field_params(&self) -> MontyParams<LIMBS> {
+    fn field_params(&self) -> FixedMontyParams<LIMBS> {
         self.field_params
     }
 }
-fn params_from_hex<const LIMBS: usize>(hex: &str) -> MontyParams<LIMBS> {
+fn params_from_hex<const LIMBS: usize>(hex: &str) -> FixedMontyParams<LIMBS> {
     let modulus = Odd::new(Uint::<LIMBS>::from_be_hex(hex)).expect("curve modulus must be odd");
-    MontyParams::new_vartime(modulus)
+    FixedMontyParams::new_vartime(modulus)
 }
-fn fe_from_hex<const LIMBS: usize>(hex: &str, params: MontyParams<LIMBS>) -> FieldElement<LIMBS> {
+fn fe_from_hex<const LIMBS: usize>(
+    hex: &str,
+    params: FixedMontyParams<LIMBS>,
+) -> FieldElement<LIMBS> {
     FieldElement::from_uint(Uint::<LIMBS>::from_be_hex(hex), params)
 }
 fn curve_from_constants<const LIMBS: usize>(
@@ -512,7 +515,7 @@ mod tests {
     };
     use num_bigint::BigUint;
     use num_traits::{One, Zero};
-    use rand_core::RngCore;
+    use rand_core::Rng;
     #[test]
     fn generator_is_on_curve_all_params() {
         for algo in [

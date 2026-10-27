@@ -10,9 +10,7 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
   /// runs use the actual attribute setter; host success is no Data Protection evidence.
   private func mailbox(
     root: URL,
-    publicationBoundary: @escaping (EnrollmentProbeFiles.PublicationBoundary) throws -> Void = {
-      _ in
-    },
+    publicationBoundary: ((String, EnrollmentProbeFiles.PublicationBoundary, Data) throws -> Void)? = nil,
     directoryBoundary: @escaping (EnrollmentProbeFiles.DirectoryBoundary) throws -> Void = { _ in }
   ) throws -> EnrollmentProbeFiles {
     #if os(iOS)
@@ -23,6 +21,78 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
         root: root, setProtection: { _ in }, publicationBoundary: publicationBoundary,
         directoryBoundary: directoryBoundary)
     #endif
+  }
+
+  func testPublicationTrialSelectionIsClosedAndSkipsUnselectedEntries() throws {
+    XCTAssertTrue(try EnrollmentPublicationTrialSelection.permits(nil, trial: nil))
+    for selected in EnrollmentPublicationTrialSelection.allCases {
+      XCTAssertFalse(try EnrollmentPublicationTrialSelection.permits(nil, trial: selected))
+      XCTAssertFalse(try EnrollmentPublicationTrialSelection.permits(selected.rawValue, trial: nil))
+      for entry in EnrollmentPublicationTrialSelection.allCases {
+        XCTAssertEqual(try EnrollmentPublicationTrialSelection.permits(selected.rawValue, trial: entry),
+          selected == entry)
+      }
+    }
+    for invalid in ["", "before", "after", "receive-before-publication ", "RECEIVE-AFTER-PUBLICATION"] {
+      XCTAssertThrowsError(try EnrollmentPublicationTrialSelection.permits(invalid, trial: nil))
+      for entry in EnrollmentPublicationTrialSelection.allCases {
+        XCTAssertThrowsError(try EnrollmentPublicationTrialSelection.permits(invalid, trial: entry))
+      }
+    }
+  }
+
+  func testSelectedBeforePublicationCapturesOriginalWithoutFinalName() throws {
+    try selectedPublicationFault(.before)
+  }
+
+  func testSelectedAfterPublicationCapturesOriginalWithAcknowledgedFinalName() throws {
+    try selectedPublicationFault(.after)
+  }
+
+  private func selectedPublicationFault(_ selection: EnrollmentPublicationTrialSelection) throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+      at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fault = EnrollmentPublicationFaultCapture()
+    let otherFault = EnrollmentPublicationFaultCapture()
+    let target = "selected-original"
+    let original = Data([1, 2, 3, 4])
+    XCTAssertThrowsError(try fault.arm(path: "../escape", boundary: selection.boundary))
+    try fault.arm(path: target, boundary: selection.boundary)
+    XCTAssertThrowsError(try fault.arm(path: "second", boundary: selection.boundary))
+    let files = try mailbox(root: root, publicationBoundary: { path, boundary, bytes in
+      try fault.observe(path: path, boundary: boundary, bytes: bytes)
+    })
+    // Both the path and the boundary must match. Neither case consumes the one-shot cut.
+    try fault.observe(path: target,
+      boundary: selection == .before ? .directorySynchronized : .staged, bytes: Data([9]))
+    try files.publish("unselected-original", bytes: Data([8]))
+    XCTAssertEqual(try files.read("unselected-original", maximum: 1), Data([8]))
+    XCTAssertThrowsError(try fault.snapshot())
+    XCTAssertThrowsError(try files.publish(target, bytes: original)) { error in
+      XCTAssertTrue(fault.matches(error))
+      XCTAssertFalse(otherFault.matches(error))
+    }
+    XCTAssertFalse(fault.matches(EnrollmentProbeFailure.custody))
+    let captured = try fault.snapshot()
+    XCTAssertEqual(captured.path, target)
+    XCTAssertEqual(captured.boundary, selection.boundary)
+    XCTAssertEqual(captured.original, original)
+    var altered = captured.original
+    altered[0] = 255
+    XCTAssertEqual(try fault.snapshot().original, original)
+    XCTAssertNotEqual(altered, original)
+    XCTAssertEqual(try files.exists(target), selection == .after)
+    if selection == .after { XCTAssertEqual(try files.read(target, maximum: 4), original) }
+    // The fired cut cannot fire again or be rearmed, and exact immutable retry still synchronizes.
+    try files.publish(target, bytes: original)
+    XCTAssertThrowsError(try fault.arm(path: target, boundary: selection.boundary))
+    let reconstructed = try mailbox(root: root)
+    try reconstructed.publish(target, bytes: original)
+    XCTAssertThrowsError(try reconstructed.publish(target, bytes: altered))
+    XCTAssertEqual(try reconstructed.read(target, maximum: 4), original)
+    XCTAssertEqual(try fault.snapshot().original, original)
   }
 
   func testProtectionFailurePreventsPublication() throws {
@@ -160,8 +230,8 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
       try FileManager.default.createDirectory(
         at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
       defer { try? FileManager.default.removeItem(at: root) }
-      let files = try mailbox(root: root, publicationBoundary: {
-        if $0 == boundary { throw EnrollmentProbeFailure.custody }
+      let files = try mailbox(root: root, publicationBoundary: { _, observed, _ in
+        if observed == boundary { throw EnrollmentProbeFailure.custody }
       })
       XCTAssertThrowsError(try files.publish("original", bytes: Data([1, 2, 3])))
       XCTAssertFalse(try files.exists("original"))
@@ -182,13 +252,13 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
       at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     defer { try? FileManager.default.removeItem(at: root) }
     let original = Data([1, 2, 3])
-    let files = try mailbox(root: root, publicationBoundary: {
-      if $0 == .published { throw EnrollmentProbeFailure.custody }
+    let files = try mailbox(root: root, publicationBoundary: { _, observed, _ in
+      if observed == .published { throw EnrollmentProbeFailure.custody }
     })
     XCTAssertThrowsError(try files.publish("original", bytes: original))
     XCTAssertEqual(try files.read("original", maximum: 3), original)
     var boundaries = [EnrollmentProbeFiles.PublicationBoundary]()
-    let resumed = try mailbox(root: root, publicationBoundary: { boundaries.append($0) })
+    let resumed = try mailbox(root: root, publicationBoundary: { _, observed, _ in boundaries.append(observed) })
     XCTAssertThrowsError(try resumed.publish("original", bytes: Data([4, 5, 6])))
     boundaries.removeAll()
     try resumed.publish("original", bytes: original)
@@ -204,8 +274,8 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
         at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
       defer { try? FileManager.default.removeItem(at: root) }
       let original = Data([1, 2, 3])
-      let interrupted = try mailbox(root: root, publicationBoundary: {
-        if $0 == boundary { throw EnrollmentProbeFailure.custody }
+      let interrupted = try mailbox(root: root, publicationBoundary: { _, observed, _ in
+        if observed == boundary { throw EnrollmentProbeFailure.custody }
       })
       XCTAssertThrowsError(try interrupted.publishDispatchFence("executed", bytes: original))
       let resumed = try mailbox(root: root)
@@ -222,8 +292,8 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let original = Data([1, 2, 3])
     let winner = try mailbox(root: root)
-    let loser = try mailbox(root: root, publicationBoundary: {
-      if $0 == .fileSynchronized { try winner.publishDispatchFence("executed", bytes: original) }
+    let loser = try mailbox(root: root, publicationBoundary: { _, observed, _ in
+      if observed == .fileSynchronized { try winner.publishDispatchFence("executed", bytes: original) }
     })
     XCTAssertThrowsError(try loser.publishDispatchFence("executed", bytes: original))
     XCTAssertEqual(try winner.read("executed", maximum: 3), original)
@@ -236,8 +306,8 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
         at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
       defer { try? FileManager.default.removeItem(at: root) }
       let original = Data([1, 2, 3])
-      let interrupted = try mailbox(root: root, publicationBoundary: {
-        if $0 == boundary { throw EnrollmentProbeFailure.custody }
+      let interrupted = try mailbox(root: root, publicationBoundary: { _, observed, _ in
+        if observed == boundary { throw EnrollmentProbeFailure.custody }
       })
       XCTAssertThrowsError(try interrupted.publishDispatchFence("executed", bytes: original))
       XCTAssertFalse(try interrupted.exists("executed"))
@@ -392,4 +462,60 @@ final class KagemushaEnrollmentProbeFilesTests: XCTestCase {
     ticks = 10
     XCTAssertThrowsError(try deadline.select { "ready" })
   }
+  /// Full current projection DATA only; it cannot manufacture a Native review capability.
+  private func reviewOriginal() -> Data {
+    var bytes = Data(count: 495)
+    bytes.replaceSubrange(0..<8, with: [75,87,79,82,86,49,0,0]); bytes[8] = 8
+    for at in [9,41,57,106,202,234,266,298,330,362,394] { bytes[at] = 1 }
+    bytes[426] = 4; bytes[427] = 1
+    return bytes
+  }
+  func testConditionalCustodyRequiresExactOriginalCompanionsAndImmutableInitialProjection() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: root) }
+    let files = try mailbox(root: root), identity = Data(repeating: 1, count: 32)
+    let originals = ["amount": Data([1]), "quote": Data([2]), "certificates": Data([3]), "beneficiary": Data([4])]
+    let marker = "actor/private/intents/executed-" + EnrollmentProbeFiles.digest(identity)
+    func selection(_ originals: [String: Data], _ continuation: Bool) throws {
+      _ = try KagemushaProbeReviewCustody.expectation(files: files, actorPath: "actor", requestID: identity,
+        family: "review-unload", originals: originals, continuation: continuation)
+    }
+    XCTAssertThrowsError(try selection(originals, true))
+    try selection(originals, false)
+    XCTAssertThrowsError(try selection(originals, true), "retained originals alone do not replace the initial fence")
+    try files.publishDispatchFence(marker, bytes: reviewOriginal())
+    try selection(originals, true)
+    var changed = originals; changed["certificates"] = Data([8])
+    XCTAssertThrowsError(try selection(changed, true), "companion bytes are retained even outside projection digests")
+    XCTAssertThrowsError(try selection(originals, false))
+    try files.mkdir("actor/private/attempt")
+    let attempt = "actor/private/attempt/review-dispatch.norito"
+    try files.publishDispatchFence(attempt, bytes: reviewOriginal())
+    XCTAssertThrowsError(try files.publishDispatchFence(attempt, bytes: reviewOriginal()))
+    XCTAssertEqual(try files.read(marker, maximum: 4591), reviewOriginal())
+    let missing = "actor/private/intents/review-originals-" + EnrollmentProbeFiles.digest(identity) + "/certificates"
+    try FileManager.default.removeItem(at: root.appendingPathComponent(missing))
+    XCTAssertThrowsError(try selection(originals, true), "continuation cannot recreate missing originals")
+    XCTAssertFalse(try files.exists(missing))
+  }
+  func testOldHashOnlyOrMalformedFenceCannotBecomeConditionalExpectation() throws {
+    for body in [Data(repeating: 65, count: 64), Data(reviewOriginal().dropLast()), reviewOriginal()+Data([0])] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700])
+      defer { try? FileManager.default.removeItem(at: root) }
+      let files = try mailbox(root: root), identity = Data(repeating: 1, count: 32)
+      let inputs = ["amount": Data([1])]
+      _ = try KagemushaProbeReviewCustody.expectation(files: files, actorPath: "actor", requestID: identity,
+        family: "review-unload", originals: inputs, continuation: false)
+      let marker = "actor/private/intents/executed-" + EnrollmentProbeFiles.digest(identity)
+      try files.publishDispatchFence(marker, bytes: body)
+      XCTAssertThrowsError(try KagemushaProbeReviewCustody.expectation(files: files, actorPath: "actor",
+        requestID: identity, family: "review-unload", originals: inputs, continuation: true))
+      XCTAssertEqual(try files.read(marker, maximum: 4591), body)
+    }
+  }
+
 }

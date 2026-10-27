@@ -2,7 +2,7 @@
 
 use super::PublicKey;
 use crate::ParseError;
-use k256::elliptic_curve::{Error, sec1::ToEncodedPoint as _};
+use k256::elliptic_curve::{Error, sec1::ToSec1Point as _};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum KeyRejection {
@@ -29,8 +29,8 @@ pub(crate) fn parse(payload: &[u8]) -> Result<PublicKey, KeyRejection> {
         return Err(KeyRejection::AllZero);
     }
     let key = PublicKey::from_sec1_bytes(payload).map_err(KeyRejection::Encoding)?;
-    // EncodedPoint keeps canonical compressed SEC1 bytes inline.
-    if key.to_encoded_point(true).as_bytes() != payload {
+    // Sec1Point keeps canonical compressed SEC1 bytes inline.
+    if key.to_sec1_point(true).as_bytes() != payload {
         return Err(KeyRejection::NonCanonical);
     }
     Ok(key)

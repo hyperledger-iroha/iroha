@@ -5,23 +5,7 @@ use super::TryReadSnapshotError;
 pub fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
     // Recoverable snapshot loss still requires the caller's Strict mode and complete
     // genesis-backed prefix; node::prepare executes every original certified block.
-    !matches!(
-        error,
-        TryReadSnapshotError::IO(_, _)
-            | TryReadSnapshotError::PayloadAllocation(_)
-            | TryReadSnapshotError::PayloadAllocatorFailure { .. }
-            | TryReadSnapshotError::StateVmInitialization(_)
-            | TryReadSnapshotError::StateRead(_)
-            | TryReadSnapshotError::StateAdmission(_)
-            | TryReadSnapshotError::StateExecutionDeferred(_)
-            | TryReadSnapshotError::StateNativeSchedule(_)
-            | TryReadSnapshotError::StateNativeLaneCustody(_)
-            | TryReadSnapshotError::StateBeaconSession(_)
-            | TryReadSnapshotError::ChainIdMismatch { .. }
-            | TryReadSnapshotError::NetworkIdMismatch { .. }
-            | TryReadSnapshotError::ZkConfigInstall(_)
-            | TryReadSnapshotError::MismatchedHeight { .. }
-    )
+    !error.halts_restore()
 }
 
 #[cfg(test)]
@@ -48,9 +32,14 @@ mod tests {
             &wrong_chain,
             false
         ));
-        let replay = TryReadSnapshotError::NativeExecutionReplayRequired;
-        assert!(snapshot_failure_allows_empty_state_fallback(&replay, false));
-        assert!(!snapshot_failure_allows_empty_state_fallback(&replay, true));
+        for replay in [
+            TryReadSnapshotError::NativeExecutionReplayRequired,
+            TryReadSnapshotError::SuccessorRequired { snapshot_height: 7 },
+            TryReadSnapshotError::WorldAuthentication("restored World differs".to_owned()),
+        ] {
+            assert!(snapshot_failure_allows_empty_state_fallback(&replay, false));
+            assert!(!snapshot_failure_allows_empty_state_fallback(&replay, true));
+        }
         assert!(snapshot_failure_allows_empty_state_fallback(
             &TryReadSnapshotError::NotFound,
             false,

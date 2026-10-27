@@ -1,21 +1,21 @@
 //! Physical allocation and exact transcript controls for fixed hybrid owners.
 use super::*;
 use crate::test_allocations::without_allocations;
-use hkdf::Hkdf;
-use rand_core::OsRng;
+use hkdf::SimpleHkdf;
+use rand::rngs::SysRng;
 
 #[test]
 fn fixed_hybrid_generation_clone_exchange_and_import_do_not_allocate() {
     // Exercise platform RNG initialization before measuring the actual production
     // operations. The measured calls still obtain genuine OS entropy.
-    let warm = HybridKeyPair::try_generate(&mut OsRng).unwrap();
+    let warm = HybridKeyPair::try_generate(&mut SysRng).unwrap();
     encapsulate(
         HybridSuite::X25519MlKem768ChaCha20Poly1305,
         warm.public(),
-        &mut OsRng,
+        &mut SysRng,
     )
     .unwrap();
-    let pair = without_allocations(|| HybridKeyPair::try_generate(&mut OsRng).unwrap());
+    let pair = without_allocations(|| HybridKeyPair::try_generate(&mut SysRng).unwrap());
     let cloned = without_allocations(|| pair.clone());
     assert!(
         core::ptr::eq(pair.public(), pair.secret().public()),
@@ -34,7 +34,7 @@ fn fixed_hybrid_generation_clone_exchange_and_import_do_not_allocate() {
         encapsulate(
             HybridSuite::X25519MlKem768ChaCha20Poly1305,
             &public,
-            &mut OsRng,
+            &mut SysRng,
         )
         .unwrap()
     });
@@ -104,7 +104,7 @@ fn streaming_hkdf_matches_original_length_prefixed_transcript_exactly() {
             original.extend_from_slice(&u64::try_from(part.len()).unwrap().to_be_bytes());
             original.extend_from_slice(part);
         }
-        let reference = Hkdf::<Sha3_256>::new(Some(suite.hkdf_salt()), &original);
+        let reference = SimpleHkdf::<Sha3_256>::new(Some(suite.hkdf_salt()), &original);
         let mut material = Zeroizing::new([0; 64]);
         let mut rekey = Zeroizing::new([0; 32]);
         reference

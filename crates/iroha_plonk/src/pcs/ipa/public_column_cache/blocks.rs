@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use ff::PrimeField;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use iroha_pasta::{
     CancellationToken, PastaCurve,
     msm::{MemoryBudget, MsmError, SharedMemoryBudget, msm_public_cancellable},

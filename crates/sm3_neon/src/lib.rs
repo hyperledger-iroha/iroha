@@ -198,7 +198,7 @@ pub fn digest(_: &[u8]) -> Option<[u8; 32]> {
 mod tests {
     use super::*;
     use hex_literal::hex;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
     use sm3::{Digest, Sm3};
     #[test]
     fn digest_matches_scalar() {

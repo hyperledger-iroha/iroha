@@ -1,31 +1,38 @@
 //! Reference software renderer.
 //!
 //! The picture is black, with four sakura-blossom finders in the canvas corners,
-//! a `天`-shaped field of 256 tiles inside three dotted rings. A light tile is
-//! a pale rounded square with a near-black katakana; a dark tile is empty
-//! except for its sakura-pink katakana. Platform SDKs may draw with their own
-//! 2D APIs as long as geometry and polarity match this renderer.
+//! three dotted rings, and inside them a field of petals on concentric bands, each
+//! lit petal turned about its centre by its turn. A lit petal whose centre lies
+//! inside the `天` is drawn in the light colour, the others in sakura pink, over a
+//! faint backdrop of the `天` itself, so the character shows through the storm of
+//! petals. Above and below that square, the card's two bands show rows of
+//! katakana tiles (see [`crate::kana`]): a light tile filled light with its glyph
+//! in ink, a dark tile black with its glyph in pink. Platform SDKs may draw with
+//! their own 2D APIs as long as geometry, turns, glyphs and polarity match this
+//! renderer.
 
-use std::sync::OnceLock;
-
-use crate::glyphs::{GLYPH_COUNT, GLYPH_GRID, is_inked};
 use crate::image::Rgb;
 use crate::lanes::FrameCells;
 use crate::layout::{
-    CANVAS, CENTER, DOT_RADIUS, FINDER_CENTERS, FINDER_OUTER, GLYPH_BOX, RING_COUNT, RING_RADII,
-    RING_SLOTS, TILE_GRID, TILE_ORIGIN, TILE_PITCH, TILE_SIZE, TILES, finder_lit, ring_offset,
+    BACKDROP_RADIUS, BAND_COUNT, BAND_INNER, BAND_OFFSETS, BAND_SLOTS, BAND_SPACING, CANVAS,
+    CARD_HEIGHT, CENTER, DOT_RADIUS, FINDER_CENTERS, FINDER_OUTER, PETAL_HALF_LENGTH, RING_COUNT,
+    RING_RADII, RING_SLOTS, SQUARE_TOP, band_phase, band_radius, cell_angle, cell_center,
+    cell_light, finder_lit, in_mask, kana_inked, kana_inside, kana_tile_at, petal_lit, ring_offset,
 };
+use crate::turns::turn_angle;
 
 /// Colours of the picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     /// Background.
     pub background: [u8; 3],
-    /// Light tile fill and finders.
+    /// Finders and the petals inside the `天`.
     pub light: [u8; 3],
-    /// Sakura pink of dots and of glyphs on dark tiles.
+    /// Sakura pink of the ring dots and of the petals outside the `天`.
     pub pink: [u8; 3],
-    /// Glyph colour on a light tile.
+    /// The faint `天` drawn under the petals (a tenth of the light colour).
+    pub backdrop: [u8; 3],
+    /// Glyphs on light katakana tiles.
     pub ink: [u8; 3],
 }
 
@@ -35,6 +42,7 @@ impl Default for Palette {
             background: [0, 0, 0],
             light: [250, 235, 244],
             pink: [245, 175, 208],
+            backdrop: [25, 24, 24],
             ink: [20, 4, 14],
         }
     }
@@ -43,7 +51,7 @@ impl Default for Palette {
 /// Rendering options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderOptions {
-    /// Output side in pixels.
+    /// Output width in pixels; the card is [`card_height_px`] pixels tall.
     pub size: usize,
     /// Samples per pixel side for anti-aliasing (1–4).
     pub supersample: usize,
@@ -61,58 +69,46 @@ impl Default for RenderOptions {
     }
 }
 
-const BITMAP_N: usize = 128;
-
-fn glyph_bitmaps() -> &'static Vec<Vec<bool>> {
-    static BITMAPS: OnceLock<Vec<Vec<bool>>> = OnceLock::new();
-    BITMAPS.get_or_init(|| {
-        (0..GLYPH_COUNT)
-            .map(|glyph| {
-                let mut bitmap = vec![false; BITMAP_N * BITMAP_N];
-                for v in 0..BITMAP_N {
-                    for u in 0..BITMAP_N {
-                        let x = (u as f64 + 0.5) / BITMAP_N as f64 * f64::from(GLYPH_GRID);
-                        let y = (v as f64 + 0.5) / BITMAP_N as f64 * f64::from(GLYPH_GRID);
-                        bitmap[v * BITMAP_N + u] = is_inked(glyph, x, y);
-                    }
-                }
-                bitmap
-            })
-            .collect()
-    })
-}
-
-fn tile_lookup() -> &'static [[Option<u16>; TILE_GRID]; TILE_GRID] {
-    static LOOKUP: OnceLock<[[Option<u16>; TILE_GRID]; TILE_GRID]> = OnceLock::new();
-    LOOKUP.get_or_init(|| {
-        let mut table = [[None; TILE_GRID]; TILE_GRID];
-        for (index, &(col, row)) in TILES.iter().enumerate() {
-            table[usize::from(row)][usize::from(col)] = Some(index as u16);
-        }
-        table
-    })
-}
-
-/// Inside test for a rounded square of half-side `half` and corner radius
-/// `radius`, relative to its centre.
-fn in_rounded_square(dx: f64, dy: f64, half: f64, radius: f64) -> bool {
-    let (ax, ay) = (dx.abs(), dy.abs());
-    if ax > half || ay > half {
-        return false;
-    }
-    let (cx, cy) = (ax - (half - radius), ay - (half - radius));
-    cx <= 0.0 || cy <= 0.0 || cx * cx + cy * cy <= radius * radius
-}
-
 struct Shader<'a> {
     cells: &'a FrameCells,
     palette: Palette,
 }
 
 impl Shader<'_> {
+    fn petal(&self, x: f64, y: f64, radius: f64, theta: f64) -> Option<[u8; 3]> {
+        let reach = f64::from(PETAL_HALF_LENGTH);
+        let nearest = ((radius - f64::from(BAND_INNER)) / f64::from(BAND_SPACING)).round();
+        for band in [nearest - 1.0, nearest, nearest + 1.0] {
+            if band < 0.0 || band >= BAND_COUNT as f64 {
+                continue;
+            }
+            let band = band as usize;
+            if (radius - f64::from(band_radius(band))).abs() > reach {
+                continue;
+            }
+            let slots = f64::from(BAND_SLOTS[band]);
+            let around = (theta / core::f64::consts::TAU * slots - band_phase(band)).round() as i64;
+            for slot in [around - 1, around, around + 1] {
+                let cell = BAND_OFFSETS[band] + slot.rem_euclid(slots as i64) as usize;
+                if !self.cells.petals[cell] {
+                    continue;
+                }
+                let (cx, cy) = cell_center(cell);
+                let angle = cell_angle(cell) + turn_angle(self.cells.turns[cell]);
+                if petal_lit(x - cx, y - cy, angle) {
+                    return Some(if cell_light(cell) {
+                        self.palette.light
+                    } else {
+                        self.palette.pink
+                    });
+                }
+            }
+        }
+        None
+    }
+
     fn shade(&self, x: f64, y: f64) -> [u8; 3] {
         let p = &self.palette;
-        // finders
         for &(fx, fy) in &FINDER_CENTERS {
             let (dx, dy) = (x - f64::from(fx), y - f64::from(fy));
             if (dx * dx + dy * dy).sqrt() <= f64::from(FINDER_OUTER) {
@@ -123,51 +119,19 @@ impl Shader<'_> {
                 };
             }
         }
-        // tiles
-        let lattice = f64::from(TILE_ORIGIN);
-        let pitch = f64::from(TILE_PITCH);
-        if x >= lattice && y >= lattice {
-            let col = ((x - lattice) / pitch) as usize;
-            let row = ((y - lattice) / pitch) as usize;
-            if col < TILE_GRID
-                && row < TILE_GRID
-                && let Some(tile) = tile_lookup()[row][col]
-            {
-                let tile = usize::from(tile);
-                let cx = lattice + pitch * (col as f64 + 0.5);
-                let cy = lattice + pitch * (row as f64 + 0.5);
-                let (dx, dy) = (x - cx, y - cy);
-                if !in_rounded_square(dx, dy, f64::from(TILE_SIZE) / 2.0, 3.0) {
-                    return p.background;
-                }
-                let box_half = f64::from(GLYPH_BOX) / 2.0;
-                let inked = dx.abs() < box_half && dy.abs() < box_half && {
-                    let u = ((dx + box_half) / (2.0 * box_half) * BITMAP_N as f64) as usize;
-                    let v = ((dy + box_half) / (2.0 * box_half) * BITMAP_N as f64) as usize;
-                    glyph_bitmaps()[usize::from(self.cells.glyph[tile])]
-                        [v.min(BITMAP_N - 1) * BITMAP_N + u.min(BITMAP_N - 1)]
-                };
-                return match (self.cells.light[tile], inked) {
-                    (true, false) => p.light,
-                    (true, true) => p.ink,
-                    (false, true) => p.pink,
-                    (false, false) => p.background,
-                };
-            }
-        }
-        // ring dots
         let (dx, dy) = (x - f64::from(CENTER), y - f64::from(CENTER));
         let radius = (dx * dx + dy * dy).sqrt();
+        let mut theta = dy.atan2(dx);
+        if theta < 0.0 {
+            theta += core::f64::consts::TAU;
+        }
+        // ring dots
         for ring in 0..RING_COUNT {
             let ring_radius = f64::from(RING_RADII[ring]);
             if (radius - ring_radius).abs() > f64::from(DOT_RADIUS) {
                 continue;
             }
             let slots = RING_SLOTS[ring];
-            let mut theta = dy.atan2(dx);
-            if theta < 0.0 {
-                theta += core::f64::consts::TAU;
-            }
             let slot = ((theta / core::f64::consts::TAU * slots as f64).round() as usize) % slots;
             if !self.cells.dots[ring_offset(ring) + slot] {
                 continue;
@@ -178,16 +142,70 @@ impl Shader<'_> {
                 return p.pink;
             }
         }
+        // petals, then the faint 天 under them
+        if radius <= f64::from(BACKDROP_RADIUS) {
+            if let Some(colour) = self.petal(x, y, radius, theta) {
+                return colour;
+            }
+            if in_mask(x, y) {
+                return p.backdrop;
+            }
+        }
         p.background
+    }
+
+    /// The colour of a katakana tile at the square-coordinate point `(x, y)` outside the square,
+    /// or the background between tiles.
+    fn kana(&self, x: f64, y: f64) -> [u8; 3] {
+        let p = &self.palette;
+        let Some((tile, u, v)) = kana_tile_at(x, y) else {
+            return p.background;
+        };
+        if !kana_inside(u, v) {
+            return p.background;
+        }
+        let symbol = self.cells.kana[tile];
+        match (kana_inked(symbol.glyph, u, v), symbol.light) {
+            (true, true) => p.ink,
+            (false, true) => p.light,
+            (true, false) => p.pink,
+            (false, false) => p.background,
+        }
     }
 }
 
-/// Renders one frame.
+/// Height in pixels of a card rendered `size` pixels wide: `size · 1668 / 1024`, rounded.
+#[must_use]
+pub fn card_height_px(size: usize) -> usize {
+    let height = size as f64 * f64::from(CARD_HEIGHT) / f64::from(CANVAS);
+    (height + 0.5).floor() as usize
+}
+
+/// Renders one frame: the card, `options.size` pixels wide and [`card_height_px`] tall, whose
+/// square starts [`SQUARE_TOP`] units below the top edge.
 ///
 /// # Panics
 /// Panics when `options.size` is zero or `options.supersample` is outside 1–4.
 #[must_use]
 pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
+    render_rows(
+        cells,
+        options,
+        card_height_px(options.size),
+        f64::from(SQUARE_TOP),
+    )
+}
+
+/// Renders only the square of the card, `options.size` pixels on a side: the decoder's own unit
+/// tests work on bare squares.
+#[cfg(test)]
+pub(crate) fn render_square(cells: &FrameCells, options: &RenderOptions) -> Rgb {
+    render_rows(cells, options, options.size, 0.0)
+}
+
+/// Renders `height` pixel rows of the card, the first `top` canvas units above the square's top
+/// edge.
+fn render_rows(cells: &FrameCells, options: &RenderOptions, height: usize, top: f64) -> Rgb {
     assert!(options.size > 0 && (1..=4).contains(&options.supersample));
     let shader = Shader {
         cells,
@@ -196,15 +214,19 @@ pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
     let size = options.size;
     let s = options.supersample;
     let unit = f64::from(CANVAS) / size as f64;
-    let mut data = vec![0u8; size * size * 3];
-    for py in 0..size {
+    let mut data = vec![0u8; size * height * 3];
+    for py in 0..height {
         for px in 0..size {
             let mut acc = [0u32; 3];
             for sy in 0..s {
                 for sx in 0..s {
                     let x = (px as f64 + (sx as f64 + 0.5) / s as f64) * unit;
-                    let y = (py as f64 + (sy as f64 + 0.5) / s as f64) * unit;
-                    let c = shader.shade(x, y);
+                    let y = (py as f64 + (sy as f64 + 0.5) / s as f64) * unit - top;
+                    let c = if (0.0..f64::from(CANVAS)).contains(&y) {
+                        shader.shade(x, y)
+                    } else {
+                        shader.kana(x, y)
+                    };
                     for k in 0..3 {
                         acc[k] += u32::from(c[k]);
                     }
@@ -219,7 +241,7 @@ pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
     }
     Rgb {
         width: size,
-        height: size,
+        height,
         data,
     }
 }
@@ -227,22 +249,24 @@ pub fn render(cells: &FrameCells, options: &RenderOptions) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lanes::{D_DATA, K_DATA, Lane, P_DATA, encode_lane};
+    use crate::lanes::{D_DATA, FIELD_DATA, Lane, encode_lane};
+    use crate::layout::{FIELD_CELLS, TOTAL_SLOTS};
 
     fn cells(seed: u8) -> FrameCells {
-        let p: Vec<u8> = (0..P_DATA as u8)
-            .map(|b| b.wrapping_mul(31).wrapping_add(seed))
-            .collect();
-        let k: Vec<u8> = (0..K_DATA as u8)
-            .map(|b| b.wrapping_mul(17) ^ seed)
-            .collect();
         let d: Vec<u8> = (0..D_DATA as u8)
             .map(|b| b.wrapping_mul(13) ^ seed)
             .collect();
+        let fields: Vec<Vec<u8>> = (0..4u8)
+            .map(|s| {
+                let data: Vec<u8> = (0..FIELD_DATA as u8)
+                    .map(|b| b.wrapping_mul(17).wrapping_add(s) ^ seed)
+                    .collect();
+                encode_lane(Lane::Field(s), &data)
+            })
+            .collect();
         FrameCells::from_words(
-            &encode_lane(Lane::P, &p),
-            &encode_lane(Lane::K, &k),
             &encode_lane(Lane::D, &d),
+            [&fields[0], &fields[1], &fields[2], &fields[3]],
         )
     }
 
@@ -256,8 +280,9 @@ mod tests {
                 palette: Palette::default(),
             },
         );
-        let at = |x: usize, y: usize| image.data[(y * 256 + x) * 3];
         let scale = 256.0 / 1024.0;
+        let top = (f64::from(SQUARE_TOP) * scale) as usize;
+        let at = |x: usize, y: usize| image.data[((y + top) * 256 + x) * 3];
         let (fx, fy) = (
             f64::from(FINDER_CENTERS[0].0) * scale,
             f64::from(FINDER_CENTERS[0].1) * scale,
@@ -275,45 +300,29 @@ mod tests {
     }
 
     #[test]
-    fn light_tiles_are_bright_and_dark_tiles_are_mostly_black() {
+    fn lit_petals_are_drawn_in_their_colour_and_dark_cells_show_the_backdrop() {
         let frame = cells(2);
         let image = render(
             &frame,
             &RenderOptions {
-                size: 512,
-                supersample: 2,
+                size: 1024,
+                supersample: 1,
                 palette: Palette::default(),
             },
         );
-        let scale = 512.0 / 1024.0;
-        let mut light_means = Vec::new();
-        let mut dark_means = Vec::new();
-        for tile in 0..crate::layout::TILE_COUNT {
-            let (cx, cy) = crate::layout::tile_center(tile);
-            let (x0, y0) = (
-                (f64::from(cx) - 10.0) * scale,
-                (f64::from(cy) - 10.0) * scale,
-            );
-            let mut sum = 0u32;
-            for j in 0..10 {
-                for i in 0..10 {
-                    sum += u32::from(image.data[((y0 as usize + j) * 512 + x0 as usize + i) * 3]);
-                }
-            }
-            let mean = f64::from(sum) / 100.0;
-            if frame.light[tile] {
-                light_means.push(mean);
-            } else {
-                dark_means.push(mean);
-            }
+        let palette = Palette::default();
+        for cell in 0..FIELD_CELLS {
+            let (x, y) = cell_center(cell);
+            let at = ((y as usize + SQUARE_TOP as usize) * 1024 + x as usize) * 3;
+            let pixel = [image.data[at], image.data[at + 1], image.data[at + 2]];
+            let expected = match (frame.petals[cell], cell_light(cell)) {
+                (true, true) => palette.light,
+                (true, false) => palette.pink,
+                (false, _) if in_mask(x.floor() + 0.5, y.floor() + 0.5) => palette.backdrop,
+                (false, _) => palette.background,
+            };
+            assert_eq!(pixel, expected, "cell {cell}");
         }
-        let light = light_means.iter().sum::<f64>() / light_means.len() as f64;
-        let dark = dark_means.iter().sum::<f64>() / dark_means.len() as f64;
-        // bold glyphs ink the middle of every tile, so only the ordering is stable
-        assert!(
-            light > dark + 25.0,
-            "light tiles average {light}, dark tiles {dark}"
-        );
     }
 
     #[test]
@@ -331,7 +340,8 @@ mod tests {
         for (ring, &slots) in RING_SLOTS.iter().enumerate() {
             for slot in 0..slots {
                 let (x, y) = crate::layout::slot_center(ring, slot);
-                let value = image.data[((y as usize) * 1024 + x as usize) * 3];
+                let value =
+                    image.data[((y as usize + SQUARE_TOP as usize) * 1024 + x as usize) * 3];
                 if frame.dots[ring_offset(ring) + slot] {
                     assert!(value > 150, "ring {ring} slot {slot} should be lit");
                 } else {
@@ -340,6 +350,52 @@ mod tests {
                 checked += 1;
             }
         }
-        assert_eq!(checked, crate::layout::TOTAL_SLOTS);
+        assert_eq!(checked, TOTAL_SLOTS);
+    }
+
+    #[test]
+    fn katakana_tiles_show_their_polarity_and_glyph() {
+        let mut frame = cells(4);
+        for (i, symbol) in frame.kana.iter_mut().enumerate() {
+            symbol.glyph = (i % 16) as u8;
+            symbol.light = i % 3 != 0;
+        }
+        let image = render(
+            &frame,
+            &RenderOptions {
+                size: 1024,
+                supersample: 1,
+                palette: Palette::default(),
+            },
+        );
+        assert_eq!(image.height, 1668);
+        let palette = Palette::default();
+        for (i, tile) in crate::layout::kana_tiles().iter().enumerate() {
+            let symbol = frame.kana[i];
+            // the pixel centres of the tile's square, against the definition
+            let (x0, y0) = (
+                tile.x.ceil() as usize,
+                (tile.y + f64::from(SQUARE_TOP)).ceil() as usize,
+            );
+            for (dx, dy) in [(3, 3), (12, 12), (8, 17), (20, 6)] {
+                let (px, py) = (x0 + dx, y0 + dy);
+                let (u, v) = (
+                    px as f64 + 0.5 - tile.x,
+                    py as f64 + 0.5 - f64::from(SQUARE_TOP) - tile.y,
+                );
+                let expected = match (kana_inked(symbol.glyph, u, v), symbol.light) {
+                    (true, true) => palette.ink,
+                    (false, true) => palette.light,
+                    (true, false) => palette.pink,
+                    (false, false) => palette.background,
+                };
+                let at = (py * 1024 + px) * 3;
+                assert_eq!(
+                    [image.data[at], image.data[at + 1], image.data[at + 2]],
+                    expected,
+                    "tile {i} at ({dx}, {dy})"
+                );
+            }
+        }
     }
 }

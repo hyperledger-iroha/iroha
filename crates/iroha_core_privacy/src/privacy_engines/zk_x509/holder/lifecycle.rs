@@ -581,19 +581,25 @@ mod tests {
     struct NoEntropy {
         requests: usize,
     }
-    impl rand::TryRngCore for NoEntropy {
-        type Error = &'static str;
+    impl rand::TryRng for NoEntropy {
+        type Error = std::io::Error;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             self.requests += 1;
-            Err("invalid attempt must not request entropy")
+            Err(std::io::Error::other(
+                "invalid attempt must not request entropy",
+            ))
         }
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             self.requests += 1;
-            Err("invalid attempt must not request entropy")
+            Err(std::io::Error::other(
+                "invalid attempt must not request entropy",
+            ))
         }
         fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
             self.requests += 1;
-            Err("invalid attempt must not request entropy")
+            Err(std::io::Error::other(
+                "invalid attempt must not request entropy",
+            ))
         }
     }
     impl rand::TryCryptoRng for NoEntropy {}

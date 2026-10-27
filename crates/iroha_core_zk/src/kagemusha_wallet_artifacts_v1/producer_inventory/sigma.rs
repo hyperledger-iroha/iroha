@@ -128,13 +128,14 @@ impl ImportedSigmaV1 {
 /// Rebuild one selector's native owner from its bound admitted source view. The
 /// circuit comes only from compiled code chosen by `selector`, with k12 or k14 taken
 /// from the compiled monetary shape; no descriptor field selects a shape or relation.
+/// Wallet proving keys always use `OnDemand`, matching the runtime capacity bound and
+/// the Q/A/W/Omega proving paths. Importer policy cannot select an eager wallet cache.
 /// A rebuild failure is final: there is no strict re-import of the original.
 pub(super) fn rebuild_prover(
     selector: usize,
     view: SourceBoundViewV2<'_, Eq>,
     k12: &PinnedParams<Eq>,
     k14: &PinnedParams<Eq>,
-    coset_cache: CosetCachePolicy,
     cancellation: Option<&iroha_pasta::CancellationToken>,
 ) -> Result<ImportedSigmaV1, SigmaQualificationErrorV1> {
     iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
@@ -143,7 +144,7 @@ pub(super) fn rebuild_prover(
             ImportedSigmaV1::$variant(Box::new(<$owner>::from_source_view_cancellable(
                 k12.clone(),
                 view,
-                coset_cache,
+                CosetCachePolicy::OnDemand,
                 cancellation,
             )?))
         }};
@@ -158,7 +159,7 @@ pub(super) fn rebuild_prover(
                 shape,
                 params.clone(),
                 view,
-                coset_cache,
+                CosetCachePolicy::OnDemand,
                 cancellation,
             )?))
         }

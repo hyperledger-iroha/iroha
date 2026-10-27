@@ -13,12 +13,12 @@
 //! a separate code path) summed point by point above that.
 
 use ff::Field;
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use group::{Curve, Group};
 use iroha_pasta::msm::{FixedBaseTable, MemoryBudget, msm_naive, msm_public, msm_secret};
 use iroha_pasta::{Ep, Eq, EqAffine, Fp, Fq, PastaCurve, PastaField};
 use rand_chacha::ChaCha20Rng;
-use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::rand_core::{Rng, SeedableRng};
 use rayon::prelude::*;
 
 fn pool(threads: usize) -> rayon::ThreadPool {
@@ -79,7 +79,7 @@ fn reference<C: PastaCurve>(s: &[C::ScalarExt], b: &[C::AffineExt]) -> C {
         let products = iroha_pasta::curve::batch_mul_vartime::<C>(b, s).expect("equal lengths");
         products
             .par_iter()
-            .map(PrimeCurveAffine::to_curve)
+            .map(CurveAffine::to_curve)
             .reduce(C::identity, |a, b| a + b)
     }
 }

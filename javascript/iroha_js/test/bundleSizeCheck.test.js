@@ -568,7 +568,9 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   );
   // Exact observed closure includes event declarations, typed faults, durable
   // schemas, product identities, and the two shared Norito metadata/value owners.
-  assert.equal(Object.keys(result.metafile.inputs).length, 129);
+  // Noble 2 removes the separate hash wrappers and shares one hashes owner
+  // with Bip39; the reviewed local module membership is unchanged.
+  assert.equal(Object.keys(result.metafile.inputs).length, 124);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -602,7 +604,8 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 7);
+  // Noble 2's SHA-2 implementation no longer imports a separate crypto shim.
+  assert.equal(Object.keys(result.metafile.inputs).length, 6);
   assert.doesNotMatch(
     result.outputFiles[0].text,
     /(?:globalThis|window|global)\.Buffer\s*=/u,
@@ -611,10 +614,10 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 157 }],
-    ["transactionCodec.js (browser)", { modules: 70 }],
-    ["nexusApp.js (browser)", { modules: 81 }],
-    ["canonicalRequest.js (browser)", { modules: 49 }],
+    ["toriiClient.js", { modules: 151 }],
+    ["transactionCodec.js (browser)", { modules: 71 }],
+    ["nexusApp.js (browser)", { modules: 80 }],
+    ["canonicalRequest.js (browser)", { modules: 44 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -718,7 +721,8 @@ test("Kotodama compiler browser export excludes Node and Buffer shims", async ()
   const inputs = Object.keys(result.metafile.inputs);
   // Exact CNTR comparison includes trigger AccountIds, JSON metadata, and frame
   // validation. Those canonical value codecs are shared with manifest encoding.
-  assert.equal(inputs.length, 55);
+  // Noble 2's Ed25519 helpers add one net dependency after hash consolidation.
+  assert.equal(inputs.length, 56);
   for (const owner of [
     "noritoContractMetadata.js", "noritoValueCodecs.js", "noritoContractCodecs.js",
     "entrypointSchema.js", "contractDeclarations.js", "embeddedStateSchema.js",

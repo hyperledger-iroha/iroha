@@ -118,6 +118,13 @@ pub enum TryReadError {
     },
     /// A committed snapshot requires original signed-genesis and certified-history execution on fresh State
     NativeExecutionReplayRequired,
+    /// Snapshot at height `{snapshot_height}` has no certified successor block in Kura to authenticate its World
+    SuccessorRequired {
+        /// Height of the snapshot tip.
+        snapshot_height: u64,
+    },
+    /// Restored snapshot World is not the certified World: {0}
+    WorldAuthentication(String),
     /// Snapshot exact network id mismatch (expected `{expected}`, got `{actual}`)
     NetworkIdMismatch {
         /// Expected genesis-derived network id from configuration.
@@ -219,6 +226,57 @@ impl From<crate::state::deserialize::StateRestoreError> for TryReadError {
                 Self::StateEvidence(error)
             }
             crate::state::deserialize::StateRestoreError::Sccp(error) => Self::StateSccp(error),
+            crate::state::deserialize::StateRestoreError::SuccessorRequired { height } => {
+                Self::SuccessorRequired {
+                    snapshot_height: height,
+                }
+            }
+            error @ (crate::state::deserialize::StateRestoreError::WorldMismatch { .. }
+            | crate::state::deserialize::StateRestoreError::WorldVerification(_)) => {
+                Self::WorldAuthentication(error.to_string())
+            }
+        }
+    }
+}
+impl TryReadError {
+    /// A local refusal or an identity/consistency conflict. Neither an older snapshot
+    /// generation nor an empty State with full replay may hide it, so restore stops on it.
+    #[must_use]
+    pub fn halts_restore(&self) -> bool {
+        use crate::{
+            state::SccpRestoreError, sumeragi::evidence::record::EvidenceRecordRestoreError,
+        };
+        match self {
+            Self::IO(_, _)
+            | Self::PayloadAllocation(_)
+            | Self::PayloadAllocatorFailure { .. }
+            | Self::StateVmInitialization(_)
+            | Self::StateRead(_)
+            | Self::StateAdmission(_)
+            | Self::StateExecutionDeferred(_)
+            | Self::StateNativeSchedule(_)
+            | Self::StateNativeLaneCustody(_)
+            | Self::StateBeaconSession(_)
+            // The decoder routes only local AMX admission refusals here.
+            | Self::StateNativeAmx(_)
+            | Self::ChainIdMismatch { .. }
+            | Self::NetworkIdMismatch { .. }
+            | Self::ZkConfigInstall(_)
+            | Self::MismatchedHeight { .. } => true,
+            // Nested resource refusals halt; completed rejections of the data do not.
+            Self::StateEvidence(error) => matches!(
+                error,
+                EvidenceRecordRestoreError::Logical(_)
+                    | EvidenceRecordRestoreError::Preparation(_)
+                    | EvidenceRecordRestoreError::Storage(_)
+            ),
+            Self::StateSccp(error) => matches!(
+                error,
+                SccpRestoreError::Storage(_)
+                    | SccpRestoreError::Admission(_)
+                    | SccpRestoreError::ReconciliationDecode(_)
+            ),
+            _ => false,
         }
     }
 }
@@ -359,6 +417,17 @@ mod evidence_restore_tests {
         let error = TryReadError::from(StateRestoreError::Evidence(
             EvidencePreparationError::Admission(expected).into(),
         ));
+        assert!(
+            error.halts_restore(),
+            "a local resource refusal stops restore"
+        );
+        assert!(
+            !TryReadError::StateEvidence(EvidenceRecordRestoreError::Json(
+                norito::json::Error::Message("invalid evidence".to_owned())
+            ))
+            .halts_restore(),
+            "a completed rejection lets restore try an older generation"
+        );
         assert!(matches!(&error, TryReadError::StateEvidence(
             EvidenceRecordRestoreError::Preparation(EvidencePreparationError::Admission(actual))
         ) if matches!(actual, iroha_allocation::AllocationRefusal::Capacity {..})));
@@ -393,6 +462,17 @@ mod sccp_restore_tests {
         let error = TryReadError::from(StateRestoreError::Sccp(SccpRestoreError::Admission(
             original,
         )));
+        assert!(
+            error.halts_restore(),
+            "a local resource refusal stops restore"
+        );
+        assert!(
+            !TryReadError::StateSccp(SccpRestoreError::Json(norito::json::Error::Message(
+                "invalid SCCP state".to_owned()
+            )))
+            .halts_restore(),
+            "a completed rejection lets restore try an older generation"
+        );
         let TryReadError::StateSccp(SccpRestoreError::Admission(actual)) = error else {
             panic!("original resource refusal is not snapshot syntax or invalid protocol data");
         };

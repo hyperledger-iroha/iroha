@@ -175,7 +175,10 @@ fn provisional_emergency_manifest_install_is_empty_and_one_shot() {
                 .contains("one-shot pre-authentication phase")
         );
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &provisional));
-        assert!(LanePrivacyRegistry::ptr_eq(&*state.lane_privacy_registry.read(), &privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &*state.lane_privacy_registry.read(),
+            &privacy
+        ));
     });
 }
 
@@ -1064,7 +1067,9 @@ fn runtime_catalog_preparation_preserves_cut_and_publication_allocates_nothing()
         let mut block = state.block(catalog_test_header(&state));
         let staged = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
         let mut tx = block.transaction();
-        tx.world.axt_authorization_transitioned.insert(DataSpaceId::new(10));
+        tx.world
+            .axt_authorization_transitioned
+            .insert(DataSpaceId::new(10));
         let original = tx.world.parameters.get().clone();
         let canonical = tx.canonical_runtime.get().clone();
         let original_lanes_pointer = tx.canonical_runtime.lanes.as_ptr();
@@ -1076,7 +1081,11 @@ fn runtime_catalog_preparation_preserves_cut_and_publication_allocates_nothing()
         let lineage = tx.lane_incarnation_lineage.clone();
         let activations = tx.lane_incarnation_activation_heights.clone();
         let transitioned = tx.world.axt_authorization_transitioned.clone();
-        let pool = tx.world.sccp_committee_generations.allocation_budget().clone();
+        let pool = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
         let held = pool.reserved_bytes();
 
         // Abandoning complete preparation retains every original owner and cut.
@@ -1090,7 +1099,10 @@ fn runtime_catalog_preparation_preserves_cut_and_publication_allocates_nothing()
         assert_eq!(tx.canonical_runtime.get(), &canonical);
         assert!(tx.canonical_runtime.touched_value().is_none());
         assert!(Arc::ptr_eq(&tx.lane_manifests, &manifests));
-        assert!(LanePrivacyRegistry::ptr_eq(&tx.lane_privacy_registry, &privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &tx.lane_privacy_registry,
+            &privacy
+        ));
         assert_eq!(tx.nexus.lane_catalog, catalog);
         assert_eq!(tx.world.dataspace_catalog, dataspaces);
         assert_eq!(tx.lane_incarnations, incarnations);
@@ -1100,8 +1112,12 @@ fn runtime_catalog_preparation_preserves_cut_and_publication_allocates_nothing()
         assert!(tx.pending_lane_lifecycle.is_none());
 
         let successor = prepared.parameters.clone();
-        let successor_lanes_pointer = prepared.canonical_runtime.as_ref()
-            .expect("the added lane changes canonical geometry").lanes.as_ptr();
+        let successor_lanes_pointer = prepared
+            .canonical_runtime
+            .as_ref()
+            .expect("the added lane changes canonical geometry")
+            .lanes
+            .as_ptr();
         let successor_manifests = Arc::clone(&prepared.lane_manifests);
         let successor_privacy = prepared.lane_privacy_registry.clone();
         let prepared_held = pool.reserved_bytes();
@@ -1116,23 +1132,38 @@ fn runtime_catalog_preparation_preserves_cut_and_publication_allocates_nothing()
         assert!(successor.same_version(tx.world.parameters.get()));
         assert!(original.same_version(tx.world.parameters.get_before_transaction()));
         assert_eq!(tx.canonical_runtime.get_before_transaction(), &canonical);
-        assert_eq!(tx.canonical_runtime.get_before_transaction().lanes.as_ptr(), original_lanes_pointer);
+        assert_eq!(
+            tx.canonical_runtime.get_before_transaction().lanes.as_ptr(),
+            original_lanes_pointer
+        );
         assert_eq!(tx.canonical_runtime.lanes.as_ptr(), successor_lanes_pointer);
         assert!(Arc::ptr_eq(&tx.lane_manifests, &successor_manifests));
-        assert!(LanePrivacyRegistry::ptr_eq(&tx.lane_privacy_registry, &successor_privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &tx.lane_privacy_registry,
+            &successor_privacy
+        ));
         assert!(Arc::ptr_eq(
-            &tx.pending_lane_lifecycle.as_ref().unwrap().updated_lane_manifests,
+            &tx.pending_lane_lifecycle
+                .as_ref()
+                .unwrap()
+                .updated_lane_manifests,
             &successor_manifests,
         ));
         assert_eq!(tx.world.axt_authorization_transitioned, transitioned);
         assert_eq!(tx.canonical_runtime.lanes, tx.nexus.lane_catalog.lanes());
-        assert_eq!(tx.canonical_runtime.autoscale_sample_history, canonical.autoscale_sample_history);
+        assert_eq!(
+            tx.canonical_runtime.autoscale_sample_history,
+            canonical.autoscale_sample_history
+        );
         assert!(runtime_catalog_from_world(&tx.world).unwrap().is_some());
         drop(successor);
         drop(successor_privacy);
         drop(tx);
         assert_eq!(pool.reserved_bytes(), held);
-        assert_eq!(crate::snapshot::canonical_staged_state_snapshot_bytes(&block), staged);
+        assert_eq!(
+            crate::snapshot::canonical_staged_state_snapshot_bytes(&block),
+            staged
+        );
     });
 }
 
@@ -1143,16 +1174,22 @@ fn axt_incarnation_transition_preparation_preserves_existing_and_marks_exact_cha
         let mut block = state.block(catalog_test_header(&state));
         let mut tx = block.transaction();
         for lane in 0..6 {
-            tx.world.axt_policies.insert(DataSpaceId::new(u64::from(lane)), AxtPolicyEntry {
-                manifest_root: [0x41; 32],
-                target_lane: LaneId::new(lane),
-                active_handle_era: 1,
-                next_handle_counter: 1,
-                current_slot: 0,
-            });
+            tx.world.axt_policies.insert(
+                DataSpaceId::new(u64::from(lane)),
+                AxtPolicyEntry {
+                    manifest_root: [0x41; 32],
+                    target_lane: LaneId::new(lane),
+                    active_handle_era: 1,
+                    next_handle_counter: 1,
+                    current_slot: 0,
+                },
+            );
         }
-        tx.world.axt_authorization_transitioned.insert(DataSpaceId::new(10));
-        let previous: BTreeMap<_, _> = [0, 1, 2, 4].into_iter()
+        tx.world
+            .axt_authorization_transitioned
+            .insert(DataSpaceId::new(10));
+        let previous: BTreeMap<_, _> = [0, 1, 2, 4]
+            .into_iter()
             .map(|lane| (LaneId::new(lane), Hash::new([lane as u8])))
             .collect();
         let mut next = previous.clone();
@@ -1160,14 +1197,30 @@ fn axt_incarnation_transition_preparation_preserves_existing_and_marks_exact_cha
         next.remove(&LaneId::new(2));
         next.insert(LaneId::new(3), Hash::new([3]));
         let expected: BTreeSet<_> = [1, 2, 3, 10].into_iter().map(DataSpaceId::new).collect();
-        assert_eq!(tx.world.prepare_axt_lane_incarnation_transitions(&previous, &next), expected);
-        assert_eq!(tx.world.axt_authorization_transitioned, BTreeSet::from([DataSpaceId::new(10)]));
-        tx.world.mark_axt_lane_incarnation_transitions(&previous, &next);
+        assert_eq!(
+            tx.world
+                .prepare_axt_lane_incarnation_transitions(&previous, &next),
+            expected
+        );
+        assert_eq!(
+            tx.world.axt_authorization_transitioned,
+            BTreeSet::from([DataSpaceId::new(10)])
+        );
+        tx.world
+            .mark_axt_lane_incarnation_transitions(&previous, &next);
         assert_eq!(tx.world.axt_authorization_transitioned, expected);
-        assert_eq!(tx.world.prepare_axt_lane_incarnation_transitions(&next, &next), expected);
-        assert_eq!(crate::test_allocations::allocations_during(|| {
-            tx.world.mark_axt_lane_incarnation_transitions(&next, &next);
-        }), 0, "unchanged ordinary lifecycle keeps its original allocation-free path");
+        assert_eq!(
+            tx.world
+                .prepare_axt_lane_incarnation_transitions(&next, &next),
+            expected
+        );
+        assert_eq!(
+            crate::test_allocations::allocations_during(|| {
+                tx.world.mark_axt_lane_incarnation_transitions(&next, &next);
+            }),
+            0,
+            "unchanged ordinary lifecycle keeps its original allocation-free path"
+        );
         assert_eq!(tx.world.axt_authorization_transitioned, expected);
     });
 }
@@ -1220,7 +1273,10 @@ fn runtime_catalog_second_parameter_refusal_keeps_complete_original_cut_and_retr
             assert_eq!(tx.nexus.lane_catalog, catalog);
             assert_eq!(tx.world.dataspace_catalog, dataspaces);
             assert!(Arc::ptr_eq(&tx.lane_manifests, &manifests));
-            assert!(LanePrivacyRegistry::ptr_eq(&tx.lane_privacy_registry, &privacy));
+            assert!(LanePrivacyRegistry::ptr_eq(
+                &tx.lane_privacy_registry,
+                &privacy
+            ));
             assert_eq!(tx.canonical_runtime.get(), &canonical);
             assert!(tx.canonical_runtime.touched_value().is_none());
             assert!(tx.world.parameters.touched_value().is_none());
@@ -1701,23 +1757,30 @@ fn catalog_observer_rejects_inner_protocol_reconstructed_and_stale_resource_erro
     }
 }
 
-
 #[test]
-fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_refunds_intermediate() {
+fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_refunds_intermediate()
+{
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let mut block = state.block(catalog_test_header(&state));
         let staged = crate::snapshot::canonical_staged_state_snapshot_bytes(&block);
         let mut tx = block.transaction();
-        let pool = tx.world.sccp_committee_generations.allocation_budget().clone();
+        let pool = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
         let original = tx.world.parameters.get().clone();
         let canonical = tx.canonical_runtime.get().clone();
         let held = pool.reserved_bytes();
         // Build a distinct, fully admitted current owner through the existing
         // source-bound fixture path; publication must actually retire this graph.
-        let intermediate = original.prepare_replace(original.get(), &pool).unwrap()
-            .into_successor(&original, &pool).unwrap();
+        let intermediate = original
+            .prepare_replace(original.get(), &pool)
+            .unwrap()
+            .into_successor(&original, &pool)
+            .unwrap();
         assert!(!intermediate.same_version(&original));
         let intermediate_bytes = pool.reserved_bytes() - held;
         assert!(intermediate_bytes > 0);
@@ -1728,22 +1791,34 @@ fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_ref
         assert!(tx.canonical_runtime.touched_value().is_some());
         let prepared = tx.prepare_consensus_catalog_transition(&payload).unwrap();
         let before_publication = pool.reserved_bytes();
-        assert_eq!(crate::test_allocations::allocations_during(|| {
-            tx.publish_consensus_catalog_transition(prepared);
-        }), 0, "retiring an intermediate graph under the real World refund scope must not allocate");
-        assert_eq!(pool.reserved_bytes(), before_publication - intermediate_bytes,
-            "the intermediate is not retained by a census-only shadow owner");
+        assert_eq!(
+            crate::test_allocations::allocations_during(|| {
+                tx.publish_consensus_catalog_transition(prepared);
+            }),
+            0,
+            "retiring an intermediate graph under the real World refund scope must not allocate"
+        );
+        assert_eq!(
+            pool.reserved_bytes(),
+            before_publication - intermediate_bytes,
+            "the intermediate is not retained by a census-only shadow owner"
+        );
         assert!(original.same_version(tx.world.parameters.get_before_transaction()));
         assert!(original.same_version(tx.world.parameters.get_before_block()));
         assert_eq!(tx.canonical_runtime.get_before_transaction(), &canonical);
-        assert_eq!(tx.canonical_runtime.get_before_transaction().lanes.as_ptr(), original_lanes);
+        assert_eq!(
+            tx.canonical_runtime.get_before_transaction().lanes.as_ptr(),
+            original_lanes
+        );
         assert!(tx.pending_lane_lifecycle.is_some());
         drop(tx);
         assert_eq!(pool.reserved_bytes(), held);
-        assert_eq!(crate::snapshot::canonical_staged_state_snapshot_bytes(&block), staged);
+        assert_eq!(
+            crate::snapshot::canonical_staged_state_snapshot_bytes(&block),
+            staged
+        );
     });
 }
-
 
 #[test]
 fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() {
@@ -1757,19 +1832,27 @@ fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() 
         // Use the exact effective geometry and cumulative manifests from real
         // successful preparation, with the original retained baseline registry.
         let prepared = tx.prepare_consensus_catalog_transition(&payload).unwrap();
-        let additions = &prepared.pending_lane_lifecycle.runtime_catalog.as_ref().unwrap().manifests;
-        let reconstruct = || runtime_catalog_manifest_registry(
-            tx.lane_manifests.as_ref(),
-            additions,
-            &prepared.nexus.lane_catalog,
-            &prepared.nexus.dataspace_catalog,
-            &prepared.nexus.governance,
-        );
-        let unlimited = norito::DecodeLimits::new(
-            usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX,
-        );
+        let additions = &prepared
+            .pending_lane_lifecycle
+            .runtime_catalog
+            .as_ref()
+            .unwrap()
+            .manifests;
+        let reconstruct = || {
+            runtime_catalog_manifest_registry(
+                tx.lane_manifests.as_ref(),
+                additions,
+                &prepared.nexus.lane_catalog,
+                &prepared.nexus.dataspace_catalog,
+                &prepared.nexus.governance,
+            )
+        };
+        let unlimited =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
         let oracle = DecodeBudgetContext::new(unlimited);
-        let registry = oracle.with(reconstruct).expect("same actual loader succeeds");
+        let registry = oracle
+            .with(reconstruct)
+            .expect("same actual loader succeeds");
         assert!(registry.has_same_authority_as(&prepared.lane_manifests));
         let bytes = usize::try_from(oracle.consumed_allocated_bytes()).unwrap();
         assert!(bytes > 0, "observe real manifest parser/writer allocations");
@@ -1781,22 +1864,62 @@ fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() 
         let dataspaces = tx.world.dataspace_catalog.clone();
         let manifests = Arc::clone(&tx.lane_manifests);
         let privacy = tx.lane_privacy_registry.clone();
-        let pool = tx.world.sccp_committee_generations.allocation_budget().clone();
+        let pool = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
         let held = pool.reserved_bytes();
+        // The unlimited accounting total is an upper bound, not necessarily the
+        // byte limit where this operation first refuses. Keep the real source
+        // unchanged and find adjacent failing/successful limits before checking
+        // the one-byte refusal and its original owner below.
+        let allocation_limits = |bytes| {
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX)
+        };
+        let mut refused_bytes = 0;
+        let mut admitted_bytes = bytes;
+        while admitted_bytes - refused_bytes > 1 {
+            let candidate = refused_bytes + (admitted_bytes - refused_bytes) / 2;
+            match norito::with_decode_limits_scope(allocation_limits(candidate), reconstruct) {
+                Ok(_) => admitted_bytes = candidate,
+                Err(LaneLifecycleError::ParameterDeferred(_)) => refused_bytes = candidate,
+                Err(error) => panic!("local manifest allocation refusal lost its owner: {error:?}"),
+            }
+        }
+        let exact =
+            norito::with_decode_limits_scope(allocation_limits(admitted_bytes), reconstruct)
+                .expect("the adjacent admitted byte limit preserves the same authority");
+        assert!(exact.has_same_authority_as(&prepared.lane_manifests));
+        drop(exact);
         for (limits, work) in [
-            (norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX), true),
-            (norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX), false),
-            (norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes - 1, usize::MAX), false),
+            (
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, 0, usize::MAX, usize::MAX),
+                true,
+            ),
+            (
+                norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
+                false,
+            ),
+            (allocation_limits(admitted_bytes - 1), false),
         ] {
             let result = norito::with_decode_limits_scope(limits, reconstruct);
             let Err(LaneLifecycleError::ParameterDeferred(owner)) = result else {
-                panic!("the real manifest operation must retain its original local refusal");
+                panic!(
+                    "the real manifest operation must retain its original local refusal under {limits:?}: {:?}",
+                    result.as_ref().map(|_| ())
+                );
             };
             let original_refusal = owner.decode_refusal().expect("actual codec owner").clone();
-            assert_eq!(original_refusal.kind(), DecodeLocalRefusalKind::EnclosingLimit);
+            assert_eq!(
+                original_refusal.kind(),
+                DecodeLocalRefusalKind::EnclosingLimit
+            );
             if work {
-                assert!(matches!(original_refusal.resource_error(),
-                    DecodeResourceError::TotalElementsExceeded { limit: 0, .. }));
+                assert!(matches!(
+                    original_refusal.resource_error(),
+                    DecodeResourceError::TotalElementsExceeded { limit: 0, .. }
+                ));
             } else {
                 assert!(matches!(original_refusal.resource_error(),
                     DecodeResourceError::TotalAllocationExceeded { limit, .. }
@@ -1806,7 +1929,8 @@ fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() 
             assert!(owner.allocator_refusal().is_none());
             let returned = crate::execution_attempt::ExecutionDeferred::try_from_vm_error(
                 owner.into_vm_error(),
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(returned.decode_refusal(), Some(&original_refusal));
             assert!(original.same_version(tx.world.parameters.get()));
             assert!(tx.world.parameters.touched_value().is_none());
@@ -1815,11 +1939,18 @@ fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() 
             assert_eq!(tx.nexus.lane_catalog, catalog);
             assert_eq!(tx.world.dataspace_catalog, dataspaces);
             assert!(Arc::ptr_eq(&tx.lane_manifests, &manifests));
-            assert!(LanePrivacyRegistry::ptr_eq(&tx.lane_privacy_registry, &privacy));
+            assert!(LanePrivacyRegistry::ptr_eq(
+                &tx.lane_privacy_registry,
+                &privacy
+            ));
             assert!(tx.pending_lane_lifecycle.is_none());
-            assert!(!tx.is_execution_deferred(), "read-only preparation does not fabricate an execution owner");
+            assert!(
+                !tx.is_execution_deferred(),
+                "read-only preparation does not fabricate an execution owner"
+            );
             assert_eq!(pool.reserved_bytes(), held);
-            let retry = reconstruct().expect("identical sources succeed under fresh local capacity");
+            let retry =
+                reconstruct().expect("identical sources succeed under fresh local capacity");
             assert!(retry.has_same_authority_as(&prepared.lane_manifests));
             assert!(retry.is_bound_to_catalog(&prepared.nexus.lane_catalog));
         }
@@ -1827,7 +1958,10 @@ fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() 
         tx.stage_consensus_catalog_transition(&payload).unwrap();
         assert!(tx.pending_lane_lifecycle.is_some());
         drop(tx);
-        assert_eq!(crate::snapshot::canonical_staged_state_snapshot_bytes(&block), staged);
+        assert_eq!(
+            crate::snapshot::canonical_staged_state_snapshot_bytes(&block),
+            staged
+        );
     });
 }
 
@@ -1861,7 +1995,10 @@ fn actual_runtime_manifest_registry_invalid_json_and_binding_reject_without_defe
         }
         drop(prepared);
         drop(tx);
-        assert_eq!(crate::snapshot::canonical_staged_state_snapshot_bytes(&block), staged);
+        assert_eq!(
+            crate::snapshot::canonical_staged_state_snapshot_bytes(&block),
+            staged
+        );
     });
 }
 
@@ -1887,18 +2024,33 @@ fn materialized_privacy_admission_refuses_before_publication_and_reuses_installe
             }],
         });
         std::fs::write(
-            directory.path().join(format!("{}.manifest.json", lane.alias)),
+            directory
+                .path()
+                .join(format!("{}.manifest.json", lane.alias)),
             norito::json::to_vec(&body).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         let source = Arc::new(LaneManifestRegistry::from_config(
-            &nexus.lane_catalog, &nexus.governance,
+            &nexus.lane_catalog,
+            &nexus.governance,
             &iroha_config::parameters::actual::LaneRegistry {
-                manifest_directory: Some(directory.path().to_path_buf()), ..Default::default()
+                manifest_directory: Some(directory.path().to_path_buf()),
+                ..Default::default()
             },
         ));
-        source.validate_active_coverage_for_catalog(&nexus.lane_catalog).unwrap();
-        source.canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance).unwrap();
-        assert!(!source.status(lane.id).unwrap().privacy_commitments.is_empty());
+        source
+            .validate_active_coverage_for_catalog(&nexus.lane_catalog)
+            .unwrap();
+        source
+            .canonical_materialized_authority_preimage(&nexus.lane_catalog, &nexus.governance)
+            .unwrap();
+        assert!(
+            !source
+                .status(lane.id)
+                .unwrap()
+                .privacy_commitments
+                .is_empty()
+        );
         let pool = state.ivm_execution_budget();
         let limit = pool.limit_bytes();
         let held = pool.reserved_bytes();
@@ -1906,32 +2058,64 @@ fn materialized_privacy_admission_refuses_before_publication_and_reuses_installe
         let original_manifests = state.lane_manifests.read().clone();
         let original_privacy = state.lane_privacy_registry.read().clone();
         pool.set_limit_bytes(held);
-        let error = state.install_materialized_lane_manifests_for_catalog(
-            &source, &nexus.lane_catalog, &nexus.governance,
-        ).unwrap_err();
-        let LaneLifecycleError::ParameterDeferred(original) = error else { panic!("actual privacy refusal stays local") };
-        assert!(matches!(original.allocation_refusal(), Some(iroha_allocation::AllocationRefusal::Capacity { .. })));
+        let error = state
+            .install_materialized_lane_manifests_for_catalog(
+                &source,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .unwrap_err();
+        let LaneLifecycleError::ParameterDeferred(original) = error else {
+            panic!("actual privacy refusal stays local")
+        };
+        assert!(matches!(
+            original.allocation_refusal(),
+            Some(iroha_allocation::AllocationRefusal::Capacity { .. })
+        ));
         assert_eq!(state.state_view_generation(), generation);
-        assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original_manifests));
-        assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &original_privacy));
+        assert!(Arc::ptr_eq(
+            &state.lane_manifests.read(),
+            &original_manifests
+        ));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &state.lane_privacy_registry.read(),
+            &original_privacy
+        ));
         assert_eq!(pool.reserved_bytes(), held);
         pool.set_limit_bytes(limit);
-        let installed = state.install_materialized_lane_manifests_for_catalog(
-            &source, &nexus.lane_catalog, &nexus.governance,
-        ).unwrap();
+        let installed = state
+            .install_materialized_lane_manifests_for_catalog(
+                &source,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .unwrap();
         assert!(installed.belongs_to(&pool));
-        assert!(LanePrivacyRegistry::ptr_eq(&installed, &state.lane_privacy_registry.read()));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &installed,
+            &state.lane_privacy_registry.read()
+        ));
         assert_eq!(state.state_view_generation(), generation + 2);
         let installed_held = pool.reserved_bytes();
         pool.set_limit_bytes(installed_held);
         let equivalent = Arc::new(source.rebind(&nexus.lane_catalog, &nexus.governance));
-        let handoff = state.install_materialized_lane_manifests_for_catalog(
-            &equivalent, &nexus.lane_catalog, &nexus.governance,
-        ).unwrap();
-        let refreshed = state.install_lane_manifests_if_consensus_compatible(&equivalent).unwrap();
+        let handoff = state
+            .install_materialized_lane_manifests_for_catalog(
+                &equivalent,
+                &nexus.lane_catalog,
+                &nexus.governance,
+            )
+            .unwrap();
+        let refreshed = state
+            .install_lane_manifests_if_consensus_compatible(&equivalent)
+            .unwrap();
         assert!(LanePrivacyRegistry::ptr_eq(&installed, &handoff));
         assert!(LanePrivacyRegistry::ptr_eq(&installed, &refreshed));
-        assert_eq!(pool.reserved_bytes(), installed_held, "startup and refresh share one graph");
+        assert_eq!(
+            pool.reserved_bytes(),
+            installed_held,
+            "startup and refresh share one graph"
+        );
         assert_eq!(state.state_view_generation(), generation + 2);
         pool.set_limit_bytes(limit);
     });
@@ -1950,13 +2134,24 @@ fn prepared_privacy_owner_survives_transaction_apply_and_carrier_preparation_wit
         assert!(!prepared.is_empty());
         assert!(prepared.belongs_to(&pool));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &prepared, &tx.pending_lane_lifecycle.as_ref().unwrap().updated_lane_privacy,
+            &prepared,
+            &tx.pending_lane_lifecycle
+                .as_ref()
+                .unwrap()
+                .updated_lane_privacy,
         ));
         tx.apply();
-        assert!(LanePrivacyRegistry::ptr_eq(&prepared, &block.lane_privacy_registry));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &prepared,
+            &block.lane_privacy_registry
+        ));
         let pending = block.pending_autoscale_lifecycle.as_ref().unwrap();
-        assert!(LanePrivacyRegistry::ptr_eq(&prepared, &pending.updated_lane_privacy));
-        let effects = carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &block.nexus);
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &prepared,
+            &pending.updated_lane_privacy
+        ));
+        let effects =
+            carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &block.nexus);
         // Its private owner is checked in that module's own test-only accessor.
         assert!(effects.privacy_is_for_test(&prepared));
         assert!(state.lane_privacy_registry.read().is_empty());

@@ -64,15 +64,18 @@ class KagemushaWalletDeletionV1Test {
         assertFailsWith<KagemushaWalletExceptionV1> { call(57) }
     }
     @Test fun uncertainConfirmationFreezesOrdinaryCallsUntilDefinitiveRecovery() {
+        val origin = Any()
         val gate = KagemushaWalletDeletionGateV1()
         val foreign = KagemushaWalletDeletionGateV1()
         assertFailsWith<IllegalStateException> { gate.resume { fail("fresh resume dispatched") } }
         gate.requireOrdinary()
-        val review = gate.review { call(53, 7, frame()) }
-        assertFailsWith<IllegalArgumentException> { foreign.confirm(review) { fail("foreign dispatch") } }
-        val stale = gate.review { call(53, 8, frame()) }
+        val review = gate.review(origin) { call(53, 7, frame()) }
+        assertFailsWith<IllegalArgumentException> { foreign.confirm(review, origin) { fail("foreign dispatch") } }
+        assertFailsWith<IllegalArgumentException> { gate.confirm(review, Any()) { fail("foreign exchange") } }
+        assertFailsWith<IllegalArgumentException> { gate.discard(review, Any()) { fail("foreign exchange cleanup") } }
+        val stale = gate.review(origin) { call(53, 8, frame()) }
         assertFailsWith<UnsupportedOperationException> {
-            gate.confirm(review) { token ->
+            gate.confirm(review, origin) { token ->
                 assertEquals(7L, token)
                 assertFailsWith<IllegalStateException> { gate.requireOrdinary() }
                 assertFailsWith<IllegalStateException> { gate.resume { fail("concurrent resume") } }
@@ -80,13 +83,13 @@ class KagemushaWalletDeletionV1Test {
             }
         }
         assertFailsWith<IllegalStateException> { gate.requireOrdinary() }
-        assertFailsWith<IllegalArgumentException> { gate.discard(review) { fail("cannot undo") } }
+        assertFailsWith<IllegalArgumentException> { gate.discard(review, origin) { fail("cannot undo") } }
         assertSame(KagemushaWalletDeletionStatusV1.NotDeleted, gate.resume { call(56) })
         gate.requireOrdinary()
-        assertFailsWith<IllegalArgumentException> { gate.confirm(stale) { fail("stale review") } }
-        val fresh = gate.review { call(53, 9, frame()) }
+        assertFailsWith<IllegalArgumentException> { gate.confirm(stale, origin) { fail("stale review") } }
+        val fresh = gate.review(origin) { call(53, 9, frame()) }
         val marker = ByteArray(32) { 3 }
-        assertContentEquals(marker, gate.confirm(fresh) { call(54, bytes = marker) })
+        assertContentEquals(marker, gate.confirm(fresh, origin) { call(54, bytes = marker) })
         assertFailsWith<IllegalStateException> { gate.requireOrdinary() }
         val resumed = gate.resume { call(54, bytes = marker) } as KagemushaWalletDeletionStatusV1.Deleted
         resumed.marker()[0] = 99
@@ -96,13 +99,14 @@ class KagemushaWalletDeletionV1Test {
         assertFailsWith<IllegalStateException> { gate.requireOrdinary() }
     }
     @Test fun discardCannotUndoAnAttemptAndMalformedRecoveryStaysFrozen() {
+        val origin = Any()
         val gate = KagemushaWalletDeletionGateV1()
-        val review = gate.review { call(53, 1, frame()) }
-        gate.discard(review) { call(55) }
+        val review = gate.review(origin) { call(53, 1, frame()) }
+        gate.discard(review, origin) { call(55) }
         gate.requireOrdinary()
-        assertFailsWith<IllegalArgumentException> { gate.confirm(review) { fail("discarded") } }
-        val fresh = gate.review { call(53, 2, frame()) }
-        assertFailsWith<KagemushaWalletExceptionV1> { gate.confirm(fresh) { call(55) } }
+        assertFailsWith<IllegalArgumentException> { gate.confirm(review, origin) { fail("discarded") } }
+        val fresh = gate.review(origin) { call(53, 2, frame()) }
+        assertFailsWith<KagemushaWalletExceptionV1> { gate.confirm(fresh, origin) { call(55) } }
         assertFailsWith<IllegalStateException> { gate.requireOrdinary() }
         assertFailsWith<KagemushaWalletExceptionV1> { gate.resume { call(55) } }
         assertFailsWith<IllegalStateException> { gate.requireOrdinary() }

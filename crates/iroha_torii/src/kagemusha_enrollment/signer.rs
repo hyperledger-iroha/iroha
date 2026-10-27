@@ -84,7 +84,7 @@ impl EnrollmentSigner {
             return Err(Error::Selection);
         }
         validate_certificate(provider)?;
-        if self.key.verifying_key().to_encoded_point(false).as_bytes()
+        if self.key.verifying_key().to_sec1_point(false).as_bytes()
             != provider.certificate.body.key.as_sec1_bytes()
         {
             return Err(Error::Selection);
@@ -108,7 +108,7 @@ impl EnrollmentSigner {
         self.revalidate(provider)?;
         // Protocol messages are the input to SHA256, not prehashed ECDSA digests.
         let signature: Signature = self.key.try_sign(message).map_err(|_| Error::Unavailable)?;
-        let signature = signature.normalize_s().unwrap_or(signature);
+        let signature = signature.normalize_s();
         self.revalidate(provider)?;
         Ok(signature.to_der().as_bytes().to_vec())
     }

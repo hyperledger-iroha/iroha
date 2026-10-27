@@ -239,7 +239,7 @@ async function fetchTestManifest() {
 
 function fakeNative(payload = manifestPayload(), overrides = {}) {
   return {
-    connectNoritoBridgeAbiVersion: () => 31,
+    connectNoritoBridgeAbiVersion: () => 33,
     privacyCompiledProfileCatalogV1: () => Uint8Array.from(CATALOG),
     privacyValidateCompiledProfileCatalogV1: (bytes) =>
       sameBytes(bytes, CATALOG) ? 0 : 8,
@@ -955,4 +955,17 @@ test("selected native admission never requires an unrelated local catalog lookup
     assert.equal(requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL).readiness, "available");
     assert.equal(calls, 1);
   });
+});
+
+test("privacy admission rejects retired32 and future34 before any catalog call", async () => {
+  for (const version of [32, 34]) {
+    let catalogCalls = 0;
+    await withNative(fakeNative(manifestPayload(), {
+      connectNoritoBridgeAbiVersion: () => version,
+      privacyCompiledProfileCatalogV1() { catalogCalls += 1; return CATALOG; },
+    }), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /requires exact ABI33/u);
+      assert.equal(catalogCalls, 0);
+    });
+  }
 });

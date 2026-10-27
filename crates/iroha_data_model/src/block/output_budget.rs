@@ -102,9 +102,13 @@ impl ExecutionOutputPhase {
 
     fn of(output: &ExecutionOutputV1) -> Self {
         match output {
-            ExecutionOutputV1::Network(_) => Self::Network,
-            ExecutionOutputV1::Pipeline(_) => Self::Pipeline,
-            ExecutionOutputV1::Time(_) => Self::Time,
+            ExecutionOutputV1::Network(_) | ExecutionOutputV1::NetworkWithLifecycle(_) => {
+                Self::Network
+            }
+            ExecutionOutputV1::Pipeline(_) | ExecutionOutputV1::PipelineWithLifecycle(_) => {
+                Self::Pipeline
+            }
+            ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => Self::Time,
         }
     }
 }
@@ -372,6 +376,7 @@ impl ExecutionOutputBudget {
             owner: self,
             terminal: Some(terminal),
             terminal_bytes: bytes,
+            terminal_ceiling_bytes: slot.terminal_bytes_per_output,
             finished: false,
         })
     }
@@ -401,6 +406,9 @@ pub struct ExecutionOutputReservation<'a> {
     owner: &'a mut ExecutionOutputBudget,
     terminal: Option<ExecutionOutputV1>,
     terminal_bytes: u64,
+    // Full State-derived rejection envelope; a lifecycle failure-policy witness
+    // can exceed the smaller preowned healthy-output-limit row.
+    terminal_ceiling_bytes: u64,
     finished: bool,
 }
 
@@ -436,12 +444,17 @@ impl ExecutionOutputReservation<'_> {
         use super::execution_output::NETWORK_REJECTION_DIAGNOSTIC_OMITTED;
         use crate::transaction::error::TransactionRejectionReason;
 
-        let ExecutionOutputV1::Network(network) = &actual else {
-            return Err("rejection settlement requires a Network output".into());
+        let network = match &actual {
+            ExecutionOutputV1::Network(network) => network,
+            ExecutionOutputV1::NetworkWithLifecycle(row) => &row.execution,
+            _ => return Err("rejection settlement requires a Network output".into()),
         };
         if network.result.is_ok()
             || !network.result.batch_transfer_outcomes().is_empty()
             || !network.completions.is_empty()
+            || actual
+                .trigger_lifecycle()
+                .is_some_and(|trace| !trace.effects().is_empty())
         {
             return Err("rejection settlement retains successful business output".into());
         }
@@ -468,8 +481,10 @@ impl ExecutionOutputReservation<'_> {
                 }
             };
         }
-        let ExecutionOutputV1::Network(network) = terminal else {
-            return Err("rejection has no Network terminal".into());
+        let network = match terminal {
+            ExecutionOutputV1::Network(network) => network,
+            ExecutionOutputV1::NetworkWithLifecycle(row) => &mut row.execution,
+            _ => return Err("rejection has no Network terminal".into()),
         };
         let Err(TransactionRejectionReason::LimitCheck(error)) = &mut network.result.0 else {
             return Err("Network terminal lost its bounded diagnostic".into());
@@ -497,7 +512,9 @@ impl ExecutionOutputReservation<'_> {
             .committed_bytes
             .checked_add(self.terminal_bytes)
             .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
-        if self.terminal_bytes > self.owner.limits.max_output_bytes
+        if (terminal.trigger_lifecycle().is_some()
+            && self.terminal_bytes > self.terminal_ceiling_bytes)
+            || self.terminal_bytes > self.owner.limits.max_output_bytes
             || total.is_none_or(|sum| sum > self.owner.limits.max_total_output_bytes)
         {
             return Err("actual rejection fee receipt has no funded terminal".into());
@@ -534,6 +551,12 @@ impl ExecutionOutputReservation<'_> {
             transaction::error::TransactionRejectionReason,
         };
 
+        if matches!(
+            &actual,
+            ExecutionOutputV1::PipelineWithLifecycle(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+        ) {
+            return self.finish_internal_lifecycle_rejection(actual);
+        }
         let (trigger, root, completions) = match &actual {
             ExecutionOutputV1::Pipeline(output) => (
                 &output.invocation.trigger,
@@ -545,7 +568,10 @@ impl ExecutionOutputReservation<'_> {
                 &output.failure_root,
                 &output.completions,
             ),
-            ExecutionOutputV1::Network(_) => {
+            ExecutionOutputV1::Network(_)
+            | ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => {
                 return Err("internal rejection requires a Pipeline or Time output".into());
             }
         };
@@ -589,7 +615,10 @@ impl ExecutionOutputReservation<'_> {
                 &mut output.failure_root,
                 &mut output.completions,
             ),
-            ExecutionOutputV1::Network(_) => {
+            ExecutionOutputV1::Network(_)
+            | ExecutionOutputV1::NetworkWithLifecycle(_)
+            | ExecutionOutputV1::PipelineWithLifecycle(_)
+            | ExecutionOutputV1::TimeWithLifecycle(_) => {
                 return Err("internal rejection has no internal terminal".into());
             }
         };
@@ -624,15 +653,151 @@ impl ExecutionOutputReservation<'_> {
         }
     }
 
+    /// Settle a lifecycle-bearing real rejection without discarding policy effects.
+    ///
+    /// Core must first validate the complete carrier, authenticate the failed
+    /// invocation and stage (not commit) its policy transaction. This budget
+    /// check does not authenticate policy semantics or fund host allocation.
+    fn finish_internal_lifecycle_rejection(
+        mut self,
+        actual: ExecutionOutputV1,
+    ) -> Result<ExecutionOutputV1, String> {
+        use super::execution_output::{TriggerFailureRootV1, TriggerLifecycleOriginV1};
+        use crate::events::trigger_completed::TriggerCompletedOutcome;
+
+        let (trigger, root, completions, trace) = match &actual {
+            ExecutionOutputV1::PipelineWithLifecycle(row) => (
+                &row.execution.invocation.trigger,
+                &row.execution.failure_root,
+                &row.execution.completions,
+                &row.trigger_lifecycle,
+            ),
+            ExecutionOutputV1::TimeWithLifecycle(row) => (
+                &row.execution.invocation.trigger,
+                &row.execution.failure_root,
+                &row.execution.completions,
+                &row.trigger_lifecycle,
+            ),
+            _ => return Err("lifecycle rejection requires an internal lifecycle output".into()),
+        };
+        if actual.result().is_ok()
+            || !actual.result().batch_transfer_outcomes().is_empty()
+            || actual.result().nexus_fee_receipt().is_some()
+            || !actual.result().contract_events().is_empty()
+            || !matches!(
+                root,
+                Some(
+                    TriggerFailureRootV1::DeclaredInstructionProjection(_)
+                        | TriggerFailureRootV1::ReturnedBeforeRollback(_)
+                        | TriggerFailureRootV1::OmittedAfterRejection
+                )
+            )
+            || !matches!(completions.as_slice(), [completion]
+                if completion.callback_index == 0
+                    && completion.trigger_id == trigger.trigger_id
+                    && matches!(completion.outcome, TriggerCompletedOutcome::Failure(_)))
+            || (matches!(root, Some(TriggerFailureRootV1::OmittedAfterRejection))
+                && !actual.is_internal_rejection_diagnostic_omitted())
+            || trace.effects().iter().any(|effect| {
+                effect.trigger_id != trigger.trigger_id
+                    || !matches!(
+                        &effect.origin,
+                        TriggerLifecycleOriginV1::InvocationPolicy {
+                            callback_index: 0,
+                            ..
+                        }
+                    )
+            })
+        {
+            return Err(
+                "lifecycle rejection retains invalid body output or policy ownership".into(),
+            );
+        }
+        let terminal = self
+            .terminal
+            .as_ref()
+            .ok_or("terminal ownership disappeared")?;
+        if !same_origin(terminal, &actual) || !terminal.is_output_limit_rejection() {
+            return Err("lifecycle rejection differs from its preowned healthy terminal".into());
+        }
+        let actual_bytes = output_bytes(&actual)?;
+        let actual_total = self
+            .owner
+            .committed_bytes
+            .checked_add(actual_bytes)
+            .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
+        if actual_bytes <= self.owner.limits.max_output_bytes
+            && actual_total.is_some_and(|sum| sum <= self.owner.limits.max_total_output_bytes)
+        {
+            return match self.finish(actual)? {
+                ReservedExecutionOutput::Accepted(row) => Ok(row),
+                ReservedExecutionOutput::OutputLimit(_) => {
+                    Err("fitting lifecycle rejection lost its budget".into())
+                }
+            };
+        }
+
+        // The oversized diagnostic may be discarded, but all committed policy
+        // evidence is moved into the already allocated matching terminal.
+        // No Action/vector clone or fallback to Complete[] is allowed here.
+        let mut projected = self
+            .terminal
+            .take()
+            .ok_or("terminal ownership disappeared")?;
+        let (result, root, completions) = match (&mut projected, actual) {
+            (
+                ExecutionOutputV1::PipelineWithLifecycle(dst),
+                ExecutionOutputV1::PipelineWithLifecycle(src),
+            ) => {
+                dst.trigger_lifecycle = src.trigger_lifecycle;
+                (
+                    &mut dst.execution.result,
+                    &mut dst.execution.failure_root,
+                    &mut dst.execution.completions,
+                )
+            }
+            (
+                ExecutionOutputV1::TimeWithLifecycle(dst),
+                ExecutionOutputV1::TimeWithLifecycle(src),
+            ) => {
+                dst.trigger_lifecycle = src.trigger_lifecycle;
+                (
+                    &mut dst.execution.result,
+                    &mut dst.execution.failure_root,
+                    &mut dst.execution.completions,
+                )
+            }
+            _ => return Err("lifecycle rejection substituted its carrier version".into()),
+        };
+        omit_internal_rejection_diagnostic(result, root, completions)?;
+        let bytes = output_bytes(&projected)?;
+        let total = self
+            .owner
+            .committed_bytes
+            .checked_add(bytes)
+            .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
+        if bytes > self.terminal_ceiling_bytes
+            || bytes > self.owner.limits.max_output_bytes
+            || total.is_none_or(|sum| sum > self.owner.limits.max_total_output_bytes)
+        {
+            return Err("complete lifecycle rejection exceeds its pre-admitted ceiling".into());
+        }
+        self.commit_retained_output(bytes)?;
+        Ok(projected)
+    }
+
     /// Resolve an attempted invocation before its effects become applied.
     ///
     /// An oversized actual row is replaced by the already-owned terminal. The
     /// caller must roll back State and every receipt/witness/completion side
     /// channel before publishing `OutputLimit`. Allocation/encoding failure is
     /// a local refusal; it is never converted into a ledger rejection here.
+    /// Oversized genuine internal lifecycle rejections must instead use typed
+    /// rejection settlement so their complete committed policy trace survives.
     ///
     /// # Errors
-    /// Rejects an origin substitution, encoding error or arithmetic contradiction.
+    /// Rejects an origin substitution, oversized genuine internal lifecycle
+    /// rejection, encoding error or arithmetic contradiction.
     pub fn finish(mut self, actual: ExecutionOutputV1) -> Result<ReservedExecutionOutput, String> {
         let terminal = self
             .terminal
@@ -652,6 +817,20 @@ impl ExecutionOutputReservation<'_> {
         let (output, selected_bytes) = if fits {
             (ReservedExecutionOutput::Accepted(actual), bytes)
         } else {
+            // Real internal lifecycle rejection may retain committed retry or
+            // quarantine effects. Only typed rejection settlement may omit its
+            // diagnostic; healthy Complete[] would erase the policy evidence.
+            if matches!(
+                &actual,
+                ExecutionOutputV1::PipelineWithLifecycle(_)
+                    | ExecutionOutputV1::TimeWithLifecycle(_)
+            ) && !actual.result().is_ok()
+                && !actual.is_output_limit_rejection()
+            {
+                return Err(
+                    "oversized internal lifecycle rejection requires typed settlement".into(),
+                );
+            }
             (
                 ReservedExecutionOutput::OutputLimit(
                     self.terminal
@@ -661,6 +840,13 @@ impl ExecutionOutputReservation<'_> {
                 self.terminal_bytes,
             )
         };
+        self.commit_retained_output(selected_bytes)?;
+        Ok(output)
+    }
+
+    // Called only after origin, carrier, complete byte bounds and reservation
+    // ownership have been checked. Accounting is shared by both settlement paths.
+    fn commit_retained_output(&mut self, selected_bytes: u64) -> Result<(), String> {
         self.owner.committed_bytes = self
             .owner
             .committed_bytes
@@ -673,7 +859,7 @@ impl ExecutionOutputReservation<'_> {
             .ok_or("retained output count overflows u32")?;
         self.owner.in_flight = false;
         self.finished = true;
-        Ok(output)
+        Ok(())
     }
 }
 
@@ -701,10 +887,60 @@ fn same_origin(left: &ExecutionOutputV1, right: &ExecutionOutputV1) -> bool {
         (ExecutionOutputV1::Time(left), ExecutionOutputV1::Time(right)) => {
             left.invocation == right.invocation
         }
+        (
+            ExecutionOutputV1::NetworkWithLifecycle(left),
+            ExecutionOutputV1::NetworkWithLifecycle(right),
+        ) => left.execution.input_index == right.execution.input_index,
+        (
+            ExecutionOutputV1::PipelineWithLifecycle(left),
+            ExecutionOutputV1::PipelineWithLifecycle(right),
+        ) => left.execution.invocation == right.execution.invocation,
+        (
+            ExecutionOutputV1::TimeWithLifecycle(left),
+            ExecutionOutputV1::TimeWithLifecycle(right),
+        ) => left.execution.invocation == right.execution.invocation,
         _ => false,
     }
+}
+
+/// Rewrite only the diagnostic fields of a preowned internal healthy terminal.
+/// The caller retains the exact lifecycle policy trace and authenticates scope.
+fn omit_internal_rejection_diagnostic(
+    result: &mut crate::transaction::signed::TransactionResult,
+    root: &mut Option<super::execution_output::TriggerFailureRootV1>,
+    completions: &mut [super::execution_output::InvocationCompletionV1],
+) -> Result<(), String> {
+    use super::execution_output::{INTERNAL_REJECTION_DIAGNOSTIC_OMITTED, TriggerFailureRootV1};
+    use crate::{
+        events::trigger_completed::TriggerCompletedOutcome,
+        transaction::error::TransactionRejectionReason,
+    };
+    let Err(TransactionRejectionReason::LimitCheck(error)) = &mut result.0 else {
+        return Err("internal terminal lost its bounded result".into());
+    };
+    let [completion] = completions else {
+        return Err("internal terminal lost its root completion".into());
+    };
+    let TriggerCompletedOutcome::Failure(reason) = &mut completion.outcome else {
+        return Err("internal terminal lost its bounded completion".into());
+    };
+    if INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.len() > error.reason.len()
+        || INTERNAL_REJECTION_DIAGNOSTIC_OMITTED.len() > reason.len()
+    {
+        return Err("internal rejection diagnostic exceeds its preowned strings".into());
+    }
+    error.reason.clear();
+    error.reason.push_str(INTERNAL_REJECTION_DIAGNOSTIC_OMITTED);
+    reason.clear();
+    reason.push_str(INTERNAL_REJECTION_DIAGNOSTIC_OMITTED);
+    *root = Some(TriggerFailureRootV1::OmittedAfterRejection);
+    Ok(())
 }
 
 #[cfg(test)]
 #[path = "output_budget_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "output_budget_lifecycle_tests.rs"]
+mod lifecycle_tests;

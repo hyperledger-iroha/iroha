@@ -12,5 +12,5 @@ schema-structural = ["dep:iroha_schema"]
 
 [dependencies]
 thiserror.workspace = true
-opus = { version = "0.3", optional = true }
+opus = { version = "0.4.0", optional = true }
 iroha_schema = { workspace = true, optional = true }

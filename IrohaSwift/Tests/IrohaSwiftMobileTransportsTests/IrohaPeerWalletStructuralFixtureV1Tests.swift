@@ -10,6 +10,7 @@ final class IrohaPeerWalletStructuralFixtureV1Tests: XCTestCase {
             kind: .request, frameBytes: KagemushaWalletWireV1.messageMaximumBytes)
         let payment = irohaPeerWalletExchangeEnvelopeV1(
             kind: .payment, frameBytes: KagemushaWalletWireV1.messageMaximumBytes)
+        // The shared wallet_v1_vectors.json bounds include the current fixed framing.
         XCTAssertEqual(request.count, 10_034)
         XCTAssertEqual(payment.count, 10_034)
         try KagemushaWalletWireV1.requireExchangeBinding(request: request, payment: payment)

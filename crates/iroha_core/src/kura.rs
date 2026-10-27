@@ -282,6 +282,9 @@ pub struct Kura {
     /// Authenticated native identities of checkpoint heights for off-chain
     /// history reads; node-local and never consensus authority.
     history_checkpoints: history_checkpoints::HistoryCheckpoints,
+    /// Retained current-attestation authority over this store's frames; empty
+    /// and detached until its node-local producer attaches.
+    retained_attestation: crate::sumeragi::finality::RetainedAttestation,
     /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
     block_notify_tx: mpsc::SyncSender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
@@ -442,6 +445,10 @@ impl Kura {
     /// Node-local checkpoints that let off-chain history reads start below the tip.
     pub(crate) fn history_checkpoints(&self) -> &history_checkpoints::HistoryCheckpoints {
         &self.history_checkpoints
+    }
+    /// Retained authority current attestations may rely on while its producer runs.
+    pub(crate) fn retained_attestation(&self) -> &crate::sumeragi::finality::RetainedAttestation {
+        &self.retained_attestation
     }
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
@@ -1510,6 +1517,7 @@ impl Kura {
             history_checkpoints: history_checkpoints::HistoryCheckpoints::new(
                 config.history_checkpoint_cache_capacity.get(),
             ),
+            retained_attestation: crate::sumeragi::finality::RetainedAttestation::default(),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
@@ -1731,6 +1739,7 @@ impl Kura {
                 &resource_inventory,
             ),
             history_checkpoints: history_checkpoints::HistoryCheckpoints::default(),
+            retained_attestation: crate::sumeragi::finality::RetainedAttestation::default(),
             block_notify_tx,
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
@@ -5624,15 +5633,17 @@ impl Kura {
             .load(Ordering::Relaxed)
     }
     /// Reset this physical store's actual read accounting for a scoped query fixture.
-    #[cfg(test)]
-    pub(crate) fn reset_canonical_query_reads_for_test(&self) {
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn reset_canonical_query_reads_for_test(&self) {
         let store = self.block_store.lock();
         store.body_read_calls.store(0, Ordering::Relaxed);
         store.body_bytes_read.store(0, Ordering::Relaxed);
     }
     /// Return actual physical body read calls and bytes; no decoded-cache proxy.
-    #[cfg(test)]
-    pub(crate) fn canonical_query_reads_for_test(&self) -> (usize, u64) {
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn canonical_query_reads_for_test(&self) -> (usize, u64) {
         let store = self.block_store.lock();
         (
             store.body_read_calls.load(Ordering::Relaxed),
@@ -7285,9 +7296,9 @@ impl BlockStore {
             read_scratch: Vec::new(),
             data_mmap: None,
             data_mmap_len: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             body_bytes_read: AtomicU64::new(0),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "iroha-core-tests"))]
             body_read_calls: AtomicUsize::new(0),
             fast_prevalidated_count: None,
             commit_marker_count: 0,
@@ -9544,7 +9555,7 @@ impl BlockStore {
                 data_len: self.data_mmap_len,
             });
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         {
             self.body_read_calls.fetch_add(1, Ordering::Relaxed);
             self.body_bytes_read.fetch_add(length, Ordering::Relaxed);
@@ -9935,7 +9946,7 @@ impl BlockStore {
         start_location_in_data_file: u64,
         dest_buffer: &mut [u8],
     ) -> Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         {
             self.body_read_calls.fetch_add(1, Ordering::Relaxed);
             self.body_bytes_read

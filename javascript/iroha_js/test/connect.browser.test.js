@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { ed25519, x25519 } from "@noble/curves/ed25519";
-import { chacha20poly1305 } from "@noble/ciphers/chacha";
-import { blake2b } from "@noble/hashes/blake2b";
-import { hkdf } from "@noble/hashes/hkdf";
-import { sha256 } from "@noble/hashes/sha2";
+import { ed25519, x25519 } from "@noble/curves/ed25519.js";
+import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { blake2b } from "@noble/hashes/blake2.js";
+import { hkdf } from "@noble/hashes/hkdf.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 import {
   ConnectApprovalRejectedError,
@@ -294,7 +294,7 @@ function encodeApproveControl(preview, walletPublicKey, accountId, accountPrivat
 
 function mixedTorsionSignature(message, privateKey) {
   const extended = ed25519.utils.getExtendedPublicKey(privateKey);
-  const Point = ed25519.Point ?? ed25519.ExtendedPoint;
+  const Point = ed25519.Point;
   const orderTwoTorsion = Point.fromHex(
     "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
   );
@@ -303,7 +303,7 @@ function mixedTorsionSignature(message, privateKey) {
     for (let index = digest.length - 1; index >= 0; index -= 1) {
       scalar = (scalar << 8n) | BigInt(digest[index]);
     }
-    return scalar % ed25519.CURVE.n;
+    return scalar % ed25519.Point.Fn.ORDER;
   };
   const hashToScalar = (...parts) => scalarFromDigest(
     createHash("sha512")
@@ -312,10 +312,10 @@ function mixedTorsionSignature(message, privateKey) {
   );
   const nonce = hashToScalar(extended.prefix, message);
   const encodedNonce = Buffer.from(
-    Point.BASE.multiply(nonce).add(orderTwoTorsion).toRawBytes(),
+    Point.BASE.multiply(nonce).add(orderTwoTorsion).toBytes(),
   );
-  const challenge = hashToScalar(encodedNonce, extended.point.toRawBytes(), message);
-  let response = (nonce + challenge * extended.scalar) % ed25519.CURVE.n;
+  const challenge = hashToScalar(encodedNonce, extended.point.toBytes(), message);
+  let response = (nonce + challenge * extended.scalar) % ed25519.Point.Fn.ORDER;
   const encodedResponse = Buffer.alloc(32);
   for (let index = 0; index < encodedResponse.length; index += 1) {
     encodedResponse[index] = Number(response & 0xffn);

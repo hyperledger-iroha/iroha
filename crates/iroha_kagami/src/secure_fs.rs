@@ -42,7 +42,7 @@ pub fn create_fifo_for_test(path: &std::path::Path, mode: libc::mode_t) -> std::
 ))]
 mod unix {
     use color_eyre::eyre::{Result, WrapErr as _, eyre};
-    use rand::{TryRngCore as _, rngs::OsRng};
+    use rand::{TryRng as _, rngs::SysRng};
     use rustix::fs::{
         AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, fchmod, open, openat, statat,
     };
@@ -756,7 +756,7 @@ mod unix {
     }
     fn random_temporary_path(parent: &Path, target_name: &str) -> Result<PathBuf> {
         let mut random = [0_u8; 16];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut random)
             .wrap_err("obtain OS entropy for private temporary filename")?;
         let suffix = hex::encode(random);

@@ -13,7 +13,9 @@ use sha2::{Digest as _, Sha256};
 mod terminal_reader;
 pub use terminal_reader::CustodyPreparationReader;
 #[cfg(test)]
-pub(super) use terminal_reader::{count_request_commitments, count_request_verifications};
+pub(super) use terminal_reader::{
+    count_request_commitments, count_request_verifications, with_original_child_custody,
+};
 
 const PAYLOAD_MAX: usize = 1024 * 1024;
 // Norito counts raw byte vectors as sequence elements. Bound them by the admitted journal
@@ -330,6 +332,13 @@ impl Retained {
     }
     fn read_with_recipe(
         journal: &Journal,
+        config: &Config,
+        recipe: ReadRecipe<'_>,
+    ) -> Result<(Self, Option<TerminalRead>)> {
+        Self::read_from_inspection(&journal.native_inspection(), config, recipe)
+    }
+    fn read_from_inspection(
+        journal: &iroha_operation_journal::NativeJournalInspection<'_>,
         config: &Config,
         recipe: ReadRecipe<'_>,
     ) -> Result<(Self, Option<TerminalRead>)> {
@@ -657,9 +666,31 @@ impl AccountService {
         kind: NativeOperationKind,
         expected: OperationExpectation<'_>,
     ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation_with(kind, expected, || Journal::open(path))
+    }
+
+    pub(super) fn retire_preparation_in_parent(
+        &self,
+        parent: &iroha_fs::PrivateDirectory,
+        name: &std::ffi::OsStr,
+        kind: NativeOperationKind,
+        expected: OperationExpectation<'_>,
+    ) -> Result<RetiredNativeRequest> {
+        self.retire_preparation_with(kind, expected, || {
+            Journal::open_optional_child(parent, name)?
+                .ok_or_else(|| eyre!("required native preparation journal is absent"))
+        })
+    }
+
+    fn retire_preparation_with(
+        &self,
+        kind: NativeOperationKind,
+        expected: OperationExpectation<'_>,
+        open: impl FnOnce() -> Result<Journal>,
+    ) -> Result<RetiredNativeRequest> {
         let _profile = ChainDiscriminantGuard::enter(self.config.account_chain_discriminant);
         norito::core::with_decode_limits_scope(LIMITS, || {
-            let journal = Journal::open(path)?;
+            let journal = open()?;
             let retained = Retained::read(&journal, &self.config)?;
             retained.verify_selection(kind, Some(&expected))?;
             eyre::ensure!(

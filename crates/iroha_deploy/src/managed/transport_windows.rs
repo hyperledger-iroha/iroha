@@ -164,7 +164,7 @@ pub(crate) fn request_observed_as<T: JsonDeserialize>(
     request: &ControlRequest,
 ) -> std::result::Result<T, RequestFailure> {
     let deadline = Instant::now()
-        + if request.action == "down" {
+        + if request.action == ControlAction::Down {
             STOP_OBSERVATION_MAXIMUM
         } else {
             IO_TIMEOUT
@@ -271,13 +271,13 @@ mod tests {
     fn roundtrip(connection: Connection, runtime: Runtime, mut client: NamedPipeClient) {
         let request = ControlRequest {
             token: "c".repeat(64),
-            action: "status".into(),
+            action: ControlAction::Status,
         };
         let expected_token = request.token.clone();
         let server = std::thread::spawn(move || {
             let mut connection = connection;
             let received = connection.receive().unwrap();
-            assert_eq!(received.action, "status");
+            assert_eq!(received.action, ControlAction::Status);
             assert_eq!(received.token, expected_token);
             connection.reply(&received).unwrap();
         });
@@ -380,7 +380,11 @@ mod tests {
     #[test]
     fn foreground_pipe_replies_keep_the_callers_absolute_deadline() {
         let _resources = super::super::super::native_test_guard();
-        for action in ["status", "attachment_start", "attachment_status"] {
+        for action in [
+            ControlAction::Status,
+            ControlAction::AttachmentStart,
+            ControlAction::AttachmentStatus,
+        ] {
             let temporary = tempfile::tempdir().unwrap();
             let directory =
                 PrivateDirectory::open_or_create(temporary.path().join("network")).unwrap();
@@ -407,7 +411,7 @@ mod tests {
                 &directory,
                 &ControlRequest {
                     token: "c".repeat(64),
-                    action: action.into(),
+                    action,
                 },
                 started + Duration::from_millis(180),
             );
@@ -428,7 +432,7 @@ mod tests {
         let listener = Listener::bind(&directory).unwrap();
         let server = std::thread::spawn(move || {
             let mut connection = accepted(&listener);
-            assert_eq!(connection.receive().unwrap().action, "down");
+            assert_eq!(connection.receive().unwrap().action, ControlAction::Down);
             let runtime = Arc::clone(&connection.runtime);
             runtime.block_on(async {
                 let _ = tokio::time::timeout(IO_TIMEOUT, async {
@@ -449,7 +453,7 @@ mod tests {
                 &directory,
                 &ControlRequest {
                     token: "c".repeat(64),
-                    action: "down".into(),
+                    action: ControlAction::Down,
                 },
                 started + Duration::from_millis(180),
             );

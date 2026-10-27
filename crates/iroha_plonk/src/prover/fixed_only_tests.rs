@@ -7,10 +7,10 @@ use crate::{
     keys::{CosetCachePolicy, KeygenConfigV2, keygen_pk_v2},
 };
 
-/// A nonconstant fixed boolean polynomial with no witness, equality or lookup
+/// A zero or nonconstant fixed boolean polynomial with no witness, equality or lookup
 /// columns. Its eager key needs no owned quotient FFT buffers at all.
 #[derive(Clone, Copy)]
-struct FixedBoolean;
+struct FixedBoolean(bool);
 
 impl<F: PastaField> Circuit<F> for FixedBoolean {
     type Config = Column<Fixed>;
@@ -34,7 +34,7 @@ impl<F: PastaField> Circuit<F> for FixedBoolean {
         layouter.assign_region(
             || "one fixed boolean",
             |mut region| {
-                region.assign_fixed(fixed, 0, F::ONE)?;
+                region.assign_fixed(fixed, 0, if self.0 { F::ONE } else { F::ZERO })?;
                 Ok(())
             },
         )
@@ -43,22 +43,30 @@ impl<F: PastaField> Circuit<F> for FixedBoolean {
 
 #[test]
 fn fixed_only_proof_has_zero_eager_workspace_and_exact_on_demand_bound() {
-    fn check<C: PastaCurve>()
+    fn check<C: PastaCurve>(nonconstant: bool)
     where
         C::ScalarExt: PoseidonField,
         C::Base: PoseidonField,
     {
+        let circuit = FixedBoolean(nonconstant);
         let params = PinnedParams::<C>::derive(K).unwrap();
         let mut previous_proof = None;
         for policy in [CosetCachePolicy::Eager, CosetCachePolicy::OnDemand] {
             let mut config = KeygenConfigV2::pipa_r(Vec::new());
             config.coset_cache = policy;
-            let pk = keygen_pk_v2(&params, &FixedBoolean, &config).unwrap();
+            let pk = keygen_pk_v2(&params, &circuit, &config).unwrap();
+            assert_eq!(
+                pk.fixed_polys()[0]
+                    .iter()
+                    .all(|value| *value == C::ScalarExt::ZERO),
+                !nonconstant,
+                "the zero fixture must exercise the constant-public-coset path"
+            );
             let setup = Setup {
                 params: params.clone(),
                 pk,
             };
-            let witness = Witness::from_circuit(&setup.pk, &FixedBoolean, &[]).unwrap();
+            let witness = Witness::from_circuit(&setup.pk, &circuit, &[]).unwrap();
             let protocol = Protocol::new(setup.pk.binding().descriptor()).unwrap();
             assert_eq!(protocol.shape().num_fixed, 1);
             assert_eq!(protocol.shape().num_advice, 0);
@@ -93,7 +101,7 @@ fn fixed_only_proof_has_zero_eager_workspace_and_exact_on_demand_bound() {
                     .num_threads(workers)
                     .build()
                     .unwrap();
-                let owned = Witness::from_circuit(&setup.pk, &FixedBoolean, &[]).unwrap();
+                let owned = Witness::from_circuit(&setup.pk, &circuit, &[]).unwrap();
                 let result = pool
                     .install(|| {
                         create_proof_owned_with_workspace(
@@ -114,7 +122,7 @@ fn fixed_only_proof_has_zero_eager_workspace_and_exact_on_demand_bound() {
             }
             if expected > 0 {
                 let mut short = QuotientWorkspace::new(expected - 1);
-                let owned = Witness::from_circuit(&setup.pk, &FixedBoolean, &[]).unwrap();
+                let owned = Witness::from_circuit(&setup.pk, &circuit, &[]).unwrap();
                 assert!(matches!(
                     create_proof_owned_with_workspace(
                         &setup.params,
@@ -130,6 +138,8 @@ fn fixed_only_proof_has_zero_eager_workspace_and_exact_on_demand_bound() {
             }
         }
     }
-    check::<Ep>();
-    check::<Eq>();
+    for nonconstant in [false, true] {
+        check::<Ep>(nonconstant);
+        check::<Eq>(nonconstant);
+    }
 }

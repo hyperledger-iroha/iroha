@@ -8,6 +8,7 @@ import {
   toriiHttpErrorFromResponseText,
 } from "./toriiErrors.js";
 import { createToriiCollections } from "./query/collections.js";
+import { decodeAssetMovementRow } from "./query/assetMovements.js";
 import { decodePageText, stringifyRequestJson } from "./query/page.js";
 import { filterQueryText } from "./query/listQuery.js";
 import { decodeEventFrames } from "./toriiEventStream.js";
@@ -1727,6 +1728,7 @@ export class ToriiBrowserClient {
         explorerAssetDefinitions: (row) => normalizeExplorerAssetDefinitionRecord(row, "explorer asset definition row"),
         explorerAssets: (row) => normalizeQuantityRecord(row, "explorer asset row", ["value"]),
         explorerRwas: (row) => normalizeQuantityRecord(row, "explorer rwa row", ["quantity", "held_quantity"]),
+        assetMovement: (row) => decodeAssetMovementRow(row, "asset movement row"),
       },
     );
   }
@@ -1850,6 +1852,11 @@ export class ToriiBrowserClient {
   /** Holders of one asset definition (`POST /v1/assets/{definition_id}/holders/query`). */
   assetHolders(assetDefinitionId) {
     return this.#collections.assetHolders(assetDefinitionId);
+  }
+
+  /** Every committed movement of one asset definition, newest first (`POST /v1/assets/{definition_id}/movements/query`); a history collection of decoded rows. */
+  assetMovements(assetDefinitionId) {
+    return this.#collections.assetMovements(assetDefinitionId);
   }
 
   /** Transactions of one account, newest first (`POST /v1/accounts/{account_id}/transactions/query`); a history collection. */
@@ -2052,10 +2059,17 @@ export class ToriiBrowserClient {
         }
         normalizedOptions.responseObserver(response);
       }
-      if (
-        status === 204
-        || normalizedOptions.nullStatuses?.includes(status)
-      ) return null;
+      if (normalizedOptions.nullStatuses?.includes(status)) {
+        // Absence changes the result, not the response-size or abort contract.
+        await readBoundedResponseBytes(
+          response,
+          normalizedOptions.maximumBodyBytes ?? DEFAULT_JSON_RESPONSE_MAX_BYTES,
+          `${method} ${path}`,
+          signal,
+        );
+        return null;
+      }
+      if (status === 204) return null;
       const jsonParser = normalizedOptions.jsonParser ?? JSON.parse;
       if (typeof jsonParser !== FIELD_FUNCTION) {
         rejectType(`${method} ${path} jsonParser${TEXT_MUST_BE_A_2}function`);

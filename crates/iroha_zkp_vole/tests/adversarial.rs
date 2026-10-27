@@ -73,7 +73,12 @@ impl Campaign {
     }
 
     fn finish(self, expected: &str) {
-        let digest = format!("{:x}", self.digest.finalize());
+        let digest = self
+            .digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         println!(
             "backend seed={SEED:#x} cases={} true_outcomes={} false_outcomes={} sha3_256={digest}",
             self.cases,

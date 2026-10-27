@@ -2400,8 +2400,8 @@ fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
         .build()
         .map_err(|error| error.to_string())
 }
-fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
-    match algorithm {
+fn jwt_algorithm_name(algorithm: Algorithm) -> Result<&'static str, &'static str> {
+    Ok(match algorithm {
         Algorithm::HS256 => "HS256",
         Algorithm::HS384 => "HS384",
         Algorithm::HS512 => "HS512",
@@ -2414,7 +2414,9 @@ fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
         Algorithm::PS384 => "PS384",
         Algorithm::PS512 => "PS512",
         Algorithm::EdDSA => "EdDSA",
-    }
+        // A new upstream algorithm needs an explicit protocol name and review.
+        _ => return Err("unsupported push JWT signing algorithm"),
+    })
 }
 fn encode_jwt_claims(
     algorithm: Algorithm,
@@ -2426,7 +2428,7 @@ fn encode_jwt_claims(
     header.insert("typ".to_string(), norito::json::Value::from("JWT"));
     header.insert(
         "alg".to_string(),
-        norito::json::Value::from(jwt_algorithm_name(algorithm)),
+        norito::json::Value::from(jwt_algorithm_name(algorithm)?),
     );
     if let Some(key_id) = key_id {
         header.insert("kid".to_string(), norito::json::Value::from(key_id));
@@ -4498,6 +4500,26 @@ mod tests {
             delivery_dedupe_key(&changed_direction, &job.token_fingerprint)
         );
     }
+    #[test]
+    fn jwt_algorithm_names_preserve_explicit_protocol_labels() {
+        for (algorithm, expected) in [
+            (Algorithm::HS256, "HS256"),
+            (Algorithm::HS384, "HS384"),
+            (Algorithm::HS512, "HS512"),
+            (Algorithm::ES256, "ES256"),
+            (Algorithm::ES384, "ES384"),
+            (Algorithm::RS256, "RS256"),
+            (Algorithm::RS384, "RS384"),
+            (Algorithm::RS512, "RS512"),
+            (Algorithm::PS256, "PS256"),
+            (Algorithm::PS384, "PS384"),
+            (Algorithm::PS512, "PS512"),
+            (Algorithm::EdDSA, "EdDSA"),
+        ] {
+            assert_eq!(jwt_algorithm_name(algorithm), Ok(expected));
+        }
+    }
+
     #[test]
     fn encode_jwt_claims_builds_verifiable_compact_token() {
         let mut claims = norito::json::Map::new();

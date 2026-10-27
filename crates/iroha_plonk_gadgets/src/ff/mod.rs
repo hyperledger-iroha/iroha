@@ -1877,10 +1877,11 @@ impl<F: PastaField> FfChip<F> {
         self.mul(region, a, a)
     }
 
-    /// `a^2 - 5 mod m`, using the unchanged CRT equality with fixed
-    /// nonnegative padding `m-5` on the compact staged Pasta profile.
-    /// Non-staged profiles retain square followed by bounded subtraction.
-    /// The staged fast path accepts only the two Pasta foreign moduli.
+    /// `a^2 - 5 mod m`. Serialized profiles accept only the two Pasta
+    /// foreign moduli. Compact admitted bounds use the unchanged CRT equality
+    /// with fixed nonnegative padding `m-5`, lowered through the staged kernel
+    /// or shared Glue rows. Full bounds and non-serialized profiles use square
+    /// followed by bounded subtraction.
     /// # Errors
     /// Mixed/unconfigured modulus, failed bound admission, or layout error.
     pub fn norm(

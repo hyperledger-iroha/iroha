@@ -31279,7 +31279,7 @@ mod advert_tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use norito::to_bytes;
-    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use rand::rand_core::{TryCryptoRng, TryRng};
     use sorafs_manifest::{
         AdvertEndpoint, AdvertSignature, AliasClaim, AvailabilityTier, CapabilityTlv,
         CapabilityType, CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1,
@@ -31564,7 +31564,7 @@ mod advert_tests {
     struct FixedProofTokenRng {
         byte: u8,
     }
-    impl TryRngCore for FixedProofTokenRng {
+    impl TryRng for FixedProofTokenRng {
         type Error = core::convert::Infallible;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))

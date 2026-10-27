@@ -150,7 +150,7 @@ fn deterministic_domains_and_proof_digest_are_reproducible() {
     assert_ne!(a, derive::<112>("tape/comparator/vote3/0"));
     assert_ne!(a, derive::<112>("tape/candidate/vote500/0"));
     let mut expected = [0u8; 32];
-    let mut shake = sha3::Shake256::default();
+    let mut shake = shake::Shake256::default();
     shake.update(&a);
     shake.finalize_xof().read(&mut expected);
     let actual = proof_digest(&a);

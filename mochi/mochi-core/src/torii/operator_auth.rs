@@ -6,7 +6,7 @@ use base64::{
 };
 use iroha_crypto::{KeyPair, PublicKey, Signature, sha256};
 use iroha_data_model::prelude::NetworkId;
-use rand::{TryRngCore as _, rngs::OsRng};
+use rand::{TryRng as _, rngs::SysRng};
 use reqwest::{
     Client, Method, Request,
     header::{ACCEPT, HeaderValue},
@@ -86,7 +86,7 @@ pub(super) fn build_operator_get_request(
             ToriiError::SignedQueryContext("Unix timestamp does not fit u64".to_owned())
         })?;
     let mut nonce_bytes = [0_u8; 16];
-    OsRng.try_fill_bytes(&mut nonce_bytes).map_err(|error| {
+    SysRng.try_fill_bytes(&mut nonce_bytes).map_err(|error| {
         ToriiError::SignedQueryContext(format!("operator request nonce RNG failed: {error}"))
     })?;
     let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);

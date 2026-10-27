@@ -1,0 +1,15 @@
+[package]
+name = "iroha-native-source-snapshot"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Independent tooling workspace: proof-library compilation never depends on it.
+[workspace]
+
+[[bin]]
+name = "source-snapshot"
+path = "../native_source_snapshot.rs"
+
+[dependencies]
+sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }

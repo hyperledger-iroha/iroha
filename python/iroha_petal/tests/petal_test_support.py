@@ -23,27 +23,28 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from iroha_petal import (  # noqa: E402
+    DECODE_ORDER,
+    SQUARE_TOP,
     Homography,
-    Lane,
     Luma,
     RenderOptions,
     StreamEncoder,
     Xorshift32,
     render_frame,
+    render_square,
 )
-from iroha_petal.decode import _decode_with_erasures, _tile_words  # noqa: E402
 
 
 @functools.lru_cache(maxsize=None)
 def stream_fixture() -> dict:
-    """``fixtures/petal/petal_stream_v1.json``."""
-    return json.loads((FIXTURES / "petal_stream_v1.json").read_text(encoding="utf-8"))
+    """``fixtures/petal/petal_stream_v5.json``."""
+    return json.loads((FIXTURES / "petal_stream_v5.json").read_text(encoding="utf-8"))
 
 
 @functools.lru_cache(maxsize=None)
 def captures_fixture() -> dict:
-    """``fixtures/petal/petal_captures_v1.json``."""
-    return json.loads((FIXTURES / "petal_captures_v1.json").read_text(encoding="utf-8"))
+    """``fixtures/petal/petal_captures_v5.json``."""
+    return json.loads((FIXTURES / "petal_captures_v5.json").read_text(encoding="utf-8"))
 
 
 def luma_of(entry: dict, key: str = "luma_zlib_base64") -> Luma:
@@ -52,13 +53,27 @@ def luma_of(entry: dict, key: str = "luma_zlib_base64") -> Luma:
     return Luma(entry["width"], entry["height"], data)
 
 
-def tile_lanes(reads) -> tuple:
-    """Lanes ``P`` and ``K`` (or ``None``) that Reed-Solomon decoding gets from tile reads."""
-    (p_word, p_conf), (k_word, k_conf) = _tile_words(reads)
-    return (
-        _decode_with_erasures(Lane.P, p_word, p_conf),
-        _decode_with_erasures(Lane.K, k_word, k_conf),
-    )
+def truth(entry: dict) -> dict:
+    """The recorded data of every lane of a fixture entry, by lane: ``D``, then the four
+    field lanes."""
+    recorded = [bytes.fromhex(entry["d_data"])]
+    recorded += [bytes.fromhex(data) for data in entry["field_data"]]
+    return dict(zip(DECODE_ORDER, recorded))
+
+
+def read_lanes(test, name: str, frame, recorded: dict) -> str:
+    """Checks every decoded lane of ``frame`` against the recorded data and returns the
+    lane letters."""
+    for lane, expected in recorded.items():
+        result = frame.lane(lane)
+        if result is not None:
+            test.assertEqual(result.data, expected, f"{name}: lane {lane.letter} data")
+    return frame.lanes
+
+
+def letters(fields) -> str:
+    """The sector digits of the field lanes that decoded."""
+    return "".join(str(sector) for sector, result in enumerate(fields) if result is not None)
 
 
 def payload(length: int, seed: int) -> bytes:
@@ -68,8 +83,8 @@ def payload(length: int, seed: int) -> bytes:
 
 
 def decode_test_payload() -> bytes:
-    """The 300-byte payload of the reference decoder tests."""
-    return bytes(((i * 2_654_435_761) & 0xFFFFFFFF) >> 11 & 0xFF for i in range(300))
+    """The 3000-byte payload of the reference decoder tests."""
+    return bytes(((i * 2_654_435_761) & 0xFFFFFFFF) >> 11 & 0xFF for i in range(3000))
 
 
 class Lcg:
@@ -98,8 +113,19 @@ def encoder(data: bytes, kind: int) -> StreamEncoder:
 
 @functools.lru_cache(maxsize=32)
 def rendered(data: bytes, kind: int, frame: int, size: int, supersample: int):
-    """Render (and cache) one frame of the stream carrying ``data``."""
+    """Render (and cache) one frame of the stream carrying ``data``: the card, ``size``
+    pixels wide."""
     return render_frame(
+        encoder(data, kind).cells(frame), RenderOptions(size=size, supersample=supersample)
+    )
+
+
+@functools.lru_cache(maxsize=32)
+def rendered_square(data: bytes, kind: int, frame: int, size: int, supersample: int):
+    """Render (and cache) the bare square of one frame of the stream carrying ``data``,
+    ``size`` pixels on a side: for tests that work on squares (pixel positions, locator
+    expectations, painting over a blossom)."""
+    return render_square(
         encoder(data, kind).cells(frame), RenderOptions(size=size, supersample=supersample)
     )
 
@@ -167,13 +193,15 @@ def capture(
 ) -> Luma:
     """A toy camera: warp a rendered luma frame into a ``width x height`` view.
 
-    ``forward`` maps canvas units to camera pixels. Every camera pixel samples
-    the source bilinearly (black outside the code), then a 3-tap blur and a
-    little deterministic noise are applied.
+    ``forward`` maps canvas units (square coordinates) to camera pixels. The source is a
+    rendered card (taller than wide: its square starts ``SQUARE_TOP`` units down) or a
+    bare square. Every camera pixel samples the source bilinearly (black outside it), then
+    a 3-tap blur and a little deterministic noise are applied.
     """
     backward = forward.inverse()
     assert backward is not None
     unit = source.width / 1024.0
+    square_top = SQUARE_TOP if source.height > source.width else 0.0
     b0, b1, b2, b3, b4, b5, b6, b7, b8 = backward.m
     sw, sh = source.width, source.height
     data = source.data
@@ -186,7 +214,7 @@ def capture(
             px = x + 0.5
             w = b6 * px + b7 * py + b8
             cx = (b0 * px + b1 * py + b2) / w * unit - 0.5
-            cy = (b3 * px + b4 * py + b5) / w * unit - 0.5
+            cy = ((b3 * px + b4 * py + b5) / w + square_top) * unit - 0.5
             if cx < -0.5 or cy < -0.5 or cx > sw - 0.5 or cy > sh - 0.5:
                 row.append(0.0)
                 continue

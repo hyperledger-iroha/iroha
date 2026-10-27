@@ -112,22 +112,22 @@ mod tests {
         requests: usize,
     }
 
-    impl rand::TryRngCore for PreflightEntropy {
-        type Error = &'static str;
+    impl rand::TryRng for PreflightEntropy {
+        type Error = std::io::Error;
 
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             self.requests += 1;
-            Err("preflight must not request entropy")
+            Err(std::io::Error::other("preflight must not request entropy"))
         }
 
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             self.requests += 1;
-            Err("preflight must not request entropy")
+            Err(std::io::Error::other("preflight must not request entropy"))
         }
 
         fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
             self.requests += 1;
-            Err("preflight must not request entropy")
+            Err(std::io::Error::other("preflight must not request entropy"))
         }
     }
 
@@ -231,16 +231,13 @@ mod tests {
             &fixture.witness.certificate_chain_der[0],
         )
         .expect("signed leaf certificate");
-        assert_eq!(
-            key.to_encoded_point(false).as_bytes(),
-            certificate.public_key
-        );
+        assert_eq!(key.to_sec1_point(false).as_bytes(), certificate.public_key);
         let message = ownership_signing_message_v1(&fixture.statement).expect("signing message");
         let digest = ownership_challenge_v1(&fixture.statement).expect("ownership digest");
         let message_signature: Signature = signer.sign(&message);
-        let message_signature = message_signature.normalize_s().unwrap_or(message_signature);
+        let message_signature = message_signature.normalize_s();
         let prehash_signature: Signature = signer.sign_prehash(&digest).expect("prehash signature");
-        let prehash_signature = prehash_signature.normalize_s().unwrap_or(prehash_signature);
+        let prehash_signature = prehash_signature.normalize_s();
         key.verify_prehash(&digest, &message_signature)
             .expect("message signer hashes the canonical message exactly once");
         key.verify(&message, &prehash_signature)
@@ -264,7 +261,7 @@ mod tests {
         }
 
         let double_hashed: Signature = signer.sign(&digest);
-        let double_hashed = double_hashed.normalize_s().unwrap_or(double_hashed);
+        let double_hashed = double_hashed.normalize_s();
         assert!(key.verify_prehash(&digest, &double_hashed).is_err());
         assert!(key.verify(&message, &double_hashed).is_err());
         fixture.witness.wallet_ownership_signature_rs = double_hashed.to_bytes().into();

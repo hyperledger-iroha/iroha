@@ -7,9 +7,9 @@
 use super::*;
 use crate::msm::{MsmError, ScratchReservation, SharedMemoryBudget};
 use crate::{Ep, Eq};
-use group::prime::PrimeCurveAffine;
+use group::CurveAffine;
 use rand_chacha::ChaCha20Rng;
-use rand_core_06::{RngCore, SeedableRng};
+use rand_core::{Rng, SeedableRng};
 use rayon::prelude::*;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -84,19 +84,19 @@ fn payload_bound(n: usize, plan: Plan) -> usize {
 
 /// Source-bound host experiment, not a portable std-layout promise. The
 /// accompanying manifest pins Rust 1.93.1's pthread `OnceBox` and Darwin SDK layout.
-/// On this target the sole boxed `pthread_mutex_t` is an 8-byte long +56 opaque bytes.
+/// On this target the sole boxed `pthread_mutex_t` is an 8-byte long + 56 opaque bytes.
 /// Independent execution must reject a different compiler/std/SDK identity.
 fn verified_mutex_payload_bytes() -> usize {
-    const {
-        assert!(
-            cfg!(all(
-                target_os = "macos",
-                target_arch = "aarch64",
-                target_pointer_width = "64"
-            )),
-            "this isolated mutex-accounting experiment requires the recorded host target"
-        );
-    }
+    // Refuse invocation on an unrecorded target without making its test
+    // binary fail to compile merely because this experiment is present.
+    assert!(
+        std::hint::black_box(cfg!(all(
+            target_os = "macos",
+            target_arch = "aarch64",
+            target_pointer_width = "64"
+        ))),
+        "this isolated mutex-accounting experiment requires the recorded host target"
+    );
     assert_eq!(
         size_of::<Mutex<()>>(),
         16,
@@ -182,6 +182,9 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
         dynamic_payload_bound(scalars.len(), plan) <= reservation.bytes(),
         "this shape has insufficient original scratch for the accounted mutex"
     );
+    // Own the permit before declaring scratch so normal return, cancellation,
+    // and unwinding all destroy the joined operation's buffers first.
+    let _scratch = reservation;
     CancellationToken::checkpoint(cancellation)?;
     let skip: Vec<bool> = bases
         .iter()
@@ -198,7 +201,7 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
             if CancellationToken::checkpoint(cancellation).is_err() {
                 break;
             }
-            let claimed = next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            let claimed = next.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 if value < tasks { Some(value + 1) } else { None }
             });
             let Ok(task) = claimed else {
@@ -262,7 +265,7 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
     drop(windows);
     drop(digits);
     drop(skip);
-    drop(reservation);
+    drop(_scratch);
     Ok(result)
 }
 
