@@ -111,6 +111,7 @@ tools/openapi/node_modules/
 specs/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes
+/.local/state/sccp-validation-evidence/
 .cargo-temp/
 /.cargo-target/
 # Swift Package Manager also writes scratch trees at the root and in examples.
