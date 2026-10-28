@@ -731,7 +731,10 @@ define_instruction_handlers! {
     // key. Core checks the exact backend, envelope, limits and duplicate identity; this does
     // not authorize spending, key administration or stronger execution-proof semantics.
     dispatch_instruction::<zk::VerifyProof> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<zk::PruneProofs>,
+    // Any signed account may apply retention. Core reads cap/grace/batch from the
+    // committed policy; the caller can select only a backend, never a weaker policy.
+    // Removing proof records and their indexes changes no numeric asset balances.
+    dispatch_instruction::<zk::PruneProofs> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<confidential::PublishPedersenParams>,

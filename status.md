@@ -147,12 +147,7 @@ pass on the unchanged 2026-10-25 candidate, including the fixture and
 signed-history repairs. Repeated carrier/refund checks pass. Broader workspace,
 SDK, network and release gates remain open.
 
-`iroha_config`
-`musubi_private_tls_listener_rejects_retired_mount_configuration` fails; 30 tests of
-the `zk_verify`, `zk_ledger_scaffold`, `zk_proof_retention` and
-`overlay_bounds` integration modules are stale and marked `TODO:`; and
-`zk::PruneProofs` has no executor admission class, so no transaction can carry
-it although the CLI builds one. On `d651d51715`: four `fastpq_prover` lib
+On `d651d51715`: four `fastpq_prover` lib
 tests fail (1,218 pass), in `axt_binding`, `compact_execution_effect_batch`,
 the compact quantity artifact and the public-transfer execution effect, and
 the four-quadrant tree capacity test fails (124 retained nodes against 127).

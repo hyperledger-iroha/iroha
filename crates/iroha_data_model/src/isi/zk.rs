@@ -28,12 +28,13 @@ isi! {
     /// Prune proof registry entries according to the on-chain retention policy.
     ///
     /// When `backend` is `None`, all backends are considered; otherwise only
-    /// the matching backend is pruned. Retention limits (cap/grace/batch) come
-    /// from the `zk` configuration, keeping pruning deterministic.
+    /// the matching backend is pruned. Any signed account may request pruning;
+    /// retention limits (cap/grace/batch) come from the committed ZK validity
+    /// policy and cannot be overridden by the caller.
     #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::PruneProofs")]
     pub struct PruneProofs {
-        /// Optional backend label to restrict pruning scope (e.g., `halo2/ipa`).
+        /// Optional backend label to restrict pruning scope (e.g., `pipa-r/pasta`).
         pub backend: Option<String>,
     }
 }
