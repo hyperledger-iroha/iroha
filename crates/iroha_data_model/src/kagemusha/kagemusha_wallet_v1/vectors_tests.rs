@@ -4753,7 +4753,6 @@ fn kagemusha_wallet_v1_vectors_file_matches_the_generated_vectors() {
             path.display()
         );
     };
-    // TODO(blacklist-local G5): regenerate fixtures/kagemusha/wallet_v1_vectors.json.
     if existing != text {
         let line = existing
             .lines()
