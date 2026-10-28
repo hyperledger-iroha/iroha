@@ -4,7 +4,7 @@ import { normalizeContractEmissionV1 } from "./contractEmissions.js";
 import { normalizeContractEventsV1 } from "./contractDeclarations.js";
 import { normalizeIvmFault } from "./ivmFault.js";
 import { normalizeEntrypointAuthorizationV1, normalizeContractPermissionsV1, validateManifestDeclarationsV1, validateManifestEntrypointIdentityV1, validateManifestFieldsV1 } from "./contractManifestRules.js";
-import { normalizeValidationFeePolicy as parseGovernanceValidationFeePolicy, normalizeValidationFeePayoutLifecycle as parseGovernanceValidationFeePayoutLifecycle } from "./governanceProposalV1.js";
+import { normalizeSccpRoute as parseGovernanceSccpRouteGovernance, normalizeValidationFeePolicy as parseGovernanceValidationFeePolicy, normalizeValidationFeePayoutLifecycle as parseGovernanceValidationFeePayoutLifecycle } from "./governanceProposalV1.js";
 import { normalizeRetailFeeAssessment, rejectUnknownRetailFeeFields } from "./retailFeeAssessment.js";
 import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
 import { parseElectionTallyResponseV1 } from "./electionTallyV1.js";
@@ -13123,43 +13123,6 @@ function parseGovernanceSbomDigests(payload, context) {
       digest: requireCanonicalGovernanceBase64(record.digest, `${itemContext}.digest`),
     };
   });
-}
-
-const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
-
-function parseGovernanceSccpRouteGovernance(payload, context) {
-  const record = requireExactGovernanceProposalRecord(payload, ["proposal"], context);
-  const proposalContext = `${context}.proposal`;
-  const proposal = requireExactGovernanceProposalRecord(
-    record.proposal,
-    ["network_id", "base_revisions", "actions"],
-    proposalContext,
-  );
-  const networkId = requireExactNonEmptyString(
-    proposal.network_id,
-    `${proposalContext}.network_id`,
-  );
-  NetworkId.parse(networkId);
-  const baseRevisions = requireGovernanceArray(
-    proposal.base_revisions,
-    `${proposalContext}.base_revisions`,
-  );
-  const actions = requireGovernanceArray(proposal.actions, `${proposalContext}.actions`);
-  if (actions.length === 0 || actions.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
-    rejectType(
-      `${proposalContext}.actions must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} actions`,
-    );
-  }
-  // TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
-  // entry statically (specs/sccp.md §4.14.3) once the SDK carries typed SCCP
-  // governance codecs; Torii and the node remain authoritative for them today.
-  return {
-    proposal: {
-      network_id: networkId,
-      base_revisions: baseRevisions,
-      actions,
-    },
-  };
 }
 
 

@@ -1,7 +1,8 @@
 //! Canonical signed RS16 geometry for global and lane consensus instances.
 //!
-//! This owns layout validation and the single genesis-builder profile. Transport,
-//! authenticated shards and availability custody are separate required integration work.
+//! This owns layout validation, the single genesis-builder profile, authenticated
+//! manifest/row evidence and original-pool payload custody. The native node driver
+//! runs authoring, acquisition and transport jobs outside the consensus event loop.
 mod artifact;
 mod json;
 pub use artifact::{

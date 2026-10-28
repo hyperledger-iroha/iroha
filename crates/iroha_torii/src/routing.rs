@@ -33743,6 +33743,8 @@ pub const ENDPOINT_ACCOUNTS_HISTORY_SSE: &str = "/v1/accounts/{account_id}/histo
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
 pub const ENDPOINT_CONTRACTS_EVENTS: &str = "/v1/contracts/events";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS: &str = "/v1/contracts/rollups/swaps/fills";
+/// Endpoint label for `/v1/contracts/rollups/swaps/candles`.
+pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES: &str = "/v1/contracts/rollups/swaps/candles";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
     "/v1/contracts/rollups/trader/activity";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
@@ -44321,10 +44323,7 @@ pub struct ContractRollupSwapsFillsParams {
     /// Optional scan limit for walking the router mirror history.
     #[norito(default)]
     pub scan_limit: Option<u64>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    // TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
-    // once these projections report exact totals.
-    #[allow(dead_code)]
+    /// Count mode: only "bounded" is supported (the default); exact totals are unavailable.
     #[norito(default)]
     pub count_mode: Option<String>,
 }
@@ -44349,10 +44348,7 @@ pub struct ContractRollupSwapsCandlesParams {
     /// Candle bucket width in milliseconds.
     #[norito(default)]
     pub bucket_ms: Option<u64>,
-    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
-    // TODO: the swaps fills/candles scans are always bounded; honor `count_mode`
-    // once these projections report exact totals.
-    #[allow(dead_code)]
+    /// Count mode: only "bounded" is supported (the default); exact totals are unavailable.
     #[norito(default)]
     pub count_mode: Option<String>,
 }
@@ -44944,7 +44940,6 @@ struct SwapFillRollup {
     quote_asset_id: String,
     history_head: u64,
     scanned: usize,
-    total: usize,
     items: Vec<SwapFillRollupItem>,
 }
 #[derive(Debug, Clone, Default)]
@@ -45721,6 +45716,20 @@ fn call_contract_view_value(
     };
     iroha_json_to_value(&result)
 }
+/// Validate count controls before resolving a contract or walking its bounded mirror history.
+fn validate_swap_rollup_count_mode(raw: Option<&str>, endpoint: &'static str) -> Result<()> {
+    match raw {
+        None | Some("bounded") => Ok(()),
+        Some("exact") => Err(Error::AppQueryValidation {
+            code: "unsupported_count_mode",
+            message: format!("{endpoint}: exact totals are unavailable for bounded swap history; use count_mode=bounded"),
+        }),
+        Some(_) => Err(Error::AppQueryValidation {
+            code: "invalid_count_mode",
+            message: format!("{endpoint}: count_mode must be bounded"),
+        }),
+    }
+}
 fn load_swap_fill_rollup(
     state: &Arc<CoreState>,
     visibility: &DataspaceReadVisibility,
@@ -45782,7 +45791,6 @@ fn load_swap_fill_rollup(
             quote_asset_id: String::new(),
             history_head: 0,
             scanned: 0,
-            total: 0,
             items: Vec::new(),
         });
     }
@@ -45853,7 +45861,6 @@ fn load_swap_fill_rollup(
         quote_asset_id,
         history_head,
         scanned,
-        total: stitched.len(),
         items: stitched,
     })
 
@@ -45903,14 +45910,14 @@ fn swap_fill_rollup_to_json_value(
     limit: Option<u64>,
     offset: u64,
 ) -> Value {
-    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+    let offset_usize = usize::try_from(offset).unwrap_or(usize::MAX);
     let limit = limit
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(rollup.items.len());
     let items = rollup
         .items
         .iter()
-        .skip(offset)
+        .skip(offset_usize)
         .take(limit)
         .map(|item| {
             let mut object = Map::new();
@@ -45963,8 +45970,9 @@ fn swap_fill_rollup_to_json_value(
     }
     top.insert("history_head".into(), Value::from(rollup.history_head));
     top.insert("scanned".into(), Value::from(rollup.scanned as u64));
-    top.insert("total".into(), Value::from(rollup.total as u64));
-    top.insert("items".into(), Value::Array(items));
+    let page = page_result_from_counted_items(items, rollup.items.len(), offset, AppCountMode::Bounded);
+    insert_page_metadata(&mut top, &page, AppCountMode::Bounded);
+    top.insert("items".into(), Value::Array(page.items));
     Value::Object(top)
 }
 #[expect(clippy::cast_precision_loss, reason = "read-only analytics intentionally project exact ledger quantities into approximate f64 display statistics")]
@@ -46135,13 +46143,13 @@ pub async fn handle_v1_contracts_rollups_swaps_fills_get(
     crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsFillsParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    validate_swap_rollup_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS)?;
     let rollup = load_swap_fill_rollup(&(state), &visibility, &params)?;
     Ok(infallible_pretty_json_response(
         &swap_fill_rollup_to_json_value(&rollup, params.limit, params.offset),
         "{}",
     ))
 }
-#[expect(clippy::cast_precision_loss, reason = "read-only analytics intentionally project exact ledger quantities into approximate f64 display statistics")]
 #[expect(clippy::unused_async, reason = "HTTP route entry points retain a Future interface for route dispatch and shared async handler tests") ]
 pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     state: Arc<CoreState>,
@@ -46149,6 +46157,7 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     crate::NoritoQuery(params): crate::NoritoQuery<ContractRollupSwapsCandlesParams>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    validate_swap_rollup_count_mode(params.count_mode.as_deref(), ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES)?;
     let fills = load_swap_fill_rollup(
         &(state),
         &visibility,
@@ -46162,6 +46171,16 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
             count_mode: None,
         },
     )?;
+    Ok(infallible_pretty_json_response(
+        &swap_candle_rollup_to_json_value(&fills, &params),
+        "{}",
+    ))
+}
+#[expect(clippy::cast_precision_loss, reason = "read-only analytics intentionally project exact ledger quantities into approximate f64 display statistics")]
+fn swap_candle_rollup_to_json_value(
+    fills: &SwapFillRollup,
+    params: &ContractRollupSwapsCandlesParams,
+) -> Value {
     let bucket_ms = params
         .bucket_ms
         .unwrap_or(DEFAULT_TRADER_CANDLE_BUCKET_MS)
@@ -46170,6 +46189,7 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
     for fill in fills
         .items
         .iter()
+        .rev()
         .filter(|item| item.timestamp_ms.is_some())
     {
         let timestamp_ms = fill.timestamp_ms.unwrap_or_default();
@@ -46231,6 +46251,7 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
         .limit
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(usize::MAX);
+    let bucket_count = buckets.len();
     let items = buckets
         .into_iter()
         .rev()
@@ -46240,10 +46261,12 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
         .collect::<Vec<_>>();
     let mut top = Map::new();
     top.insert("ok".into(), Value::Bool(true));
-    top.insert("authority".into(), Value::from(fills.authority));
+    top.insert("authority".into(), Value::from(fills.authority.clone()));
     top.insert("bucketMs".into(), Value::from(bucket_ms));
-    top.insert("items".into(), Value::Array(items));
-    Ok(infallible_pretty_json_response(&Value::Object(top), "{}"))
+    let page = page_result_from_counted_items(items, bucket_count, params.offset, AppCountMode::Bounded);
+    insert_page_metadata(&mut top, &page, AppCountMode::Bounded);
+    top.insert("items".into(), Value::Array(page.items));
+    Value::Object(top)
 }
 pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
     state: Arc<CoreState>,
@@ -47265,7 +47288,6 @@ mod tx_projection_display_tests {
             quote_asset_id: "usdt#soraswap.universal".into(),
             history_head: 7,
             scanned: 2,
-            total: 2,
             items: vec![
                 SwapFillRollupItem {
                     record_id: 7,
@@ -47305,6 +47327,96 @@ mod tx_projection_display_tests {
         assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
         assert_eq!(json["items"][0]["recordId"].as_u64(), Some(6));
         assert_eq!(json["items"][0]["executionHash"].as_str(), Some("hash-buy"));
+        assert!(json.get("total").is_none());
+        assert_eq!(json["count_mode"].as_str(), Some("bounded"));
+        assert_eq!(json["has_more"].as_bool(), Some(false));
+        let first = swap_fill_rollup_to_json_value(&rollup, Some(1), 0);
+        assert_eq!(first["has_more"].as_bool(), Some(true));
+        let past_end = swap_fill_rollup_to_json_value(&rollup, Some(1), u64::MAX);
+        assert_eq!(past_end["items"].as_array().map(Vec::len), Some(0));
+        assert_eq!(past_end["has_more"].as_bool(), Some(false));
+    }
+    routing_test! { sync swap_rollup_count_mode_defaults_to_bounded
+        for endpoint in [ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS, ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES] {
+            for mode in [None, Some("bounded")] {
+                validate_swap_rollup_count_mode(mode, endpoint).unwrap();
+            }
+        }
+    }
+    routing_test! { async swap_rollup_routes_reject_unsupported_counts_before_history_reads
+        let state = Arc::new(CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        ));
+        for (mode, expected_code) in [
+            ("exact", "unsupported_count_mode"),
+            ("unknown", "invalid_count_mode"),
+            ("", "invalid_count_mode"),
+            (" bounded ", "invalid_count_mode"),
+        ] {
+            // The deliberately invalid authority must not reach contract resolution.
+            let fills = handle_v1_contracts_rollups_swaps_fills_get(
+                Arc::clone(&state), DataspaceReadVisibility::default(),
+                crate::NoritoQuery(ContractRollupSwapsFillsParams {
+                    authority: "invalid".into(), count_mode: Some(mode.into()),
+                    ..Default::default()
+                }), MaybeTelemetry::disabled(),
+            ).await.map(IntoResponse::into_response);
+            let candles = handle_v1_contracts_rollups_swaps_candles_get(
+                Arc::clone(&state), DataspaceReadVisibility::default(),
+                crate::NoritoQuery(ContractRollupSwapsCandlesParams {
+                    authority: "invalid".into(), count_mode: Some(mode.into()),
+                    ..Default::default()
+                }), MaybeTelemetry::disabled(),
+            ).await.map(IntoResponse::into_response);
+            for result in [fills, candles] {
+                let error = result.expect_err("unsupported count must be rejected");
+                let Error::AppQueryValidation { code, .. } = &error else {
+                    panic!("unexpected error: {error:?}");
+                };
+                assert_eq!(*code, expected_code);
+                assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+            }
+        }
+    }
+    routing_test! { sync swap_candle_rollup_uses_chronological_prices_and_bounded_pages
+        let mut fills = sample_swap_fill_rollup();
+        let mut params = ContractRollupSwapsCandlesParams {
+            limit: Some(1), bucket_ms: Some(60_000), ..Default::default()
+        };
+        let json = swap_candle_rollup_to_json_value(&fills, &params);
+        let candle = &json["items"][0];
+        assert_eq!(candle["open"].as_f64(), Some(0.5));
+        assert_eq!(candle["close"].as_f64(), Some(1.5));
+        assert_eq!(candle["low"].as_f64(), Some(0.5));
+        assert_eq!(candle["high"].as_f64(), Some(1.5));
+        assert_eq!(candle["buyCount"].as_u64(), Some(1));
+        assert_eq!(candle["sellCount"].as_u64(), Some(1));
+        assert_eq!(candle["baseVolume"].as_f64(), Some(110.0));
+        assert_eq!(candle["quoteVolume"].as_f64(), Some(140.0));
+        assert_eq!(json["has_more"].as_bool(), Some(false));
+        assert_eq!(json["count_mode"].as_str(), Some("bounded"));
+        assert!(json.get("total").is_none());
+
+        fills.items[0].timestamp_ms = Some(62_000);
+        let newest = swap_candle_rollup_to_json_value(&fills, &params);
+        assert_eq!(newest["items"][0]["bucketStartMs"].as_u64(), Some(60_000));
+        assert_eq!(newest["has_more"].as_bool(), Some(true));
+        params.offset = 1;
+        let oldest = swap_candle_rollup_to_json_value(&fills, &params);
+        assert_eq!(oldest["items"][0]["bucketStartMs"].as_u64(), Some(0));
+        assert_eq!(oldest["has_more"].as_bool(), Some(false));
+        params.offset = u64::MAX;
+        let past_end = swap_candle_rollup_to_json_value(&fills, &params);
+        assert_eq!(past_end["items"].as_array().map(Vec::len), Some(0));
+        assert_eq!(past_end["has_more"].as_bool(), Some(false));
+        fills.items.clear();
+        params.offset = 0;
+        let empty = swap_candle_rollup_to_json_value(&fills, &params);
+        assert_eq!(empty["items"].as_array().map(Vec::len), Some(0));
+        assert_eq!(empty["has_more"].as_bool(), Some(false));
+        assert!(empty.get("total").is_none());
     }
     routing_test! { sync empty_visible_swap_scope_omits_contract_and_asset_projection
         let mut rollup = sample_swap_fill_rollup();
@@ -47314,7 +47426,6 @@ mod tx_projection_display_tests {
         rollup.quote_asset_id.clear();
         rollup.history_head = 0;
         rollup.scanned = 0;
-        rollup.total = 0;
         rollup.items.clear();
         let json = swap_fill_rollup_to_json_value(&rollup, Some(10), 0);
         assert!(json.get("contract_address").is_none());
@@ -47322,7 +47433,9 @@ mod tx_projection_display_tests {
         assert!(json.get("base_asset_id").is_none());
         assert!(json.get("quote_asset_id").is_none());
         assert_eq!(json["history_head"].as_u64(), Some(0));
-        assert_eq!(json["total"].as_u64(), Some(0));
+        assert!(json.get("total").is_none());
+        assert_eq!(json["count_mode"].as_str(), Some("bounded"));
+        assert_eq!(json["has_more"].as_bool(), Some(false));
     }
     routing_test! { sync swap_fill_stitching_omits_records_without_a_visible_committed_event
         use iroha_data_model::smart_contract::{entrypoint::*, event::*};

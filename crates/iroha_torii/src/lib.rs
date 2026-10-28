@@ -1,14 +1,5 @@
 //! The web server of Iroha. `Torii` translates to gateway.
-// The shipping API's unit-test harness has over 2,048 descriptors. Rustc 1.93
-// generates their reference array at a dummy span, beyond Clippy's 16 KiB
-// threshold; application buffers are not the source of this diagnostic.
-#![cfg_attr(
-    all(test, feature = "node-api"),
-    expect(
-        clippy::large_stack_arrays,
-        reason = "rustc generates a test descriptor reference array larger than 16 KiB for the node API test harness"
-    )
-)]
+#![cfg_attr(test, deny(clippy::large_stack_arrays))]
 #![allow(unexpected_cfgs)]
 //!
 //! Crate features:

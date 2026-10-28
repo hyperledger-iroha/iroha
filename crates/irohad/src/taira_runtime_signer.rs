@@ -412,9 +412,41 @@ fn verify_consumed_key_file(
     Ok(())
 }
 
+/// Initial link-count admission for the two concrete private-record carriers.
+enum PrivateRecordLinkPolicy {
+    /// Runtime signer records retain their one-shot launch pathname until consumed.
+    Named,
+    /// Lifecycle config may be unlinked before the supervisor writes private bytes.
+    LifecycleConfig,
+}
+
+/// Consume a one-shot signer or credential record with exactly one initial pathname.
 pub(crate) fn load_private_record_from_file<T>(
+    file: File,
+    record_bytes: u64,
+    parse: impl FnOnce(&[u8]) -> Result<T, TairaRuntimeSignerErrorV1>,
+) -> Result<T, TairaRuntimeSignerErrorV1> {
+    load_private_record_with_link_policy(file, record_bytes, PrivateRecordLinkPolicy::Named, parse)
+}
+
+/// Consume a lifecycle configuration carried by a named or already-unlinked private file.
+pub(crate) fn load_private_config_record_from_file<T>(
+    file: File,
+    record_bytes: u64,
+    parse: impl FnOnce(&[u8]) -> Result<T, TairaRuntimeSignerErrorV1>,
+) -> Result<T, TairaRuntimeSignerErrorV1> {
+    load_private_record_with_link_policy(
+        file,
+        record_bytes,
+        PrivateRecordLinkPolicy::LifecycleConfig,
+        parse,
+    )
+}
+
+fn load_private_record_with_link_policy<T>(
     mut file: File,
     record_bytes: u64,
+    link_policy: PrivateRecordLinkPolicy,
     parse: impl FnOnce(&[u8]) -> Result<T, TairaRuntimeSignerErrorV1>,
 ) -> Result<T, TairaRuntimeSignerErrorV1> {
     let before_metadata = file
@@ -425,7 +457,9 @@ pub(crate) fn load_private_record_from_file<T>(
     if !before_metadata.is_file()
         || before.owner != effective_uid
         || before.mode & 0o7777 != 0o600
-        || before.links != 1
+        || !(before.links == 1
+            || (before.links == 0
+                && matches!(link_policy, PrivateRecordLinkPolicy::LifecycleConfig)))
         || before.length != record_bytes
     {
         return Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor);
@@ -1212,6 +1246,24 @@ mod tests {
             load_key_pair_from_file(open_consumable_key_file(&path)),
             Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
         ));
+    }
+
+    #[test]
+    fn descriptor_loader_rejects_unlinked_runtime_signer_record() {
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519).expect("Ed25519 key pair");
+        let (_directory, path) = key_file(&key_pair);
+        let file = open_consumable_key_file(&path);
+        let retained = file.try_clone().expect("retained private record");
+        fs::remove_file(path).expect("unlink before loading");
+        assert!(matches!(
+            load_key_pair_from_file(file),
+            Err(TairaRuntimeSignerErrorV1::UntrustedDescriptor)
+        ));
+        assert_eq!(
+            retained.metadata().expect("unconsumed record").len(),
+            TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1
+        );
     }
 
     /// A consumable owner-only launch copy of `key_pair`'s record beside its retained source.

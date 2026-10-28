@@ -830,20 +830,7 @@ Root {
         staking: NexusStaking {
             public_validator_mode: StakeElected,
             restricted_validator_mode: AdminManaged,
-            min_validator_stake: Quantity(
-                Numeric {
-                    mantissa: 1,
-                    scale: 0,
-                },
-            ),
             max_validators: 32,
-            max_stake_shares_per_validator: 256,
-            max_pending_unbonds_per_share: 8,
-            unbonding_delay: 0ns,
-            max_slash_bps: 10000,
-            stake_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         },
         fees: RootFeePolicy {
             fee_asset_id: AssetDefinitionId {
@@ -914,9 +901,6 @@ Root {
             replay_retention_slots: 128,
         },
         atomic_private_settlement: NexusAtomicPrivateSettlement {
-            enabled: false,
-            activation_height: None,
-            minimum_activation_notice_blocks: 7200,
             proof_profile_version: 1,
             max_participants: 255,
             max_expiry_blocks: 7200,

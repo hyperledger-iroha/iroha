@@ -25201,6 +25201,162 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/iroha_torii/src/explorer_history.rs",
+        "reason": "A node-local cache retains at most 16,384 fixed-size Explorer block-summary projections, keyed by exact reader visibility and immutable source identity. Eviction drops the lowest heights; it does not change transaction admission, committed contents or block validity. This is read-service retention, not an execution-path cap.",
+        "symbols": [
+          "EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY"
+        ],
+        "exprs": {
+          "EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY": "16_384"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/kagemusha_enrollment/observation.rs",
+        "reason": "The enrollment observer admits one owner-private local DER TLS trust-root file before constructing its HTTP client. The 16 KiB file-shape guard bounds this operator-selected credential read; exact DER parsing, file custody, normal TLS verification and hostname checks remain mandatory. It does not set a transaction or block validity limit.",
+        "symbols": [
+          "MAX_TLS_ROOT"
+        ],
+        "exprs": {
+          "MAX_TLS_ROOT": "16 << 10"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/multisig_approval_landings.rs",
+        "reason": "Read-only node-local indexing of when committed multisig approvals landed: a foreground read folds at most 16 recent blocks and retains at most 200,000 proposal/signer first-landings. Longer catch-up is background work; unindexed approvals remain untimed, and the index stops growing at its retention ceiling. These limits affect optional HTTP timing metadata, never the executed approval or committed validity.",
+        "symbols": [
+          "REQUEST_TAIL_BLOCKS",
+          "MAX_LANDINGS"
+        ],
+        "exprs": {
+          "REQUEST_TAIL_BLOCKS": "16",
+          "MAX_LANDINGS": "200_000"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/routing/asset_movements.rs",
+        "reason": "Read-only node-local asset-movement indexing and paging: a request folds at most 64 tail blocks, background progress publishes after 64 folded blocks, retention is at most 500,000 rows and a page examines at most 20,000 rows before ending at a block boundary. A lagging index returns retryable indexing status; evicted history is explicitly not retained. The limits bound this HTTP projection and do not decide validity or change movements executed by the chain.",
+        "symbols": [
+          "REQUEST_TAIL_BLOCKS",
+          "PUBLISH_EVERY_BLOCKS",
+          "MAX_ROWS",
+          "PAGE_EXAMINED_ROWS"
+        ],
+        "exprs": {
+          "REQUEST_TAIL_BLOCKS": "64",
+          "PUBLISH_EVERY_BLOCKS": "64",
+          "MAX_ROWS": "500_000",
+          "PAGE_EXAMINED_ROWS": "20_000"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/routing/collection_sources/account_aliases.rs",
+        "reason": "Conservative byte accounting for the optional account-alias collection join. ALIAS_TRANSIENT_BYTES reserves room under the original admitted scratch owner for temporary canonical literals, scope and permission selectors; MAX_SCOPE_BYTES bounds one scope string from two already bounded Names and its separator. Scratch exhaustion refuses the read, while alias visibility and SNS decoding keep their original authority. The canonical Name ceiling is separately listed; these derived local projection allowances are not independent transaction or block limits.",
+        "symbols": [
+          "ALIAS_TRANSIENT_BYTES",
+          "MAX_SCOPE_BYTES"
+        ],
+        "exprs": {
+          "ALIAS_TRANSIENT_BYTES": "16 * iroha_model_base::name::MAX_NAME_BYTES + 64",
+          "MAX_SCOPE_BYTES": "2 * iroha_model_base::name::MAX_NAME_BYTES + 1"
+        }
+      },
+      {
+        "files": [
+          {
+            "exprs": {
+              "CAPACITY": "128"
+            },
+            "path": "crates/iroha_data_model/src/sumeragi/epoch.rs",
+            "symbols": [
+              "CAPACITY"
+            ]
+          }
+        ],
+        "reason": "Process-local memo of successfully verified BLS proofs of possession. CAPACITY bounds a fixed ring of exact 48-byte public-key and 96-byte proof pairs. Only successful pairings enter it; a miss or eviction runs the same original pairing verification again. Committee size, key ordering, key/proof widths and invalid-proof rejection remain mandatory. This cache capacity does not change committee, transaction, proof or block validity."
+      },
+      {
+        "files": [
+          {
+            "exprs": {
+              "MAX_LEAD": "16",
+              "RECENT": "64",
+              "MAX_ADVANCE": "1_024",
+              "MAX_COVERAGE_AGE": "Duration::from_secs(30 * 60)",
+              "SCRUB_CHUNK": "128"
+            },
+            "path": "crates/iroha_core/src/sumeragi/finality/retained.rs",
+            "symbols": [
+              "MAX_LEAD",
+              "RECENT",
+              "MAX_ADVANCE",
+              "MAX_COVERAGE_AGE",
+              "SCRUB_CHUNK"
+            ]
+          }
+        ],
+        "reason": "Node-local retained current-attestation producer and reader policy: MAX_LEAD limits the distance between a request view and a previously authenticated durable tip; RECENT retains recently verified height/hash pairs; MAX_ADVANCE revokes an overlarge incremental gap so the producer must mint again by the complete native walk; SCRUB_CHUNK paces the complete retained-frame reread; MAX_COVERAGE_AGE expires that retained authority unless coverage is refreshed. A missing, lagging, expired, revoked or poisoned authority refuses the local attestation request; these constants never change native quorum, canonical execution or transaction/block validity. This exclusion records local serving/work/freshness policy only and does not certify memory custody or full-history reader qualification."
+      },
+      {
+        "files": [
+          {
+            "exprs": {
+              "APP_STAGE_LIMIT": "Duration::from_secs(90)"
+            },
+            "path": "crates/iroha_core/src/sumeragi/test_chain/kagemusha_setup/cohort.rs",
+            "symbols": [
+              "APP_STAGE_LIMIT"
+            ]
+          }
+        ],
+        "reason": "Deadline asserted by the test-only KAGEMUSHA enrollment-cohort setup and activation harness. The sumeragi::test_chain module is compiled only under cfg(test) or iroha-core-tests; APP_STAGE_LIMIT compares local elapsed time for the 100-owner rehearsal with an iOS stage deadline. It is not consulted by node admission, execution or consensus."
+      },
+      {
+        "reason": "KAGEMUSHA wallet-local idle Archive scheduling: IDLE_AGE_MILLIS is the 24-hour wall-age alternative for attempting maintenance, and MIN_RECHECK_MILLIS/MAX_RECHECK_MILLIS bound relative housekeeping wake delays. age() rechecks a fresh Native wall observation using checked subtraction; missing, unavailable or regressed observations do not become due. wake_hint() never converts elapsed sleeps into an age verdict. These wall observations and delays never enter proofs, Requests, quotas, leases or accepted-time floors, whose authenticated monetary time authority is separate. These are wallet maintenance scheduling controls, not transaction, block, transport or generic proof admission limits.",
+        "files": [
+          {
+            "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/deferred_archive/clock.rs",
+            "symbols": [
+              "IDLE_AGE_MILLIS",
+              "MIN_RECHECK_MILLIS",
+              "MAX_RECHECK_MILLIS"
+            ],
+            "exprs": {
+              "IDLE_AGE_MILLIS": "86_400_000",
+              "MIN_RECHECK_MILLIS": "60_000",
+              "MAX_RECHECK_MILLIS": "15 * MIN_RECHECK_MILLIS"
+            }
+          }
+        ]
+      },
+      {
+        "reason": "KAGEMUSHA wallet-local exchange-capability occupancy: begin_exchange refuses with ExchangeErrorV1::Capacity at 64 live or ending process-local exchanges. Ending a lease fences new calls but accepted children retain its occupancy until the last child finishes; the Native Archive gate separately refuses while exchanges remain open. This is a real bounded local wallet resource, not a consensus or generic transaction, block, transport or proof carrier ceiling. Capabilities are not serialized, cannot be constructed from caller DATA and grant neither monetary authority nor Archive dispatch permission; proof, operation and custody checks remain separate.",
+        "files": [
+          {
+            "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/scheduling/exchanges.rs",
+            "symbols": [
+              "MAX_EXCHANGES"
+            ],
+            "exprs": {
+              "MAX_EXCHANGES": "64"
+            }
+          }
+        ]
+      },
+      {
+        "reason": "KAGEMUSHA wallet-local fold fairness: after two payment-priority cancellations without durable fold publication, a payment that can wait without holding the wallet owner lets the running sub-proof finish and settle its publication before taking priority. Each cancelled sub-proof counts once and durable progress resets the count; owner-holding payments cannot wait for publication because it needs that owner. This controls cooperative scheduling and cancellation of local proving work, not proof acceptance or transaction, block, transport or generic proof sizes, and does not grant custody or monetary authority.",
+        "files": [
+          {
+            "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/scheduling.rs",
+            "symbols": [
+              "FOLD_FAIRNESS_CANCELLATIONS"
+            ],
+            "exprs": {
+              "FOLD_FAIRNESS_CANCELLATIONS": "2"
+            }
+          }
+        ]
       }
     ],
     "literals": {
@@ -25417,7 +25573,7 @@
             {
               "path": "crates/iroha_torii/src/multisig_execution_evidence.rs",
               "sites": {
-                "height < 2": 1
+                "height.get() >= 2": 1
               }
             },
             {
@@ -28569,6 +28725,196 @@
               "path": "crates/iroha_core/src/state/parameter_publication.rs",
               "sites": {
                 "(6..=10).contains(&count)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Test-only checks outside inline test modules, which the source census still sees: SignatureVerification has a bounded representation and the Explorer walk fixture spends its read budget at synthetic height 98 after returning heights 100 and 99. Both sites are cfg(test); they establish regression behavior and are not production resource-policy ceilings.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/mcp/transaction_artifacts.rs",
+              "sites": {
+                "std::mem::size_of::<SignatureVerification>() <= 24": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/routing.rs",
+              "sites": {
+                "height.get() > 98": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Finite retries of a node-local background history-index fold while the original history pool is transiently busy. At 50 retries the pass stops without a validity verdict; foreground readers either see explicitly untimed approval metadata or retryable indexing status. No transaction or block is rejected by these retry counts.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/multisig_approval_landings.rs",
+              "sites": {
+                "busy_retries < 50": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/routing/asset_movements.rs",
+              "sites": {
+                "busy_retries < 50": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The resource-names proof partitions its original request budget into eight units and allocates two units to journal bytes, clamped to the separately pinned native-finality journal ceiling. This is local response-accounting arithmetic; exhaustion returns the original capacity refusal and does not relax proof, authentication or consensus validity.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/resource_names_state.rs",
+              "sites": {
+                "(unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The asset-movement indexing response converts a backlog of blocks into a Retry-After recommendation: one second per rounded-up 100-block gap, clamped to 1 through 30 seconds. Both scanner expressions are pinned, including the nested clamp. This HTTP retry hint is not a limit on indexed history, admitted payloads or verification work.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/routing/asset_movements.rs",
+              "sites": {
+                "u64::try_from(gap.div_ceil(100)) .unwrap_or(u64::MAX) .clamp(1, 30)": 1,
+                ".unwrap_or(u64::MAX) .clamp(1, 30)": 1
+              }
+            }
+          ]
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/action_frame_cursor.rs",
+              "sites": {
+                "self.take(4, budget)": 1,
+                "self.take(8, budget)": 1
+              }
+            }
+          ],
+          "reason": "Exact little-endian scalar widths in the Action-frame cursor: u32 reads four bytes and u64 reads eight bytes. The borrowed cursor checks the original slice extent and charges the same work budget before advancing. These reads select fixed scalar representations, not transaction, frame, proof or work ceilings."
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
+              "sites": {
+                "text.len() > 255": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+              "sites": {
+                "entrypoint.len() > 255": 1
+              }
+            }
+          ],
+          "reason": "Closed Action-frame scanner and bounded trigger-source producer field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1; the producer refuses unsupported sources without replacing invocation/schema authentication. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
+              "sites": {
+                "(0x20..=0x7e).contains(byte)": 1,
+                "(0x21..=0x7e).contains(&byte)": 1
+              }
+            }
+          ],
+          "reason": "ASCII code-unit ranges of the deliberately closed Action-frame scanner subset: visible ASCII for a Name and unescaped printable ASCII inside a JSON string. They reject unsupported character spellings while preserving the original frame; they are lexical ranges, not byte-count, allocation or work limits. The scanner remains incomplete and is not a lifecycle validation authority."
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
+              "sites": {
+                "bytes.len() < 2": 1
+              }
+            }
+          ],
+          "reason": "Minimum lexical shape of an unescaped JSON string in the closed Action-frame scanner: at least two bytes are required for the opening and closing quotes before indexing their positions. This minimum refuses malformed short values and supplies no size or work ceiling."
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
+              "sites": {
+                "text.len() > 20": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+              "sites": {
+                "raw.len() > 20": 1
+              }
+            }
+          ],
+          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner and producer additionally reject non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/compact.rs",
+              "sites": {
+                "proof.height() >= 2": 2,
+                "tip.height() >= 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/deserialize_core.rs",
+              "sites": {
+                "committed_height >= 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
+              "sites": {
+                "view.native_world_snapshot_height_v1()? < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/finality/retained.rs",
+              "sites": {
+                "tip.height() <= 2": 1
+              }
+            }
+          ],
+          "reason": "Native history boundaries at genesis and its first certified successors: compact Commit certificates and checkpoints require a successor of H1; State restoration only walks a predecessor when committed height is at least two; World-name snapshots require a certified successor; and retained attestation optimization leaves H1/H2 on their complete-proof path. These height predicates choose the required existing history/authority shape and are not byte, count or work ceilings. All certificate, journal, restoration and full-proof checks remain required."
+        },
+        {
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/compact.rs",
+              "sites": {
+                "tip.height().min(3)": 1,
+                "tip.height().saturating_sub(2).max(1)": 1
+              }
+            }
+          ],
+          "reason": "Exact native compact-finality restart witness geometry: checkpoint_from_proofs requires the last three full proofs, or all available heights below three, and starts at the second predecessor clamped to signed genesis. It then verifies continuity, the original genesis, exact Commit certificates, canonical execution and successor edges. These literals encode the existing checkpoint structure, not a tunable local window or permission to enlarge generic proof, transaction or block resource limits."
+        },
+        {
+          "reason": "KAGEMUSHA software-key simulator fixture arithmetic in next_capsule_variant: the wrapping tag plus two is clamped to a nonzero byte before constructing a test ArchiveSent credited field. This module is compiled only under cfg(test) or the explicit non-shipping kagemusha-simulator feature. The comparison constructs a fixture scalar; it is not a limit applied to received proof, transaction, block or wallet input.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_wallet_advance_v1/test_support.rs",
+              "sites": {
+                "tag.wrapping_add(2).max(1)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "KAGEMUSHA wallet-local Archive dispatch threshold: at least 16 queued items is one maintenance eligibility alternative, alongside charging or a fresh positive Native age observation. It is a minimum batching threshold, not a queue capacity or accepted receipt ceiling: positive smaller counts are eligible through the other alternatives. The same reservation still checks owner and turn identity, closed/busy state, payment occupancy, absence of open exchanges, zero fold backlog and the exact nonzero request/source identities; none of those checks is bypassed.",
+          "files": [
+            {
+              "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/scheduling/archive_admission.rs",
+              "sites": {
+                "count >= 16": 1
               }
             }
           ]

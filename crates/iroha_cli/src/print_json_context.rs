@@ -19,7 +19,6 @@ struct PrintJsonContext<W, E> {
     json_lines: bool,
     i18n: Localizer,
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
     fn config(&self) -> &Config {
         &self.config

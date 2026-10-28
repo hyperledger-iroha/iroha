@@ -82,8 +82,8 @@ pub mod runtime_provider_broker {
 }
 /// Fixed layout under a node's `data_dir`.
 ///
-/// When `data_dir` is set, every state path listed in [`data_dir::STATE_PATHS`] that the
-/// configuration does not set explicitly defaults to `<data_dir>/state/<relative>`, and every
+/// When `data_dir` is set, unset paths in [`data_dir::STATE_PATHS`] and enabled services in
+/// [`data_dir::ENABLED_SERVICE_STATE_PATHS`] default to `<data_dir>/state/<relative>`, and every
 /// secret file defaults to `<data_dir>/secrets/<name>`. Explicit per-path values still win.
 pub mod data_dir {
     /// Path of the loader-owned configuration source that carries the resolved absolute
@@ -96,12 +96,6 @@ pub mod data_dir {
     /// Subdirectory of `data_dir` holding owner-only secret files.
     pub const SECRETS_DIR: &str = "secrets";
     /// Derived state paths: configuration key and path relative to [`STATE_DIR`].
-    ///
-    /// TODO: the `SoraFS` provider sub-states (`sorafs.storage.pop_credentials.*`,
-    /// moderation, reputation, reserve-transparency, hedging-billing and evidence-viewer
-    /// checkpoints) and `torii.privacy_bootle_lantern_issuer.state_dir` still default to
-    /// `./storage/...`; they are only used when the embedded `SoraFS` provider or the
-    /// Bootle/Lantern issuer is enabled, which no compiled profile does.
     pub const STATE_PATHS: &[(&[&str], &str)] = &[
         (&["kura", "store_dir"], "kura"),
         (&["snapshot", "store_dir"], "snapshot"),
@@ -129,6 +123,54 @@ pub mod data_dir {
         ),
         (&["sorafs", "storage", "data_dir"], "sorafs"),
         (&["sorafs", "por", "state_dir"], "sorafs/por"),
+    ];
+    /// Opt-in service state paths, completed only when the sibling `enabled` key is `true`.
+    ///
+    /// These services are disabled by default. Leaving their paths unset while disabled
+    /// preserves validation that requires inactive service policy to remain at its defaults.
+    pub const ENABLED_SERVICE_STATE_PATHS: &[(&[&str], &str)] = &[
+        (
+            &["sorafs", "storage", "pop_credentials", "issuer_state_dir"],
+            "sorafs/pop/issuer",
+        ),
+        (
+            &["sorafs", "storage", "pop_credentials", "wallet_state_dir"],
+            "sorafs/pop/wallet",
+        ),
+        (
+            &[
+                "sorafs",
+                "storage",
+                "moderation_orchestrator",
+                "checkpoint_path",
+            ],
+            "sorafs/moderation/orchestrator.norito",
+        ),
+        (
+            &["sorafs", "storage", "evidence_viewer", "checkpoint_path"],
+            "sorafs/moderation/evidence-viewer.norito",
+        ),
+        (
+            &["sorafs", "storage", "reputation_runtime", "state_dir"],
+            "sorafs/reputation",
+        ),
+        (
+            &[
+                "sorafs",
+                "storage",
+                "reserve_transparency_runtime",
+                "state_dir",
+            ],
+            "sorafs/reserve-transparency",
+        ),
+        (
+            &["sorafs", "storage", "hedging_billing_runtime", "state_dir"],
+            "sorafs/hedging-billing",
+        ),
+        (
+            &["torii", "privacy_bootle_lantern_issuer", "state_dir"],
+            "privacy_bootle_lantern_issuer",
+        ),
     ];
     /// Validator BLS private key (`private_key_file`).
     pub const VALIDATOR_KEY: &str = "validator.key";

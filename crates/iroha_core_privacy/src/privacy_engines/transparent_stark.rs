@@ -1086,15 +1086,95 @@ fn goldilocks_evaluate_coset_with_inner_parallelism_v1<const PARALLEL_INNER: boo
     {
         return Err(TransparentStarkErrorV1::NonCanonicalField);
     }
+    // Reject the same malformed roots as the dense FFT before allocating or
+    // populating witness-bearing output. Coefficient validation retains precedence.
+    if root.0 >= GOLDILOCKS_MODULUS_V1
+        || root.pow(size as u128) != GoldilocksFieldV1::ONE
+        || (size > 1 && root.pow((size / 2) as u128) == GoldilocksFieldV1::ONE)
+    {
+        return Err(TransparentStarkErrorV1::InvalidDomain);
+    }
     let mut evaluations = vec![GoldilocksFieldV1::ZERO; size];
     let mut shift_power = GoldilocksFieldV1::ONE;
     for (target, coefficient) in evaluations.iter_mut().zip(coefficients.iter().copied()) {
         *target = coefficient.mul(shift_power);
         shift_power = shift_power.mul(shift);
     }
-    goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(&mut evaluations, root)?;
+    if coefficients.len() < size {
+        // Only the public coefficient extent selects work; neither coefficient
+        // values nor masked trace contents are inspected.
+        goldilocks_fft_zero_padded_v1::<PARALLEL_INNER>(&mut evaluations, root, coefficients.len());
+    } else {
+        goldilocks_fft_with_inner_parallelism_v1::<PARALLEL_INNER>(&mut evaluations, root)?;
+    }
     Ok(evaluations)
 }
+
+/// Transform a validated coefficient prefix followed by caller-initialized zeros.
+/// DIF preserves that public prefix bound in both children, allowing the zero
+/// suffix butterflies to be omitted. One final in-place permutation restores
+/// natural evaluation order; no field allocation or secret-dependent work is added.
+fn goldilocks_fft_zero_padded_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    prefix: usize,
+) {
+    goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(values, root, prefix);
+    let size = values.len();
+    let mut reversed = 0_usize;
+    for index in 1..size {
+        let mut bit = size >> 1;
+        while reversed & bit != 0 {
+            reversed ^= bit;
+            bit >>= 1;
+        }
+        reversed ^= bit;
+        if index < reversed {
+            values.swap(index, reversed);
+        }
+    }
+}
+
+/// Infallible DIF over disjoint slices after domain and coefficient validation.
+fn goldilocks_fft_prefix_dif_v1<const PARALLEL_INNER: bool>(
+    values: &mut [GoldilocksFieldV1],
+    root: GoldilocksFieldV1,
+    prefix: usize,
+) {
+    if values.len() == 1 || prefix == 0 {
+        return;
+    }
+    let half = values.len() / 2;
+    let pairs = prefix.min(half);
+    let (left, right) = values.split_at_mut(half);
+    let mut twiddle = GoldilocksFieldV1::ONE;
+    for (even, odd) in left[..pairs].iter_mut().zip(&mut right[..pairs]) {
+        let original_even = *even;
+        let original_odd = *odd;
+        *even = original_even.add(original_odd);
+        *odd = original_even.sub(original_odd).mul(twiddle);
+        twiddle = twiddle.mul(root);
+    }
+    let child_root = root.mul(root);
+    // Split by the public remaining output extent, including short prefixes:
+    // those prefixes still expand to the entire output domain. Coarse recursive
+    // tasks avoid a second nested task set for individual butterfly windows.
+    if PARALLEL_INNER && half >= FFT_PARALLEL_MIN_VALUES_V1 / 2 && rayon::current_num_threads() > 1
+    {
+        rayon::join(
+            || goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(left, child_root, pairs),
+            || goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(right, child_root, pairs),
+        );
+    } else {
+        goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(left, child_root, pairs);
+        goldilocks_fft_prefix_dif_v1::<PARALLEL_INNER>(right, child_root, pairs);
+    }
+}
+
+#[cfg(test)]
+#[path = "transparent_stark_prefix_fft_tests.rs"]
+mod prefix_fft_tests;
+
 /// In-place radix-two FFT over the quartic Goldilocks extension.
 ///
 /// The evaluation domain remains in the base field, so roots and twiddles are

@@ -725,6 +725,159 @@ fn flat_data_dir_derives_paths_and_keeps_explicit_overrides() {
             .to_string(),
         TRANSPORT_PUBLIC
     );
+
+    // Enabled issuance can use the derived absolute path without losing its public bindings.
+    let issuer = dir.write(
+        "issuer.toml",
+        &format!(
+            "extends = \"flat.toml\"\n\
+             [torii.privacy_bootle_lantern_issuer]\n\
+             enabled = true\nmax_inflight = 2\n\
+             issuer_id_hex = \"{}\"\npolicy_id_hex = \"{}\"\n\
+             runtime_provider_registry_handle = \"runtime://privacy/bootle-lantern/primary\"\n\
+             runtime_provider_registry_revision = 7\n\
+             runtime_provider_registry_policy_digest_hex = \"{}\"\n",
+            "41".repeat(32),
+            "42".repeat(32),
+            "43".repeat(32),
+        ),
+    );
+    let (config, _) = parse(&issuer);
+    let issuer = config.torii.privacy_bootle_lantern_issuer.unwrap();
+    assert_eq!(
+        issuer.state_dir,
+        state.join("privacy_bootle_lantern_issuer")
+    );
+    assert_eq!(issuer.max_inflight.get(), 2);
+    assert_eq!(issuer.runtime_provider_registry_revision, 7);
+}
+
+#[test]
+fn data_dir_completes_enabled_service_paths() {
+    let dir = NodeDir::new("enabled_service_paths");
+    let path = dir.write(
+        "node.toml",
+        "data_dir = \"data\"\n\
+         [sorafs.storage.pop_credentials]\nenabled = true\n\
+         [sorafs.storage.moderation_orchestrator]\nenabled = true\n\
+         [sorafs.storage.evidence_viewer]\nenabled = true\n\
+         [sorafs.storage.reputation_runtime]\nenabled = true\n\
+         [sorafs.storage.reserve_transparency_runtime]\nenabled = true\n\
+         [sorafs.storage.hedging_billing_runtime]\nenabled = true\n\
+         [torii.privacy_bootle_lantern_issuer]\nenabled = true\n",
+    );
+    let reader = open(&path).unwrap();
+    for (key, relative) in [
+        (
+            "sorafs.storage.pop_credentials.issuer_state_dir",
+            "sorafs/pop/issuer",
+        ),
+        (
+            "sorafs.storage.pop_credentials.wallet_state_dir",
+            "sorafs/pop/wallet",
+        ),
+        (
+            "sorafs.storage.moderation_orchestrator.checkpoint_path",
+            "sorafs/moderation/orchestrator.norito",
+        ),
+        (
+            "sorafs.storage.evidence_viewer.checkpoint_path",
+            "sorafs/moderation/evidence-viewer.norito",
+        ),
+        (
+            "sorafs.storage.reputation_runtime.state_dir",
+            "sorafs/reputation",
+        ),
+        (
+            "sorafs.storage.reserve_transparency_runtime.state_dir",
+            "sorafs/reserve-transparency",
+        ),
+        (
+            "sorafs.storage.hedging_billing_runtime.state_dir",
+            "sorafs/hedging-billing",
+        ),
+        (
+            "torii.privacy_bootle_lantern_issuer.state_dir",
+            "privacy_bootle_lantern_issuer",
+        ),
+    ] {
+        assert_eq!(
+            completed_value(&reader, &key.split('.').collect::<Vec<_>>()),
+            dir.data_dir()
+                .join("state")
+                .join(relative)
+                .to_string_lossy(),
+            "{key}",
+        );
+    }
+    discard(reader);
+}
+
+#[test]
+fn data_dir_does_not_complete_inactive_service_paths() {
+    let dir = NodeDir::new("inactive_service_paths");
+    for (key, _) in layout::ENABLED_SERVICE_STATE_PATHS {
+        let section = key[..key.len() - 1].join(".");
+        for contents in [
+            "data_dir = \"data\"".to_owned(),
+            format!("data_dir = \"data\"\n[{section}]\nenabled = false"),
+            // Without data_dir, enabled services still need explicit absolute state paths.
+            format!("[{section}]\nenabled = true"),
+        ] {
+            let path = dir.write("node.toml", &contents);
+            let reader = open(&path).unwrap();
+            assert!(!reader.reader().contains_toml_parameter(*key), "{key:?}");
+            discard(reader);
+        }
+    }
+}
+
+#[test]
+fn data_dir_service_paths_respect_layered_enablement_and_explicit_paths() {
+    let dir = NodeDir::new("layered_service_paths");
+    for (key, relative) in layout::ENABLED_SERVICE_STATE_PATHS {
+        let (leaf, parent) = key.split_last().unwrap();
+        let section = parent.join(".");
+        for (base_enabled, override_enabled, expected_enabled) in [
+            (false, Some(true), true),
+            (true, Some(false), false),
+            (true, None, true),
+        ] {
+            dir.write(
+                "base.toml",
+                &format!("[{section}]\nenabled = {base_enabled}"),
+            );
+            let mut node = "extends = \"base.toml\"\ndata_dir = \"data\"\n".to_owned();
+            if let Some(enabled) = override_enabled {
+                node.push_str(&format!("[{section}]\nenabled = {enabled}\n"));
+            }
+            let path = dir.write("node.toml", &node);
+            let reader = open(&path).unwrap();
+            assert_eq!(
+                reader.reader().contains_toml_parameter(*key),
+                expected_enabled
+            );
+            if expected_enabled {
+                assert_eq!(
+                    completed_value(&reader, key),
+                    dir.data_dir()
+                        .join("state")
+                        .join(relative)
+                        .to_string_lossy(),
+                );
+            }
+            discard(reader);
+
+            // An explicit path in an inherited source survives either enablement setting.
+            dir.write(
+                "base.toml",
+                &format!("[{section}]\nenabled = {base_enabled}\n{leaf} = \"/explicit/state\""),
+            );
+            let reader = open(&path).unwrap();
+            assert_eq!(completed_value(&reader, key), "/explicit/state");
+            discard(reader);
+        }
+    }
 }
 
 #[test]

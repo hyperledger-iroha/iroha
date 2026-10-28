@@ -3989,7 +3989,16 @@ The governance ISI builders mirror the first-release Torii DTOs. Proposal
 builders contain immutable proposal content only; Parliament derives lifecycle
 timing and execution automatically. Hash inputs are normalized into the typed
 32-byte governance hash wrappers, while ballot builders retain their standalone
-referendum/election encoding:
+referendum/election encoding.
+
+SCCP proposal normalization and typed Torii reads share validation of the closed
+action tags, external network keys, safe-integer base revisions, and the exact
+sorted, deduplicated subject set derived from the ordered actions. Route revision
+controls, pause controls, profile activation, deployment-progress attestations,
+and trusted checkpoints also enforce exact payload fields and static value bounds.
+Route registration, stranded-value release, light-client initialization, and parameter
+body checks remain with Torii. Committed state determines authorization, current
+revisions, and enactment.
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";

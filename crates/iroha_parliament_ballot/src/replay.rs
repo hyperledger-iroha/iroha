@@ -23,14 +23,15 @@
 //! otherwise), not their window or duplicate decisions, which belong to those scopes'
 //! verifications.
 //!
-//! TODO: the Core integration adds `TransactionEntrypoint::AnonymousBallot` and
-//! `TransactionRejectionReason::AnonymousBallot`. An evidence reader must then (a) verify the
-//! continuity and finality of every block from the opening height through the closure height
-//! against externally authenticated finality evidence, (b) extract every anonymous-ballot
-//! input with its global `input_index` from each block and check the extraction against the
+//! The data model includes `TransactionEntrypoint::AnonymousBallot` and
+//! `TransactionRejectionReason::AnonymousBallot`. TODO: connect an authenticated evidence
+//! reader that (a) verifies the continuity and finality of every block from the opening
+//! height through the closure height
+//! against externally authenticated finality evidence, (b) extracts every anonymous-ballot
+//! input with its global `input_index` from each block and checks the extraction against the
 //! block's input commitment, so that an omitted input is reported as incomplete evidence,
-//! (c) read each input's recorded result from `NetworkExecutionOutputV1` under
-//! `BlockResult.output_merkle`, and (d) authenticate the seal, casting-clock and closure
+//! (c) reads each input's recorded result from `NetworkExecutionOutputV1` under
+//! `BlockResult.output_merkle`, and (d) authenticates the seal, casting-clock and closure
 //! outputs from `BlockResult.outputs`, before it feeds [`verify_full_v1`]. Until then the
 //! blocks given here are as authentic as their source.
 

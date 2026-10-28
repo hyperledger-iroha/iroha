@@ -307,7 +307,9 @@ fn assert_prepared_neighbors_reject_without_requests() {
     }
 }
 fn assert_native_clone_positive_control() {
-    let source = BigInt::one();
+    // num-bigint keeps one native digit inline. This value requires heap digits
+    // on both 32-bit and 64-bit targets, so its clone exercises the allocator.
+    let source = BigInt::from(u128::MAX);
     let (copy, requests) = measured(|| std::hint::black_box(source.clone()));
     assert_eq!(
         requests,

@@ -11,7 +11,10 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::SumeragiRootScope,
-        execution_output::{ExecutionOutputV1, TriggerFailureRootV1},
+        execution_output::{
+            ExecutionOutputV1, NetworkExecutionOutputV2, PipelineExecutionOutputV2,
+            TimeExecutionOutputV2, TriggerFailureRootV1,
+        },
     },
     isi::{
         InstructionBox,
@@ -221,7 +224,11 @@ impl Projection {
         output: &ExecutionOutputV1,
     ) -> Result<()> {
         let (source, invocation, result, failure_root, completions) = match output {
-            ExecutionOutputV1::Network(row) => {
+            ExecutionOutputV1::Network(row)
+            | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                execution: row,
+                ..
+            }) => {
                 let input_index = usize::try_from(row.input_index)?;
                 let entrypoint = block
                     .network_entrypoint_at(input_index)
@@ -237,14 +244,21 @@ impl Projection {
                 };
                 return self.entrypoint(entrypoint, block, source, input_index, Some(&row.result));
             }
-            ExecutionOutputV1::Pipeline(row) => (
+            ExecutionOutputV1::Pipeline(row)
+            | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                execution: row,
+                ..
+            }) => (
                 "pipeline_execution",
                 json::to_value(&row.invocation)?,
                 &row.result,
                 &row.failure_root,
                 &row.completions,
             ),
-            ExecutionOutputV1::Time(row) => (
+            ExecutionOutputV1::Time(row)
+            | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                execution: row, ..
+            }) => (
                 "time_execution",
                 json::to_value(&row.invocation)?,
                 &row.result,
@@ -508,7 +522,7 @@ mod tests {
             execution_output::{
                 InvocationCompletionV1, NetworkExecutionOutputV1, PipelineEventPositionV1,
                 PipelineExecutionOutputV1, PipelineInvocationV1, TimeExecutionOutputV1,
-                TimeInvocationV1, TriggerUseV1,
+                TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
             },
             output_budget::ExecutionOutputLimits,
         },
@@ -968,6 +982,386 @@ mod tests {
         project_block(&omitted, &mut projection, None).expect("omitted rejected program");
         assert!(projection.records.is_empty());
         assert!(projection.gaps.contains("rejected_trigger_program_omitted"));
+    }
+
+    #[test]
+    fn beacon_history_projects_lifecycle_wrapped_outputs_without_changing_identities() {
+        let block = block(vec![lifecycle()]);
+        let pipeline_invocation = PipelineInvocationV1 {
+            event: PipelineEventPositionV1::Network(0),
+            candidate_index: 3,
+            trigger: trigger_use(&block, "pipeline_root"),
+        };
+        let time_invocation = time_invocation(&block);
+        let pipeline_json = json::to_value(&pipeline_invocation).expect("pipeline identity");
+        let time_json = json::to_value(&time_invocation).expect("time identity");
+        let completion = |name: &str, callback_index| InvocationCompletionV1 {
+            callback_index,
+            trigger_id: name.parse().expect("trigger ID"),
+            outcome: TriggerCompletedOutcome::Success,
+        };
+        // Exercise only the projection boundary here. Empty trace fixtures do
+        // not establish complete internal lifecycle capture or carrier admission.
+        let outputs = [
+            ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                execution: NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: TransactionResult::new(Ok(vec![
+                        trigger_step("network_data"),
+                        trigger_step("network_by_call"),
+                    ])),
+                    completions: Vec::new(),
+                },
+                trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                    effects: Vec::new(),
+                },
+            }),
+            ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                execution: PipelineExecutionOutputV1 {
+                    invocation: pipeline_invocation,
+                    result: TransactionResult::new(Ok(vec![
+                        trigger_step("pipeline_root"),
+                        trigger_step("pipeline_nested"),
+                    ])),
+                    failure_root: None,
+                    completions: vec![
+                        completion("pipeline_root", 0),
+                        completion("pipeline_nested", 1),
+                    ],
+                },
+                trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                    effects: Vec::new(),
+                },
+            }),
+            ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                execution: TimeExecutionOutputV1 {
+                    invocation: time_invocation,
+                    result: TransactionResult::new(Ok(vec![
+                        trigger_step("beacon_lifecycle_timer"),
+                        trigger_step("time_nested"),
+                    ])),
+                    failure_root: None,
+                    completions: vec![
+                        completion("beacon_lifecycle_timer", 0),
+                        completion("time_nested", 1),
+                    ],
+                },
+                trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                    effects: Vec::new(),
+                },
+            }),
+        ];
+        let output_hashes = outputs.each_ref().map(HashOf::new);
+        let mut projection = Projection::default();
+        for (index, output) in outputs.iter().enumerate() {
+            projection
+                .output(&block, index + 17, output)
+                .expect("wrapped projection");
+        }
+        assert_eq!(outputs.each_ref().map(HashOf::new), output_hashes);
+        assert_eq!(
+            projection.records.len(),
+            7,
+            "full results projected exactly once"
+        );
+        for source in [
+            "block_network_execution",
+            "pipeline_execution",
+            "time_execution",
+        ] {
+            assert_eq!(projection.counts.get(source), Some(&1));
+        }
+        assert_eq!(
+            projection.counts.get("explicit_native_instructions"),
+            Some(&7)
+        );
+        for record in &projection.records {
+            assert_eq!(
+                record["occurrence"]["stored_outcome"].as_str(),
+                Some("recorded_success_unverified")
+            );
+            assert_eq!(
+                record["occurrence"]["authenticated_execution_verified"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                record["certificate_authority_verified"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                record["occurrence"]["carrier_hash"].as_str(),
+                Some(block.hash().to_string().as_str())
+            );
+        }
+        for (record, path) in projection.records[..3].iter().zip([
+            "instructions/0",
+            "recorded_trigger/0/0",
+            "recorded_trigger/1/0",
+        ]) {
+            assert_eq!(record["instruction_path"].as_str(), Some(path));
+            assert_eq!(
+                record["occurrence"]["source"].as_str(),
+                Some("block_network_execution")
+            );
+            assert_eq!(record["occurrence"]["entrypoint_index"].as_u64(), Some(0));
+            assert_eq!(
+                record["occurrence"]["entrypoint_hash"].as_str(),
+                Some(
+                    block.external_entrypoints_slice()[0]
+                        .hash()
+                        .to_string()
+                        .as_str()
+                )
+            );
+            assert!(
+                record["occurrence"]
+                    .as_object()
+                    .expect("occurrence")
+                    .get("output_index")
+                    .is_none()
+            );
+        }
+        for (rows, source, index, hash, invocation) in [
+            (
+                &projection.records[3..5],
+                "pipeline_execution",
+                18,
+                output_hashes[1],
+                pipeline_json,
+            ),
+            (
+                &projection.records[5..7],
+                "time_execution",
+                19,
+                output_hashes[2],
+                time_json,
+            ),
+        ] {
+            for (record, path) in rows
+                .iter()
+                .zip(["recorded_trigger/0/0", "recorded_trigger/1/0"])
+            {
+                assert_eq!(record["instruction_path"].as_str(), Some(path));
+                assert_eq!(record["occurrence"]["source"].as_str(), Some(source));
+                assert_eq!(record["occurrence"]["output_index"].as_u64(), Some(index));
+                assert_eq!(
+                    record["occurrence"]["output_hash"].as_str(),
+                    Some(hash.to_string().as_str())
+                );
+                assert_eq!(record["occurrence"]["invocation"], invocation);
+                assert_eq!(record["occurrence"]["completion_count"].as_u64(), Some(2));
+                assert!(
+                    record["occurrence"]
+                        .as_object()
+                        .expect("occurrence")
+                        .get("entrypoint_hash")
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn beacon_history_preserves_lifecycle_wrapped_rejections_and_omissions() {
+        use iroha_data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+
+        let original = block(vec![lifecycle()]);
+        let pipeline_invocation = PipelineInvocationV1 {
+            event: PipelineEventPositionV1::Network(0),
+            candidate_index: 0,
+            trigger: trigger_use(&original, "pipeline_root"),
+        };
+        for (failure_root, expected_path) in [
+            (
+                TriggerFailureRootV1::DeclaredInstructionProjection(ExecutionStep(
+                    vec![lifecycle()].into(),
+                )),
+                "rejected_declared_trigger/0",
+            ),
+            (
+                TriggerFailureRootV1::ReturnedBeforeRollback(ExecutionStep(
+                    vec![lifecycle()].into(),
+                )),
+                "rolled_back_trigger/0",
+            ),
+        ] {
+            let mut block = (*original).clone();
+            let time_invocation = time_invocation(&block);
+            let rejected = || {
+                TransactionResult::new(Err(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted("fixture rejection".to_owned()),
+                )))
+            };
+            let completion = |trigger: &TriggerUseV1| InvocationCompletionV1 {
+                callback_index: 0,
+                trigger_id: trigger.trigger_id.clone(),
+                outcome: TriggerCompletedOutcome::Failure("actual invocation rejected".to_owned()),
+            };
+            let outputs = vec![
+                ExecutionOutputV1::network_lifecycle_output_limit_rejection(0),
+                ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                    execution: PipelineExecutionOutputV1 {
+                        invocation: pipeline_invocation.clone(),
+                        result: rejected(),
+                        failure_root: Some(failure_root.clone()),
+                        completions: vec![completion(&pipeline_invocation.trigger)],
+                    },
+                    trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                        effects: Vec::new(),
+                    },
+                }),
+                ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                    execution: TimeExecutionOutputV1 {
+                        invocation: time_invocation.clone(),
+                        result: rejected(),
+                        failure_root: Some(failure_root),
+                        completions: vec![completion(&time_invocation.trigger)],
+                    },
+                    trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                        effects: Vec::new(),
+                    },
+                }),
+            ];
+            let output_hashes: Vec<_> = outputs.iter().map(HashOf::new).collect();
+            attach_outputs(&mut block, outputs);
+            let mut projection = Projection::default();
+            project_block(&block, &mut projection, None).expect("stored wrapped rejections");
+            assert_eq!(projection.records.len(), 3);
+            assert_eq!(
+                projection.counts.get("explicit_native_instructions"),
+                Some(&3)
+            );
+            for (index, source) in [
+                "block_network_execution",
+                "pipeline_execution",
+                "time_execution",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let record = &projection.records[index];
+                assert_eq!(projection.counts.get(source), Some(&1));
+                assert_eq!(record["occurrence"]["source"].as_str(), Some(source));
+                assert_eq!(
+                    record["occurrence"]["stored_outcome"].as_str(),
+                    Some("recorded_rejection_unverified")
+                );
+                assert_eq!(
+                    record["occurrence"]["authenticated_execution_verified"].as_bool(),
+                    Some(false)
+                );
+                assert_eq!(
+                    record["certificate_authority_verified"].as_bool(),
+                    Some(false)
+                );
+                if index == 0 {
+                    assert_eq!(record["instruction_path"].as_str(), Some("instructions/0"));
+                    assert_eq!(record["occurrence"]["entrypoint_index"].as_u64(), Some(0));
+                } else {
+                    assert_eq!(record["instruction_path"].as_str(), Some(expected_path));
+                    assert_eq!(
+                        record["occurrence"]["output_index"].as_u64(),
+                        Some(index as u64)
+                    );
+                    assert_eq!(
+                        record["occurrence"]["output_hash"].as_str(),
+                        Some(output_hashes[index].to_string().as_str())
+                    );
+                    assert_eq!(record["occurrence"]["completion_count"].as_u64(), Some(1));
+                }
+            }
+        }
+        let mut omitted = (*original).clone();
+        let time = time_invocation(&omitted);
+        attach_outputs(
+            &mut omitted,
+            vec![
+                ExecutionOutputV1::network_lifecycle_output_limit_rejection(0),
+                ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline_invocation),
+                ExecutionOutputV1::time_lifecycle_output_limit_rejection(time),
+            ],
+        );
+        let mut projection = Projection::default();
+        project_block(&omitted, &mut projection, None).expect("stored wrapped omissions");
+        assert_eq!(
+            projection.records.len(),
+            1,
+            "omitted roots invent no program"
+        );
+        assert_eq!(
+            projection.records[0]["occurrence"]["stored_outcome"].as_str(),
+            Some("recorded_rejection_unverified")
+        );
+        assert_eq!(
+            projection.counts.get("rejected_trigger_program_omitted"),
+            Some(&2)
+        );
+        assert!(projection.gaps.contains("rejected_trigger_program_omitted"));
+    }
+
+    #[test]
+    fn beacon_history_requires_exact_input_for_lifecycle_wrapped_network_output() {
+        let mut block = (*block(vec![lifecycle()])).clone();
+        let valid = ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+            execution: NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: TransactionResult::new(Ok(Vec::new())),
+                completions: Vec::new(),
+            },
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: Vec::new(),
+            },
+        });
+        attach_outputs(&mut block, vec![valid.clone()]);
+        let mut projection = Projection::default();
+        project_block(&block, &mut projection, None).expect("stored wrapped Network success");
+        assert_eq!(projection.records.len(), 1);
+        assert_eq!(
+            projection.records[0]["occurrence"]["stored_outcome"].as_str(),
+            Some("recorded_success_unverified")
+        );
+        let mut missing = valid;
+        let ExecutionOutputV1::NetworkWithLifecycle(row) = &mut missing else {
+            panic!("wrapped fixture")
+        };
+        row.execution.input_index = 1;
+        let mut refused = Projection::default();
+        let error = refused
+            .output(&block, 0, &missing)
+            .expect_err("no ordinal fallback");
+        assert_eq!(error.to_string(), "Network output lacks its exact input");
+        assert!(refused.records.is_empty());
+        assert!(refused.counts.is_empty());
+        let mut corrupt = json::to_value(&block).expect("fixture JSON");
+        let result = corrupt
+            .as_object_mut()
+            .unwrap()
+            .get_mut("result")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        result.insert(
+            "outputs".to_owned(),
+            json::to_value(&vec![missing.clone()]).unwrap(),
+        );
+        result.insert(
+            "output_merkle".to_owned(),
+            json::to_value(
+                &[HashOf::new(&missing)]
+                    .into_iter()
+                    .collect::<iroha_crypto::MerkleTree<_>>(),
+            )
+            .unwrap(),
+        );
+        let corrupt: SignedBlock = json::from_value(corrupt).expect("structural fixture");
+        let error = project_block(&corrupt, &mut Projection::default(), None)
+            .expect_err("refuse absent exact input despite matching output Merkle tree");
+        assert!(
+            error
+                .to_string()
+                .contains("typed output ownership or Merkle cache"),
+            "{error}"
+        );
     }
 
     #[test]

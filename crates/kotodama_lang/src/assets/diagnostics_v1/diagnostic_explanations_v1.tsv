@@ -1,10 +1,13 @@
-kotodama-diagnostic-explanations-v1	306
+kotodama-diagnostic-explanations-v1	311
 code	phase	summary	help	bad_example	fixed_example
 E_ACCESS_INCOMPLETE	Semantic	the compiler could not prove a complete access set	The runtime must serialize conservatively; remove dynamic or opaque access if parallel execution is required.	-	-
 E_AMBIGUOUS_EXPORT	Resolve	multiple modules define the same declared package export	Keep exactly one module definition for each exported function.	-	-
 E_ASSET_NAME_INVALID	Semantic	an asset display name literal is not a valid asset name	Use a non-blank name of at most 128 characters without `#`, `@`, or control characters.	-	-
 E_AUTHORIZATION_STRING	Parse	authorization was written as an arbitrary string	Declare `permission Admin;` and use `authorize(Admin)`, or explicitly choose `authorize(anyone)`.	-	-
 E_AUTHORIZE_POSITION	Parse	an authorization clause follows the return type	Write authorization before the return type: `kotoage fn name(params) authorize(Admin) -> Type { ... }`.	kotoage fn bump(int delta) -> int authorize(anyone) {\n    return delta;\n}	kotoage fn bump(int delta) authorize(anyone) -> int {\n    return delta;\n}
+E_BALLOT_ELECTION_ID	Semantic	an inline ballot election selector is not canonical	Use 1-128 RFC 3986 unreserved ASCII characters (letters, digits, `-`, `.`, `_`, `~`), with no leading dot.	-	-
+E_BALLOT_LITERAL_REQUIRED	Semantic	the inline ballot builder received a runtime field	Supply compile-time string and byte literals, directly or through literal bindings and private helpers. The inline builder cannot embed fields received as entrypoint parameters.	-	-
+E_BALLOT_NULLIFIER	Semantic	an inline ballot nullifier has the wrong byte length	Supply exactly 32 bytes for the ballot nullifier; byte escapes each encode one byte.	-	-
 E_BIDI_CONTROL_CHARACTER	Lex	the source contains an invisible bidirectional control character	Delete the character; inside a string literal that genuinely needs it, write it as a `\\u{...}` escape. Bidirectional controls make reviewed text read differently from what compiles.	// owner check <U+202E> disabled	// owner check disabled
 E_BRANCH_TYPE_MISMATCH	Semantic	expression branches have different types	Make every if or match branch tail produce exactly the same type.	-	-
 E_BREAK_OUTSIDE_LOOP	Semantic	break appeared outside an accepted bounded loop	Move break into the body of a compiler-proven bounded for loop.	-	-
@@ -68,6 +71,7 @@ E_INVALID_ASSIGNMENT_TARGET	Semantic	an assignment targeted a non-assignable exp
 E_INVALID_IDENTIFIER	Resolve	a package, module, alias, or symbol name is not a strict V1 identifier	Use a valid unambiguous Kotodama V1 identifier in the reported graph location.	-	-
 E_INVALID_ID_LITERAL	Semantic	a typed identifier literal is malformed or encoded for another network	Copy the identifier exactly as printed, or re-encode an account for this network with `iroha tools address convert`. Canonical account literals write katakana half-width, except ヰ and ヱ.	let ds = DataSpaceId::parse("zero");	let ds = DataSpaceId::parse("0");
 E_INVALID_MODULE_ITEM	Resolve	a reusable module contains a deployable-only declaration	Move state, triggers, `kotoage`/`言挙げ`, `view fn`, `hajimari`/`始まり`, or `kaizen`/`改善` declarations into the seiyaku root.	-	-
+E_INVALID_POINTER_LITERAL	Semantic	an encoded pointer literal is malformed or internally inconsistent	Use the canonical Norito frame for the requested pointer type, encoded as an even-length `0x` hexadecimal string. AXT descriptors must contain valid data space/touch declarations; anchored spends must preserve their signed-payload bindings. Runtime authorization is still required.	-	-
 E_INVALID_SCALE	Semantic	an exact numeric operation received a scale outside zero through 28	Choose an int scale from 0 through 28.	-	-
 E_INVALID_SOURCE_PATH	Resolve	a logical module source path is non-canonical or escapes its package	Use a normalized relative logical path contained by the package source root.	-	-
 E_ITERATION_LIMIT	Semantic	a bounded collection operation exceeded the 64-item V1 limit	Reduce the collection or split the operation into deterministic calls of at most 64 items.	-	-
@@ -135,6 +139,7 @@ E_PATTERN_TYPE	Semantic	a sum pattern was applied to a non-Option/non-Result val
 E_PATTERN_VARIANT	Semantic	the pattern variant does not belong to the expected type	Match a variant from the exact nominal enum or sum type of the scrutinee.	-	-
 E_PERMISSION_ARGUMENT	Semantic	a grant or revocation did not name an instance permission declaration	Pass a declared instance permission identifier as `permission:`. Chain imports, strings and dynamic Name values cannot be used for scoped grants.	-	-
 E_PERMISSION_DECLARATION	Parse	a permission declaration is invalid or outside a seiyaku	Declare an instance permission with `permission Admin;` or import a chain token explicitly; modules cannot declare permissions and `anyone` cannot be a permission name.	-	-
+E_POINTER_LITERAL_REQUIRED	Semantic	a pointer constructor received runtime text instead of a compile-time literal	Use a compile-time string literal or accept the canonical typed identifier directly as the entrypoint parameter. Local literal bindings and private helpers with literal arguments remain supported.	-	-
 E_POSITIONAL_ARGUMENT_ORDER	Parse	a positional argument follows a named argument	Supply the positional prefix first, then named arguments in any order.	-	-
 E_POSITIONAL_ARGUMENT_REQUIRED	Semantic	a positional-only parameter was supplied by name	Omit the label for parameters declared as `Type _ name`.	-	-
 E_POSITIONAL_PARAMETER_ORDER	Parse	a positional parameter follows a named parameter	Place every `Type _ name` parameter before the named `Type name` parameters.	-	-

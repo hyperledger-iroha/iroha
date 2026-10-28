@@ -1,102 +1,53 @@
 //! Iroha client CLI implementation executed by the thin `iroha` binary.
 #![deny(deprecated)]
-// Rust 1.93's generated libtest main builds one pointer array for every test.
-// On 64-bit targets this CLI exceeds Clippy's 16 KiB limit for that generated
-// registry, which has no annotatable source item. All source modules and root
-// functions, impls and traits explicitly deny the lint below.
-// TODO: remove this exception and the source overrides when the pinned Clippy
-// skips rustc-generated test registries.
-#![cfg_attr(
-    all(test, target_pointer_width = "64"),
-    expect(
-        clippy::large_stack_arrays,
-        reason = "rustc's generated libtest registry exceeds 2048 test pointers; executable source items deny this lint separately"
-    )
-)]
+#![cfg_attr(test, deny(clippy::large_stack_arrays))]
 
 use iroha_core::release_identity::CompiledBuildMetadata;
 use iroha_model_base::domain::DomainId;
 
 use iroha_model_base::chain::ChainId;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod address;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod audit;
 #[cfg(feature = "bridge")]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod bridge;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod cli_output;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod client_config;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod collection_list;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod commands;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod compute;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod confidential;
 #[cfg(test)]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod config_utils;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod content;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod contracts;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod crypto;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod dataspace_definition;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod endorsement;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod execution;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod execution_finality;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod gov;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ivm_cli;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod json_utils;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod jurisdiction;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod nexus;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod offline;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod operator_key;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod runtime;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod sccp;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod soracloud;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod space_directory;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod staking;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod subscriptions;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod sumeragi;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod taira;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod taira_dataspace_deploy;
 pub use taira_dataspace_deploy::{
     DataspaceAuthorityOriginal, VerifiedDataspaceAuthority, dataspace_authority_completion_sha256,
     dataspace_authority_original_inventory, verify_dataspace_authority_originals,
 };
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod taira_public_reset;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod transaction_journal;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod transaction_load;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{AttachmentKind, FrameKind, IntoReportCompat, Report, ResultExt, fmt::ColorMode};
@@ -131,7 +82,6 @@ use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use url::Url;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn compiled_build_identity() -> core::result::Result<
     iroha_core::release_identity::BuildIdentity,
     iroha_core::release_identity::BuildIdentityError,
@@ -141,7 +91,6 @@ fn compiled_build_identity() -> core::result::Result<
 static BUILD_METADATA: std::sync::OnceLock<CompiledBuildMetadata> = std::sync::OnceLock::new();
 
 /// Install one immutable identity, accepting retries only when exactly identical.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn install_build_metadata(
     slot: &std::sync::OnceLock<CompiledBuildMetadata>,
     build: CompiledBuildMetadata,
@@ -149,7 +98,6 @@ fn install_build_metadata(
     slot.set(build).is_ok() || slot.get() == Some(&build)
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn build_metadata() -> CompiledBuildMetadata {
     BUILD_METADATA.get().copied().unwrap_or_else(|| {
         CompiledBuildMetadata::from_compiled_parts(
@@ -186,7 +134,6 @@ const CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::ne
     MAX_CLI_JSON_DECODE_ALLOCATION_BYTES_V1,
     MAX_CLI_JSON_NESTING_DEPTH_V1,
 );
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn validate_executable_fee_payment(
     executable: &Executable,
     fee_payment: &FeePaymentIntent,
@@ -198,7 +145,6 @@ fn validate_executable_fee_payment(
         .map(|_| ())
         .map_err(|err| eyre!(format_gas_limit_validation_error(executable, err)))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn format_gas_limit_validation_error(
     executable: &Executable,
     err: iroha::data_model::transaction::TransactionGasLimitError,
@@ -223,7 +169,6 @@ fn format_gas_limit_validation_error(
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn apply_cli_gas_limit_override(
     fee_payment: FeePaymentIntent,
     gas_limit: Option<u64>,
@@ -245,7 +190,6 @@ pub(crate) fn apply_cli_gas_limit_override(
         ),
     })
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn quote_and_sign_transaction(
     client: &BlockingClient,
     executable: Executable,
@@ -256,7 +200,6 @@ pub(crate) fn quote_and_sign_transaction(
 }
 
 /// Bound the signed execution lifetime before quoting the exact payload.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn quote_and_sign_transaction_with_expiry(
     client: &BlockingClient,
     executable: Executable,
@@ -273,7 +216,6 @@ pub(crate) fn quote_and_sign_transaction_with_expiry(
     )
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn bound_transaction_payload_lifetime(
     payload: &mut iroha::data_model::transaction::TransactionPayload,
     execution_expiry_ms: u64,
@@ -289,7 +231,6 @@ fn bound_transaction_payload_lifetime(
     Ok(())
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn quote_and_sign_transaction_inner(
     client: &BlockingClient,
     executable: Executable,
@@ -318,7 +259,6 @@ fn quote_and_sign_transaction_inner(
         .wrap_err("Failed to sign the exact quoted transaction payload")?;
     Ok((transaction, quote))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn print_fee_quote_text<C: RunContext + ?Sized>(
     context: &mut C,
     quote: &FeeQuoteResponse,
@@ -347,7 +287,6 @@ fn print_fee_quote_text<C: RunContext + ?Sized>(
     Ok(())
 }
 /// Norito JSON derive macros exported for CLI data definitions.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
@@ -380,7 +319,6 @@ pub(crate) struct OutputSelection {
     /// Render JSON as compact newline-delimited values instead of pretty documents.
     pub(crate) json_lines: bool,
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl OutputSelection {
     /// Resolve the explicit option, or default to text on a terminal and JSON otherwise.
     ///
@@ -415,7 +353,6 @@ impl OutputSelection {
 ///
 /// Line-delimited output prints each element of a top-level array on its own line, so list results
 /// and event streams can be consumed with line-oriented tools.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn render_json_output<T: JsonSerialize + ?Sized>(
     data: &T,
     json_lines: bool,
@@ -472,7 +409,6 @@ struct FeePaymentArgs {
     #[arg(long, global = true, value_name = "NONZERO_U64")]
     fee_program_revision: Option<u64>,
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl FeePaymentArgs {
     fn selection(&self) -> Result<FeePaymentIntent> {
         match self.fee_payer {
@@ -525,7 +461,6 @@ pub(crate) struct TransactionWaitArgs {
     #[arg(long, default_value_t = 500)]
     pub poll_interval_ms: u64,
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl TransactionWaitArgs {
     pub(crate) fn is_enabled(&self) -> bool {
         !self.submit_only
@@ -540,7 +475,6 @@ impl TransactionWaitArgs {
         })
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn wait_for_transaction_applied(
     client: &Client,
     hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
@@ -696,7 +630,6 @@ enum Command {
 ///
 /// The top-level hash feeds `tx status --hash` and therefore uses raw lowercase hex.
 /// The signed transaction and its checked network identity retain their Norito encoding.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn transaction_submission_receipt_fields(
     hash: HashOf<SignedTransaction>,
     transaction: &SignedTransaction,
@@ -709,7 +642,6 @@ fn transaction_submission_receipt_fields(
     ])
 }
 /// Context inside which commands run
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 trait RunContext {
     fn config(&self) -> &Config;
     /// SCCP values retained from the same original client configuration file.
@@ -905,7 +837,6 @@ trait RunContext {
 }
 include!("print_json_context.rs");
 /// Runs command
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 trait Run {
     /// Runs command
     ///
@@ -913,7 +844,6 @@ trait Run {
     /// if inner command errors
     fn run<C: RunContext>(self, context: &mut C) -> Result<()>;
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
@@ -937,7 +867,6 @@ impl Run for Command {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Command {
     fn allows_fallback_config(&self) -> bool {
         match self {
@@ -967,7 +896,6 @@ impl Command {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod explorer {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1055,7 +983,6 @@ mod explorer {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ledger {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1111,7 +1038,6 @@ mod ledger {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod ops {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1151,7 +1077,6 @@ mod ops {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod app {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1348,7 +1273,6 @@ mod app {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod tools {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -1421,7 +1345,6 @@ struct CliHint(String);
 /// The outermost message becomes the report context; every distinct cause in the chain becomes a
 /// printable attachment. Error types that embed their source in their own message would otherwise
 /// show that source twice, so a cause already contained in a shown message is skipped.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn command_error_report(error: &eyre::Report) -> Report<MainError> {
     let mut chain = error.chain().map(std::string::ToString::to_string);
     let message = chain.next().unwrap_or_default();
@@ -1453,7 +1376,6 @@ fn command_error_report(error: &eyre::Report) -> Report<MainError> {
 /// Whether a command error was caused by invalid input rather than by the command itself.
 ///
 /// Invalid list flags and Torii's `invalid_*` collection-query codes are input errors.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn is_input_error(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         cause
@@ -1466,7 +1388,6 @@ fn is_input_error(error: &eyre::Report) -> bool {
     })
 }
 /// Torii's structured guidance for an API error: its hint and the accepted values.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn api_error_hints(error: &eyre::Report) -> Vec<String> {
     let Some(api) = error
         .chain()
@@ -1497,7 +1418,6 @@ enum CliErrorKind {
     Command,
     Internal,
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl CliErrorKind {
     fn label(self) -> &'static str {
         match self {
@@ -1518,7 +1438,6 @@ impl CliErrorKind {
 }
 #[derive(clap::Args, Debug)]
 struct MarkdownHelp;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Run for MarkdownHelp {
     fn run<C: RunContext>(self, _context: &mut C) -> Result<()> {
         Ok(())
@@ -1526,7 +1445,6 @@ impl Run for MarkdownHelp {
 }
 #[derive(clap::Args, Debug)]
 struct Version;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 impl Run for Version {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client_version = build_metadata().version();
@@ -1579,7 +1497,6 @@ impl Run for Version {
 /// Execute the CLI with immutable metadata captured by its executable.
 ///
 /// The process installs its metadata once, before parsing or dispatching commands.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
     if !install_build_metadata(&BUILD_METADATA, build) {
         eprintln!("CLI executable build metadata is already installed with a different identity");
@@ -1604,12 +1521,10 @@ pub fn main_entry(build: CompiledBuildMetadata) -> std::process::ExitCode {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn args_command(build: CompiledBuildMetadata) -> clap::Command {
     Args::command().version(build.version())
 }
 #[allow(clippy::too_many_lines)]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let language_override = language_override_from_args(
@@ -1850,7 +1765,6 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     }
     map_command_result(args.command.run(&mut context)).map(|()| std::process::ExitCode::SUCCESS)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn run_local_dataspace_profile(
     args: &Args,
     output: impl std::io::Write,
@@ -1871,11 +1785,9 @@ fn run_local_dataspace_profile(
         _ => None,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.map_err(|error| command_error_report(&error))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
     match (
         args.operator_private_key_file.as_deref(),
@@ -1889,7 +1801,6 @@ fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
         (None, None) => Ok(None),
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
     if args.config.is_some()
         || args.config_fd.is_some()
@@ -1910,7 +1821,6 @@ fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportRes
     }
     Ok(())
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainError> {
     let mut flags = Vec::new();
     if args.config_fd.is_some() || args.config_source_path.is_some() {
@@ -1952,7 +1862,6 @@ fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainE
     ))))
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(), MainError> {
     let mut flags = Vec::new();
     if args.config.is_some() {
@@ -2017,7 +1926,6 @@ const HELP_REPLACEMENTS: &[(&str, &str)] = &[
     ("Default:", "help.label.default"),
     ("Environment:", "help.label.env"),
 ];
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn language_override_from_args<I, S>(args: I) -> Option<String>
 where
     I: IntoIterator<Item = S>,
@@ -2041,7 +1949,6 @@ where
     }
     None
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn localize_help_text(help: &str, i18n: &Localizer) -> String {
     let mut localized = help.to_string();
     for (needle, key) in HELP_REPLACEMENTS {
@@ -2055,7 +1962,6 @@ fn localize_help_text(help: &str, i18n: &Localizer) -> String {
 /// Scan raw arguments for the explicit output format and `--machine` before clap parses them.
 ///
 /// Argument errors are rendered in the format the caller asked for, even when parsing fails.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn output_format_override_from_args<I, S>(args: I) -> (Option<OutputFormatArg>, bool)
 where
     I: IntoIterator<Item = S>,
@@ -2092,7 +1998,6 @@ where
     }
     (explicit, machine)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_output_format(value: &str) -> Option<OutputFormatArg> {
     match value.trim().to_ascii_lowercase().as_str() {
         "json" => Some(OutputFormatArg::Json),
@@ -2101,21 +2006,17 @@ fn parse_output_format(value: &str) -> Option<OutputFormatArg> {
         _ => None,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn stdout_is_terminal() -> bool {
     use std::io::IsTerminal as _;
     io::stdout().is_terminal()
 }
 /// Output selection for parsed arguments, applying the terminal-dependent default.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn effective_output(args: &Args) -> OutputSelection {
     OutputSelection::resolve(args.output_format, args.machine, stdout_is_terminal())
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn effective_output_format(args: &Args) -> CliOutputFormat {
     effective_output(args).format
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn color_mode() -> ColorMode {
     if supports_color::on(supports_color::Stream::Stdout).is_some()
         && supports_color::on(supports_color::Stream::Stderr).is_some()
@@ -2127,7 +2028,6 @@ fn color_mode() -> ColorMode {
 }
 /// Client configuration read when neither `--config` nor `--config-fd` is given.
 const DEFAULT_CLIENT_CONFIG_PATH: &str = "client.toml";
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn load_cli_client_config(
     load_path: LoadPath<PathBuf>,
 ) -> ReportResult<(Config, client_config::FilesystemConfig), MainError> {
@@ -2170,7 +2070,6 @@ fn load_cli_client_config(
     }
     Ok((config, filesystem_config))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
     match raw {
         toml::Value::Integer(ms) if *ms >= 0 => u64::try_from(*ms).ok().map(Duration::from_millis),
@@ -2178,7 +2077,6 @@ fn parse_duration_value(raw: &toml::Value) -> Option<Duration> {
         _ => None,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
     if let Some(transaction) = raw.get("transaction").and_then(|v| v.as_table()) {
         if let Some(ttl) = transaction
@@ -2195,7 +2093,6 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
     // Offline-only commands still share the complete client configuration type.
@@ -2216,7 +2113,6 @@ fn try_fallback_config() -> Result<Config> {
     ))
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn client_config_with_defaults(
     chain: ChainId,
     network_id: NetworkId,
@@ -2255,11 +2151,9 @@ fn client_config_with_defaults(
     }
 }
 #[cfg(test)]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn fallback_config() -> Config {
     try_fallback_config().expect("offline fallback config should derive a deterministic key pair")
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn config_to_json(
     config: &Config,
     filesystem_config: &client_config::FilesystemConfig,
@@ -2308,7 +2202,6 @@ fn config_to_json(
         ),
     ])
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<String> {
     use iroha::data_model::isi::error::{AccountAdmissionError, AccountAdmissionQuotaScope};
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
@@ -2355,7 +2248,6 @@ fn account_admission_hint(err: &(dyn std::error::Error + 'static)) -> Option<Str
     }
     None
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Report {
     if let Some(hint) = account_admission_hint(err.as_ref()) {
         eprintln!(
@@ -2365,7 +2257,6 @@ fn map_account_admission_error(err: eyre::Report, i18n: &Localizer) -> eyre::Rep
     }
     err
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
     i18n.t_with("error.account_admission_rejected", &[("hint", hint)])
 }
@@ -2374,7 +2265,6 @@ fn account_admission_rejected_message(hint: &str, i18n: &Localizer) -> String {
 ///
 /// `duration` is a deadline for the whole subscription, not an idle timeout: a stream that keeps
 /// delivering items still stops on time. Each receive waits at most for the time remaining.
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn drive_stream_until_deadline<T, F>(
     mut receive: impl FnMut(Duration) -> iroha::Result<Option<T>>,
     mut on_item: F,
@@ -2406,7 +2296,6 @@ where
     Ok(())
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn finish_stream<T>(result: Result<T>, close: iroha::Result<()>) -> Result<T> {
     match (result, close) {
         (Ok(value), Ok(())) => Ok(value),
@@ -2418,7 +2307,6 @@ fn finish_stream<T>(result: Result<T>, close: iroha::Result<()>) -> Result<T> {
     }
 }
 
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn listen_events_message(
     filter: &EventFilterBox,
     timeout: Option<Duration>,
@@ -2439,7 +2327,6 @@ fn listen_events_message(
         },
     )
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn listen_blocks_message(
     height: NonZeroU64,
     timeout: Option<Duration>,
@@ -2460,7 +2347,6 @@ fn listen_blocks_message(
         },
     )
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod events {
     use super::*;
     use iroha::data_model::events::pipeline::{BlockEventFilter, TransactionEventFilter};
@@ -2589,7 +2475,6 @@ mod events {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod blocks {
     use super::*;
     use std::num::NonZeroU64;
@@ -2644,7 +2529,6 @@ mod blocks {
         finish_stream(result, stream.close())
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod domain {
     use super::*;
     #[allow(clippy::large_enum_variant)]
@@ -2717,7 +2601,6 @@ mod domain {
         pub id: DomainId,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod account {
     use super::*;
     use std::fmt::Debug;
@@ -2978,7 +2861,6 @@ mod account {
         pub role: RoleId,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod asset {
     use super::*;
     use iroha::data_model::account::AccountAdmissionMode;
@@ -3839,7 +3721,6 @@ mod asset {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod nft {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -3921,7 +3802,6 @@ mod nft {
         pub id: NftId,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod rwa {
     use super::*;
     use iroha::data_model::isi::rwa::{
@@ -4104,7 +3984,6 @@ mod rwa {
         pub to: String,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod peer {
     use super::*;
     use iroha::data_model::isi::register::RegisterPeerWithPop;
@@ -4227,7 +4106,6 @@ mod peer {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod multisig {
     use super::*;
     use core::convert::TryFrom;
@@ -5204,7 +5082,6 @@ mod multisig {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod query {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -5263,7 +5140,6 @@ mod query {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod transaction {
     use super::*;
     use iroha::data_model::{Level as LogLevel, isi::Log};
@@ -5790,7 +5666,6 @@ mod transaction {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod role {
     use super::*;
     use crate::json_utils;
@@ -5947,7 +5822,6 @@ mod role {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod parameter {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -5989,7 +5863,6 @@ mod parameter {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod trigger {
     use super::*;
     use clap::ValueEnum;
@@ -6911,7 +6784,6 @@ mod trigger {
         Ok(Value::Object(map))
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod executor {
     use super::*;
     #[derive(clap::Subcommand, Debug)]
@@ -6948,7 +6820,6 @@ mod executor {
         path: PathBuf,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod metadata {
     use super::*;
     pub mod domain {
@@ -7259,7 +7130,6 @@ mod metadata {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod repo {
     use super::*;
     use iroha::data_model::{
@@ -7492,7 +7362,6 @@ mod repo {
         u64::try_from(millis).unwrap_or(u64::MAX)
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod settlement {
     use super::*;
     use clap::ValueEnum;
@@ -8658,7 +8527,6 @@ mod settlement {
         }
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn dump_json_stdout<T>(value: &T) -> Result<()>
 where
     T: JsonSerialize + ?Sized,
@@ -8671,7 +8539,6 @@ where
     io::stdout().write_all(rendered.as_bytes())?;
     Ok(())
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_json_stdin<T>(context: &impl RunContext) -> Result<T>
 where
     T: JsonDeserialize,
@@ -8683,14 +8550,12 @@ where
     }
     parse_json_stdin_unchecked()
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_json_stdin_unchecked<T>() -> Result<T>
 where
     T: JsonDeserialize,
 {
     parse_json(&string_from_stdin()?)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_json<T>(s: &str) -> Result<T>
 where
     T: JsonDeserialize,
@@ -8706,7 +8571,6 @@ where
     norito::with_decode_limits_scope(CLI_JSON_DECODE_LIMITS_V1, || norito::json::from_json(s))
         .map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -8725,14 +8589,12 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> Result<AccountId> {
     resolve_account_id_with(literal)
 }
 /// Parse a count that must be at least one, such as `--limit` or `--fetch-size`.
 ///
 /// Zero is rejected instead of silently meaning "unbounded" or "default".
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub(crate) fn positive_u64(raw: &str) -> std::result::Result<u64, String> {
     match raw.parse::<u64>() {
         Ok(0) => Err("must be at least 1".to_owned()),
@@ -8740,7 +8602,6 @@ pub(crate) fn positive_u64(raw: &str) -> std::result::Result<u64, String> {
         Err(error) => Err(error.to_string()),
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_asset_balance_scope_literal(
     literal: &str,
 ) -> Result<iroha::data_model::asset::AssetBalanceScope> {
@@ -8760,7 +8621,6 @@ fn parse_asset_balance_scope_literal(
         "asset balance scope must be `global` or `dataspace:<id>`"
     ))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn resolve_asset_definition_id_by_alias(
     client: &Client,
     alias: &AssetDefinitionAlias,
@@ -8790,16 +8650,13 @@ fn resolve_asset_definition_id_by_alias(
     AssetDefinitionId::parse_address_literal(definition_raw)
         .map_err(|err| eyre!("invalid `asset_definition_id` in alias response: {err}"))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
     AssetDefinitionId::parse_address_literal(literal)
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
     DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -8823,16 +8680,13 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     })?;
     Ok(parsed)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn string_from_stdin() -> Result<String> {
     let bytes = read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")?;
     String::from_utf8(bytes).map_err(|error| eyre!("stdin is not valid UTF-8: {error}"))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn bytes_from_stdin() -> Result<Vec<u8>> {
     read_cli_input_bounded(&mut io::stdin().lock(), MAX_CLI_STDIN_BYTES_V1, "stdin")
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn read_cli_input_bounded<R: Read>(
     reader: &mut R,
     max_bytes: usize,
@@ -8871,7 +8725,6 @@ fn read_cli_input_bounded<R: Read>(
     }
     Ok(bytes)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn read_cli_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     let mut file = fs::File::open(path)
         .wrap_err_with(|| format!("failed to open {label} {}", path.display()))?;
@@ -8900,13 +8753,11 @@ fn read_cli_file_bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn read_cli_text_file_bounded(path: &Path, label: &str) -> Result<String> {
     let bytes = read_cli_file_bounded(path, label)?;
     String::from_utf8(bytes)
         .map_err(|error| eyre!("{label} {} is not valid UTF-8: {error}", path.display()))
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn decode_base64_or_hex(
     input: &str,
     hex_length_err: &'static str,
@@ -8931,7 +8782,6 @@ fn decode_base64_or_hex(
     Ok(out)
 }
 type ReportResult<T, E> = core::result::Result<T, Report<E>>;
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
     match report.current_context() {
         MainError::Config => CliErrorKind::Config,
@@ -8953,7 +8803,6 @@ struct CliErrorDescription {
     causes: Vec<String>,
     hints: Vec<String>,
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn describe_cli_error(report: &Report<MainError>) -> CliErrorDescription {
     // `frames()` yields the most recent attachment first; list hints in the order attached.
     let mut hints: Vec<String> = report
@@ -9007,7 +8856,6 @@ fn describe_cli_error(report: &Report<MainError>) -> CliErrorDescription {
         hints,
     }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn render_cli_error(report: &Report<MainError>, output: OutputSelection) -> CliRenderedError {
     let kind = error_kind_for_report(report);
     let description = describe_cli_error(report);
@@ -9035,7 +8883,6 @@ fn render_cli_error(report: &Report<MainError>, output: OutputSelection) -> CliR
     });
     CliRenderedError { kind, output }
 }
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 fn render_cli_error_text(
     report: &Report<MainError>,
     description: &CliErrorDescription,
@@ -9068,10 +8915,8 @@ fn render_cli_error_text(
 }
 #[cfg(test)]
 #[path = "main_shared_tests.rs"]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod tests;
 #[cfg(test)]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod multisig_json_tests {
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
@@ -9126,7 +8971,6 @@ mod multisig_json_tests {
     }
 }
 #[cfg(all(test, feature = "cli_integration_harness"))]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod cli_integration_harness_tests {
     use super::*;
     use iroha::crypto::KeyPair;
@@ -10283,7 +10127,6 @@ mod cli_integration_harness_tests {
 // It is intentionally behind a feature and unused by default to avoid pulling
 // additional dependencies or affecting production builds.
 #[cfg(all(test, feature = "cli_integration_harness"))]
-#[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod cli_integration_harness {
     use super::*;
     use eyre::eyre;

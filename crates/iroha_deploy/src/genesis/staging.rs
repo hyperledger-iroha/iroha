@@ -549,6 +549,34 @@ fn staged_sumeragi_context_hashes_from_provisional_on_bounded_stack(
     staged_genesis_with_projection_on_bounded_stack(genesis, config, provisional, |_| Ok(()))
         .map(|staged| staged.execution)
 }
+/// Retain every rejected output's original source identity in staging diagnostics.
+fn staged_genesis_execution_errors(
+    outputs: &[iroha_data_model::block::execution_output::ExecutionOutputV1],
+) -> Vec<String> {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+
+    outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(output_index, output)| {
+            let reason = output.result().as_ref().err()?;
+            let source = match output {
+                ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
+                ExecutionOutputV1::NetworkWithLifecycle(row) => {
+                    format!("transaction[{}]", row.execution.input_index)
+                }
+                ExecutionOutputV1::Pipeline(_) | ExecutionOutputV1::PipelineWithLifecycle(_) => {
+                    format!("pipeline output[{output_index}]")
+                }
+                ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                    format!("time output[{output_index}]")
+                }
+            };
+            Some(format!("{source}: {reason:?}"))
+        })
+        .collect()
+}
+
 fn staged_genesis_with_projection_on_bounded_stack<T>(
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
@@ -591,28 +619,7 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
         // Preserve the validator's concrete error through the report context. Only the
         // unpublished signing draft may consume its exact derived policy commitments.
         let error = *error;
-        let transaction_errors = block
-            .execution_outputs()
-            .iter()
-            .enumerate()
-            .filter_map(|(output_index, output)| {
-                use iroha_data_model::block::execution_output::ExecutionOutputV1;
-                let reason = output.result().as_ref().err()?;
-                let source = match output {
-                    ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
-                    ExecutionOutputV1::NetworkWithLifecycle(row) => {
-                        format!("transaction[{}]", row.execution.input_index)
-                    }
-                    ExecutionOutputV1::Pipeline(_) | ExecutionOutputV1::PipelineWithLifecycle(_) => {
-                        format!("pipeline output[{output_index}]")
-                    }
-                    ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
-                        format!("time output[{output_index}]")
-                    }
-                };
-                Some(format!("{source}: {reason:?}"))
-            })
-            .collect::<Vec<_>>();
+        let transaction_errors = staged_genesis_execution_errors(block.execution_outputs());
         if transaction_errors.is_empty() {
             color_eyre::Report::new(error).wrap_err(format!(
                 "staged genesis execution failed ({} network inputs)",
@@ -912,6 +919,82 @@ fn install_staged_nexus_policies(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn staged_genesis_execution_errors_preserve_lifecycle_sources_and_indices() {
+        use iroha_data_model::{
+            block::execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                PipelineEventPositionV1, PipelineInvocationV1, TimeInvocationV1,
+                TriggerLifecycleEffectsV1, TriggerUseV1,
+            },
+            events::time::{TimeEvent, TimeInterval},
+            transaction::signed::TransactionResult,
+        };
+
+        // Only diagnostic projection is exercised; these rows assert no native authority.
+        let trigger = TriggerUseV1 {
+            trigger_id: "genesis-diagnostic".parse().expect("fixture trigger id"),
+            registered_at_height: 1,
+            action_hash: Hash::new(b"genesis diagnostic fixture"),
+        };
+        let pipeline = PipelineInvocationV1 {
+            event: PipelineEventPositionV1::BlockApproved,
+            candidate_index: 91,
+            trigger: trigger.clone(),
+        };
+        let time = TimeInvocationV1 {
+            schedule_index: 81,
+            event: TimeEvent {
+                interval: TimeInterval {
+                    since_ms: 100,
+                    length_ms: 20,
+                },
+            },
+            trigger,
+        };
+        let successful = NetworkExecutionOutputV1 {
+            input_index: 1,
+            result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        };
+        let success = ExecutionOutputV1::Network(successful.clone());
+        let lifecycle_success = ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+            execution: NetworkExecutionOutputV1 {
+                input_index: 2,
+                ..successful
+            },
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: Vec::new(),
+            },
+        });
+        assert!(
+            staged_genesis_execution_errors(&[success.clone(), lifecycle_success.clone(),])
+                .is_empty()
+        );
+        let outputs = [
+            success,
+            ExecutionOutputV1::network_output_limit_rejection(17),
+            ExecutionOutputV1::pipeline_output_limit_rejection(pipeline.clone()),
+            lifecycle_success,
+            ExecutionOutputV1::time_output_limit_rejection(time.clone()),
+            ExecutionOutputV1::network_lifecycle_output_limit_rejection(29),
+            ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline),
+            ExecutionOutputV1::time_lifecycle_output_limit_rejection(time),
+        ];
+        let reason = "LimitCheck(TransactionLimitError { reason: \"execution output exceeds consensus byte limit\" })";
+        assert_eq!(
+            staged_genesis_execution_errors(&outputs),
+            [
+                format!("transaction[17]: {reason}"),
+                format!("pipeline output[2]: {reason}"),
+                format!("time output[4]: {reason}"),
+                format!("transaction[29]: {reason}"),
+                format!("pipeline output[6]: {reason}"),
+                format!("time output[7]: {reason}"),
+            ]
+        );
+    }
+
     fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
         let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
         iroha_genesis::default_staking_policy(
