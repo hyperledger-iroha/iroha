@@ -169,7 +169,7 @@ fn owned_start_refuses_an_unselected_or_changed_daemon_before_logs_and_launch_ma
         progress: Arc::new(progress::Progress::default()),
     };
     assert!(matches!(
-        processes.start(&directory, &retained, &ownership, &unselected, None, &budget),
+        processes.start(&directory, &retained, &ownership, &unselected, None, None, &budget),
         Err(Error::Invalid(message)) if message == "daemon differs from the retained runtime path"
     ));
     std::fs::OpenOptions::new()
@@ -180,12 +180,14 @@ fn owned_start_refuses_an_unselected_or_changed_daemon_before_logs_and_launch_ma
         .unwrap();
     assert!(
         processes
-            .start(&directory, &retained, &ownership, &selected, None, &budget)
+            .start(
+                &directory, &retained, &ownership, &selected, None, None, &budget
+            )
             .is_err()
     );
     let changed = crate::managed::program::NativeProgram::capture(&path).unwrap();
     assert!(matches!(
-        processes.start(&directory, &retained, &ownership, &changed, None, &budget),
+        processes.start(&directory, &retained, &ownership, &changed, None, None, &budget),
         Err(Error::Invalid(message)) if message == "daemon differs from the retained runtime contents"
     ));
     assert!(processes.children.is_empty());

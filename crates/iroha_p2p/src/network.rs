@@ -51,7 +51,6 @@ use std::{
     },
     time::Duration,
 };
-#[cfg(test)]
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 #[cfg(test)]
@@ -7202,12 +7201,14 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             },
             initial_trusted_sources,
             HashSet::new(),
+            None,
             shutdown_signal,
         )
         .await
     }
     /// Launch with protected-source authority and the configured validator roster.
     /// The roster is installed before topology processing to prevent a startup race.
+    /// An owned prebound listener preserves the managed launcher's port reservation.
     ///
     /// # Errors
     ///
@@ -7216,6 +7217,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         identity_keys,
         initial_trusted_sources,
         initial_validator_dial_roster,
+        prebound_listener,
         shutdown_signal
     ))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
@@ -7310,6 +7312,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         }: HandshakeCapabilities,
         mut initial_trusted_sources: HashSet<PeerId>,
         mut initial_validator_dial_roster: HashSet<PeerId>,
+        prebound_listener: Option<std::net::TcpListener>,
         shutdown_signal: ShutdownSignal,
     ) -> Result<(Self, Child), Error> {
         // Reject vulnerable QUIC before listener or dialer sockets are created.
@@ -7799,6 +7802,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         }
         let task = start_tls_listener::<WireMessage<T>, E>(
             listener_socket_addr,
+            prebound_listener,
             Arc::clone(&key_pair),
             Arc::clone(&soranet_transport_key_pair),
             Arc::clone(&soranet_transport_certificate),
@@ -10260,6 +10264,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
+            None,
             Arc::new(key_pair),
             soranet_transport_key_pair,
             soranet_transport_certificate,
@@ -10354,6 +10359,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
+            None,
             Arc::new(key_pair),
             soranet_transport_key_pair,
             soranet_transport_certificate,
@@ -10525,6 +10531,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let tls_listener = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             tls_addr,
+            None,
             Arc::new(key_pair.clone()),
             Arc::clone(&soranet_transport_key_pair),
             Arc::clone(&soranet_transport_certificate),
@@ -10855,6 +10862,7 @@ mod accept_stream_tests {
         let shutdown = ShutdownSignal::new();
         let _listener_task = start_tls_listener::<super::WireMessage<Dummy>, ChaCha20Poly1305>(
             addr,
+            None,
             Arc::new(key_pair),
             soranet_transport_key_pair,
             soranet_transport_certificate,
@@ -11890,9 +11898,30 @@ struct TlsListenerOptions {
     tcp_nodelay: bool,
     tcp_keepalive: Option<std::time::Duration>,
 }
+/// Keep a managed socket bound while moving its ownership into the async reactor.
+async fn prepare_tcp_listener(
+    address: std::net::SocketAddr,
+    prebound: Option<std::net::TcpListener>,
+) -> io::Result<TcpListener> {
+    match prebound {
+        Some(listener) => {
+            if listener.local_addr()? != address {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "prebound P2P listener does not match the configured address",
+                ));
+            }
+            listener.set_nonblocking(true)?;
+            TcpListener::from_std(listener)
+        }
+        None => TcpListener::bind(address).await,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_tls_listener<T, E>(
     addr: std::net::SocketAddr,
+    prebound_listener: Option<std::net::TcpListener>,
     key_pair: Arc<iroha_crypto::KeyPair>,
     soranet_transport_key_pair: Arc<iroha_crypto::KeyPair>,
     soranet_transport_certificate: Arc<crate::peer::LocalSoranetTransportCertificateV5>,
@@ -11952,7 +11981,7 @@ where
     .map_err(|e| std::io::Error::other(format!("tls config: {e}")))?;
     server_cfg.alpn_protocols = vec![crate::transport::P2P_ALPN.to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_cfg));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = prepare_tcp_listener(addr, prebound_listener).await?;
     let id_alloc = NEXT_TLS_CONN_ID.get_or_init(|| std::sync::atomic::AtomicU64::new(1 << 59));
     let task = tokio::spawn(async move {
         let mut children = tokio::task::JoinSet::new();

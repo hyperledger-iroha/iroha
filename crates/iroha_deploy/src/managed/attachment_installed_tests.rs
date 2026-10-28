@@ -1045,7 +1045,51 @@ fn independently_observed_parent(
         &source.finality_proof(NonZeroU64::new(1).unwrap())?,
     )?;
     let challenge: [u8; 32] = rand::random();
-    let quorum = verifier.observe(&source, &challenge)?;
+    let quorum = match verifier.observe(&source, &challenge) {
+        Ok(quorum) => quorum,
+        Err(failure) => {
+            // The production source deliberately bounds its transport diagnostics. Keep
+            // the exact SDK failure in this disposable fixture without printing configs,
+            // signing material or request headers. These reads establish no readiness.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut diagnostics = Vec::new();
+            for (index, (endpoint, peer)) in prepared.peers.iter().zip(peers).enumerate() {
+                let mut selected = config.clone();
+                selected.torii_api_url = endpoint.torii_url.parse()?;
+                let client = Client::builder(selected)
+                    .build()?
+                    .with_request_deadline(deadline);
+                let scope = iroha_genesis::signed_genesis_consensus_metadata(&anchor.genesis)?
+                    .sumeragi_context
+                    .root_scope;
+                let mut height = NonZeroU64::new(1).unwrap();
+                for _ in 0..4 {
+                    match client.get_sumeragi_finality_attestation(height, challenge, peer, scope) {
+                        Ok(_) => {
+                            diagnostics
+                                .push(format!("peer {index}: authenticated height {height}"));
+                            break;
+                        }
+                        Err(error) => {
+                            let detail: String = format!("{error:#}").chars().take(2_048).collect();
+                            diagnostics.push(format!("peer {index}, height {height}: {detail}"));
+                            let Some(next) = error
+                                .downcast_ref::<iroha::client::BridgeFinalityAttestationTipMismatch>()
+                                .and_then(|progress| NonZeroU64::new(progress.response().applied_height))
+                            else {
+                                break;
+                            };
+                            height = next;
+                        }
+                    }
+                }
+            }
+            return Err(eyre!(
+                "parent finality observation failed: {failure:?}; direct SDK diagnostics: {}",
+                diagnostics.join("; ")
+            ));
+        }
+    };
     ensure!(
         quorum.verified() == 4,
         "independent parent release needs all four actual HTTP attestations"

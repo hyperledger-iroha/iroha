@@ -7,7 +7,10 @@
 use crate::torii::ToriiError;
 use iroha::client::AccountClient;
 use iroha_data_model::{
-    block::{SignedBlock, execution_output::ExecutionOutputV1},
+    block::{
+        SignedBlock,
+        execution_output::{ExecutionOutputV1, PipelineExecutionOutputV2, TimeExecutionOutputV2},
+    },
     isi::{
         BurnBox, CustomInstruction, ExecuteTrigger, GrantBox, Instruction, InstructionBox, Log,
         MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox, SetAssetKeyValue,
@@ -297,14 +300,22 @@ impl BlockDetail {
             .iter()
             .enumerate()
             .filter_map(|(output_index, output)| match output {
-                ExecutionOutputV1::Network(_) => None,
-                ExecutionOutputV1::Pipeline(row) => Some(InvocationRow {
+                ExecutionOutputV1::Network(_) | ExecutionOutputV1::NetworkWithLifecycle(_) => None,
+                ExecutionOutputV1::Pipeline(row)
+                | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                    execution: row,
+                    ..
+                }) => Some(InvocationRow {
                     output_index,
                     kind: "Pipeline trigger",
                     trigger: row.invocation.trigger.trigger_id.to_string(),
                     outcome: Outcome::of(&row.result),
                 }),
-                ExecutionOutputV1::Time(row) => Some(InvocationRow {
+                ExecutionOutputV1::Time(row)
+                | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                    execution: row,
+                    ..
+                }) => Some(InvocationRow {
                     output_index,
                     kind: "Time trigger",
                     trigger: row.invocation.trigger.trigger_id.to_string(),
@@ -855,6 +866,9 @@ mod tests {
 
     #[test]
     fn scheduled_invocations_are_listed_apart_from_transactions() {
+        use iroha_data_model::block::execution_output::{
+            PipelineEventPositionV1, PipelineInvocationV1, TriggerLifecycleEffectsV1,
+        };
         let scheduled = ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
             schedule_index: 0,
             event: TimeEvent {
@@ -869,21 +883,84 @@ mod tests {
                 action_hash: Hash::new(b"nightly report action"),
             },
         });
-        let block = sample_block(Ok(DataTriggerSequence::default()), vec![scheduled]);
-        let detail = BlockDetail::from_block(&block, 0);
-        assert_eq!(detail.transactions.len(), 1);
-        assert_eq!(detail.rejected(), 0, "trigger runs are not transactions");
-        let [run] = detail.invocations.as_slice() else {
-            panic!("one trigger run: {:?}", detail.invocations);
-        };
-        assert_eq!(run.output_index, 1);
-        assert_eq!(run.kind, "Time trigger");
-        assert_eq!(run.trigger, "nightly_report");
-        assert!(
-            run.outcome.is_rejected(),
-            "an output-limit terminal rejects"
-        );
-        assert!(output_json(&block, run.output_index).is_some());
+        let pipeline = ExecutionOutputV1::pipeline_output_limit_rejection(PipelineInvocationV1 {
+            event: PipelineEventPositionV1::BlockApproved,
+            candidate_index: 0,
+            trigger: TriggerUseV1 {
+                trigger_id: "approved_report".parse().unwrap(),
+                registered_at_height: 0,
+                action_hash: Hash::new(b"approved report action"),
+            },
+        });
+        for lifecycle in [false, true] {
+            let mut outputs = vec![pipeline.clone(), scheduled.clone()];
+            if lifecycle {
+                outputs = outputs
+                    .into_iter()
+                    .map(|output| {
+                        let trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
+                            effects: Vec::new(),
+                        };
+                        match output {
+                            ExecutionOutputV1::Pipeline(execution) => {
+                                ExecutionOutputV1::PipelineWithLifecycle(
+                                    PipelineExecutionOutputV2 {
+                                        execution,
+                                        trigger_lifecycle,
+                                    },
+                                )
+                            }
+                            ExecutionOutputV1::Time(execution) => {
+                                ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                                    execution,
+                                    trigger_lifecycle,
+                                })
+                            }
+                            _ => unreachable!("fixture contains pipeline and time owners"),
+                        }
+                    })
+                    .collect();
+            }
+            let block = sample_block(Ok(DataTriggerSequence::default()), outputs.clone());
+            let original_hash = block.hash();
+            let detail = BlockDetail::from_block(&block, 0);
+            assert_eq!(detail.hash, original_hash.to_string());
+            assert_eq!(
+                block.hash(),
+                original_hash,
+                "projection must not rewrite the block"
+            );
+            assert_eq!(detail.transactions.len(), 1);
+            assert_eq!(detail.rejected(), 0, "trigger runs are not transactions");
+            assert_eq!(detail.invocations.len(), 2);
+            for (index, (kind, trigger)) in [
+                ("Pipeline trigger", "approved_report"),
+                ("Time trigger", "nightly_report"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let run = &detail.invocations[index];
+                assert_eq!(run.output_index, index + 1);
+                assert_eq!(run.kind, kind);
+                assert_eq!(run.trigger, trigger);
+                assert!(
+                    run.outcome.is_rejected(),
+                    "an output-limit terminal rejects"
+                );
+                assert_eq!(
+                    output_json(&block, run.output_index),
+                    pretty(&outputs[index])
+                );
+                if lifecycle {
+                    assert!(
+                        output_json(&block, run.output_index)
+                            .unwrap()
+                            .contains("trigger_lifecycle")
+                    );
+                }
+            }
+        }
     }
 
     #[test]

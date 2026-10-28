@@ -44,6 +44,7 @@ pub struct PreparedStartup {
     // stacks. Preparation still creates it once; activation or joined cleanup consumes it.
     pub(super) native: Box<PreparedNative>,
     pub(super) lifetime: StartupLifetime,
+    pub(super) listeners: Option<iroha_deploy::managed::RuntimeListeners>,
 }
 
 /// Refuse a build whose linked BLS pairing context cannot verify consensus aggregates.
@@ -82,7 +83,11 @@ impl PreparedStartup {
         };
         let mut supervisor = Supervisor::new();
         match Self::prepare_inner(config, genesis, &mut supervisor, &mut lifetime) {
-            Ok(native) => Ok(Self { native, lifetime }),
+            Ok(native) => Ok(Self {
+                native,
+                lifetime,
+                listeners: None,
+            }),
             Err(error) => {
                 supervisor.shutdown_signal().send();
                 let cleanup = supervisor.start().await;
@@ -566,6 +571,7 @@ impl PreparedStartup {
         let Self {
             mut native,
             lifetime,
+            listeners,
         } = self;
         // StateExecutor's Drop closes admission and joins its original native thread.
         drop(native.prepared_sumeragi.take());
@@ -574,6 +580,7 @@ impl PreparedStartup {
         let result = supervisor.start().await;
         drop(native);
         drop(lifetime);
+        drop(listeners);
         result
     }
 }
