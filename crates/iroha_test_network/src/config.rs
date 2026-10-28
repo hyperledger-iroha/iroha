@@ -1394,6 +1394,30 @@ pub(crate) fn validate_genesis_with_runtime_config(
     )
 }
 
+/// Keep the first rejected output's original source and full reason for genesis reports.
+fn first_genesis_execution_error(
+    outputs: &[iroha_data_model::block::execution_output::ExecutionOutputV1],
+) -> Option<String> {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+
+    outputs.iter().enumerate().find_map(|(index, output)| {
+        let error = output.result().as_ref().err()?;
+        let source = match output {
+            ExecutionOutputV1::Network(row) => format!("tx#{}", row.input_index),
+            ExecutionOutputV1::NetworkWithLifecycle(row) => {
+                format!("tx#{}", row.execution.input_index)
+            }
+            ExecutionOutputV1::Pipeline(_) | ExecutionOutputV1::PipelineWithLifecycle(_) => {
+                format!("pipeline output#{index}")
+            }
+            ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                format!("time output#{index}")
+            }
+        };
+        Some(format!("{source}: {error}; details: {error:?}"))
+    })
+}
+
 fn validate_genesis_with_display_chain(
     block: &GenesisBlock,
     genesis_account: &AccountId,
@@ -1531,26 +1555,7 @@ fn validate_genesis_on_current_thread(
         Err((rejected_block, err)) => {
             let first_tx_error = rejected_block
                 .has_results()
-                .then(|| {
-                    rejected_block
-                        .execution_outputs()
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, output)| {
-                            use iroha_data_model::block::execution_output::ExecutionOutputV1;
-                            let error = output.result().as_ref().err()?;
-                            let source = match output {
-                                ExecutionOutputV1::Network(row) => {
-                                    format!("tx#{}", row.input_index)
-                                }
-                                ExecutionOutputV1::Pipeline(_) => {
-                                    format!("pipeline output#{index}")
-                                }
-                                ExecutionOutputV1::Time(_) => format!("time output#{index}"),
-                            };
-                            Some(format!("{source}: {error}; details: {error:?}"))
-                        })
-                })
+                .then(|| first_genesis_execution_error(rejected_block.execution_outputs()))
                 .flatten();
             let mut report = Report::new(err);
             if let Some(first_tx_error) = first_tx_error {
@@ -1733,6 +1738,101 @@ mod tests {
         isi::{GrantBox, RevokeBox},
     };
     use norito::codec::Decode;
+
+    #[test]
+    fn first_genesis_execution_error_preserves_lifecycle_sources_and_indices() {
+        use iroha_data_model::{
+            block::execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+                PipelineEventPositionV1, PipelineInvocationV1, TimeInvocationV1,
+                TriggerLifecycleEffectsV1, TriggerUseV1,
+            },
+            events::time::{TimeEvent, TimeInterval},
+            transaction::signed::TransactionResult,
+        };
+
+        // Only diagnostic projection is exercised; these rows assert no native authority.
+        let trigger = TriggerUseV1 {
+            trigger_id: "genesis-diagnostic".parse().expect("fixture trigger id"),
+            registered_at_height: 1,
+            action_hash: Hash::new(b"genesis diagnostic fixture"),
+        };
+        let pipeline = PipelineInvocationV1 {
+            event: PipelineEventPositionV1::BlockApproved,
+            candidate_index: 91,
+            trigger: trigger.clone(),
+        };
+        let time = TimeInvocationV1 {
+            schedule_index: 81,
+            event: TimeEvent {
+                interval: TimeInterval {
+                    since_ms: 100,
+                    length_ms: 20,
+                },
+            },
+            trigger,
+        };
+        let successful = NetworkExecutionOutputV1 {
+            input_index: 1,
+            result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        };
+        let success = ExecutionOutputV1::Network(successful.clone());
+        let lifecycle_success = ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+            execution: NetworkExecutionOutputV1 {
+                input_index: 2,
+                ..successful
+            },
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: Vec::new(),
+            },
+        });
+        assert_eq!(
+            first_genesis_execution_error(&[success.clone(), lifecycle_success.clone()]),
+            None
+        );
+        let cases = [
+            (
+                ExecutionOutputV1::network_output_limit_rejection(17),
+                "tx#17",
+            ),
+            (
+                ExecutionOutputV1::pipeline_output_limit_rejection(pipeline.clone()),
+                "pipeline output#2",
+            ),
+            (
+                ExecutionOutputV1::time_output_limit_rejection(time.clone()),
+                "time output#2",
+            ),
+            (
+                ExecutionOutputV1::network_lifecycle_output_limit_rejection(29),
+                "tx#29",
+            ),
+            (
+                ExecutionOutputV1::pipeline_lifecycle_output_limit_rejection(pipeline),
+                "pipeline output#2",
+            ),
+            (
+                ExecutionOutputV1::time_lifecycle_output_limit_rejection(time),
+                "time output#2",
+            ),
+        ];
+        let detail = "LimitCheck(TransactionLimitError { reason: \"execution output exceeds consensus byte limit\" })";
+        for (rejected, expected_source) in cases {
+            let outputs = [
+                success.clone(),
+                lifecycle_success.clone(),
+                rejected,
+                ExecutionOutputV1::network_lifecycle_output_limit_rejection(99),
+            ];
+            assert_eq!(
+                first_genesis_execution_error(&outputs),
+                Some(format!(
+                    "{expected_source}: Failed to validate transaction limits; details: {detail}"
+                ))
+            );
+        }
+    }
 
     // Genesis uses the same exact four-validator committee and authenticated PoPs
     // as a real minimum-size test network; individual tests may own one key.
