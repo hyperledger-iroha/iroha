@@ -14,7 +14,7 @@ use std::{
     os::{
         fd::{AsFd as _, AsRawFd as _, OwnedFd},
         unix::{
-            fs::{MetadataExt as _, OpenOptionsExt as _},
+            fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
             process::CommandExt as _,
         },
     },
@@ -25,6 +25,21 @@ const KEY_FD: i32 = 198;
 const PUBLIC_FD: i32 = 201;
 const FINALITY_FD: i32 = 202;
 const MAX_PROOF_FRAME: usize = 4 * 1024 * 1024;
+
+/// Prepare a descriptor-only config, unlinking before any private bytes are written.
+fn private_config_file(root: &Path, config: &[u8]) -> Result<File> {
+    let mut file = tempfile::tempfile_in(root)?;
+    // Some tempfile backends create and then unlink the file. Refuse a failed
+    // unlink before populating it so a supervisor crash cannot leave secrets
+    // reachable through the filesystem, even before the child opens FD 198.
+    if file.metadata()?.nlink() != 0 {
+        return Err(eyre!("genesis seat config file must be unlinked"));
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(config)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(file)
+}
 
 struct SeatChild {
     child: Child,
@@ -63,20 +78,10 @@ impl SeatChild {
         ensure_local_deadline(Some(deadline))?;
         let credential_memory =
             configured_beacon_credential_memory(config, Path::new("genesis-seat-config.toml"))?;
-        // TODO: Recovery must scrub an unconsumed per-seat config copy after a
-        // supervisor crash before its daemon child opens FD 198. The signed
-        // network attempt remains consumed even when this cleanup is needed.
         let config_root = tempfile::Builder::new()
             .prefix("genesis-seat-config-")
             .tempdir_in(root)?;
-        let config_path = config_root.path().join("config.toml");
-        reset::inputs::write_new_private(&config_path, config)?;
-        let mut config_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())?)
-            .open(&config_path)?;
-        config_file.seek(SeekFrom::Start(0))?;
+        let config_file = private_config_file(config_root.path(), config)?;
         let (public_reader, public_writer) = std::io::pipe()?;
         let (finality_reader, finality_writer) = std::io::pipe()?;
         let private = File::from(rustix::io::fcntl_dupfd_cloexec(
@@ -544,6 +549,43 @@ impl GenesisRelay {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_config_is_unlinked_owner_only_and_ready_for_child_read() {
+        let root = reset::private_custody_test_dir("beacon-relay-config-");
+        let config = b"private_key = 'disposable-test-config'\n";
+        let file = private_config_file(root.path(), config).expect("descriptor-only config");
+        let metadata = file.metadata().expect("config metadata");
+        assert_eq!(metadata.nlink(), 0);
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::read_dir(root.path()).expect("config directory").count(),
+            0
+        );
+
+        // A separate process reads from the inherited descriptor without a path
+        // or an explicit seek, as the daemon does for its private configuration.
+        let output = Command::new("/bin/cat")
+            .stdin(Stdio::from(file))
+            .output()
+            .expect("read inherited config");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, config);
+        assert_eq!(
+            fs::read_dir(root.path()).expect("config directory").count(),
+            0
+        );
+    }
+
+    #[test]
+    fn private_config_requires_an_existing_directory() {
+        let root = reset::private_custody_test_dir("beacon-relay-config-");
+        assert!(private_config_file(&root.path().join("missing"), b"private config").is_err());
+        assert_eq!(
+            fs::read_dir(root.path()).expect("config directory").count(),
+            0
+        );
+    }
 
     #[test]
     fn public_frame_rejects_empty_and_oversized_payloads() {

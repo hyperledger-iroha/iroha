@@ -63,6 +63,7 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
 /// is measured with saturating arithmetic before any recursive type materialization occurs.
 pub const MAX_EXPANDED_TYPE_NODES: usize = ivm_abi::call::MAX_CALL_SCHEMA_NODES_V1;
+pub(crate) mod ballot_literals;
 mod call_target;
 pub(crate) mod contract_imports;
 use contract_imports::analyze_contract_call;
@@ -4410,6 +4411,29 @@ fn capture_builtin_argument_help(
     args: &[Expr],
     argument_types: &[Type],
 ) {
+    if matches!(
+        error.code,
+        "E_INVALID_POINTER_LITERAL" | "E_POINTER_LITERAL_REQUIRED"
+    ) && matches!(builtin, Builtin::PointerConstructor(_))
+        && let Some(argument) = args.first()
+    {
+        context.capture_diagnostic(context.expression_source(argument), None);
+        return;
+    }
+    if builtin == Builtin::BuildSubmitBallotInline {
+        let index = match error.code {
+            "E_BALLOT_ELECTION_ID" => Some(0),
+            "E_BALLOT_NULLIFIER" => Some(2),
+            "E_BALLOT_LITERAL_REQUIRED" => args.iter().position(|argument| {
+                matches!(argument.kind(), Expr::Ident(name) if is_external_parameter(context, name))
+            }),
+            _ => None,
+        };
+        if let Some(argument) = index.and_then(|index| args.get(index)) {
+            context.capture_diagnostic(context.expression_source(argument), None);
+            return;
+        }
+    }
     if error.code == "E_INVALID_ID_LITERAL"
         && let (Builtin::PointerConstructor(constructor), Some(argument)) = (builtin, args.first())
         && let Expr::String(raw) = argument.kind()
@@ -8423,6 +8447,14 @@ fn analyze_fixed_builtin_call(
     {
         return Err(sem_err("K2003", message.render(builtin)));
     }
+    if builtin == Builtin::BuildSubmitBallotInline {
+        if let ExprKind::String(raw) = args[0].kind() {
+            ballot_literals::election_id(raw)?;
+        }
+        if let ExprKind::Bytes(raw) = args[2].kind() {
+            ballot_literals::nullifier(raw)?;
+        }
+    }
     let expression = typed_builtin_call(
         builtin,
         args,
@@ -8991,6 +9023,18 @@ fn analyze_surface_builtin_call(
             if arg_ty != Type::String {
                 return Err(sem_err("K2003", format!("{name} expects string")));
             }
+            if constructor != PointerConstructor::Json
+                && let ExprKind::Ident(parameter) = arg_typed[0].kind()
+                && is_external_parameter(context, parameter)
+            {
+                return Err(sem_err(
+                    "E_POINTER_LITERAL_REQUIRED",
+                    format!(
+                        "{} requires a compile-time string literal; entrypoint parameter `{parameter}` is only available at runtime",
+                        builtin.source_name()
+                    ),
+                ));
+            }
             if let ExprKind::String(raw) = arg_typed[0].kind()
                 && let Err(invalid) = id_literals::validate(
                     constructor,
@@ -8999,6 +9043,18 @@ fn analyze_surface_builtin_call(
                 )
             {
                 return Err(sem_err("E_INVALID_ID_LITERAL", invalid.message));
+            }
+            if let ExprKind::String(raw) = arg_typed[0].kind() {
+                match constructor {
+                    PointerConstructor::AxtDescriptor => {
+                        crate::pointer_literals::axt_descriptor(raw).map(|_| ())
+                    }
+                    PointerConstructor::AxtAnchoredSpendV1 => {
+                        crate::pointer_literals::axt_anchored_spend(raw).map(|_| ())
+                    }
+                    _ => Ok(()),
+                }
+                .map_err(|message| sem_err("E_INVALID_POINTER_LITERAL", message))?;
             }
             if constructor == PointerConstructor::Json {
                 let ExprKind::String(raw) = arg_typed[0].kind() else {
@@ -9673,8 +9729,53 @@ fn analyze_surface_builtin_call(
         | Builtin::TestActorSign => {
             unreachable!("test helpers are validated before generic builtin analysis")
         }
+        Builtin::BuildSubmitBallotInline => {
+            let call = analyze_fixed_builtin_call(builtin, arg_typed)?;
+            if let ExprKind::Call { args, .. } = call.kind()
+                && let Some((index, parameter)) =
+                    args.iter().enumerate().find_map(|(index, argument)| {
+                        let ExprKind::Ident(name) = argument.kind() else {
+                            return None;
+                        };
+                        is_external_parameter(context, name).then_some((index, name))
+                    })
+            {
+                return Err(sem_err(
+                    "E_BALLOT_LITERAL_REQUIRED",
+                    format!(
+                        "{} requires compile-time literal `{}`; entrypoint parameter `{parameter}` is only available at runtime",
+                        builtin.source_name(),
+                        builtin.signature().parameter_names[index],
+                    ),
+                ));
+            }
+            Ok(call)
+        }
         _ => analyze_fixed_builtin_call(builtin, arg_typed),
     }
+}
+
+/// Recognize an immutable external parameter without classifying local or private-call values.
+fn is_external_parameter(context: &SemanticContext, name: &str) -> bool {
+    // Parameters cannot be assigned or shadowed, so a matching identifier remains runtime input.
+    context
+        .current_function_modifiers
+        .borrow()
+        .as_ref()
+        .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private)
+        && context
+            .current_function_name
+            .borrow()
+            .as_ref()
+            .is_some_and(|function| {
+                context
+                    .function_params
+                    .borrow()
+                    .get(function)
+                    .is_some_and(|parameters| {
+                        parameters.iter().any(|parameter| parameter.name == name)
+                    })
+            })
 }
 
 fn enclosing_return_type(context: &SemanticContext) -> Option<Type> {

@@ -336,9 +336,8 @@ See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 ## Cargo `build-dir` decision
 
 Rust 1.91 stabilised the `[build] build-dir` option, which allows relocating
-`target/`. The workspace baseline is now Rust 1.92, but we audited the CI
-wrappers and decided **not** to override this
-setting:
+`target/`. The workspace compiler is pinned in `rust-toolchain.toml`. CI
+wrappers retain the default build directory for these reasons:
 
 - `ci/check_sorafs_fixtures.sh` exports `target/go-cache`, `target/go-mod-cache`,
   and other Go workdirs when it runs the cross-language chunker suite

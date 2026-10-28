@@ -8,6 +8,6 @@ numeric line, stable identifier, and duplicate key before generating Rust
 items in `OUT_DIR`.
 
 The repository compile-time asset checker pins each asset's byte length and
-SHA-256 plus the exact historical Rust constant declaration from which it was
-projected. A focused standard-library Python test independently reconstructs
-the projection and checks ordering and values.
+SHA-256 and binds it to the current `build.rs` consumer. A focused
+standard-library Python test checks the current closed schemas, row counts,
+unique keys, and diagnostic ownership as these first-release tables evolve.

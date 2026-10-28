@@ -12,9 +12,11 @@
 //!   else is rejected with the file and key. Such a file must not be combined with `--sora`
 //!   and must not use `extends`.
 //!
-//! In both cases a `data_dir` completes every state path the configuration leaves unset under
+//! In both cases a `data_dir` completes registered state paths the configuration leaves unset under
 //! `<data_dir>/state/` and every secret file under `<data_dir>/secrets/`
-//! ([`crate::parameters::defaults::data_dir`]). Explicit per-path values win. A relative
+//! ([`crate::parameters::defaults::data_dir`]). Opt-in service paths are completed only when
+//! their section sets `enabled = true`; disabled services retain their defaults.
+//! Explicit per-path values win. A relative
 //! `data_dir` resolves against the directory of the file that sets it and is then made absolute
 //! against the working directory, so every completed path is absolute. The resolved `data_dir`
 //! is written to the loader-owned source [`crate::parameters::defaults::data_dir::LAYOUT_SOURCE`],
@@ -498,6 +500,19 @@ fn complete_data_dir(
         .iter()
         .map(|(key, relative)| (*key, state_dir.join(relative)))
         .collect();
+    for (key, relative) in layout::ENABLED_SERVICE_STATE_PATHS {
+        let enabled = ParameterId::from(key[..key.len() - 1].iter().copied().chain(["enabled"]));
+        if reader
+            .toml_sources()
+            .iter()
+            .rev()
+            .find_map(|source| source.fetch(&enabled))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+        {
+            completions.push((key, state_dir.join(relative)));
+        }
+    }
     for secret in SECRET_FILES {
         let parent = &secret.key[..secret.key.len() - 1];
         if secret

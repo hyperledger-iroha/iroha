@@ -214,18 +214,25 @@ Executes multiple read-only view entrypoints in one HTTP round-trip.
 - Query type: `ContractRollupSwapsFillsParams`.
 - Required query: `authority`.
 - Optional queries: `limit`, `offset`, `contract_address`, `contract_alias`,
-  and `scan_limit`.
+  `scan_limit`, and `count_mode`.
 - The route walks the router mirror history, stitches it to indexed swap
   events, and returns trader-facing fill cards plus pagination metadata.
+- `count_mode` defaults to `bounded`, the only supported mode. The response
+  omits `total` and reports `count_mode: "bounded"`; `has_more` refers only to
+  further visible rows in the scanned window, not the complete mirror history.
+  `exact` is rejected with `400 unsupported_count_mode`, and unknown values
+  with `400 invalid_count_mode`, before contract/history reads.
 
 ### `GET /v1/contracts/rollups/swaps/candles`
 
 - Query type: `ContractRollupSwapsCandlesParams`.
 - Required query: `authority`.
 - Optional queries: `limit`, `offset`, `contract_address`, `contract_alias`,
-  `scan_limit`, and `bucket_ms`.
+  `scan_limit`, `bucket_ms`, and `count_mode`.
 - The route reuses the fills rollup and buckets the stitched fills into OHLC
-  candle windows.
+  candle windows. Open and close follow oldest-to-newest fill order.
+- Count controls follow the fills endpoint: bounded mode only, no exact
+  `total`, and `has_more` limited to further buckets in the scanned window.
 
 ### `GET /v1/contracts/rollups/trader/activity`
 

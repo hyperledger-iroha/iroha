@@ -56,6 +56,13 @@ its LSP `initialize` response.
    `KOTODAMA_UPDATE_SNAPSHOT=1 npm test`. The extension is not published to a
    marketplace; install the packaged `.vsix`.
 
+The packaging tool's Azure Identity dependency is scoped to MSAL Node 7.1.2
+to fix [GHSA-xcx6-jx8p-x3h5](https://github.com/advisories/GHSA-xcx6-jx8p-x3h5).
+MSAL 7 removes the interactive `responseMode` option; Azure Identity 4.14 does
+not set that option, and VSCE's credential chain does not use browser-loopback
+authentication. TODO: remove the override when Azure Identity requires a
+patched MSAL release itself.
+
 ## Configure
 
 | Setting | Default | Meaning |

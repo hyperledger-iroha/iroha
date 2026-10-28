@@ -3470,6 +3470,10 @@ rows; flat indices are stripe-major. Only the terminal data padding is zero-fill
 `N = s·(d+p)` and encoded bytes are `(s−1)c(d+p) + ell(d+p)`. All products are checked.
 RS16 operates on little-endian GF(2^16) symbols with bit-identical scalar/SIMD outputs.
 Small payloads use the compact terminal stripe, not a full maximum-size stripe.
+Rows are coded in place. Shared codec geometry reserves exactly `2d² + dp + d`
+`u16` scratch words for two square matrices, parity coefficients and row indices,
+independent of row size. Native codec and verification admissions derive their
+scratch demand from that geometry; there is no separate row-staging allocation.
 
 **One canonical evidence format.** `AvailabilityFrame` is the existing semantic Norito
 ByteSequence with a declared frame identity, carrying this exact opaque signed table:

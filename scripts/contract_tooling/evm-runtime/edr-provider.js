@@ -1,6 +1,6 @@
 "use strict";
 
-// Native EDR EIP-1193 test provider. Requires the exact npm-ci-verified 0.24.0
+// Native EDR EIP-1193 test provider. Requires the exact npm-ci-verified 0.25.0
 // dependency and its platform Node-API library. No compiler, CLI or network
 // server is involved; each provider owns an isolated in-memory test chain.
 //
@@ -30,7 +30,7 @@ try {
   fs.closeSync(descriptor);
 }
 assert.equal(metadata.name, "@nomicfoundation/edr");
-assert.equal(metadata.version, "0.24.0", "native EDR version must match its audited lock");
+assert.equal(metadata.version, "0.25.0", "native EDR version must match its audited lock");
 const edr = require(entry);
 const context = new edr.EdrContext();
 const registered = context.registerProviderFactory(edr.L1_CHAIN_TYPE, edr.l1ProviderFactory());

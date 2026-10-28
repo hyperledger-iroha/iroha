@@ -1276,13 +1276,13 @@ fn lifecycle_key_from_config(
 }
 fn load_lifecycle_config(file: File, network: &iroha_data_model::NetworkId) -> Result<KeyPair> {
     use crate::taira_runtime_signer::{
-        TairaRuntimeSignerErrorV1 as KeyError, load_private_record_from_file,
+        TairaRuntimeSignerErrorV1 as KeyError, load_private_config_record_from_file,
     };
     let length = file.metadata().map_err(|_| Error::InvalidCustody)?.len();
     if length == 0 || length > iroha_config_base::toml::MAX_TOML_SOURCE_BYTES {
         return Err(Error::InvalidCustody);
     }
-    load_private_record_from_file(file, length, |bytes| {
+    load_private_config_record_from_file(file, length, |bytes| {
         lifecycle_key_from_config(bytes, network).map_err(|_| KeyError::InvalidKey)
     })
     .map_err(|_| Error::InvalidCustody)

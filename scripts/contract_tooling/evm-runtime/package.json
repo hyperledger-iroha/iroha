@@ -9,7 +9,7 @@
   "dependencies": {
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
-    "@nomicfoundation/edr": "0.24.0",
+    "@nomicfoundation/edr": "0.25.0",
     "ethers": "6.17.0"
   },
   "overrides": {

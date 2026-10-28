@@ -12,4 +12,4 @@ name = "source-snapshot"
 path = "../native_source_snapshot.rs"
 
 [dependencies]
-sha2 = { version = "=0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "=0.11.1", default-features = false }
