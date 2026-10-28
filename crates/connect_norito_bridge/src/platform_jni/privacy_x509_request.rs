@@ -136,7 +136,7 @@ fn materialize_statement(request: &[u8], action: &[u8], intent: &[u8]) -> Option
 }
 
 fn read_bounded(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     input: &jni::objects::JByteArray<'_>,
     maximum: usize,
 ) -> Option<Zeroizing<Vec<u8>>> {
@@ -151,7 +151,7 @@ fn read_bounded(
 }
 
 pub(super) fn java_create_request(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     statement: jni::objects::JByteArray<'_>,
     attachment_action_index: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
@@ -172,7 +172,7 @@ pub(super) fn java_create_request(
 }
 
 pub(super) fn java_inspect_request(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     request: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     let Some(input) = read_bounded(
@@ -188,10 +188,10 @@ pub(super) fn java_inspect_request(
         return std::ptr::null_mut();
     };
     (|| -> jni::errors::Result<jni::sys::jobjectArray> {
-        let result = env.new_object_array(9, "[B", jni::objects::JObject::null())?;
+        let result = env.new_object_array(9, jni::jni_str!("[B"), jni::objects::JObject::null())?;
         for (index, bytes) in fields.iter().enumerate() {
             let value = env.byte_array_from_slice(bytes)?;
-            env.set_object_array_element(&result, index as i32, &value)?;
+            env.set_object_array_element(&result, index, &value)?;
         }
         Ok(result.into_raw())
     })()
@@ -199,7 +199,7 @@ pub(super) fn java_inspect_request(
 }
 
 pub(super) fn java_materialize_statement(
-    env: &mut jni::JNIEnv<'_>,
+    env: &mut jni::Env<'_>,
     request: jni::objects::JByteArray<'_>,
     action: jni::objects::JByteArray<'_>,
     intent: jni::objects::JByteArray<'_>,
