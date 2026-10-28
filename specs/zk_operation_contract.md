@@ -336,7 +336,8 @@ Each rule is exercised by at least one scenario fixture.
   `specs/zk_resource_contract.json`; every scenario's vocabulary, trace safety,
   script consumption and outcomes of its refusal tokens; coverage of every rule,
   call stage and durable state; and that this document names every identifier
-  of the contract. `make guards` runs it.
+  of the contract. `make guards` runs it. The pull-request workflow runs this
+  checker and `scripts/tests/check_operation_contract_test.py`.
 
 ## 12. Open
 
@@ -349,6 +350,3 @@ Each rule is exercised by at least one scenario fixture.
   here; their ports are S1-B and S1-C packets.
 - The remedy for the two violated authenticated-carrier relations (section 8)
   and the structured size refusal (`queue.rs`) wait for the plan author's review.
-- TODO(CI): the pull-request workflow does not run the checker and its tests
-  yet; the step is added once the current claim on
-  `.github/workflows/pr.yml` is released.

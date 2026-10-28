@@ -12331,8 +12331,6 @@ mod tests {
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
-                #[cfg(feature = "telemetry")]
-                StateTelemetry::default(),
             );
             assert!(
                 state

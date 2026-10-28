@@ -169,8 +169,37 @@ function normalizeRuntimeUpgrade(value, context) {
 }
 
 const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
+// Declaration order in SccpGovernanceSubjectV1 and SccpNetworkV1 fixes S(P).
+const SCCP_SUBJECTS = Object.freeze([
+  "route", "route_control", "light_client", "parameters", "forgery_hold",
+  "fast_hold", "fast_pause_control",
+]);
+const SCCP_EXTERNAL_NETWORKS = Object.freeze([
+  "ethereum_mainnet", "bsc_mainnet", "ton_mainnet",
+]);
+const SCCP_ACTION_SUBJECTS = Object.freeze({
+  register_route: "route",
+  activate_revision: "route",
+  switch_revision: "route",
+  deactivate_outbound: "route",
+  retire_revision: "route",
+  remove_staged: "route",
+  release_stranded: "route",
+  set_taira_paused: "route",
+  set_destination_paused: "route_control",
+  initialize_light_client: "light_client",
+  install_trusted_checkpoint: "light_client",
+  freeze_light_client: "light_client",
+  set_parameters: "parameters",
+  activate_light_client_profile: "light_client",
+  attest_deployment_progress: "forgery_hold",
+  quarantine_revision: "forgery_hold",
+  open_reconciliation: "forgery_hold",
+  set_fast_pause_suspended: "fast_pause_control",
+});
 
-function normalizeSccpRoute(value, context) {
+/** Admit the shared SCCP proposal envelope and its exact subject-revision set. */
+export function normalizeSccpRoute(value, context) {
   const record = exactRecord(value, ["proposal"], context);
   const proposalContext = `${context}.proposal`;
   const proposal = exactRecord(
@@ -180,16 +209,56 @@ function normalizeSccpRoute(value, context) {
   );
   const networkId = nonEmptyString(proposal.network_id, `${proposalContext}.network_id`);
   NetworkId.parse(networkId);
-  const baseRevisions = array(proposal.base_revisions, `${proposalContext}.base_revisions`);
-  const actions = array(proposal.actions, `${proposalContext}.actions`);
-  if (actions.length === 0 || actions.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
+  const basesContext = `${proposalContext}.base_revisions`;
+  const bases = array(proposal.base_revisions, basesContext);
+  const actionsContext = `${proposalContext}.actions`;
+  const rawActions = array(proposal.actions, actionsContext);
+  for (const [entries, label] of [[bases, basesContext], [rawActions, actionsContext]]) {
+    if (entries.length === 0 || entries.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
+      throw new TypeError(
+        `${label} must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} entries`,
+      );
+    }
+  }
+  const baseRevisions = Array.from(bases, (item, index) => {
+    const label = `${basesContext}[${index}]`;
+    const entry = exactRecord(item, ["subject", "revision"], label);
+    return {
+      subject: normalizeSccpSubject(entry.subject, `${label}.subject`),
+      revision: jsonUint(entry.revision, `${label}.revision`),
+    };
+  });
+  const actionSubjects = new Set();
+  const actions = Array.from(rawActions, (item, index) => {
+    const label = `${actionsContext}[${index}]`;
+    const entry = exactRecord(item, ["action", "payload"], label);
+    const action = nonEmptyString(entry.action, `${label}.action`);
+    if (!Object.hasOwn(SCCP_ACTION_SUBJECTS, action)) {
+      throw new TypeError(`${label}.action contains an unsupported SCCP action: ${action}`);
+    }
+    if (!plainObject(entry.payload)) {
+      throw new TypeError(`${label}.payload must be an object`);
+    }
+    const tag = SCCP_ACTION_SUBJECTS[action];
+    const key = tag === "parameters"
+      ? null
+      : normalizeSccpNetwork(entry.payload.network, `${label}.payload.network`);
+    actionSubjects.add(sccpSubjectOrder({ subject: tag, key }));
+    return {
+      action,
+      payload: key === null ? { ...entry.payload } : { ...entry.payload, network: key },
+    };
+  });
+  const expected = [...actionSubjects].sort((left, right) => left - right);
+  if (baseRevisions.length !== expected.length
+      || baseRevisions.some((entry, index) => sccpSubjectOrder(entry.subject) !== expected[index])) {
     throw new TypeError(
-      `${proposalContext}.actions must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} actions`,
+      `${basesContext} must list exactly the action subjects in canonical order, without duplicates`,
     );
   }
-  // TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
-  // entry statically (specs/sccp.md §4.14.3) once the SDK carries typed SCCP
-  // governance codecs; Torii and the node remain authoritative for them today.
+  // TODO: validate each typed SCCP action body, including nested parameters,
+  // deployment/light-client invariants and JSON-safe u64 fields (spec §4.14.3).
+  // Torii and the node remain authoritative for those checks and live state.
   return {
     proposal: {
       network_id: networkId,
@@ -197,6 +266,33 @@ function normalizeSccpRoute(value, context) {
       actions,
     },
   };
+}
+
+function normalizeSccpSubject(value, context) {
+  const record = exactRecord(value, ["subject", "key"], context);
+  const tag = nonEmptyString(record.subject, `${context}.subject`);
+  if (!SCCP_SUBJECTS.includes(tag)) {
+    throw new TypeError(`${context}.subject contains an unsupported SCCP subject: ${tag}`);
+  }
+  if (tag === "parameters") {
+    if (record.key !== null) throw new TypeError(`${context}.key must be null`);
+    return { subject: tag, key: null };
+  }
+  return { subject: tag, key: normalizeSccpNetwork(record.key, `${context}.key`) };
+}
+
+function normalizeSccpNetwork(value, context) {
+  const record = exactRecord(value, ["network", "profile"], context);
+  if (!SCCP_EXTERNAL_NETWORKS.includes(record.network)) {
+    throw new TypeError(`${context}.network must name a supported external SCCP network`);
+  }
+  if (record.profile !== null) throw new TypeError(`${context}.profile must be null`);
+  return { network: record.network, profile: null };
+}
+
+function sccpSubjectOrder({ subject, key }) {
+  return SCCP_SUBJECTS.indexOf(subject) * 4
+    + (key === null ? 0 : SCCP_EXTERNAL_NETWORKS.indexOf(key.network) + 1);
 }
 
 function requireNativeFeeHash(value, context) {
