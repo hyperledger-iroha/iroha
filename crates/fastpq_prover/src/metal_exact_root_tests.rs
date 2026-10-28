@@ -192,6 +192,56 @@ fn factorized_lookup(table: &[u64], exponent: u32) -> u64 {
     result
 }
 
+// Independent sparse-factor model: the shader is exercised by the required
+// device test below; this model also counts the eliminated identity products.
+fn sparse_factorized_lookup(table: &[u64], exponent: u32) -> (u64, usize) {
+    assert_eq!(table.len(), 4 * 256);
+    let mut value = None;
+    let mut multiplications = 0;
+    for digit in 0..4 {
+        let byte = ((exponent >> (8 * digit)) & 255) as usize;
+        if byte != 0 {
+            let factor = table[digit * 256 + byte];
+            value = Some(value.map_or(factor, |previous| {
+                multiplications += 1;
+                goldilocks_mul(previous, factor)
+            }));
+        }
+    }
+    (value.unwrap_or(1), multiplications)
+}
+
+#[test]
+fn sparse_public_twiddle_factors_match_dense_lookup_and_full_width_exponents() {
+    for log in 1..=32 {
+        for odd in [1, 3, 5] {
+            let root = goldilocks_pow(goldilocks_pow(7, (FIELD_MODULUS - 1) >> log), odd);
+            for inverse in [false, true] {
+                let table = compute_factorized_root_twiddles(root, inverse);
+                let omega = if inverse { goldilocks_inv(root) } else { root };
+                let single_digits =
+                    (0..4).flat_map(|digit| (0..256_u32).map(move |byte| byte << (8 * digit)));
+                let mixed_digits = (0..1024_u32).map(|i| i.wrapping_mul(0x9e37_79b9));
+                for exponent in
+                    single_digits
+                        .chain(mixed_digits)
+                        .chain([u32::MAX, 0x0102_0304, 0x7fff_ffff])
+                {
+                    let (actual, multiplications) = sparse_factorized_lookup(&table, exponent);
+                    assert_eq!(actual, factorized_lookup(&table, exponent));
+                    assert_eq!(actual, goldilocks_pow(omega, u64::from(exponent)));
+                    let nonzero_digits = exponent
+                        .to_le_bytes()
+                        .into_iter()
+                        .filter(|byte| *byte != 0)
+                        .count();
+                    assert_eq!(multiplications, nonzero_digits.saturating_sub(1));
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn factorized_public_powers_match_independent_exponentiation_for_all_orders_and_digits() {
     for log in 1..=32 {
@@ -309,4 +359,46 @@ fn required_metal_stage_and_factorized_layouts_share_one_bounded_cache_without_a
         crate::gpu_memory::METAL_TWIDDLE_PAYLOAD_ALLOWANCE,
         66 * 4 * 256 * 8
     );
+}
+
+#[test]
+#[ignore = "requires rebuilt authenticated Metal artifact and actual native19/common22 device parity"]
+fn required_metal_sparse_public_twiddles_match_cpu_at_native_and_common_domains() {
+    select_metal_device().expect("required twiddle parity needs an actual Metal device");
+    let _lane = crate::backend::acquire_gpu_lane();
+    for log in [19, 22] {
+        for odd in [1, 3] {
+            let root = goldilocks_pow(goldilocks_pow(7, (FIELD_MODULUS - 1) >> log), odd);
+            for inverse in [false, true] {
+                let mut actual = source(log, 1);
+                let mut expected = actual.clone();
+                let domain = Domain {
+                    log_size: log,
+                    generator: root,
+                };
+                if inverse {
+                    cyclotomic::ifft(&mut expected[0], domain);
+                } else {
+                    cyclotomic::fft(&mut expected[0], domain);
+                }
+                let allocation = (actual[0].as_ptr(), actual[0].len(), actual[0].capacity());
+                let started = std::time::Instant::now();
+                transform(&mut actual, log, root, inverse).unwrap();
+                let elapsed = started.elapsed();
+                assert_eq!(
+                    allocation,
+                    (actual[0].as_ptr(), actual[0].len(), actual[0].capacity())
+                );
+                assert_eq!(
+                    actual, expected,
+                    "log={log}, root_power={odd}, inverse={inverse}"
+                );
+                assert!(!backend_quarantined());
+                eprintln!(
+                    "exact-root sparse public twiddles: log={log}, columns=1, root_power={odd}, inverse={inverse}, device_seconds={:.6}; byte parity only, no full-proof timing qualification",
+                    elapsed.as_secs_f64()
+                );
+            }
+        }
+    }
 }

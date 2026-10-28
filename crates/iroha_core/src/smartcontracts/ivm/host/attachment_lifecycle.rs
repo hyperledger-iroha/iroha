@@ -39,7 +39,7 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
     }
     pub(super) fn finish_attachment_child(&mut self, rollback: bool) -> Result<(), ivm::VMError> {
         let authority = if self.attachment_custody.is_some() {
-            self.with_attachment_invocation(|_| Ok(()))
+            self.with_attachment_invocation::<_, CustodyError>(|_| Ok(()))
                 .map_err(|_| ivm::VMError::PermissionDenied)
         } else {
             Ok(())
@@ -68,7 +68,7 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
     pub(super) fn finish_attachment_root(&mut self) -> Result<(), ValidationFail> {
         if self.attachment_custody.is_some() {
             // Revalidate the restored root's actual subject before releasing any artifacts.
-            self.with_attachment_invocation(|_| Ok(()))
+            self.with_attachment_invocation::<_, CustodyError>(|_| Ok(()))
                 .map_err(|e| ValidationFail::NotPermitted(e.to_string()))?;
         }
         if let Some(owner) = self.attachment_custody.take() {
@@ -81,19 +81,21 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
 
     /// The current immutable authorization supplies the subject, not a signed
     /// declaration or guest account. This does not itself enable any operation.
-    /// TODO(I.3): typed native consumers must bind their normalized request and
-    /// effect to this original invocation before admission can be enabled.
-    pub(super) fn with_attachment_invocation<T>(
+    /// X.509 binds its normalized request and native effect to this invocation.
+    /// TODO(I.3): complete X509's joint security construction and genuine signed execution
+    /// before enabling admission; other operations and independent replay roots still
+    /// need their typed consumers.
+    pub(super) fn with_attachment_invocation<T, E: From<CustodyError>>(
         &mut self,
-        visit: impl FnOnce(&mut Invocation<'_, '_>) -> Result<T, CustodyError>,
-    ) -> Result<T, CustodyError> {
+        visit: impl FnOnce(&mut Invocation<'_, '_>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let Some(context) = self.current_contract_runtime_context.as_ref() else {
             self.abort_attachment_attempt();
-            return Err(CustodyError::WrongAuthority(0));
+            return Err(CustodyError::WrongAuthority(0).into());
         };
         let Some(authorization) = self.current_entrypoint_authorization.as_ref() else {
             self.abort_attachment_attempt();
-            return Err(CustodyError::WrongAuthority(0));
+            return Err(CustodyError::WrongAuthority(0).into());
         };
         if context.contract_subject != context.contract_address.subject_id()
             || context.contract_address != authorization.contract_address
@@ -101,10 +103,10 @@ impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
             || self.authority != authorization.authority
         {
             self.abort_attachment_attempt();
-            return Err(CustodyError::WrongAuthority(0));
+            return Err(CustodyError::WrongAuthority(0).into());
         }
         let Some(owner) = self.attachment_custody.as_mut() else {
-            return Err(CustodyError::ForeignOwner);
+            return Err(CustodyError::ForeignOwner.into());
         };
         owner.with_invocation(&context.contract_subject, visit)
     }

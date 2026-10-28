@@ -13,12 +13,20 @@ const KEY_OPENINGS_V1: usize = 11;
 #[path = "main_digest_joins.rs"]
 mod main_digest_joins;
 use main_digest_joins::{DIGEST_BLOCKS_V1, DIGEST_OPENINGS_V1, MainDigestJoinPlanV1};
-pub(super) const BLOCKS_V1: usize = KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1;
+#[path = "main_public_sha_digests.rs"]
+mod main_public_sha_digests;
+use super::super::super::verifier_profile::ZkX509CrlPublicInputsV1;
+use main_public_sha_digests::{MainPublicShaDigestPlanV1, PUBLIC_DIGEST_BLOCKS_V1};
+#[path = "main_public_crl_times.rs"]
+mod main_public_crl_times;
+use main_public_crl_times::{MainPublicCrlTimePlanV1, PUBLIC_TIME_BLOCKS_V1};
+pub(super) const BLOCKS_V1: usize =
+    KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + PUBLIC_DIGEST_BLOCKS_V1 + PUBLIC_TIME_BLOCKS_V1;
 pub(in super::super) const OPENINGS_V1: usize = KEY_OPENINGS_V1 + DIGEST_OPENINGS_V1;
 // The current first-release profile fixes eleven key and twenty digest DEEP values.
 const _: () = assert!(OPENINGS_V1 == 31);
 const DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:main-key-byte-joins:v1";
-const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+activity1:12-key-blocks647-equalities+5-sha-digest-blocks40-u32-equalities:root-power2,8,32:original-masks:31-extra-deep-openings:no-private-byte-divisions";
+const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+activity1:12-key-blocks647-equalities+5-sha-digest-blocks40-u32-equalities+2-authoritative-crl-digest-blocks16-u32-equalities+2-authoritative-crl-time-equalities:root-power2,8,32:original-masks:31-extra-deep-openings:no-private-byte-divisions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ColumnV1 {
@@ -38,10 +46,12 @@ struct BlockV1 {
     scale: F,
 }
 
-/// Closed statement-only relation plan. No private values or endpoints enter it.
+/// Closed statement and authoritative-record plan. No private values enter it.
 pub(super) struct MainKeyJoinPlanV1 {
     blocks: [BlockV1; KEY_BLOCKS_V1],
     digest: MainDigestJoinPlanV1,
+    public_digest: MainPublicShaDigestPlanV1,
+    public_times: MainPublicCrlTimePlanV1,
 }
 
 impl MainKeyJoinPlanV1 {
@@ -56,6 +66,7 @@ impl MainKeyJoinPlanV1 {
         layout: &AggregateProofLayoutV1,
         statement: &IrohaZkX509StarkP256StatementV1,
         shape: ZkX509Rfc5280StarkShapeV1,
+        crl_public_inputs: ZkX509CrlPublicInputsV1,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         layout.validate_exact_full_profile_registration_v1()?;
         let (rows, channels, value_column, activity_column) =
@@ -228,7 +239,18 @@ impl MainKeyJoinPlanV1 {
         };
         let digest =
             MainDigestJoinPlanV1::new_v1(layout, usize::from(shape.disclosed_attribute_count()))?;
-        let plan = Self { blocks, digest };
+        let public_digest = MainPublicShaDigestPlanV1::new_v1(
+            layout,
+            usize::from(shape.disclosed_attribute_count()),
+            crl_public_inputs,
+        )?;
+        let public_times = MainPublicCrlTimePlanV1::new_v1(layout, shape, crl_public_inputs)?;
+        let plan = Self {
+            blocks,
+            digest,
+            public_digest,
+            public_times,
+        };
         plan.check_mask_query_closure_v1()?;
         Ok(plan)
     }
@@ -297,6 +319,8 @@ impl MainKeyJoinPlanV1 {
                 .map_err(map_transparent_error_v1)?;
         }
         self.digest.absorb_plan_v1(transcript)?;
+        self.public_digest.absorb_plan_v1(transcript)?;
+        self.public_times.absorb_plan_v1(transcript)?;
         Self::exact_challenges_v1(transcript, DOMAIN_V1, BLOCKS_V1)
     }
 
@@ -408,12 +432,24 @@ impl MainKeyJoinPlanV1 {
                 ),
             );
         }
-        Ok(result.add(self.digest.evaluate_v1(
-            groups,
-            z,
-            &values[KEY_OPENINGS_V1..],
-            &alphas[KEY_BLOCKS_V1..],
-        )?))
+        Ok(result
+            .add(self.digest.evaluate_v1(
+                groups,
+                z,
+                &values[KEY_OPENINGS_V1..],
+                &alphas[KEY_BLOCKS_V1..KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1],
+            )?)
+            .add(self.public_digest.evaluate_v1(
+                groups,
+                z,
+                &alphas[KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1
+                    ..KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + PUBLIC_DIGEST_BLOCKS_V1],
+            )?)
+            .add(self.public_times.evaluate_v1(
+                groups,
+                z,
+                &alphas[KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + PUBLIC_DIGEST_BLOCKS_V1..],
+            )?))
     }
     pub(super) fn supplemental_v1(
         &self,
@@ -724,12 +760,58 @@ impl MainKeyJoinPlanV1 {
         }
         // The activity pair has different committed columns. Both byte caches
         // are dropped before these owners are allocated.
-        let block = self.blocks[KEY_OPENINGS_V1];
-        let source = Self::replay_v1(block.source, layout, polynomials, sources, policy)?;
-        let target = Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
-        let quotient = Self::quotient_v1(block, &source, &target)?;
-        for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
-            *out = out.add(alphas[KEY_OPENINGS_V1].mul_base(*value));
+        {
+            let block = self.blocks[KEY_OPENINGS_V1];
+            let source = Self::replay_v1(block.source, layout, polynomials, sources, policy)?;
+            let target = Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
+            let quotient = Self::quotient_v1(block, &source, &target)?;
+            for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
+                *out = out.add(alphas[KEY_OPENINGS_V1].mul_base(*value));
+            }
+        }
+        // Both authoritative endpoints share one physical SHA column in every
+        // admitted shape. Retain that original owner while clearing each quotient
+        // sequentially; do not replay or independently reconstruct the same column.
+        let mut public_source: Option<(ColumnV1, ZeroizingMainTraceColumnV1)> = None;
+        for index in 0..PUBLIC_DIGEST_BLOCKS_V1 {
+            let column = self.public_digest.source_v1(index)?;
+            if public_source
+                .as_ref()
+                .is_none_or(|(owner, _)| *owner != column)
+            {
+                drop(public_source.take());
+                public_source = Some((
+                    column,
+                    Self::replay_v1(column, layout, polynomials, sources, policy)?,
+                ));
+            }
+            let source = &public_source
+                .as_ref()
+                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
+                .1;
+            let quotient = self.public_digest.quotient_v1(index, source)?;
+            for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
+                *out = out.add(alphas[KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + index].mul_base(*value));
+            }
+        }
+        drop(public_source);
+        {
+            let source = Self::replay_v1(
+                self.public_times.source_v1(),
+                layout,
+                polynomials,
+                sources,
+                policy,
+            )?;
+            for index in 0..PUBLIC_TIME_BLOCKS_V1 {
+                let quotient = self.public_times.quotient_v1(index, &source)?;
+                for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
+                    *out = out.add(
+                        alphas[KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + PUBLIC_DIGEST_BLOCKS_V1 + index]
+                            .mul_base(*value),
+                    );
+                }
+            }
         }
         main_bounded_transform::check_completion_v1(
             fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
@@ -839,7 +921,18 @@ mod tests {
         rfc_statement.disclosed_attribute_indices =
             (0..u8::try_from(disclosures).expect("fixture value fits u8")).collect();
         let shape = ZkX509Rfc5280StarkShapeV1::from_statement(&rfc_statement).unwrap();
-        let plan = MainKeyJoinPlanV1::new_v1(&layout, &statement, shape).unwrap();
+        let plan = MainKeyJoinPlanV1::new_v1(
+            &layout,
+            &statement,
+            shape,
+            ZkX509CrlPublicInputsV1 {
+                crl_der: [7; 32],
+                issuer_spki: [8; 32],
+                this_update: 1,
+                next_update: 2,
+            },
+        )
+        .unwrap();
         (layout, plan)
     }
     fn product_v1(a: &[F], b: &[F]) -> Vec<F> {
@@ -1133,8 +1226,16 @@ mod tests {
             assert!(streamed[..i].iter().all(|other| other.target != b.target));
         }
         let replays_per_opening_phase = 1 + streamed.len();
-        let composition_replays = 1 + replays_per_opening_phase + 2 + 3;
-        assert_eq!(composition_replays + 2 * replays_per_opening_phase, 24);
+        let public_replays = (0..PUBLIC_DIGEST_BLOCKS_V1)
+            .filter(|index| {
+                *index == 0
+                    || plan.public_digest.source_v1(*index).unwrap()
+                        != plan.public_digest.source_v1(*index - 1).unwrap()
+            })
+            .count();
+        assert_eq!(public_replays, 1);
+        let composition_replays = 1 + replays_per_opening_phase + 2 + 3 + public_replays + 1;
+        assert_eq!(composition_replays + 2 * replays_per_opening_phase, 26);
         let n = |log: u8| (1_usize << log) + MASK_DEGREE + 1;
         let divisions: usize = plan
             .blocks
@@ -1146,6 +1247,11 @@ mod tests {
             .sum();
         assert_eq!(divisions, 345_046_578);
         assert_eq!(divisions + 5 * 8 * (32 * (n(16) - 1) + 1), 431_255_898);
+        assert_eq!(
+            divisions + 5 * 8 * (32 * (n(16) - 1) + 1) + PUBLIC_DIGEST_BLOCKS_V1 * 8 * n(19),
+            439_673_562
+        );
+        assert_eq!(439_673_562 + PUBLIC_TIME_BLOCKS_V1 * n(19), 440_725_770);
         let evaluation_steps: usize = plan.blocks[..KEY_OPENINGS_V1]
             .iter()
             .map(|b| n(b.target.log))
@@ -1159,6 +1265,10 @@ mod tests {
             2 * ((1 << 19) / 2 * 19) + 3 * ((1 << 18) / 2 * 18) + 16 * ((1 << 16) / 2 * 16);
         assert_eq!(native_butterflies, 25_427_968);
         assert_eq!(native_butterflies + 3 * ((1 << 19) / 2 * 19), 40_370_176);
+        assert_eq!(
+            native_butterflies + (4 + public_replays) * ((1 << 19) / 2 * 19),
+            50_331_648
+        );
         assert!((n(19) + n(18) + n(16)) * 8 <= 2 * n(19) * 8);
     }
 

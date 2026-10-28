@@ -482,6 +482,15 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state.rs",
+        "canonical_history_summary_source_token",
+        1,
+        UseOwner::Other(
+            Use::LocalArtifact,
+            "Returns Kura's original canonical block file and journal metadata fingerprint for derived-summary cache invalidation; no State root or body authority",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/state.rs",
         "captured_fastpq_transcript_sources",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
@@ -1103,6 +1112,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state/native_execution_tip.rs",
+        "restored_successor_world_root",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/native_execution_tip.rs",
         "validate_native_execution_authorization",
         1,
         UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
@@ -1188,6 +1203,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",
         "state_transition",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "verify_captured_accumulator",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "verify_state_accumulator",
         1,
         UseOwner::Roots(&["world_state_root"]),
     ),

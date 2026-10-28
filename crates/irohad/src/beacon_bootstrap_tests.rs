@@ -416,20 +416,59 @@ fn rotation_config_descriptor_uses_only_exact_native_consensus_identity() {
         .expect("private test root");
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("private root");
     let path = fs::canonicalize(root.path()).expect("canonical root");
-    for (name, bytes, success) in [
-        ("valid", config.as_bytes(), true),
-        ("malformed", b"not TOML".as_slice(), false),
-    ] {
-        let file_path = path.join(name);
-        write_new(&file_path, bytes, true).expect("private config");
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&file_path)
-            .expect("open config");
-        assert_eq!(load_lifecycle_config(file, &network).is_ok(), success);
-        assert_eq!(fs::metadata(file_path).expect("truncated config").len(), 0);
+    for unlinked in [false, true] {
+        for (name, bytes, success) in [
+            ("valid", config.as_bytes(), true),
+            ("malformed", b"not TOML".as_slice(), false),
+        ] {
+            use std::os::fd::AsRawFd as _;
+
+            let file_path = path.join(format!("{name}-{unlinked}"));
+            write_new(&file_path, bytes, true).expect("private config");
+            let retained = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&file_path)
+                .expect("open config");
+            if unlinked {
+                fs::remove_file(&file_path).expect("unlink launch config");
+            }
+            // Reopen the original inode through the same kernel descriptor path
+            // used by `take_inherited_private_file`, including after unlink.
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            let descriptor_path = format!("/proc/self/fd/{}", retained.as_raw_fd());
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
+            let descriptor_path = format!("/dev/fd/{}", retained.as_raw_fd());
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(descriptor_path)
+                .expect("reopen config descriptor");
+            let loaded = load_lifecycle_config(file, &network);
+            assert_eq!(loaded.is_ok(), success);
+            if success {
+                assert_eq!(loaded.expect("exact key").public_key(), key.public_key());
+            }
+            assert_eq!(retained.metadata().expect("truncated config").len(), 0);
+            assert_eq!(file_path.exists(), !unlinked);
+        }
     }
+    let file_path = path.join("linked");
+    write_new(&file_path, config.as_bytes(), true).expect("private config");
+    fs::hard_link(&file_path, path.join("linked-alias")).expect("additional config link");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .expect("open linked config");
+    assert!(matches!(
+        load_lifecycle_config(file, &network),
+        Err(Error::InvalidCustody)
+    ));
+    assert_eq!(
+        fs::read(file_path).expect("unconsumed config"),
+        config.as_bytes()
+    );
     config.zeroize();
 }
 

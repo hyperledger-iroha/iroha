@@ -657,16 +657,6 @@ record!(
     "iroha_data_model::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1"
 );
 record!(
-    privacy_register_privacy_exact12_qualification_v1,
-    crate::isi::privacy::RegisterPrivacyExact12QualificationV1,
-    "iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1"
-);
-record!(
-    privacy_register_privacy_protocol_activation_v1,
-    crate::isi::privacy::RegisterPrivacyProtocolActivationV1,
-    "iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1"
-);
-record!(
     privacy_register_privacy_vega_issuer_v1,
     crate::isi::privacy::RegisterPrivacyVegaIssuerV1,
     "iroha_data_model::isi::privacy::RegisterPrivacyVegaIssuerV1"
@@ -752,14 +742,14 @@ record!(
     "iroha_data_model::isi::privacy::RotatePrivacyZkX509TrustAnchorV1"
 );
 record!(
-    privacy_schedule_privacy_consensus_policy_tightening_v1,
-    crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1,
-    "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1"
+    privacy_schedule_privacy_consensus_policy_update_v1,
+    crate::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1,
+    "iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1"
 );
 record!(
-    privacy_schedule_privacy_protocol_limits_tightening_v1,
-    crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1,
-    "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1"
+    privacy_schedule_privacy_protocol_limits_update_v1,
+    crate::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+    "iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1"
 );
 record!(
     privacy_submit_privacy_proof_v1,
@@ -767,9 +757,9 @@ record!(
     "iroha_data_model::isi::privacy::SubmitPrivacyProofV1"
 );
 record!(
-    privacy_transition_privacy_protocol_lifecycle_v1,
-    crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
-    "iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1"
+    privacy_submit_privacy_zk_x509_certificate_v1,
+    crate::isi::privacy::SubmitPrivacyZkX509CertificateV1,
+    "iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1"
 );
 record!(
     private_settlement_abort_atomic_private_settlement_v1,

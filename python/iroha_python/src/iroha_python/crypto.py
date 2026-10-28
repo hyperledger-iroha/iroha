@@ -149,7 +149,7 @@ __all__ = [
     "ContractCall",
     "NetworkId",
     "TransactionExecutableEntry",
-    "PrivacyNativeActionBuildResultV1",
+    "PrivacyX509PreparedTransactionV1",
     "PrivacyExact12CapabilityManifestV1",
     "SignedTransactionEnvelope",
     "TransactionBuilder",
@@ -437,7 +437,7 @@ if TYPE_CHECKING:
 
         def to_json(self) -> str: ...
 
-    PrivacyNativeActionBuildResultV1: TypeAlias = Any
+    PrivacyX509PreparedTransactionV1: TypeAlias = Any
     PrivacyExact12CapabilityManifestV1: TypeAlias = Any
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
@@ -566,7 +566,7 @@ else:
                 expiration_epoch,
             )
 
-    PrivacyNativeActionBuildResultV1 = _crypto.PrivacyNativeActionBuildResultV1
+    PrivacyX509PreparedTransactionV1 = _crypto.PrivacyX509PreparedTransactionV1
     PrivacyExact12CapabilityManifestV1 = _crypto.PrivacyExact12CapabilityManifestV1
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
@@ -2538,7 +2538,7 @@ def is_privacy_native_available() -> bool:
 def privacy_compiled_profile_catalog_v1() -> bytes:
     """Return this binary's canonical Norito V1 local compiled-profile catalog.
 
-    This archive has no committed height, governance activation, or readiness
+    This archive has no committed height, committed protocol policy, or readiness
     state. Use the client's authoritative Exact12 capability query for a fresh
     snapshot from live Torii.
     """

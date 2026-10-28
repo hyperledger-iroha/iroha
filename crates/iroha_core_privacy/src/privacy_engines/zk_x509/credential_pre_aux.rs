@@ -379,6 +379,7 @@ fn encode_pre_aux_roots_v1(
 }
 fn derive_credential_projection_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
+    hash_bus: ZkX509ShaCallBusChallengesV1,
 ) -> Result<ZkX509ProjectionChallengesV1, ZkX509CredentialPreAuxErrorV1> {
     let mut sampled = [F::ZERO; ZK_X509_PROJECTION_COPY_LANES_V1 * 7];
     for (index, challenge) in sampled.iter_mut().enumerate() {
@@ -386,6 +387,7 @@ fn derive_credential_projection_challenges_v1(
         *challenge = transcript.challenge_field(label)?;
     }
     let challenges = ZkX509ProjectionChallengesV1 {
+        hash_bus,
         copy: core::array::from_fn(|lane| ZkX509ProjectionCopyChallengesV1 {
             beta: sampled[lane * 7],
             gamma: sampled[lane * 7 + 1],
@@ -406,6 +408,11 @@ fn derive_credential_projection_challenges_v1(
 fn validate_main_post_base_challenges_v1(
     phase: &ZkX509CredentialMainPostBaseChallengesV1,
 ) -> Result<(), ZkX509CredentialPreAuxErrorV1> {
+    // No duplicate challenge encoding: this bus must use the already committed
+    // SHA family, not a separately sampled or caller-selected substitute.
+    if phase.projection.hash_bus != phase.sha {
+        return Err(ZkX509CredentialPreAuxErrorV1::Challenge);
+    }
     phase
         .sha
         .validate()
@@ -565,7 +572,7 @@ pub fn derive_zk_x509_credential_pre_aux_binding_v1(
     transcript.absorb(CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1, &[&roots])?;
     let sha = derive_zk_x509_sha_call_bus_challenges_v1(&mut transcript)?;
     let rfc5280 = derive_zk_x509_rfc5280_stark_challenges_v1(&mut transcript)?;
-    let projection = derive_credential_projection_challenges_v1(&mut transcript)?;
+    let projection = derive_credential_projection_challenges_v1(&mut transcript, sha)?;
     let io = derive_zk_x509_io_challenges_v1(&mut transcript)?;
     let der = derive_zk_x509_der_stark_challenges_v1(&mut transcript)?;
     let sha_word_memory = derive_sha256_word_memory_challenges_v1(&mut transcript)?;
@@ -690,8 +697,11 @@ mod tests {
                 derive_zk_x509_rfc5280_stark_challenges_v1(transcript).expect("RFC challenges");
             }
             2 => {
-                derive_credential_projection_challenges_v1(transcript)
-                    .expect("projection challenges");
+                derive_credential_projection_challenges_v1(
+                    transcript,
+                    super::super::projection_air::tests::test_hash_bus_challenges_v1(),
+                )
+                .expect("projection challenges");
             }
             3 => {
                 derive_zk_x509_io_challenges_v1(transcript).expect("I/O challenges");
@@ -1231,12 +1241,14 @@ mod tests {
             &public_digest,
         )
         .expect("pre-root transcript");
-        let premature = derive_credential_projection_challenges_v1(&mut before_roots)
-            .expect("premature projection schedule");
+        let premature =
+            derive_credential_projection_challenges_v1(&mut before_roots, canonical.hash_bus)
+                .expect("premature projection schedule");
         assert_ne!(premature, canonical);
         let mut reordered = transcript_after_roots_v1(main, CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1);
-        let projection_first = derive_credential_projection_challenges_v1(&mut reordered)
-            .expect("projection-first schedule");
+        let projection_first =
+            derive_credential_projection_challenges_v1(&mut reordered, canonical.hash_bus)
+                .expect("projection-first schedule");
         assert_ne!(projection_first, canonical);
         let mut wrong_domain = transcript_after_roots_v1(
             main,
@@ -1246,8 +1258,9 @@ mod tests {
             .expect("wrong-domain SHA challenges");
         let _ = derive_zk_x509_rfc5280_stark_challenges_v1(&mut wrong_domain)
             .expect("wrong-domain RFC challenges");
-        let wrong_domain_projection = derive_credential_projection_challenges_v1(&mut wrong_domain)
-            .expect("wrong-domain projection challenges");
+        let wrong_domain_projection =
+            derive_credential_projection_challenges_v1(&mut wrong_domain, canonical.hash_bus)
+                .expect("wrong-domain projection challenges");
         assert_ne!(wrong_domain_projection, canonical);
         let mut injected = transcript_after_roots_v1(main, CREDENTIAL_PRE_AUX_ROOTS_DOMAIN_V1);
         injected
@@ -1257,8 +1270,9 @@ mod tests {
             .expect("injected SHA challenges");
         let _ = derive_zk_x509_rfc5280_stark_challenges_v1(&mut injected)
             .expect("injected RFC challenges");
-        let injected_projection = derive_credential_projection_challenges_v1(&mut injected)
-            .expect("injected projection challenges");
+        let injected_projection =
+            derive_credential_projection_challenges_v1(&mut injected, canonical.hash_bus)
+                .expect("injected projection challenges");
         assert_ne!(injected_projection, canonical);
     }
     #[test]
@@ -1269,6 +1283,13 @@ mod tests {
                 .expect("canonical challenge encoding")
                 .len(),
             ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1 * core::mem::size_of::<u64>()
+        );
+        let mut wrong_source = canonical;
+        wrong_source.main_post_base.projection.hash_bus.lanes[0].terms[0] =
+            wrong_source.main_post_base.projection.hash_bus.lanes[0].terms[0].add(F::ONE);
+        assert_eq!(
+            encode_pre_aux_challenges_v1(&wrong_source).err(),
+            Some(ZkX509CredentialPreAuxErrorV1::Challenge)
         );
         let mut changed_projection = canonical;
         changed_projection.main_post_base.projection.copy[0].beta =

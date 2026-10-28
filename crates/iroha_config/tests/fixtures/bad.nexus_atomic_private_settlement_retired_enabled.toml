@@ -1,0 +1,4 @@
+extends = "base.toml"
+
+[nexus.atomic_private_settlement]
+enabled = false

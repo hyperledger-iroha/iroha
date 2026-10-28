@@ -481,9 +481,9 @@ capture_world_table_once!(
     "world.runtime_upgrades"
 );
 capture_world_table_once!(
-    capture_privacy_activations_once,
-    privacy_activations,
-    "world.privacy_activations"
+    capture_privacy_protocol_policies_once,
+    privacy_protocol_policies,
+    "world.privacy_protocol_policies"
 );
 capture_world_table_once!(
     capture_kagemusha_wallet_ledger_once,
@@ -889,7 +889,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_pedersen_params_once::MATERIALIZER,
     capture_poseidon_params_once::MATERIALIZER,
     capture_runtime_upgrades_once::MATERIALIZER,
-    capture_privacy_activations_once::MATERIALIZER,
+    capture_privacy_protocol_policies_once::MATERIALIZER,
     capture_kagemusha_wallet_ledger_once::MATERIALIZER,
     capture_private_settlement_governance_once::MATERIALIZER,
     capture_private_settlement_pools_once::MATERIALIZER,
@@ -1307,7 +1307,7 @@ mod tests {
             "world.pedersen_params",
             "world.poseidon_params",
             "world.runtime_upgrades",
-            "world.privacy_activations",
+            "world.privacy_protocol_policies",
             "world.kagemusha_wallet_ledger",
             "world.private_settlement_governance",
             "world.private_settlement_pools",
@@ -1887,7 +1887,13 @@ mod tests {
             .expect("bounded exact interval");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.roles",
-            limits(),(&before.root(), &before.lookup_root(), &before.ordered_root()),(start, end),
+            limits(),
+            (
+                &before.root(),
+                &before.lookup_root(),
+                &before.ordered_root(),
+            ),
+            (start, end),
             1,
             8 * 1024,
             &proof,
@@ -1912,7 +1918,13 @@ mod tests {
         assert!(matches!(
             CanonicalTableLeafSet::verify_paired_raw_range(
                 "world.roles",
-                limits(),(&before.root(), &omitted.lookup_root(), &omitted.ordered_root()),(start, end),
+                limits(),
+                (
+                    &before.root(),
+                    &omitted.lookup_root(),
+                    &omitted.ordered_root()
+                ),
+                (start, end),
                 1,
                 8 * 1024,
                 &omitted_proof,
@@ -1943,7 +1955,13 @@ mod tests {
             .expect("bounded exact interval");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.viral_binding_claims",
-            limits(),(&before.root(), &before.lookup_root(), &before.ordered_root()),(start, end),
+            limits(),
+            (
+                &before.root(),
+                &before.lookup_root(),
+                &before.ordered_root(),
+            ),
+            (start, end),
             1,
             8 * 1024,
             &proof,
@@ -1966,7 +1984,13 @@ mod tests {
         assert!(matches!(
             CanonicalTableLeafSet::verify_paired_raw_range(
                 "world.viral_binding_claims",
-                limits(),(&before.root(), &changed.lookup_root(), &changed.ordered_root()),(start, end),
+                limits(),
+                (
+                    &before.root(),
+                    &changed.lookup_root(),
+                    &changed.ordered_root()
+                ),
+                (start, end),
                 1,
                 8 * 1024,
                 &changed_proof,
@@ -2203,7 +2227,13 @@ mod tests {
             .expect("digest-only range has bounded size");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.contract_code",
-            limits,(&captured.root(), &captured.lookup_root(), &captured.ordered_root()),(&start, &end),
+            limits,
+            (
+                &captured.root(),
+                &captured.lookup_root(),
+                &captured.ordered_root(),
+            ),
+            (&start, &end),
             1,
             4096,
             &proof,
@@ -2286,7 +2316,13 @@ mod tests {
             .expect("bounded digest-only history range");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.oracle_history",
-            limits,(&captured.root(), &captured.lookup_root(), &captured.ordered_root()),(&start, &end),
+            limits,
+            (
+                &captured.root(),
+                &captured.lookup_root(),
+                &captured.ordered_root(),
+            ),
+            (&start, &end),
             1,
             4096,
             &proof,

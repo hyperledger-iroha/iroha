@@ -217,6 +217,13 @@ class PrivacyNativeBridgeTest {
         assertContentEquals(canonical, PrivacyNativeBridge.compiledProfileCatalogV1())
         val typed = PrivacyNativeBridge.compiledProfileCatalogTypedV1()
         assertEquals(12, typed.protocols.size)
+        val x509 = typed.protocols[PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1.ordinal]
+            .compiledProfile as PrivacyCompiledProfileResultV1.Unavailable
+        assertEquals(
+            PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+            x509.reason,
+        )
+        assertEquals(null, x509.statementSchemaError)
         assertContentEquals(
             canonical,
             PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(typed),

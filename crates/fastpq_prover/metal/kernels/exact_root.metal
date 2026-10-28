@@ -12,14 +12,29 @@ struct ExactRootFftArgs {
     uint padding;
 };
 
-// Public radix-256 exponent digits index a root-specific 8KiB table. Exactly
-// three multiplies replace repeated square-and-multiply exponentiation. Root,
-// exponent, table addresses and execution order are independent of column data.
+// Public radix-256 exponent digits index the same root-specific 8KiB table.
+// A zero digit contributes 1. Load only nonzero higher digits and multiply
+// only when a lower digit already contributed a factor. For k nonzero digits
+// this needs max(k - 1, 0) field multiplies, including every 32-bit exponent.
+// Every branch and table address depends only on the public exponent.
 inline ulong exact_root_power_v1(const device ulong *powers, uint exponent) {
     ulong value = powers[exponent & 255U];
-    value = mul_mod(value, powers[256U + ((exponent >> 8U) & 255U)]);
-    value = mul_mod(value, powers[512U + ((exponent >> 16U) & 255U)]);
-    return mul_mod(value, powers[768U + (exponent >> 24U)]);
+    uint digit = (exponent >> 8U) & 255U;
+    if (digit != 0U) {
+        ulong factor = powers[256U + digit];
+        value = (exponent & 255U) == 0U ? factor : mul_mod(value, factor);
+    }
+    digit = (exponent >> 16U) & 255U;
+    if (digit != 0U) {
+        ulong factor = powers[512U + digit];
+        value = (exponent & 65535U) == 0U ? factor : mul_mod(value, factor);
+    }
+    digit = exponent >> 24U;
+    if (digit != 0U) {
+        ulong factor = powers[768U + digit];
+        value = (exponent & 16777215U) == 0U ? factor : mul_mod(value, factor);
+    }
+    return value;
 }
 
 // One pair is written only by its lower index. Distinct pairs never overlap.

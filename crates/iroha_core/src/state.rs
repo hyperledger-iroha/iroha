@@ -1270,8 +1270,7 @@ macro_rules! with_world_overlay_fields {
             poseidon_params,
             runtime_upgrades,
             privacy_consensus_policy,
-            privacy_exact12_qualification,
-            privacy_activations,
+            privacy_protocol_policies,
             kagemusha_wallet_ledger,
             private_settlement_governance,
             private_settlement_pools,
@@ -4338,15 +4337,12 @@ pub struct WorldData {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
-    /// Singleton chain-wide privacy admission policy and pending tightening.
+    /// Singleton chain-wide privacy admission policy and pending update.
     pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
-    /// Immutable full Exact12 release and target-network qualification evidence.
-    pub(crate) privacy_exact12_qualification:
-        Cell<Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>>,
-    /// Immutable governed privacy activations keyed by closed protocol identity.
-    pub(crate) privacy_activations: Storage<
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    /// Optional committed resource policies keyed by closed protocol identity.
+    pub(crate) privacy_protocol_policies: Storage<
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA reserve ledger, permanent replay indexes and historical objects.
     pub(crate) kagemusha_wallet_ledger:
@@ -5326,14 +5322,11 @@ pub struct WorldBlockFields<'world> {
     /// Singleton chain-wide privacy admission policy for this block scope.
     pub(crate) privacy_consensus_policy:
         CellField<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
-    /// Exact12 qualification singleton for this block scope.
-    pub(crate) privacy_exact12_qualification:
-        CellField<'world, Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>>,
-    /// Immutable governed privacy activations keyed by closed protocol identity.
-    pub(crate) privacy_activations: StorageField<
+    /// Optional committed resource policies keyed by closed protocol identity.
+    pub(crate) privacy_protocol_policies: StorageField<
         'world,
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA ledger overlay.
     pub(crate) kagemusha_wallet_ledger:
@@ -6134,7 +6127,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.tx_sequences, TxSequence);
         collect_reverts!(self.verifying_keys, VerifyingKey);
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
-        collect_reverts!(self.privacy_activations, PrivacyActivation);
+        collect_reverts!(self.privacy_protocol_policies, PrivacyProtocolPolicy);
         collect_reverts!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_reverts!(
             self.private_settlement_governance,
@@ -6240,7 +6233,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.tx_sequences, TxSequence);
         collect_payload!(self.verifying_keys, VerifyingKey);
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
-        collect_payload!(self.privacy_activations, PrivacyActivation);
+        collect_payload!(self.privacy_protocol_policies, PrivacyProtocolPolicy);
         collect_payload!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_payload!(
             self.private_settlement_governance,
@@ -6336,7 +6329,6 @@ impl WorldBlock<'_> {
             governance_unlock_stats,
             parliament_attempt_counts,
             privacy_consensus_policy,
-            privacy_exact12_qualification,
             musubi_registry_policy,
             musubi_resolver_index_revision,
             musubi_replication_shortfall_releases,
@@ -6454,7 +6446,7 @@ impl WorldBlock<'_> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
-            privacy_activations,
+            privacy_protocol_policies,
             kagemusha_wallet_ledger,
             private_settlement_governance,
             private_settlement_pools,
@@ -7058,17 +7050,11 @@ pub struct WorldTransaction<'block, 'world> {
     /// Singleton chain-wide privacy admission policy for this transaction.
     pub(crate) privacy_consensus_policy:
         CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
-    /// Exact12 qualification singleton for this transaction.
-    pub(crate) privacy_exact12_qualification: CellTransaction<
+    /// Optional committed resource policies keyed by closed protocol identity.
+    pub(crate) privacy_protocol_policies: StorageTransaction<
         'block,
-        'world,
-        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
-    >,
-    /// Immutable governed privacy activations keyed by closed protocol identity.
-    pub(crate) privacy_activations: StorageTransaction<
-        'block,
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA ledger transaction.
     pub(crate) kagemusha_wallet_ledger: StorageTransaction<
@@ -9322,14 +9308,11 @@ pub struct WorldView<'world> {
     /// Singleton chain-wide privacy admission policy view.
     pub(crate) privacy_consensus_policy:
         CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
-    /// Exact12 qualification singleton view.
-    pub(crate) privacy_exact12_qualification:
-        CellView<'world, Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>>,
-    /// Immutable governed privacy activations keyed by closed protocol identity.
-    pub(crate) privacy_activations: StorageView<
+    /// Optional committed resource policies keyed by closed protocol identity.
+    pub(crate) privacy_protocol_policies: StorageView<
         'world,
-        crate::privacy_state::PrivacyActivationKeyV1,
-        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Public private-settlement governance projection view.
     /// Canonical KAGEMUSHA ledger read view.
@@ -13759,7 +13742,7 @@ impl<'state> StateBlock<'state> {
                  {incoming_height}: {error}"
             )
         });
-        let Some(pending) = policy.pending_tightening else {
+        let Some(pending) = policy.pending_update else {
             return;
         };
         assert!(
@@ -13777,7 +13760,7 @@ impl<'state> StateBlock<'state> {
         )
         .unwrap_or_else(|error| {
             panic!(
-                "scheduled privacy retention tightening is invalid at incoming block height \
+                "scheduled privacy retention update is invalid at incoming block height \
                  {incoming_height}: {error}"
             )
         });
@@ -13791,7 +13774,7 @@ impl<'state> StateBlock<'state> {
                 )
                 .unwrap_or_else(|error| {
                     panic!(
-                        "scheduled typed privacy retention tightening for {protocol_id:?} failed at \
+                        "scheduled typed privacy retention update for {protocol_id:?} failed at \
                          incoming block height {incoming_height}: {error}"
                     )
                 }),
@@ -13817,6 +13800,12 @@ impl<'state> StateBlock<'state> {
                 head.root(),
                 head.provenance().clone(),
                 Some(plan.new_anchor),
+                head.retained_count_after_pruning(plan.removal_keys.len())
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "scheduled privacy root pruning has an invalid attained count: {error}"
+                        )
+                    }),
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -13839,7 +13828,7 @@ impl<'state> StateBlock<'state> {
         *self.world.privacy_consensus_policy.get_mut() =
             iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
                 current_limits: pending.next_limits,
-                pending_tightening: None,
+                pending_update: None,
             };
         self.privacy_budget_in_block =
             crate::privacy::PrivacyBlockBudgetV1::new(pending.next_limits)
@@ -13848,17 +13837,17 @@ impl<'state> StateBlock<'state> {
     fn apply_due_privacy_protocol_limits(&mut self) {
         let incoming_height = self._curr_block.height().get();
         let updates = crate::privacy_state::plan_due_privacy_protocol_limits_v1(
-            &self.world.privacy_activations,
+            &self.world.privacy_protocol_policies,
             incoming_height,
         )
         .unwrap_or_else(|error| {
             panic!(
-                "persisted privacy activation registry is invalid at block height \
+                "persisted privacy protocol policy table is invalid at block height \
                      {incoming_height}: {error}"
             )
         });
         for (key, record) in updates {
-            self.world.privacy_activations.insert(key, record);
+            self.world.privacy_protocol_policies.insert(key, record);
         }
     }
     fn activate_due_public_lane_validators(&mut self, current_epoch: u64) {
@@ -21555,13 +21544,10 @@ macro_rules! world_ro_accessors {
             cell_ref soradns_history_len: u64;
             /// Authoritative singleton privacy policy (read-only).
             cell_ref privacy_consensus_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1;
-            /// Full registered Exact12 release and deployment evidence (read-only).
-            cell_ref privacy_exact12_qualification:
-                Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>;
-            /// Authoritative governed privacy activations (read-only).
-            storage privacy_activations:
-                crate::privacy_state::PrivacyActivationKeyV1 =>
-                iroha_data_model::privacy::PrivacyProtocolActivationRecordV1;
+            /// Optional committed privacy resource policies (read-only).
+            storage privacy_protocol_policies:
+                crate::privacy_state::PrivacyProtocolPolicyKeyV1 =>
+                iroha_data_model::privacy::PrivacyProtocolPolicyV1;
         );
     };
     (governance, $mode:ident) => {
@@ -25023,8 +25009,7 @@ impl WorldTransaction<'_, '_> {
             poseidon_params: _,
             runtime_upgrades: _,
             privacy_consensus_policy: _,
-            privacy_exact12_qualification: _,
-            privacy_activations: _,
+            privacy_protocol_policies: _,
             kagemusha_wallet_ledger: _,
             private_settlement_governance: _,
             private_settlement_pools: _,
@@ -25251,8 +25236,7 @@ impl WorldTransaction<'_, '_> {
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
         self.privacy_consensus_policy.apply();
-        self.privacy_exact12_qualification.apply();
-        self.privacy_activations.apply();
+        self.privacy_protocol_policies.apply();
         self.kagemusha_wallet_ledger.apply();
         self.private_settlement_governance.apply();
         self.private_settlement_pools.apply();
@@ -36275,41 +36259,40 @@ pub trait StateReadOnly: WorldStateSnapshot {
             .expect("supported target pointer widths always fit a state height into u64");
         let world = self.world();
         crate::privacy_profiles::committed_privacy_capability_snapshot_v1(
+            *self.network_id(),
             committed_height,
             *world.privacy_consensus_policy(),
-            world.privacy_exact12_qualification().clone(),
             |protocol_id| {
                 world
-                    .privacy_activations()
-                    .get(&crate::privacy_state::PrivacyActivationKeyV1::new(
+                    .privacy_protocol_policies()
+                    .get(&crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
                         protocol_id,
                     ))
                     .copied()
             },
         )
     }
-    /// Resolve an activation only when the immutable Exact12 singleton proves
-    /// production qualification for this exact committed state.
+    /// Resolve the selected implementation against its exact committed per-protocol policy.
     ///
     /// # Errors
     ///
-    /// Returns a fail-closed reason when evidence is missing, invalid, stale,
-    /// or bound to another activation/profile tuple.
-    fn qualified_privacy_activation_v1(
+    /// Returns the concrete implementation failure or an invalid, stale
+    /// or mismatched committed policy.
+    fn admitted_privacy_protocol_v1(
         &self,
         protocol_id: iroha_data_model::privacy::PrivacyProtocolIdV1,
-    ) -> core::result::Result<iroha_data_model::privacy::PrivacyProtocolActivationRecordV1, String>
-    {
+    ) -> core::result::Result<
+        crate::privacy_state::AdmittedPrivacyProtocolV1,
+        crate::privacy_state::PrivacyAdmissionErrorV1,
+    > {
         let committed_height = u64::try_from(self.height())
             .expect("supported target pointer widths always fit a state height into u64");
         let world = self.world();
-        crate::privacy_state::resolve_qualified_privacy_activation_v1(
-            world.privacy_exact12_qualification().as_ref(),
-            world.privacy_activations(),
+        crate::privacy_state::resolve_admitted_privacy_protocol_v1(
+            world.privacy_protocol_policies(),
             protocol_id,
             committed_height,
         )
-        .map(|qualified| *qualified.activation())
     }
     /// Latest committed block hash (if any).
     fn latest_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -41952,62 +41935,27 @@ impl StateTransaction<'_, '_> {
         }
         roster
     }
-    fn ensure_private_settlement_feature_active_v1(
+    // Native relation availability and committed policy are the admission owner.
+    // Local configuration cannot impose an activation event on this first-release path.
+    fn ensure_private_settlement_admitted_v1(
         &self,
-        authority_context_height: u64,
     ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
         let config = &self.nexus.atomic_private_settlement;
-        if !config.enabled {
-            return Err(PrivateSettlementGlobalStateErrorV1::Disabled);
-        }
-        let activation_height = config
-            .activation_height
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Activation)?;
-        if self.block_height() < activation_height || authority_context_height < activation_height {
-            return Err(PrivateSettlementGlobalStateErrorV1::Activation);
-        }
         let protocol_id =
             iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let activation = self
-            .world
-            .privacy_activations
-            .get(&crate::privacy_state::PrivacyActivationKeyV1::new(
-                protocol_id,
-            ))
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Capability)?;
-        activation
-            .validate()
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
-        crate::privacy_profiles::validate_compiled_privacy_activation_v1(activation)
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
+        let admitted = crate::privacy_state::resolve_admitted_privacy_protocol_v1(
+            &self.world.privacy_protocol_policies,
+            protocol_id,
+            self.block_height(),
+        )
+        .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
         crate::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
-        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::IrohaIvmPrivateNoteStarkV1(
-            limits,
-        ) = activation.protocol_limits
+        let iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) =
+            admitted.protocol_limits()
         else {
             return Err(PrivateSettlementGlobalStateErrorV1::Capability);
         };
-        let iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Active(active) =
-            activation.lifecycle
-        else {
-            return Err(PrivateSettlementGlobalStateErrorV1::Activation);
-        };
-        let earliest_activation = active
-            .proposed_at_height
-            .checked_add(config.minimum_activation_notice_blocks.get())
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Activation)?;
-        if activation_height < earliest_activation
-            || self.block_height() < earliest_activation
-            || authority_context_height < earliest_activation
-            || activation_height < active.activated_at_height
-            || self.block_height() < active.activated_at_height
-            || authority_context_height < active.activated_at_height
-            || self.block_height() < active.state_since_height
-            || authority_context_height < active.state_since_height
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Activation);
-        }
         let required_inputs = iroha_data_model::privacy::IVM_PRIVATE_NOTE_MAX_INPUTS_V1;
         let required_outputs = iroha_data_model::privacy::IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1;
         if limits.max_input_count < required_inputs || limits.max_output_count < required_outputs {
@@ -42047,7 +41995,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_feature_active_v1(current_height)?;
+        self.ensure_private_settlement_admitted_v1()?;
         self.ensure_private_settlement_route_active_v1(governance.route)?;
         let plan = plan_private_settlement_pool_bootstrap_v1(
             &self.world.private_settlement_governance,
@@ -42081,7 +42029,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_feature_active_v1(current_height)?;
+        self.ensure_private_settlement_admitted_v1()?;
         self.ensure_private_settlement_route_active_v1(replacement.route)?;
         let replacement_key =
             PrivateSettlementPoolKeyV1::new(replacement.route, replacement.pool_id)?;
@@ -42127,9 +42075,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_feature_active_v1(
-            barrier.manifest.authority_context_height,
-        )?;
+        self.ensure_private_settlement_admitted_v1()?;
         if barrier.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
@@ -42200,9 +42146,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_feature_active_v1(
-            receipt.manifest.authority_context_height,
-        )?;
+        self.ensure_private_settlement_admitted_v1()?;
         if receipt.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
@@ -42297,7 +42241,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_feature_active_v1(current_height)?;
+        self.ensure_private_settlement_admitted_v1()?;
         if receipt.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
@@ -44294,9 +44238,10 @@ impl StateTransaction<'_, '_> {
         })?;
         let artifacts = artifacts.map_err(|error| self.attempt_error_to_validation_fail(error))?;
         self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
-        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-            &artifacts.queued_instructions_by_authority(),
-            &artifacts.queued_instructions_with_authority(),
+        crate::validation_fee::enforce_opaque_deferred_instruction_views(
+            artifacts.queued_instruction_views(),
+            artifacts.queued_instruction_authority_count(),
+            artifacts.queued_instruction_views(),
             self,
             None,
         )
@@ -44306,7 +44251,9 @@ impl StateTransaction<'_, '_> {
                 "validation-fee policy resolution failed during generic IVM trigger execution: {other:?}"
             )),
         })?;
-        let queued = artifacts.apply_to_transaction(self, authority)?;
+        let queued = artifacts
+            .apply_to_transaction(self, authority)?
+            .into_trigger_instructions()?;
         Ok(ConstVec::<InstructionBox>::from(queued).into())
     }
     fn resolve_ivm_trigger_program(
@@ -44572,7 +44519,9 @@ impl StateTransaction<'_, '_> {
                                     Some((id, nft_seq_base)),
                                     None,
                                 )?;
-                                executed_instructions.extend(outcome.executed_instructions);
+                                executed_instructions.extend(
+                                    outcome.executed_instructions.into_trigger_instructions()?,
+                                );
                                 batch_gas_used = batch_gas_used.saturating_add(outcome.gas_used);
                                 nft_seq_base = outcome
                                     .next_nft_sequence
@@ -44843,9 +44792,10 @@ impl StateTransaction<'_, '_> {
                     )
                 });
                 let validation_outcome =
-                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                        &artifacts.queued_instructions_by_authority(),
-                        &artifacts.queued_instructions_with_authority(),
+                    crate::validation_fee::enforce_opaque_deferred_instruction_views(
+                        artifacts.queued_instruction_views(),
+                        artifacts.queued_instruction_authority_count(),
+                        artifacts.queued_instruction_views(),
                         self,
                         runtime_origin,
                     )?;
@@ -44854,7 +44804,9 @@ impl StateTransaction<'_, '_> {
                 let queued = if no_op {
                     Vec::new()
                 } else {
-                    artifacts.apply_to_transaction(self, authority)?
+                    artifacts
+                        .apply_to_transaction(self, authority)?
+                        .into_trigger_instructions()?
                 };
                 let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                 (Ok(cvs.into()), None)
@@ -45144,9 +45096,10 @@ impl StateTransaction<'_, '_> {
                                 )
                             });
                             let validation_outcome =
-                                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                                    &artifacts.queued_instructions_by_authority(),
-                                    &artifacts.queued_instructions_with_authority(),
+                                crate::validation_fee::enforce_opaque_deferred_instruction_views(
+                                    artifacts.queued_instruction_views(),
+                                    artifacts.queued_instruction_authority_count(),
+                                    artifacts.queued_instruction_views(),
                                     self,
                                     runtime_origin,
                                 )?;
@@ -45155,7 +45108,9 @@ impl StateTransaction<'_, '_> {
                             let queued = if no_op {
                                 Vec::new()
                             } else {
-                                artifacts.apply_to_transaction(self, authority)?
+                                artifacts
+                                    .apply_to_transaction(self, authority)?
+                                    .into_trigger_instructions()?
                             };
                             let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                             (Ok(cvs.into()), None)

@@ -873,7 +873,7 @@ The first-release native catalog surface exposes local build metadata:
 `isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
 latter returns this binary's canonical Norito
 `PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
-committed height, consensus policy, activation, or readiness projection and
+committed height, consensus policy, protocol policy, or readiness projection and
 cannot authorize a network operation. Import
 `getPrivacyExact12CapabilityManifestV1` from
 `@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
@@ -883,9 +883,12 @@ dependencies and must preserve HTTPS authentication, response URL, and redirect 
 Public archive decoding is inspection-only; copying or re-decoding transport
 bytes loses admission authority. The authenticated ABI33 binding applies
 the bounded canonical decoder; transaction construction must then call
-`requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
-state, registered production qualification, and byte-exact equality with the
-selected local compiled-profile row and deployment network. The admission result
+`requirePrivacyExact12CapabilityAdmissionV1`, which requires a supported canonical
+implementation under committed resource policy and byte-exact equality with the
+selected local compiled-profile row and authoritative top-level network identity.
+Review receipts and all-protocol qualification records are not admission requirements.
+An incomplete X509 joint security reduction remains an explicit unsupported
+implementation reason; sample proof verification is not that reduction. The admission result
 retains that exact network and Torii origin. There is no browser, JSON snapshot, or
 mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
@@ -1007,8 +1010,13 @@ in wire order: `zk-ace-pq-authorization-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
 `pq-masp-stark-v1`. Each manifest row has exactly `protocol_id`,
 `operation_schema`, `execution_mode`, `privacy_feature_mask`,
-`compiled_profile`, `readiness`, and `activation`. Unknown fields, aliases,
+`compiled_profile`, `readiness`, and `policy`. Unknown fields, aliases,
 duplicates, case-folded labels, and whitespace-normalized labels fail closed.
+The optional protocol policy supplies current limits and a scheduled future
+update. Absence uses native defaults; policy cannot enable an unavailable proof
+relation. Consensus and protocol updates may increase or decrease limits within
+the canonical bounds. Admission checks the selected limits against the actual
+native profile ceiling.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -3981,7 +3989,16 @@ The governance ISI builders mirror the first-release Torii DTOs. Proposal
 builders contain immutable proposal content only; Parliament derives lifecycle
 timing and execution automatically. Hash inputs are normalized into the typed
 32-byte governance hash wrappers, while ballot builders retain their standalone
-referendum/election encoding:
+referendum/election encoding.
+
+SCCP proposal normalization and typed Torii reads share validation of the closed
+action tags, external network keys, safe-integer base revisions, and the exact
+sorted, deduplicated subject set derived from the ordered actions. Route revision
+controls, pause controls, profile activation, deployment-progress attestations,
+and trusted checkpoints also enforce exact payload fields and static value bounds.
+Route registration, stranded-value release, light-client initialization, and parameter
+body checks remain with Torii. Committed state determines authorization, current
+revisions, and enactment.
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
@@ -4107,6 +4124,35 @@ builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 `buildFinalizeElectionTransaction`) enforce the 2..=64 V1 election option
 bound. Ballot ciphertexts and Halo2 proofs use canonical helper paths across
 SDKs. See `index.d.ts` for the full set of confidential input shapes.
+
+### Direct X509 preparation and signing
+
+The Node.js `@iroha/iroha-js/privacy-x509` entry point exports
+`preparePrivacyX509DirectTransactionV1` and `buildPrivacyX509DirectTransactionV1`.
+Preparation accepts an authenticated Torii capability manifest, exact `NetworkId`,
+canonical proof-free request, original authority, fee payment, explicit creation
+time and positive TTL, and optional nonce and metadata. Choose the original TTL
+to cover proof generation and submission; preparation supplies no implicit lifetime.
+It retains one direct action and one
+original Proof/ActionProof occurrence. The prepared object's byte getters return
+copies; pass `materializedStatementNorito` to the holder prover, then call
+`prepared.sign(rawProof, privateKey)` with the authority's exact 32-byte Ed25519
+key. The one-call form accepts the same inputs plus `{ prove, privateKey }`; its
+callback receives that exact statement before signing.
+
+The Rust owner derives the ordered intent and ActionStatement using the canonical
+model, and repeats selected-profile, network, authority and committed-limit checks
+at signing. It also requires the canonical X5S1 container and its exact original
+statement/network header binding before signing. Returned signed bytes cover the entire original payload and proof
+occurrence. An offline decoded manifest, supplied digest, fake capability object,
+mixed action or alternate native bridge cannot authorize this producer. The API
+does not submit transactions or claim proof/State verification.
+
+X509 currently refuses construction with the actual
+`JointSecurityReductionIncomplete` failure. The producer does not substitute
+fixture bytes or a documentary receipt for the missing joint-security construction.
+Its native tests distinguish structural planning/transaction-signature checks from
+valid credential-proof acceptance.
 
 ### Native-independent Exact12 fixture codec
 

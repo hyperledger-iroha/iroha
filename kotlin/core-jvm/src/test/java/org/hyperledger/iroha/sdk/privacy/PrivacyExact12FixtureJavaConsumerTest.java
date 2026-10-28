@@ -67,7 +67,7 @@ public final class PrivacyExact12FixtureJavaConsumerTest {
       assertTrue(row.getStatementNorito().length > 0);
       assertTrue(row.getEnvelopeNorito().length > 0);
       assertEquals(
-          PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID, row.submitProofWireId);
+          PrivacyExact12FixtureCodecV1.submitProofWireIdV1(row.protocolId), row.submitProofWireId);
       assertTrue(row.getSubmitProofInstructionNorito().length > 0);
       assertTrue(row.getTransactionIntentProjectionNorito().length > 0);
       assertEquals(
@@ -511,7 +511,7 @@ public final class PrivacyExact12FixtureJavaConsumerTest {
         protocol,
         statement,
         new byte[] {2},
-        PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID,
+        PrivacyExact12FixtureCodecV1.submitProofWireIdV1(protocol),
         new byte[] {3},
         new byte[] {4},
         fill(5, PrivacyExact12FixtureCodecV1.HASH_BYTES),

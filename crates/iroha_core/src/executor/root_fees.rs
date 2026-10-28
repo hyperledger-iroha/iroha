@@ -54,16 +54,16 @@ pub(super) fn effective<'a>(
     Ok(captured)
 }
 
-/// Select sponsor custody from the authored H1 policy or the frozen predecessor policy.
+/// Borrow execution custody from the authored H1 policy or the frozen predecessor policy.
 /// Initial genesis has no committed predecessor policy, so its funding must consume the
 /// original policy already installed in this World. Ordinary execution never refreshes
 /// its captured monetary policy after a transaction-local parameter write.
 ///
 /// # Errors
-/// Initial genesis must install its explicit root fee policy before using sponsor custody.
-pub fn sponsor_vault_custody<'a>(
+/// Initial genesis must install its explicit root fee policy before using monetary custody.
+pub(crate) fn execution_custody_policy<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
-) -> Result<&'a AccountId, InstructionExecutionError> {
+) -> Result<&'a RootFeePolicy, InstructionExecutionError> {
     let policy = if is_initial_genesis_context(state_transaction) {
         state_transaction
             .world
@@ -71,14 +71,25 @@ pub fn sponsor_vault_custody<'a>(
             .root_fees()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
-                    "initial genesis sponsor custody requires its authored root fee policy".into(),
+                    "initial genesis execution custody requires its authored root fee policy"
+                        .into(),
                 )
             })?
     } else {
         execution_policy(state_transaction)
             .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?
     };
-    Ok(&policy.sponsor_vault_custody_account_id)
+    Ok(policy)
+}
+
+/// Borrow sponsor custody from the same original execution policy as other monetary consumers.
+///
+/// # Errors
+/// Refuses missing authored genesis policy or missing original ordinary policy.
+pub fn sponsor_vault_custody<'a>(
+    state_transaction: &'a StateTransaction<'_, '_>,
+) -> Result<&'a AccountId, InstructionExecutionError> {
+    Ok(&execution_custody_policy(state_transaction)?.sponsor_vault_custody_account_id)
 }
 
 /// Validate the complete committed policy for executed-genesis schedule admission.
@@ -377,6 +388,10 @@ mod tests {
             sponsor_vault_custody(&tx).unwrap(),
             &authored.sponsor_vault_custody_account_id
         );
+        assert!(std::ptr::eq(
+            execution_custody_policy(&tx).unwrap(),
+            tx.world.parameters().root_fees().unwrap(),
+        ));
         assert_eq!(*execution_policy(&tx).unwrap(), frozen);
         let mut malformed = tx.world.parameters.get().get().clone();
         malformed
@@ -389,10 +404,19 @@ mod tests {
         )
         .expect("funded malformed original fee-policy fixture");
         *tx.world.parameters.get_mut() = retained;
+        let error = execution_custody_policy(&tx).unwrap_err();
+        assert!(matches!(
+            &error,
+            InstructionExecutionError::InvariantViolation(_)
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("initial genesis execution custody requires its authored root fee policy")
+        );
         assert!(sponsor_vault_custody(&tx).is_err());
         assert_eq!(*execution_policy(&tx).unwrap(), frozen);
     }
-
     #[test]
     fn ordinary_sponsor_custody_keeps_the_captured_predecessor() {
         let (state, _, _) = fixture(true, true);
@@ -420,6 +444,30 @@ mod tests {
         assert_eq!(*execution_policy(&tx).unwrap(), frozen);
     }
 
+    #[test]
+    fn execution_custody_policy_refuses_original_absence_despite_pending_policy() {
+        let (state, _, _) = fixture(false, true);
+        let mut block = state.block(BlockHeader::new(2.try_into().unwrap(), None, None, 1000, 0));
+        let mut tx = block.transaction();
+        assert!(!is_initial_genesis_context(&tx));
+        assert!(execution_policy(&tx).is_err());
+        let authored = tx.nexus.fees.clone();
+        tx.world
+            .set_parameter_for_testing(Parameter::Custom(authored.into_custom_parameter().unwrap()))
+            .unwrap();
+        assert!(tx.world.parameters().root_fees().is_some());
+        let error = execution_custody_policy(&tx).unwrap_err();
+        assert!(matches!(
+            &error,
+            InstructionExecutionError::InvariantViolation(_)
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("original committed root fee policy is absent")
+        );
+        assert!(sponsor_vault_custody(&tx).is_err());
+    }
     #[test]
     fn committed_policy_validation_uses_exact_world_projection() {
         let (state, _, _) = fixture(true, true);

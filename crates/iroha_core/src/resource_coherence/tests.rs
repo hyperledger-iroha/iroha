@@ -5,7 +5,7 @@ use std::num::NonZeroU64;
 use iroha_data_model::{
     Level, Registrable as _,
     account::Account,
-    isi::{InstructionBox, Log, SetParameter, privacy::SchedulePrivacyConsensusPolicyTighteningV1},
+    isi::{InstructionBox, Log, SetParameter, privacy::SchedulePrivacyConsensusPolicyUpdateV1},
     parameter::{
         Parameter,
         system::{
@@ -16,9 +16,7 @@ use iroha_data_model::{
             },
         },
     },
-    privacy::{
-        PrivacyConsensusLimitsV1, PrivacyConsensusPolicyTighteningV1, PrivacyConsensusPolicyV1,
-    },
+    privacy::{PrivacyConsensusLimitsV1, PrivacyConsensusPolicyUpdateV1, PrivacyConsensusPolicyV1},
     transaction::Executable,
 };
 use iroha_executor_data_model::permission::{
@@ -195,7 +193,7 @@ fn lower_genesis_caps_require_privacy_tightening_at_height_two() {
     set_caps(&world, u64::from(3 * MIB), 4 * MIB);
     let mut policy = PrivacyConsensusPolicyV1 {
         current_limits: PrivacyConsensusLimitsV1::taira_default(),
-        pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+        pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
             scheduled_at_height: 1,
             effective_at_height: 2,
             next_limits: lower_limits(2 * MIB, 3 * MIB),
@@ -203,11 +201,7 @@ fn lower_genesis_caps_require_privacy_tightening_at_height_two() {
     };
     set_privacy(&world, policy);
     validate_final_policy(&world.view(), 1).unwrap();
-    policy
-        .pending_tightening
-        .as_mut()
-        .unwrap()
-        .effective_at_height = 3;
+    policy.pending_update.as_mut().unwrap().effective_at_height = 3;
     set_privacy(&world, policy);
     assert!(matches!(
         validate_final_policy(&world.view(), 1),
@@ -256,7 +250,7 @@ fn genesis_config(effective_at_height: Option<u64>) -> TestChainConfig {
     ]);
     if let Some(height) = effective_at_height {
         config.genesis_instructions.push(
-            SchedulePrivacyConsensusPolicyTighteningV1::new(height, lower_limits(2 * MIB, 3 * MIB))
+            SchedulePrivacyConsensusPolicyUpdateV1::new(height, lower_limits(2 * MIB, 3 * MIB))
                 .into(),
         );
     }
@@ -277,7 +271,7 @@ fn split_signed_genesis_transactions_may_be_temporarily_incoherent() {
                 }
                 if instruction
                     .as_any()
-                    .is::<SchedulePrivacyConsensusPolicyTighteningV1>()
+                    .is::<SchedulePrivacyConsensusPolicyUpdateV1>()
                 {
                     privacy_index = Some(index);
                 }
@@ -318,7 +312,7 @@ fn atomic_governance_transaction_checks_final_policy_in_either_instruction_order
             )))
             .into(),
             // Exactly the largest action whose required context fits the 1 MiB cap.
-            SchedulePrivacyConsensusPolicyTighteningV1::new(
+            SchedulePrivacyConsensusPolicyUpdateV1::new(
                 3,
                 lower_limits(exact_action(MIB), 2 * MIB),
             )
@@ -552,4 +546,135 @@ fn governance_checks_the_action_context_at_exact_and_one_over_signature_caps() {
         "{failure}"
     );
     validate_restored_policy(chain.state().view().world(), 2).unwrap();
+}
+
+#[test]
+fn later_privacy_increase_is_checked_by_final_candidates_and_restores() {
+    let world = scheduled_world([4 * MIB; 3]);
+    set_caps(&world, u64::from(3 * MIB), 4 * MIB);
+    let current = lower_limits(2 * MIB, 3 * MIB);
+    let reserve = iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
+    let mut policy = PrivacyConsensusPolicyV1 {
+        current_limits: current,
+        pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
+            scheduled_at_height: 2,
+            effective_at_height: 10,
+            next_limits: lower_limits(2 * MIB, 4 * MIB),
+        }),
+    };
+    set_privacy(&world, policy);
+    let expected = PolicyCoherenceError::Effective(SuccessorResourceCoherenceError::AtHeight {
+        effective_height: 10,
+        error: ResourceCoherenceError::PrivacyBlockExceedsPayload {
+            max_privacy_bytes_per_block: 4 * MIB,
+            reserve_bytes: reserve,
+            required_block_bytes: u64::from(4 * MIB + reserve),
+            max_block_bytes: 4 * MIB,
+        },
+    });
+    assert_eq!(validate_final_policy(&world.view(), 2), Err(expected));
+    assert_eq!(validate_restored_policy(&world.view(), 2), Err(expected));
+    assert_eq!(*world.view().privacy_consensus_policy(), policy);
+    policy
+        .pending_update
+        .as_mut()
+        .unwrap()
+        .next_limits
+        .max_privacy_bytes_per_block = 4 * MIB - reserve;
+    set_privacy(&world, policy);
+    validate_final_policy(&world.view(), 2).unwrap();
+    validate_restored_policy(&world.view(), 2).unwrap();
+    assert_eq!(*world.view().privacy_consensus_policy(), policy);
+}
+
+#[test]
+fn later_privacy_increase_rolls_back_atomically_and_a_coherent_retry_applies() {
+    let mut chain = CertifiedTestChain::start(genesis_config(Some(2))).unwrap();
+    let current = lower_limits(2 * MIB, 3 * MIB);
+    let next_limits = lower_limits(2 * MIB, 6 * MIB);
+    let set_block = |cap| -> InstructionBox {
+        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
+            NonZeroU32::new(cap).unwrap(),
+        )))
+        .into()
+    };
+    let invalid = chain.sign(
+        &ALICE_KEYPAIR,
+        [
+            set_block(5 * MIB),
+            SchedulePrivacyConsensusPolicyUpdateV1::new(10, next_limits).into(),
+        ],
+        1,
+    );
+    let work = chain.sign(
+        &ALICE_KEYPAIR,
+        [Log::new(Level::INFO, "late increase rollback control".into()).into()],
+        2,
+    );
+    assert_eq!(chain.commit(vec![invalid, work]), vec![false, true]);
+    {
+        let view = chain.state().view();
+        assert_eq!(
+            view.world().parameters().sumeragi().max_block_bytes().get(),
+            4 * MIB
+        );
+        assert_eq!(
+            *view.world().privacy_consensus_policy(),
+            PrivacyConsensusPolicyV1 {
+                current_limits: current,
+                pending_update: None,
+            }
+        );
+        validate_restored_policy(view.world(), 2).unwrap();
+    }
+    let failure = format!("{:?}", chain.committed(2).block().output_error(0));
+    assert!(
+        failure.contains("incoherent resource policy at height 10")
+            && failure.contains("privacy block budget"),
+        "{failure}"
+    );
+    let reserve = iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
+    let exact_block = 6 * MIB + reserve;
+    let retry = chain.sign(
+        &ALICE_KEYPAIR,
+        [
+            SchedulePrivacyConsensusPolicyUpdateV1::new(10, next_limits).into(),
+            set_block(exact_block),
+        ],
+        3,
+    );
+    assert_eq!(chain.commit(vec![retry]), vec![true]);
+    {
+        let view = chain.state().view();
+        assert_eq!(
+            *view.world().privacy_consensus_policy(),
+            PrivacyConsensusPolicyV1 {
+                current_limits: current,
+                pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
+                    scheduled_at_height: 3,
+                    effective_at_height: 10,
+                    next_limits,
+                }),
+            }
+        );
+        validate_restored_policy(view.world(), 3).unwrap();
+    }
+    for height in 4..=10 {
+        let carrier = chain.sign(
+            &ALICE_KEYPAIR,
+            [Log::new(Level::INFO, format!("advance to policy boundary {height}")).into()],
+            100 + height,
+        );
+        assert_eq!(chain.commit(vec![carrier]), vec![true]);
+        let view = chain.state().view();
+        validate_restored_policy(view.world(), height).unwrap();
+        let policy = view.world().privacy_consensus_policy();
+        if height < 10 {
+            assert_eq!(policy.current_limits, current);
+            assert_eq!(policy.pending_update.unwrap().effective_at_height, 10);
+        } else {
+            assert_eq!(policy.current_limits, next_limits);
+            assert!(policy.pending_update.is_none());
+        }
+    }
 }

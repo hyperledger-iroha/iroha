@@ -31,14 +31,18 @@ fn register_and_unregister_domain_queue_instructions() {
     // Register
     let res = host.syscall(syscalls::SYSCALL_REGISTER_DOMAIN, &mut vm);
     assert!(res.is_ok());
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1);
     // Unregister (reset host)
     let mut host2 = CoreHost::new(ALICE_ID.clone());
     vm.set_register(10, ptr);
     let res2 = host2.syscall(syscalls::SYSCALL_UNREGISTER_DOMAIN, &mut vm);
     assert!(res2.is_ok());
-    let queued2 = host2.drain_instructions();
+    let queued2 = host2
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued2.len(), 1);
 }
 #[test]
@@ -60,7 +64,9 @@ fn transfer_domain_queues_instruction() {
     vm.set_register(11, p_to);
     let res = host.syscall(syscalls::SYSCALL_TRANSFER_DOMAIN, &mut vm);
     assert!(res.is_ok());
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1);
 }
 #[test]

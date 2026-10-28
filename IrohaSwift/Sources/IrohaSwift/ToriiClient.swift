@@ -9979,6 +9979,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "NftView",
         "QueryPage",
         "AssetUidHoldingQuote",
+        "PendingAction",
         "AxtDescriptor",
         "AxtAnchoredSpendV1",
         "ProofBlob",

@@ -911,6 +911,14 @@
       }
     ]
   },
+  "CryptoAdmissionPolicyV1": {
+    "Struct": [
+      {
+        "name": "allowed_algorithms",
+        "type": "Vec<Algorithm>"
+      }
+    ]
+  },
   "CustomParameter": {
     "Struct": [
       {
@@ -924,6 +932,12 @@
     ]
   },
   "CustomParameterId": "Name",
+  "CustomParameters": {
+    "Map": {
+      "key": "CustomParameterId",
+      "value": "CustomParameter"
+    }
+  },
   "DataAvailabilityLayout": {
     "Struct": [
       {
@@ -2475,34 +2489,6 @@
       }
     ]
   },
-  "ManifestCrypto": {
-    "Struct": [
-      {
-        "name": "sm_openssl_preview",
-        "type": "bool"
-      },
-      {
-        "name": "sm_intrinsics",
-        "type": "String"
-      },
-      {
-        "name": "default_hash",
-        "type": "String"
-      },
-      {
-        "name": "allowed_signing",
-        "type": "Vec<Algorithm>"
-      },
-      {
-        "name": "sm2_distid_default",
-        "type": "String"
-      },
-      {
-        "name": "allowed_curve_ids",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "ManifestDigest": "Array<u8, 32>",
   "MathError": {
     "Enum": [
@@ -3107,7 +3093,7 @@
       },
       {
         "name": "custom",
-        "type": "SortedMap<CustomParameterId, CustomParameter>"
+        "type": "CustomParameters"
       }
     ]
   },
@@ -3403,8 +3389,8 @@
         "type": "SumeragiGenesisContextParameters"
       },
       {
-        "name": "crypto",
-        "type": "ManifestCrypto"
+        "name": "crypto_admission_policy",
+        "type": "CryptoAdmissionPolicyV1"
       }
     ]
   },
@@ -4120,12 +4106,6 @@
         "type": "Array<u8, 32>"
       }
     ]
-  },
-  "SortedMap<CustomParameterId, CustomParameter>": {
-    "Map": {
-      "key": "CustomParameterId",
-      "value": "CustomParameter"
-    }
   },
   "SpaceDirectoryEventFilter": {
     "Struct": [

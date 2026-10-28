@@ -585,13 +585,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
         } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
         _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
     })?;
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
+    let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
     let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -605,7 +599,8 @@ pub(super) fn verify_vega_release_production_envelope_v1(
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,

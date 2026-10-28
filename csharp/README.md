@@ -50,10 +50,11 @@ do not create enlarged-stack threads. Native result bounds, owned input snapshot
 and native-buffer cleanup apply on that same call path.
 
 Exact12 capability admission requires authenticated HTTPS Torii reads, the configured
-`NetworkId`, and native validation of the complete signed qualification. The SDK
-retains that exact network on the manifest and admission token, checks the deployment
-network against its genesis hash, and revalidates native evidence and network identity
-at construction. Offline decoded archives are inspection data and cannot grant admission.
+`NetworkId`, and native validation of the canonical runtime manifest. Its top-level
+network must match the authenticated client. Availability derives from the executable
+compiled tuple and current per-protocol governance; release/deployment diagnostics
+are not runtime prerequisites. The admission token revalidates the exact archive,
+network and local tuple at construction. Offline decoded archives are inspection data and cannot grant admission.
 
 ## Add the SDK
 
@@ -624,3 +625,30 @@ does not qualify all five NuGet runtime assets.
 The request model has no plaintext input or local encryption fallback. DTO
 validation does not authenticate an opening or make a backend available; Torii
 enforces signatures, context and its current encryption availability boundary.
+
+The Exact12 fixture codec validates the dedicated proof-free X509 request, original
+signed occurrence, ActionStatement projection and materialized statement. Other
+protocols retain their own existing route. The retired inline X509 submission is
+rejected. `TransactionBuilder.PrepareX509Transaction(admission, requestNorito)` freezes an
+otherwise empty builder and the current canonical request in a native opaque owner.
+The returned `PrivacyX509PreparedTransactionV1` exposes copied ordered-intent/action
+digests, ActionStatement and tagged materialized PrivacyStatement. Its `Sign(seed,
+credentialProof)` completes exactly the retained Proof/ActionProof occurrence;
+there is no alternative payload parameter. Use `using`/`Dispose` to release custody.
+
+Capability readiness comes only from the actual compiled implementation. Protocol
+policy is optional: `PolicyCanonicalBytes` retains bounded current limits and any
+scheduled ordinary update. No activation, lifecycle or registration enables use;
+retired activation layouts are rejected. Protocol and consensus policy updates may
+increase or decrease limits within hard bounds; no-op or stale schedules are invalid.
+
+The sealed SDK admission retains authenticated HTTPS origin and exact network.
+The C ABI validates canonical manifests and repeats selected native profile,
+governed context, authority, occurrence and proof-container checks; a raw C archive
+does not authenticate a Torii service. Native buffers use `iroha_privacy_free_buffer`.
+`PrivacyCapabilityUnavailableException` retains the exact selected refusal, including
+`JointSecurityReductionIncomplete`; direct native calls retain the same refusal
+(status -24). No local fixture, mock driver, or wire codec grants availability or
+State authority. TODO: validate this producer with the rebuilt native bridge and
+complete holder-prover, authenticated transport, and full-operation integration
+once the joint security construction is complete.

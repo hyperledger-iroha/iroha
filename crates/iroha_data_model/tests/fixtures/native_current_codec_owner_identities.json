@@ -4946,10 +4946,10 @@
           "serialize_hash": "90fb35b4ce6b716ef181b8c8b4fc2283"
         },
         {
-          "deserialize_hash": "7d813460f51b5e7105a0b7edf8567296",
-          "nominal": "iroha_data_model::privacy::PrivacyConsensusPolicyTighteningV1",
-          "root": "iroha_data_model::privacy::PrivacyConsensusPolicyTighteningV1",
-          "serialize_hash": "7d813460f51b5e7105a0b7edf8567296"
+          "deserialize_hash": "f7e1240d7df5bb27648a1954f442c726",
+          "nominal": "iroha_data_model::privacy::PrivacyConsensusPolicyUpdateV1",
+          "root": "iroha_data_model::privacy::PrivacyConsensusPolicyUpdateV1",
+          "serialize_hash": "f7e1240d7df5bb27648a1954f442c726"
         },
         {
           "deserialize_hash": "7de347dc608e2452790aecabad23b0d9",
@@ -4958,106 +4958,76 @@
           "serialize_hash": "7de347dc608e2452790aecabad23b0d9"
         },
         {
-          "deserialize_hash": "719a329127dd229f1eba4261579491c7",
-          "nominal": "iroha_data_model::privacy::PrivacyProposedLifecycleV1",
-          "root": "iroha_data_model::privacy::PrivacyProposedLifecycleV1",
-          "serialize_hash": "719a329127dd229f1eba4261579491c7"
-        },
-        {
-          "deserialize_hash": "b5624a3a9c3ef0d9bd6a68cd23e7605c",
-          "nominal": "iroha_data_model::privacy::PrivacyActiveLifecycleV1",
-          "root": "iroha_data_model::privacy::PrivacyActiveLifecycleV1",
-          "serialize_hash": "b5624a3a9c3ef0d9bd6a68cd23e7605c"
-        },
-        {
-          "deserialize_hash": "3ba895cad0205d25323984c31e0606d4",
-          "nominal": "iroha_data_model::privacy::PrivacySuspendedLifecycleV1",
-          "root": "iroha_data_model::privacy::PrivacySuspendedLifecycleV1",
-          "serialize_hash": "3ba895cad0205d25323984c31e0606d4"
-        },
-        {
-          "deserialize_hash": "72a6aa817cc7e6e529942380e3560bf7",
-          "nominal": "iroha_data_model::privacy::PrivacyRetiredLifecycleV1",
-          "root": "iroha_data_model::privacy::PrivacyRetiredLifecycleV1",
-          "serialize_hash": "72a6aa817cc7e6e529942380e3560bf7"
-        },
-        {
-          "deserialize_hash": "9e3d04b8f6391070f962defc85e4cd47",
-          "nominal": "iroha_data_model::privacy::PrivacyProtocolLifecycleV1",
-          "root": "iroha_data_model::privacy::PrivacyProtocolLifecycleV1",
-          "serialize_hash": "9e3d04b8f6391070f962defc85e4cd47"
-        },
-        {
           "deserialize_hash": "87368b9da35faa6d2dee8dd5dbdf70cf",
           "nominal": "iroha_data_model::privacy::PrivacySecurityClaimV1",
           "root": "iroha_data_model::privacy::PrivacySecurityClaimV1",
           "serialize_hash": "87368b9da35faa6d2dee8dd5dbdf70cf"
         },
         {
-          "deserialize_hash": "3e8d0f83ebb834f90f523e82f3b87bf4",
-          "nominal": "iroha_data_model::privacy::AnonymousPgcActivationLimitsV1",
-          "root": "iroha_data_model::privacy::AnonymousPgcActivationLimitsV1",
-          "serialize_hash": "3e8d0f83ebb834f90f523e82f3b87bf4"
+          "deserialize_hash": "20266c8920e3fd5edc45cee5073bdeb6",
+          "nominal": "iroha_data_model::privacy::AnonymousPgcLimitsV1",
+          "root": "iroha_data_model::privacy::AnonymousPgcLimitsV1",
+          "serialize_hash": "20266c8920e3fd5edc45cee5073bdeb6"
         },
         {
-          "deserialize_hash": "c8375c6928fc08318d9caab37cddf0ae",
-          "nominal": "iroha_data_model::privacy::VeRangeActivationLimitsV1",
-          "root": "iroha_data_model::privacy::VeRangeActivationLimitsV1",
-          "serialize_hash": "c8375c6928fc08318d9caab37cddf0ae"
+          "deserialize_hash": "ce4a3a0c333b98655f9f420bdc50f8a2",
+          "nominal": "iroha_data_model::privacy::VeRangeLimitsV1",
+          "root": "iroha_data_model::privacy::VeRangeLimitsV1",
+          "serialize_hash": "ce4a3a0c333b98655f9f420bdc50f8a2"
         },
         {
-          "deserialize_hash": "7939558a5135f997135382cc3ccfec22",
-          "nominal": "iroha_data_model::privacy::ZkAmsActivationLimitsV1",
-          "root": "iroha_data_model::privacy::ZkAmsActivationLimitsV1",
-          "serialize_hash": "7939558a5135f997135382cc3ccfec22"
+          "deserialize_hash": "3ec157bd8ad6d62ec41f1e1c71ac44a2",
+          "nominal": "iroha_data_model::privacy::ZkAmsLimitsV1",
+          "root": "iroha_data_model::privacy::ZkAmsLimitsV1",
+          "serialize_hash": "3ec157bd8ad6d62ec41f1e1c71ac44a2"
         },
         {
-          "deserialize_hash": "0c4ab50a96fb94ac1623b4528050f779",
-          "nominal": "iroha_data_model::privacy::JindoActivationLimitsV1",
-          "root": "iroha_data_model::privacy::JindoActivationLimitsV1",
-          "serialize_hash": "0c4ab50a96fb94ac1623b4528050f779"
+          "deserialize_hash": "653292eb2f9847b018eac90448a9cd2b",
+          "nominal": "iroha_data_model::privacy::JindoLimitsV1",
+          "root": "iroha_data_model::privacy::JindoLimitsV1",
+          "serialize_hash": "653292eb2f9847b018eac90448a9cd2b"
         },
         {
-          "deserialize_hash": "4fbe0618470dacdcfdc590b2d7d5f08e",
-          "nominal": "iroha_data_model::privacy::OrchardActivationLimitsV1",
-          "root": "iroha_data_model::privacy::OrchardActivationLimitsV1",
-          "serialize_hash": "4fbe0618470dacdcfdc590b2d7d5f08e"
+          "deserialize_hash": "bc8ff3c14c216b72f3cf737a88d83341",
+          "nominal": "iroha_data_model::privacy::OrchardLimitsV1",
+          "root": "iroha_data_model::privacy::OrchardLimitsV1",
+          "serialize_hash": "bc8ff3c14c216b72f3cf737a88d83341"
         },
         {
-          "deserialize_hash": "1acfdcb06525319ff0c55fc7de0c48c8",
-          "nominal": "iroha_data_model::privacy::FcmpActivationLimitsV1",
-          "root": "iroha_data_model::privacy::FcmpActivationLimitsV1",
-          "serialize_hash": "1acfdcb06525319ff0c55fc7de0c48c8"
+          "deserialize_hash": "3a5ae93492603d479119f41c088760c0",
+          "nominal": "iroha_data_model::privacy::FcmpLimitsV1",
+          "root": "iroha_data_model::privacy::FcmpLimitsV1",
+          "serialize_hash": "3a5ae93492603d479119f41c088760c0"
         },
         {
-          "deserialize_hash": "32dbe257fa3733eca9f797fc981938f8",
-          "nominal": "iroha_data_model::privacy::IvmPrivateNoteActivationLimitsV1",
-          "root": "iroha_data_model::privacy::IvmPrivateNoteActivationLimitsV1",
-          "serialize_hash": "32dbe257fa3733eca9f797fc981938f8"
+          "deserialize_hash": "64d2dc62d17f6c2b107100b4b5ca371a",
+          "nominal": "iroha_data_model::privacy::IvmPrivateNoteLimitsV1",
+          "root": "iroha_data_model::privacy::IvmPrivateNoteLimitsV1",
+          "serialize_hash": "64d2dc62d17f6c2b107100b4b5ca371a"
         },
         {
-          "deserialize_hash": "78cfd67f30badafddc86bfd095e18550",
-          "nominal": "iroha_data_model::privacy::PqMaspActivationLimitsV1",
-          "root": "iroha_data_model::privacy::PqMaspActivationLimitsV1",
-          "serialize_hash": "78cfd67f30badafddc86bfd095e18550"
+          "deserialize_hash": "30efd653b22940f1d8bba05faf37a92f",
+          "nominal": "iroha_data_model::privacy::PqMaspLimitsV1",
+          "root": "iroha_data_model::privacy::PqMaspLimitsV1",
+          "serialize_hash": "30efd653b22940f1d8bba05faf37a92f"
         },
         {
-          "deserialize_hash": "dbeddf57d68adf4e15afe0d892060891",
-          "nominal": "iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1",
-          "root": "iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1",
-          "serialize_hash": "dbeddf57d68adf4e15afe0d892060891"
+          "deserialize_hash": "a0441df04d7eba934d21c947e9ab5c01",
+          "nominal": "iroha_data_model::privacy::PrivacyProtocolLimitsV1",
+          "root": "iroha_data_model::privacy::PrivacyProtocolLimitsV1",
+          "serialize_hash": "a0441df04d7eba934d21c947e9ab5c01"
         },
         {
-          "deserialize_hash": "07edbc48204de8b0fff44ba9b12a8158",
-          "nominal": "iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1",
-          "root": "iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1",
-          "serialize_hash": "07edbc48204de8b0fff44ba9b12a8158"
+          "deserialize_hash": "f1e86538130dad59dcba9ff37f1b9f99",
+          "nominal": "iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1",
+          "root": "iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1",
+          "serialize_hash": "f1e86538130dad59dcba9ff37f1b9f99"
         },
         {
-          "deserialize_hash": "fb8601b194f821864a4681c0bcdcb254",
-          "nominal": "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1",
-          "root": "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1",
-          "serialize_hash": "fb8601b194f821864a4681c0bcdcb254"
+          "deserialize_hash": "1ae161a923e250d3b55052c0272cfe45",
+          "nominal": "iroha_data_model::privacy::PrivacyProtocolPolicyV1",
+          "root": "iroha_data_model::privacy::PrivacyProtocolPolicyV1",
+          "serialize_hash": "1ae161a923e250d3b55052c0272cfe45"
         },
         {
           "deserialize_hash": "9f6a5d02136607ede5a36dba3c61a6b3",
@@ -5358,12 +5328,6 @@
           "nominal": "iroha_data_model::privacy::release_manifest::PrivacyExact12ReleaseManifestV1",
           "root": "iroha.privacy.exact12-release-manifest.v1",
           "serialize_hash": "23ad9b4937a923ad4b37f49f6c6c8e9e"
-        },
-        {
-          "deserialize_hash": "c776762758764c7af74a3b962fc847a6",
-          "nominal": "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1",
-          "root": "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1",
-          "serialize_hash": "c776762758764c7af74a3b962fc847a6"
         },
         {
           "deserialize_hash": "596586c1b064f8b7247687fb8a22d35d",

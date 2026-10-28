@@ -53,20 +53,13 @@ impl CompactShape {
             .and_then(|v| v.checked_add(terminal_row))
             .and_then(|v| v.checked_mul(n))
             .ok_or(Rs16Error)?;
-        let active_row = if stripes == 1 {
-            terminal_row
-        } else {
-            maximum_row
-        };
-        // TODO: the `(n + k) * active_row / 2` row-staging term no longer backs codec work
-        // (rows are coded in place); drop it together with the consensus admission budgets
-        // derived from `workspace_words` and `required_backing_bytes`.
+        // Rows are coded in place. The shared admission geometry reserves only the
+        // two square matrices, parity coefficients and selected row indices.
         let workspace = k
             .checked_mul(k)
             .and_then(|v| v.checked_mul(2))
             .and_then(|v| v.checked_add(k.checked_mul(m)?))
             .and_then(|v| v.checked_add(k))
-            .and_then(|v| v.checked_add(n.checked_add(k)?.checked_mul(active_row / 2)?))
             .ok_or(Rs16Error)?;
         Ok(Self {
             payload,
@@ -100,7 +93,7 @@ impl CompactShape {
     pub fn chunk_count(self) -> usize {
         self.chunks
     }
-    /// Required caller-owned u16 workspace elements.
+    /// Exact caller-owned u16 coefficient/index workspace elements, independent of row size.
     pub fn workspace_words(self) -> usize {
         self.workspace
     }
@@ -415,6 +408,23 @@ mod tests {
             ^ (k * 1000 + m) as u64
             ^ (row as u64).rotate_left(32);
         reference::bytes(seed, len)
+    }
+    /// In-place coding requires only coefficient/index scratch, even for full and
+    /// multiple maximum-size stripes. Row bytes already belong to the codeword.
+    #[test]
+    fn workspace_excludes_retired_row_staging() {
+        for (k, m, words) in [(1, 1, 4), (4, 2, 44), (16, 16, 784)] {
+            for row in [2, 64, ROW] {
+                for len in [1, k * row - 1, k * row, k * row + 1, 16 * MIB] {
+                    let shape = CompactShape::new(len, k, m, row).unwrap();
+                    assert_eq!(
+                        shape.workspace_words(),
+                        words,
+                        "{k}+{m} row {row} len {len}"
+                    );
+                }
+            }
+        }
     }
     /// Every backend writes exactly the reference codeword, whose digest is pinned, over
     /// dirty output and scratch buffers.

@@ -10511,16 +10511,6 @@ impl_default!(NexusAxt {
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Whether admission is enabled, subject to the governed activation height.
-    #[config(default = "defaults::nexus::atomic_private_settlement::ENABLED")]
-    pub enabled: bool,
-    /// First block height at which the path may be admitted.
-    pub activation_height: Option<u64>,
-    /// Minimum governance notice before activation, in blocks.
-    #[config(
-        default = "defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS"
-    )]
-    pub minimum_activation_notice_blocks: u64,
     /// Audited fixed-shape private-note proof profile version.
     #[config(default = "defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION")]
     pub proof_profile_version: u16,
@@ -10575,10 +10565,6 @@ pub struct NexusAtomicPrivateSettlement {
     pub permitted_policy_versions: Vec<u16>,
 }
 impl_default!(NexusAtomicPrivateSettlement {
-    enabled: defaults::nexus::atomic_private_settlement::ENABLED,
-    activation_height: None,
-    minimum_activation_notice_blocks:
-        defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
     proof_profile_version: defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
     max_participants: defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
     max_expiry_blocks: defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
@@ -10604,13 +10590,6 @@ impl NexusAtomicPrivateSettlement {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::NexusAtomicPrivateSettlement> {
         let mut invalid = false;
-        if self.enabled && self.activation_height.is_none() {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.atomic_private_settlement.enabled requires activation_height"),
-            );
-        }
         macro_rules! nonzero_u64 {
             ($value:expr, $field:literal) => {{
                 NonZeroU64::new($value).unwrap_or_else(|| {
@@ -10623,10 +10602,6 @@ impl NexusAtomicPrivateSettlement {
                 })
             }};
         }
-        let minimum_activation_notice_blocks = nonzero_u64!(
-            self.minimum_activation_notice_blocks,
-            "nexus.atomic_private_settlement.minimum_activation_notice_blocks"
-        );
         let max_expiry_blocks = nonzero_u64!(
             self.max_expiry_blocks,
             "nexus.atomic_private_settlement.max_expiry_blocks"
@@ -10856,9 +10831,6 @@ impl NexusAtomicPrivateSettlement {
             return None;
         }
         Some(actual::NexusAtomicPrivateSettlement {
-            enabled: self.enabled,
-            activation_height: self.activation_height,
-            minimum_activation_notice_blocks,
             proof_profile_version,
             max_participants,
             max_expiry_blocks,

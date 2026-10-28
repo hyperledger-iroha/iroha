@@ -30,7 +30,9 @@ fn pointer_abi_holding_limit_preserves_some_and_none() {
         let mut host = CoreHost::new(account.clone());
         host.syscall(ivm_sys::SYSCALL_SET_ASSET_HOLDING_LIMIT, &mut vm)
             .expect("queue holding-limit instruction");
-        let queued = host.drain_instructions();
+        let queued = host
+            .drain_instructions()
+            .expect("ordinary instruction inspection retains no attachment owner");
         assert_eq!(queued.len(), 1);
         let instruction = queued[0]
             .as_any()
@@ -146,7 +148,9 @@ fn pointer_abi_transfer_asset_enqueues_isi() {
     vm.set_register(14, ptr_dataspace);
     host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
         .unwrap();
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1);
     let instr = &queued[0];
     let any = instr.as_any();
@@ -198,7 +202,9 @@ fn nft_mint_enqueues_register_and_transfer() {
     vm.run().unwrap();
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_mut::<CoreHost>().unwrap();
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 2);
     let reg = queued[0]
         .as_any()
@@ -407,7 +413,11 @@ fn sm_syscalls_ignore_local_crypto_preferences() {
                 assert_eq!(vm.register(10), 1, "valid SM2 signature");
                 vec![1]
             };
-            assert!(host.drain_instructions().is_empty());
+            assert!(
+                host.drain_instructions()
+                    .expect("ordinary instruction inspection retains no attachment owner")
+                    .is_empty()
+            );
             outcomes.push((quote, output));
         }
         if let Some(expected) = prior.as_ref() {
@@ -442,6 +452,10 @@ fn sm_quotes_validate_pointer_types_without_node_opt_in() {
             host.prepare_syscall(number, &vm),
             Err(ivm::VMError::NoritoInvalid)
         ));
-        assert!(host.drain_instructions().is_empty());
+        assert!(
+            host.drain_instructions()
+                .expect("ordinary instruction inspection retains no attachment owner")
+                .is_empty()
+        );
     }
 }

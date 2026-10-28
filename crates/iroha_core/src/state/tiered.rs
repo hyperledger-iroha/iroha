@@ -1732,9 +1732,9 @@ impl TieredStateBackend {
             world.runtime_upgrades
         );
         collect_map!(
-            TieredSegment::PrivacyActivations,
-            PrivacyActivation,
-            world.privacy_activations
+            TieredSegment::PrivacyProtocolPolicies,
+            PrivacyProtocolPolicy,
+            world.privacy_protocol_policies
         );
         collect_map!(
             TieredSegment::PrivacyPgcAccounts,
@@ -2519,7 +2519,7 @@ mod measured_bytes_impls {
         },
         nft::NftData,
         permission::Permission,
-        privacy::PrivacyProtocolActivationRecordV1,
+        privacy::PrivacyProtocolPolicyV1,
         proof::{
             ProofAttachment, ProofAttachmentList, ProofBox, ProofId, ProofRecord, ProofStatus,
             VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
@@ -2618,7 +2618,7 @@ mod measured_bytes_impls {
         RuntimeUpgradeStatus,
         TleKeySessionId,
         TleKeySessionLifecycleV1,
-        PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolPolicyV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
         PrivacyPgcPoolInvariantV1,
@@ -4087,7 +4087,7 @@ enum TieredSegment {
     TxSequences,
     VerifyingKeys,
     RuntimeUpgrades,
-    PrivacyActivations,
+    PrivacyProtocolPolicies,
     PrivacyPgcAccounts,
     PrivacyPgcPoolInvariants,
     PrivacyNullifiers,
@@ -4165,7 +4165,7 @@ macro_rules! tiered_segment_table {
             TxSequences, TxSequence, "tx_sequences", tx_sequences;
             VerifyingKeys, VerifyingKey, "verifying_keys", verifying_keys;
             RuntimeUpgrades, RuntimeUpgrade, "runtime_upgrades", runtime_upgrades;
-            PrivacyActivations, PrivacyActivation, "privacy_activations", privacy_activations;
+            PrivacyProtocolPolicies, PrivacyProtocolPolicy, "privacy_protocol_policies", privacy_protocol_policies;
             PrivacyPgcAccounts, PrivacyPgcAccount, "privacy_pgc_accounts", privacy_pgc_accounts;
             PrivacyPgcPoolInvariants, PrivacyPgcPoolInvariant, "privacy_pgc_pool_invariants", privacy_pgc_pool_invariants;
             PrivacyNullifiers, PrivacyNullifier, "privacy_nullifiers", privacy_nullifiers;
@@ -4416,7 +4416,7 @@ pub enum TieredKeyHandle {
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
     RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
-    PrivacyActivation(crate::privacy_state::PrivacyActivationKeyV1),
+    PrivacyProtocolPolicy(crate::privacy_state::PrivacyProtocolPolicyKeyV1),
     PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
     PrivacyPgcPoolInvariant(crate::privacy_state::PrivacyPgcPoolInvariantKeyV1),
     PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),
@@ -4509,7 +4509,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::AccountRole(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::VerifyingKey(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::RuntimeUpgrade(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::PrivacyActivation(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyProtocolPolicy(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyPgcAccount(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyPgcPoolInvariant(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyNullifier(key) => norito::codec::Encode::encode(key),
@@ -4669,8 +4669,8 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
             TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
-            TieredKeyHandle::PrivacyActivation(id) => {
-                write!(f, "privacy_activation:{id:?}")
+            TieredKeyHandle::PrivacyProtocolPolicy(id) => {
+                write!(f, "privacy_protocol_policy:{id:?}")
             }
             TieredKeyHandle::PrivacyPgcAccount(id) => {
                 write!(f, "privacy_pgc_account:{id:?}")
@@ -4983,7 +4983,7 @@ mod tests {
             }),
         );
         let mut previous = None;
-        for (epoch, byte) in [(1, 81), (2, 83)] {
+        for (index, (epoch, byte)) in [(1, 81), (2, 83)].into_iter().enumerate() {
             let root = PrivacyRootV1::new([byte; 32]);
             let anchor = PrivacyZkX509TrustAnchorRecordV1::new(
                 issuer,
@@ -5023,7 +5023,14 @@ mod tests {
             );
             world.privacy_root_heads.insert(
                 PrivacyRootHeadKeyV1::new(namespace, publication.role).expect("head key"),
-                PrivacyRootHeadRecordV1::new(epoch, root, provenance, None).expect("head"),
+                PrivacyRootHeadRecordV1::new(
+                    epoch,
+                    root,
+                    provenance,
+                    None,
+                    u32::try_from(index + 1).expect("inserted root count fits u32"),
+                )
+                .expect("head"),
             );
         }
         world
@@ -5034,7 +5041,7 @@ mod tests {
     ) -> Result<(), crate::privacy_state::PrivacyStateValidationErrorV1> {
         crate::privacy_state::validate_privacy_persisted_state_v1(
             &iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default(),
-            &world.privacy_activations.view(),
+            &world.privacy_protocol_policies.view(),
             crate::privacy_state::PrivacyPgcStateReadV1 {
                 accounts: &world.privacy_pgc_accounts.view(),
                 pool_invariants: &world.privacy_pgc_pool_invariants.view(),
@@ -5090,7 +5097,7 @@ mod tests {
             MeasuredBytes::measured_bytes(&fixed),
             std::mem::size_of::<PrivacyRootProvenanceV1>()
         );
-        let head = PrivacyRootHeadRecordV1::new(1, PrivacyRootV1::new([92; 32]), fixed, None)
+        let head = PrivacyRootHeadRecordV1::new(1, PrivacyRootV1::new([92; 32]), fixed, None, 1)
             .expect("fixed head");
         assert_eq!(
             MeasuredBytes::measured_bytes(&head),

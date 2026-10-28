@@ -926,7 +926,7 @@ mod state_snapshot_decode_error_tests {
         }
         *overlay.privacy_consensus_policy.get_mut() = PrivacyConsensusPolicyV1 {
             current_limits: limits,
-            pending_tightening: None,
+            pending_update: None,
         };
         overlay.commit();
     }
@@ -1553,13 +1553,13 @@ impl KuraSeed {
             })?;
         validate_resource_policy_versions(&world, committed_height, &self.execution_budget)?;
         validate_sccp_policy_versions(&world, &self.execution_budget)?;
-        crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
-            &world.privacy_activations.view(),
+        crate::privacy_state::validate_privacy_protocol_policies_at_committed_height_v1(
+            &world.privacy_protocol_policies.view(),
             committed_height,
         )
         .map_err(|message| json::Error::InvalidField {
-            field: "state.world.privacy_activations".to_owned(),
-            message,
+            field: "state.world.privacy_protocol_policies".to_owned(),
+            message: message.to_string(),
         })?;
         let (mut restored_nexus, _, _, _, _) =
             nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes, replay_nexus)?;
@@ -1672,20 +1672,7 @@ impl KuraSeed {
             .decode_transactions(self.kura.transaction_history_budget())?;
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
-        if let Some(qualification) = world.privacy_exact12_qualification.view().get() {
-            crate::privacy_state::validate_privacy_exact12_qualification_registration_v1(
-                qualification,
-                &chain_id,
-                network_id,
-                committed_height,
-                &world.privacy_activations.view(),
-                commit_topology.view().get(),
-            )
-            .map_err(|message| json::Error::InvalidField {
-                field: "state.world.privacy_exact12_qualification".to_owned(),
-                message,
-            })?;
-        }
+
         reject_unknown(&map, "state")?;
         super::contract_subject_restore::rebuild(&mut world).map_err(|message| {
             json::Error::InvalidField {

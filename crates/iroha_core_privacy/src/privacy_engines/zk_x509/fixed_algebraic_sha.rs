@@ -15,15 +15,18 @@ use super::{
     },
     profile::ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
     sha_call_bus_stark::{
-        ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, ZK_X509_SHA_CA_CALL_COUNT_V1,
+        ShaFrameByteV1, ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, ZK_X509_SHA_CA_CALL_COUNT_V1,
         ZK_X509_SHA_CA_LEAF_CALL_V1, ZK_X509_SHA_CALL_COUNT_V1,
         ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1, ZK_X509_SHA_FIXED_CALL_V1,
+        ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1, ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1,
+        ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1, ZK_X509_SHA_FIXED_FRAME_MASK_V1,
         ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1, ZK_X509_SHA_FIXED_ROLE_V1,
         ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1, ZK_X509_SHA_FIXED_SEGMENT_LAST_V1,
         ZK_X509_SHA_FIXED_SLOT_V1, ZK_X509_SHA_SEGMENT_ACTIVE_ROWS_V1,
         ZK_X509_SHA_SEGMENT_COUNT_V1, ZK_X509_SHA_SEGMENT_ROWS_V1, ZkX509ShaCallBusStarkErrorV1,
         ZkX509ShaCallManifestV1, ZkX509ShaCallPublicShapeV1, ZkX509ShaCallRoleV1,
-        ZkX509ShaCallScheduleV1, ZkX509ShaRfcConsumerChannelsV1, sha_rfc_consumer_channels_v1,
+        ZkX509ShaCallScheduleV1, ZkX509ShaRfcConsumerChannelsV1, projection_bus, sha_frame_byte_v1,
+        sha_rfc_consumer_channels_v1,
     },
     sha_word_stark::{
         SHA_WORD_CAPACITY_BLOCK_CONTINUE_V1, SHA_WORD_CAPACITY_BLOCK_FIRST_V1,
@@ -54,7 +57,7 @@ use std::{
 use thiserror::Error;
 /// Exact first-release algebraic SHA compiler description.
 pub const ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-sha-fixed-algebraic-compiler-v1-incompatible:public-shapes=disclosed-attributes0through4:four-independent-physical-log19-generic-children:child-widths=118,118,118,118:combined-width472:segment-major-column-order:each-child-generic-cap65536:typed-composite-digest=sha3-384-opaque48-binds-disclosure-shape+profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:typed-zero-capacity-sha-word-circuit-topology:word-operation-and-execution-sorted-memory-walk:authoritative-local-row-event-order-replay:definition-writes-immediately-before-consuming-operation:operation-input-reads-then-output-write:eight-digest-reads-last:derived-execution-sort-must-equal-circuit-canonical-sorted-memory:execution-write-axis-key=typed-word-phase(initial|input|expansion3|round8|final):compute+execution+sorted-memory-call-axis-transpose-on-exact-maximal-contiguous-same-segment-same-geometry-runs-iff-calls-strictly-greater-than-blocks:block-row-axis-on-ties:boolean-topology-three-way-exact-atom-planner(block-or-call=2048*min(calls,blocks)|round=32*blocks*calls|block-gap=416*calls):strict-lower-only:old-then-round-wins-ties:block-gap-axis-one-stride14-hull+12-negative-stride1064-gap-residues-per-lane:operation-read-typed-block+phase(expansion6|round18|final2)+read-slot-axis-with-exact-per-call-cost44*blocks-2:operation-read-axis-transpose-iff-exact-cost-strictly-less-than-existing-block-or-call-axis:sorted-memory-typed-initial-or-block+word-phase(initial|input|expansion3|round8|final)+access-occurrence-axis:sorted-memory-phase-axis-on-every-exact-geometry-run-iff-phase-cost=298*blocks*calls-is-strictly-less-than-existing-axis-cost(call=4952*blocks+32|block=(4952+32)*calls):old-axis-wins-ties:call-axis-key=local-column+family+block(initial-or-sha-index)+word-position+occurrence:remaining-sorted-memory-nontransposed-series-maximal-across-ordered-calls:no-native-row-matrix:no-lde-matrix:no-artifact:no-merkle-root:no-proof-supplied-fixed-values:affine+repeated+sparse-atoms:generator-coset-log19-to-log22:call-role-slot-boundaries+compact-ca-selectors+field-native-rfc-events+physical-padding:exact-shape-derived-rfc-channel-offsets:all-six-formerly-reconstructed-word-columns-native:first-release";
+    b"zk-x509-sha-fixed-algebraic-compiler-v1-incompatible:public-shapes=disclosed-attributes0through4:four-independent-physical-log19-generic-children:child-widths=137,137,137,137:combined-width548:segment-major-column-order:each-child-generic-cap65536:typed-composite-digest=sha3-384-opaque48-binds-disclosure-shape+profile+ordered-widths+ordered-child-digests:row-major-child-opening-concatenation:typed-zero-capacity-sha-word-circuit-topology:word-operation-and-execution-sorted-memory-walk:authoritative-local-row-event-order-replay:definition-writes-immediately-before-consuming-operation:operation-input-reads-then-output-write:eight-digest-reads-last:derived-execution-sort-must-equal-circuit-canonical-sorted-memory:execution-write-axis-key=typed-word-phase(initial|input|expansion3|round8|final):compute+execution+sorted-memory-call-axis-transpose-on-exact-maximal-contiguous-same-segment-same-geometry-runs-iff-calls-strictly-greater-than-blocks:block-row-axis-on-ties:boolean-topology-three-way-exact-atom-planner(block-or-call=2048*min(calls,blocks)|round=32*blocks*calls|block-gap=416*calls):strict-lower-only:old-then-round-wins-ties:block-gap-axis-one-stride14-hull+12-negative-stride1064-gap-residues-per-lane:operation-read-typed-block+phase(expansion6|round18|final2)+read-slot-axis-with-exact-per-call-cost44*blocks-2:operation-read-axis-transpose-iff-exact-cost-strictly-less-than-existing-block-or-call-axis:sorted-memory-typed-initial-or-block+word-phase(initial|input|expansion3|round8|final)+access-occurrence-axis:sorted-memory-phase-axis-on-every-exact-geometry-run-iff-phase-cost=298*blocks*calls-is-strictly-less-than-existing-axis-cost(call=4952*blocks+32|block=(4952+32)*calls):old-axis-wins-ties:call-axis-key=local-column+family+block(initial-or-sha-index)+word-position+occurrence:remaining-sorted-memory-nontransposed-series-maximal-across-ordered-calls:no-native-row-matrix:no-lde-matrix:no-artifact:no-merkle-root:no-proof-supplied-fixed-values:affine+repeated+sparse-atoms:generator-coset-log19-to-log22:call-role-slot-boundaries+compact-ca-selectors+field-native-rfc-events+physical-padding:exact-shape-derived-rfc-channel-offsets:canonical-domain-and-static-field-frame-byte-mask-constant-and-raw-length-high-low-columns:active-projection-word-length-digest-selectors:exact18-atoms-per-active-call:all-six-formerly-reconstructed-word-columns-native:first-release";
 #[cfg(test)]
 const SHA_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:sha-fixed-algebraic-compiler:v1";
@@ -68,8 +71,15 @@ pub const ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1: usize =
 /// This is an allocation guard, not a consensus-tunable parameter. The
 /// canonical five schedules are required by tests to stay below it.
 pub const ZK_X509_SHA_FIXED_ALGEBRAIC_MAX_ATOMS_V1: usize = 65_536;
-const SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [usize; ZK_X509_SHA_SEGMENT_COUNT_V1] =
-    [55_703, 64_091, 34_614, 45_994];
+// Canonical frame columns for publicly inactive projection slots are zero.
+// Selecting these slots changes the exact atom inventory by disclosure shape.
+const SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1: [[usize; ZK_X509_SHA_SEGMENT_COUNT_V1]; 5] = [
+    [56_608, 64_656, 34_614, 46_561],
+    [56_608, 64_808, 34_614, 46_561],
+    [56_608, 64_960, 34_614, 46_561],
+    [56_608, 64_960, 34_766, 46_561],
+    [56_608, 64_960, 34_766, 46_713],
+];
 // Exact raw SHA-word fixed-column positions. These are deliberately repeated
 // here because the source module keeps the implementation-only names private;
 // exhaustive differential tests bind these positions to `fixed_row_v1`.
@@ -161,8 +171,8 @@ const _: () = {
     assert!(ZK_X509_SHA_CALL_COUNT_V1 == 29);
     assert!(ZK_X509_SHA_SEGMENT_COUNT_V1 == 4);
     assert!(ZK_X509_SHA_SEGMENT_ROWS_V1 == 1 << 19);
-    assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 == 118);
-    assert!(ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1 == 472);
+    assert!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 == 137);
+    assert!(ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1 == 548);
     assert!(SHA_WORD_CAPACITY_FIXED_WIDTH_V1 == 72);
     assert!(ZK_X509_SHA_FIXED_CALL_V1 == SHA_WORD_CAPACITY_FIXED_WIDTH_V1);
     assert!(ZK_X509_SHA_FIXED_ROLE_V1 == 73);
@@ -173,10 +183,18 @@ const _: () = {
     assert!(ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 == 78);
     assert!(SHA_FIXED_RFC_LENGTH_PAIR_V1 == 91);
     assert!(SHA_FIXED_RFC_STREAMS_V1 == 94);
+    // RFC events end where the four canonical frame-byte groups begin.
     assert!(
         SHA_FIXED_RFC_STREAMS_V1 + 4 * SHA_FIXED_RFC_STREAM_STRIDE_V1
-            == ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
+            == ZK_X509_SHA_FIXED_FRAME_MASK_V1
     );
+    assert!(ZK_X509_SHA_FIXED_FRAME_MASK_V1 + 4 == ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1);
+    assert!(ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + 4 == ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1);
+    assert!(ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + 4 == ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1);
+    assert!(ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1 + 4 == projection_bus::FIX_WORD_V1);
+    assert!(projection_bus::FIX_WORD_V1 + 1 == projection_bus::FIX_LENGTH_V1);
+    assert!(projection_bus::FIX_LENGTH_V1 + 1 == projection_bus::FIX_DIGEST_V1);
+    assert!(projection_bus::FIX_DIGEST_V1 + 1 == ZK_X509_SHA_BATCH_FIXED_WIDTH_V1);
     assert!(
         SHA_ROUND_REGION_OFFSET_V1 + SHA_ROUNDS_PER_BLOCK_V1 * SHA_ROUND_ROWS_V1 + 8
             == SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1
@@ -820,6 +838,20 @@ impl StructuralBuilderV1 {
         if value == F::ZERO {
             return Ok(());
         }
+        if end.checked_sub(start) == Some(1) {
+            // A one-row selector is a canonical sparse atom. Affine ranges
+            // require at least two rows; keep the generic kernel invariant.
+            if end > ZK_X509_SHA_SEGMENT_ROWS_V1 {
+                return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+            }
+            let column = self.combined_column_v1(segment, local_column)?;
+            let atom = ZkX509FixedAlgebraicAtomV1::sparse_v1(
+                u16::try_from(column).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
+                u64::try_from(start).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
+                value,
+            )?;
+            return NonzeroSeriesV1::push_atom_v1(&mut self.inner, &mut self.atom_count, atom);
+        }
         self.push_affine_v1(segment, local_column, start, end, value, F::ZERO)
     }
     fn push_repeated_v1(
@@ -1011,6 +1043,33 @@ fn emit_common_call_atoms_v1(
     output.observe_v1(segment, FIX_FIRST_AGGREGATE_ROW, start, F::ONE)?;
     output.observe_v1(segment, SHA_WORD_CAPACITY_CALL_FIRST_V1, start, F::ONE)?;
     output.observe_v1(segment, SHA_WORD_CAPACITY_CALL_LAST_V1, end - 1, F::ONE)?;
+    if projection_bus::is_active_v1(manifest) {
+        // These public selectors cover exactly 512 payload words, one length,
+        // and eight digest words. They never depend on the private message.
+        if manifest.maximum_message_bytes != projection_bus::WORDS_V1 * 4
+            || manifest.maximum_blocks != 33
+        {
+            return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+        }
+        for word in 0..16 {
+            output.push_repeated_v1(
+                segment,
+                projection_bus::FIX_WORD_V1,
+                start + INITIAL_LOCAL_ROWS_PER_CALL_V1 + word,
+                projection_bus::WORDS_V1 / 16,
+                SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1,
+                F::ONE,
+            )?;
+        }
+        output.push_constant_v1(segment, projection_bus::FIX_LENGTH_V1, end - 1, end, F::ONE)?;
+        output.push_constant_v1(
+            segment,
+            projection_bus::FIX_DIGEST_V1,
+            local_end - DIGEST_LOCAL_ROWS_PER_CALL_V1,
+            local_end,
+            F::ONE,
+        )?;
+    }
     output.push_constant_v1(segment, FIX_MEMORY, local_end, end, F::ONE)?;
     let compute_start = start
         .checked_add(INITIAL_LOCAL_ROWS_PER_CALL_V1)
@@ -1202,6 +1261,19 @@ fn emit_word_row_v1(
                 .checked_mul(4)
                 .and_then(|offset| offset.checked_add(byte))
                 .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+            if let Some(expected) = sha_frame_byte_v1(manifest, byte_index) {
+                output.observe_v1(segment, ZK_X509_SHA_FIXED_FRAME_MASK_V1 + byte, row, F::ONE)?;
+                let (column, value) = match expected {
+                    ShaFrameByteV1::Constant(value) => {
+                        (ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1, F(u64::from(value)))
+                    }
+                    ShaFrameByteV1::RawLengthHigh => {
+                        (ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1, F::ONE)
+                    }
+                    ShaFrameByteV1::RawLengthLow => (ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1, F::ONE),
+                };
+                output.observe_v1(segment, column + byte, row, value)?;
+            }
             if byte_index < manifest.maximum_message_bytes {
                 output.observe_v1(
                     segment,
@@ -2656,7 +2728,7 @@ impl ZkX509ShaFixedAlgebraicScheduleV1 {
             .domain_v1();
         if children
             .iter()
-            .zip(SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1)
+            .zip(SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1[shape.disclosed_attributes])
             .any(|(child, atom_count)| {
                 child.domain_v1() != domain
                     || usize::from(child.width_v1()) != ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
@@ -3011,7 +3083,7 @@ fn compile_sha_fixed_algebraic_children_v1(
         })?;
     Ok(children)
 }
-/// Compile all 472 verifier-owned SHA fixed columns for one admitted shape.
+/// Compile all 548 verifier-owned SHA fixed columns for one admitted shape.
 pub fn compile_zk_x509_sha_fixed_algebraic_schedule_v1(
     shape: ZkX509ShaCallPublicShapeV1,
 ) -> Result<ZkX509ShaFixedAlgebraicScheduleV1, ZkX509ShaFixedAlgebraicErrorV1> {
@@ -3093,6 +3165,8 @@ fn compile_sha_atom_accounting_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::zk_x509::sha_call_bus_stark::ZkX509ShaBatchFixedProviderV1;
+    include!("sha_frame_atom_tests.rs");
+    include!("sha_projection_atom_tests.rs");
     fn schedule(disclosed_attributes: usize) -> ZkX509ShaFixedAlgebraicScheduleV1 {
         compile_zk_x509_sha_fixed_algebraic_schedule_v1(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes,
@@ -4055,7 +4129,7 @@ mod tests {
                 core::array::from_fn(|segment| {
                     schedule.children_v1()[segment].atoms_v1().len()
                 }),
-                SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1,
+                SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1[disclosed_attributes],
             );
             assert!(
                 schedule.children_v1().iter().all(|child| {

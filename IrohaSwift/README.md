@@ -1753,33 +1753,43 @@ representations, missing canonical request authentication, and a missing or
 stale native bridge fail closed. The signed fetch bypasses local cached responses
 and sends `Cache-Control: no-cache, no-store` for current committed state.
 `PrivacyExact12CapabilityAdmissionV1` issues
-an opaque per-protocol token only when the committed row is active, ready, and
+an opaque per-protocol token only when the committed row is available and
 byte-identical to the ABI33 native-validated compiled catalog. The generic
-transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
+transaction-frame initializer rejects both privacy submission wires, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
-complete final V1 envelope profile tuple both at construction and final encoding.
-The client must supply `localSigningContext.networkId`: the authenticated origin
-and its token retain that exact network, the deployment's raw32 network and genesis
-fields must match it, and every retained statement's context must bind it.
+protocol-specific request or envelope profile tuple at construction and final encoding.
+The client must supply `localSigningContext.networkId`: the authenticated origin,
+the capability manifest's top-level raw32 `network_id`, the opaque token and every
+retained statement must match that exact network. The manifest digest binds this
+network field together with committed height, policy and protocol rows.
 Final batch encoding also compares the token and statement against the batch's
 exact `networkId`; an admission from another network cannot be reused. Managed
 fixture projection and standalone native validation do not mint network authority.
 
-ABI33 requires exactly six privacy C exports, including
-`iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
+ABI33 requires exactly seven privacy C exports, including
+`iroha_privacy_validate_exact12_capability_manifest_v1` and
+`iroha_privacy_validate_exact12_submit_proof_construction_v1`. Swift passes the exact
 Torii archive to the canonical Rust validator before projecting its fields.
-Rust checks the complete release and deployment records, artifact counts,
-digests, audit signatures, and validator signatures. Every authority-bearing
-path also compares the selected tuple against the native local catalog.
-The managed decoder alone cannot establish production qualification; a bridge
-without the manifest validator is unavailable.
+Rust checks the canonical manifest, compiled profiles, and committed resource policies.
+Swift compares each row against the actual native catalog; a mismatch is retained
+on that row and blocks only admission for that selected protocol. Each protocol is
+`available` only when its canonical implementation is supported; ordinary
+committed policy selects effective limits. Unrelated protocols and documentary release or
+deployment evidence do not gate it. X509 currently reports
+`joint-security-reduction-incomplete` and remains unavailable. Every authority-bearing
+path compares the selected tuple against the native local catalog and the exact
+expected network. Managed decoding grants no network or proof authority; a bridge
+without the manifest validator is unavailable. This first-release wire has no
+qualification field or fallback decoder for the retired layout. Runtime availability
+does not claim engineering release, platform or network qualification.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 33
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
-the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
+the capability-manifest and construction validators, the zeroizing-free symbol,
+and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
 
@@ -1818,6 +1828,20 @@ external signer and normalize its signature to low-s, fixed 64-byte `r || s`
 before building a witness. This preparation neither authenticates current
 State nor proves a credential, pairs a device, or establishes network readiness.
 Missing native support and noncanonical or wrong-protocol input fail explicitly.
+
+`PrivacyX509DirectTransactionV1.prepare` retains one direct, proof-free X509
+request and its exact transaction fields. It derives the ordered intent and
+ActionStatement from the canonical signed-attachment plan and exposes the
+materialized statement for proving. `sign(rawProof:signingKey:)` revalidates the
+original network admission, binds the exact raw Proof/ActionProof occurrence,
+and signs with the matching single Ed25519 authority. The X509 execution wire
+is `iroha.privacy.submit_zk_x509_certificate.v1`; the generic submit-proof wire
+is refused for X509. This builder does not create contract or mixed-action
+bindings. It does not establish proof validity, State freshness, or production
+qualification; unavailable native or network admission still refuses construction.
+The Exact12 X509 row carries its original ActionStatement frame in the intent
+projection field; the other eleven protocols retain their existing projections.
+
 
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,

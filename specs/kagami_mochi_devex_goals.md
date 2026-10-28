@@ -227,6 +227,10 @@ The installed macOS attachment fixture passes with four parent and four private
 validators, including native discovery, all three deployments, execution and exact
 recovery. Restricted transaction gossip selects the independently signed private
 root's authenticated next-height committee; it does not require a parent lane record.
+The local workflow covers retained restart and fresh reset without releasing reserved
+ports during startup. Mochi’s headless walkthrough exercises genuine quickstart,
+quoted account funding, contract deployment, mutable calls, views and all state
+listings, followed by verified zero-peer shutdown.
 The attachment fixture also checks
 that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression

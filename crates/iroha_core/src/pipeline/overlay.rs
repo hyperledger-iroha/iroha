@@ -1243,6 +1243,7 @@ impl OverlayEffect {
     fn instruction(&self) -> Option<&InstructionBox> {
         match &self.payload {
             QueuedEffectPayload::Instruction(instruction) => Some(instruction),
+            QueuedEffectPayload::AttachedX509(action) => Some(action.instruction()),
             QueuedEffectPayload::Emission(_) => None,
         }
     }
@@ -1774,6 +1775,9 @@ impl TxOverlay {
                     QueuedEffectPayload::Emission(emission) => {
                         norito::canonical_frame_len(&emission.value).unwrap_or(usize::MAX)
                     }
+                    // TODO(I.3): independent overlay/replay roots do not own original
+                    // signed attachment invocation custody and remain unsupported.
+                    QueuedEffectPayload::AttachedX509(_) => usize::MAX,
                 })
                 .fold(0usize, usize::saturating_add)
         })
@@ -1895,6 +1899,17 @@ impl TxOverlay {
         state_tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> Result<(), ValidationFail> {
+        if self
+            .effects
+            .iter()
+            .any(|effect| matches!(&effect.payload, QueuedEffectPayload::AttachedX509(_)))
+        {
+            // TODO(I.3): bind replay roots to the original signed owner before
+            // supporting attachment-backed effects through this separate route.
+            return Err(ValidationFail::NotPermitted(
+                "X.509 original attachment custody cannot be applied through an independent overlay root".into(),
+            ));
+        }
         (|| -> Result<(), ValidationFail> {
             let execution_height = self
                 .source
@@ -2003,6 +2018,11 @@ impl TxOverlay {
                 let effect_authority =
                     execution_context.map_or(authority, |context| &context.authority);
                 match effect.payload {
+                    QueuedEffectPayload::AttachedX509(_) => {
+                        return Err(ValidationFail::NotPermitted(
+                            "X.509 original attachment custody cannot be applied through an independent overlay root".into(),
+                        ));
+                    }
                     QueuedEffectPayload::Emission(emission) => {
                         crate::smartcontracts::ivm::host::HostExecutionArtifacts::validate_emission_provenance(
                             &state_tx.world, &emission.value,
@@ -2354,7 +2374,9 @@ where
     let access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
     #[cfg(not(test))]
     let _ = &access_log;
-    let queued = host.drain_queued_effects_with_contract_runtime_context(None);
+    let queued = host
+        .drain_queued_effects_with_contract_runtime_context(None)
+        .map_err(OverlayBuildError::IvmRun)?;
     let (durable_state_overlay, durable_state_authorizations) =
         host.drain_durable_state_overlay_with_authorizations();
     let completed_axt = host.drain_completed_axt_states();
@@ -2552,9 +2574,11 @@ where
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let queued = host.drain_queued_effects_with_contract_runtime_context(
-                contract_runtime_context.clone(),
-            );
+            let queued = host
+                .drain_queued_effects_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                )
+                .map_err(OverlayBuildError::IvmRun)?;
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
@@ -2722,9 +2746,11 @@ where
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let mut queued = host.drain_queued_effects_with_contract_runtime_context(
-                contract_runtime_context.clone(),
-            );
+            let mut queued = host
+                .drain_queued_effects_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                )
+                .map_err(OverlayBuildError::IvmRun)?;
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
@@ -2889,7 +2915,8 @@ pub fn build_overlay_for_transaction_with_accounts(
                 && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
             {
                 (
-                    host.drain_instructions(),
+                    host.drain_instructions()
+                        .map_err(OverlayBuildError::IvmRun)?,
                     host.drain_durable_state_overlay(),
                 )
             } else {
@@ -3101,9 +3128,11 @@ where
             let access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let queued = host.drain_queued_effects_with_contract_runtime_context(
-                contract_runtime_context.clone(),
-            );
+            let queued = host
+                .drain_queued_effects_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                )
+                .map_err(OverlayBuildError::IvmRun)?;
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
@@ -3291,9 +3320,11 @@ where
             let access_log = finish_overlay_access_log(&mut host, capture_access_log)?;
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let mut queued = host.drain_queued_effects_with_contract_runtime_context(
-                contract_runtime_context.clone(),
-            );
+            let mut queued = host
+                .drain_queued_effects_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                )
+                .map_err(OverlayBuildError::IvmRun)?;
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
@@ -3572,9 +3603,11 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             let returned_error = run_vm_with_host(&mut vm, &mut host)?;
             let lifecycle_transition = lifecycle_transition.filter(|_| !returned_error);
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let queued = host.drain_queued_effects_with_contract_runtime_context(
-                contract_runtime_context.clone(),
-            );
+            let queued = host
+                .drain_queued_effects_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                )
+                .map_err(OverlayBuildError::IvmRun)?;
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();
@@ -3744,9 +3777,11 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let queued = host.drain_queued_effects_with_contract_runtime_context(
-                contract_runtime_context.clone(),
-            );
+            let queued = host
+                .drain_queued_effects_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                )
+                .map_err(OverlayBuildError::IvmRun)?;
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
             let completed_axt = host.drain_completed_axt_states();

@@ -888,7 +888,7 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
         .expect("coherent small fixture privacy limits");
     world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
         current_limits: limits,
-        pending_tightening: None,
+        pending_update: None,
     });
     let mut config = TestChainConfig::new(world, 1_000);
     config

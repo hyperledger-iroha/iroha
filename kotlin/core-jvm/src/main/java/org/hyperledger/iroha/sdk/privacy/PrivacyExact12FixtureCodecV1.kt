@@ -73,7 +73,7 @@ class PrivacyExact12TypedFixtureRowV1(
     )
 
     init {
-        require(submitProofWireId == PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID) {
+        require(submitProofWireId == PrivacyExact12FixtureCodecV1.submitProofWireIdV1(protocolId)) {
             "submitProofWireId must be the canonical first-release wire id"
         }
         require(nestedByteCount() <= PrivacyExact12FixtureCodecV1.MAX_AGGREGATE_NESTED_BYTES) {
@@ -189,8 +189,15 @@ class PrivacyExact12FixtureBundleV1(
 object PrivacyExact12FixtureCodecV1 {
     const val SCHEMA_NAME: String = "iroha.privacy.exact12-typed-fixture-bundle.v1"
     const val SUBMIT_PROOF_WIRE_ID: String = "iroha.privacy.submit_proof.v1"
+    /** X509 uses an attached request; the other eleven protocols retain SubmitPrivacyProofV1. */
+    @JvmStatic
+    fun submitProofWireIdV1(protocolId: PrivacyProtocolIdV1): String =
+        if (protocolId == PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1)
+            SubmitPrivacyZkX509CertificateV1.WIRE_ID else SUBMIT_PROOF_WIRE_ID
+
+    // Pin the decoded archive emitted by the maintained Rust fixture producer.
     const val CANONICAL_ARCHIVE_SHA256_HEX: String =
-        "d7f1755b8145a1e18af5ffc315d6517ec68b16f1b67cf1aae58865e7c41f912b"
+        "9c8e6094408059b96295ef27f584fa18f5b1a567a7b39866adaa082b3c6394f9"
     const val VERSION: Int = 1
     const val ROW_COUNT: Int = 12
     const val HASH_BYTES: Int = 32
@@ -404,7 +411,9 @@ object PrivacyExact12FixtureCodecV1 {
                 MAX_WIRE_ID_ENCODED_BYTES,
                 "submit-proof wire id",
             )
-            require(wireId == SUBMIT_PROOF_WIRE_ID) { "unknown or retired submit-proof wire id" }
+            require(wireId == submitProofWireIdV1(protocols[protocolTag.toInt()])) {
+                "unknown, retired, or protocol-substituted privacy submission wire id"
+            }
             decodeBudget.claim(wireId.toByteArray(StandardCharsets.UTF_8).size.toLong(), "submit-proof wire id")
             val instruction = decodeRawBytesField(
                 decoder,

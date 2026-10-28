@@ -447,6 +447,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
     pub(crate) fn new_v1(
         statement: &'a IrohaZkX509StarkP256StatementV1,
         rfc_statement: &'a ZkX509Rfc5280StatementV1,
+        crl_public_inputs: crate::privacy_engines::zk_x509::verifier_profile::ZkX509CrlPublicInputsV1,
         public: ZkX509CredentialPublicBindingV1,
         binding: &ZkX509CredentialPreAuxBindingV1,
         auxiliary: JointAuxiliaryBindingV1,
@@ -512,6 +513,7 @@ impl<'a> MainJointVerifierOraclesV1<'a> {
             statement,
             ZkX509Rfc5280StarkShapeV1::from_statement(rfc_statement)
                 .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?,
+            crl_public_inputs,
         )?;
         let _ = key_plan.derive_alphas_v1(&mut transcript)?;
         let sha_union_plan = main_sha_union::MainShaUnionPlanV1::new_v1(&layout)?;

@@ -11,6 +11,7 @@
     clippy::unnecessary_wraps
 )]
 mod authenticated_block_proofs;
+mod privacy_x509_transaction;
 mod transaction_attachment_context;
 pub use transaction_attachment_context::{
     JsTransactionAttachmentContextV1, inspect_transaction_attachment_context_v1,
@@ -6498,7 +6499,7 @@ fn encode_privacy_compiled_profile_catalog_archive(
 #[napi]
 /// Return this binary's canonical typed Norito V1 privacy compiled-profile catalog.
 ///
-/// This local catalog contains no committed height, governance activation, or
+/// This local catalog contains no committed height, committed protocol policy, or
 /// readiness state. Those fields are authoritative only in a fresh
 /// `PrivacyCapabilitySnapshotV1` fetched from live Torii.
 pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
@@ -6559,7 +6560,7 @@ pub fn privacy_exact12_capability_manifest_json_v1(archive: Uint8Array) -> napi:
     json::to_json(&manifest).map_err(norito_to_napi)
 }
 #[napi(js_name = "privacyRequireExact12CapabilityTupleV1")]
-/// Require active committed admission, the authenticated transport's expected network,
+/// Require selected native admission, the authenticated transport's expected network,
 /// and exact equality with this binary's local profile row.
 pub fn privacy_require_exact12_capability_tuple_v1(
     archive: Uint8Array,
@@ -6574,17 +6575,7 @@ pub fn privacy_require_exact12_capability_tuple_v1(
         )
     })?;
     let manifest = decode_privacy_exact12_capability_manifest_v1(archive.as_ref())?;
-    let qualification = manifest.qualification.as_ref().ok_or_else(|| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            "Exact12 admission requires target-network production qualification",
-        )
-    })?;
-    require_privacy_exact12_network_v1(
-        &qualification.deployment_qualification.network_id,
-        &qualification.deployment_qualification.genesis_hash,
-        &expected_network_id,
-    )?;
+    require_privacy_exact12_network_v1(&manifest.network_id, &expected_network_id)?;
     let network_row = manifest
         .protocols
         .iter()
@@ -6595,47 +6586,44 @@ pub fn privacy_require_exact12_capability_tuple_v1(
                 "validated Exact12 manifest omitted its selected canonical row",
             )
         })?;
-    if !network_row.is_network_available() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-                "privacy protocol {} is not available in the committed Exact12 manifest",
-                protocol_id.canonical_label()
-            ),
-        ));
-    }
-    let local_catalog = privacy_compiled_profile_catalog()?;
-    let local_row = local_catalog
-        .protocols
-        .iter()
-        .find(|row| row.protocol_id == protocol_id)
-        .ok_or_else(|| {
-            napi::Error::new(
-                napi::Status::GenericFailure,
-                "validated local compiled-profile catalog omitted its selected canonical row",
+    // Query the selected real implementation first: policy cannot manufacture availability.
+    let local_profile =
+        iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
+            .map_err(norito_to_napi)?;
+    if !network_row.is_network_available()
+        || network_row.compiled_profile
+            != iroha_data_model::privacy::PrivacyCompiledProfileResultV1::Available(
+                local_profile.snapshot(),
             )
-        })?;
-    if network_row.compiled_profile != local_row.compiled_profile {
+    {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!(
-                "local native profile for {} does not match the committed Exact12 capability tuple",
+                "local native profile for {} does not match the available committed Exact12 capability tuple",
                 protocol_id.canonical_label()
             ),
         ));
     }
+    let limits = network_row.effective_protocol_limits_v1().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "selected native profile is unavailable",
+        )
+    })?;
+    limits
+        .validate_with_ceiling(&local_profile.protocol_limits)
+        .map_err(norito_to_napi)?;
     Ok(true)
 }
 
 fn require_privacy_exact12_network_v1(
     actual: &NetworkId,
-    genesis_hash: &[u8; Hash::LENGTH],
     expected: &NetworkId,
 ) -> napi::Result<()> {
-    if actual != expected || genesis_hash != expected.as_bytes() {
+    if actual != expected {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            "Exact12 deployment qualification does not match the authenticated Torii network",
+            "Exact12 committed network identity does not match the authenticated Torii network",
         ));
     }
     Ok(())
@@ -9052,47 +9040,31 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 .code()
         );
     }
-    fn active_exact12_capability_manifest_archive() -> (PrivacyProtocolIdV1, Vec<u8>) {
+    fn available_exact12_capability_manifest_archive() -> (PrivacyProtocolIdV1, Vec<u8>) {
         use iroha_data_model::privacy::{
-            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyActiveLifecycleV1,
-            PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
-            PrivacyProtocolLifecycleV1,
+            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
+            PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
         };
         let active_protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
         let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
         let protocols = catalog
             .protocols
             .into_iter()
-            .map(|row| {
-                let activation = (row.protocol_id == active_protocol).then(|| {
-                    iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1(
-                        active_protocol,
-                    )
-                    .expect("selected native profile is available")
-                    .activation_record(PrivacyProtocolLifecycleV1::Active(
-                        PrivacyActiveLifecycleV1 {
-                            proposed_at_height: 1,
-                            activated_at_height: 2,
-                            state_since_height: 2,
-                        },
-                    ))
-                });
-                PrivacyCapabilityRowV1 {
-                    protocol_id: row.protocol_id,
-                    compiled_profile: row.compiled_profile,
-                    activation,
-                }
+            .map(|row| PrivacyCapabilityRowV1 {
+                protocol_id: row.protocol_id,
+                compiled_profile: row.compiled_profile,
+                policy: None,
             })
             .collect();
         let manifest = PrivacyCapabilitySnapshotV1 {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+            network_id: test_network_id(b"privacy-exact12-network"),
             committed_height: 3,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
-            qualification: None,
             protocols,
         }
         .exact12_capability_manifest_v1()
-        .expect("active Exact12 capability manifest");
+        .expect("available Exact12 capability manifest without registration");
         (
             active_protocol,
             manifest
@@ -9101,8 +9073,65 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         )
     }
     #[test]
+    fn privacy_exact12_optional_policy_preserves_native_availability_and_tuple_binding() {
+        use iroha_data_model::privacy::{
+            PrivacyCompiledProfileResultV1, PrivacyParameterDigestV1, PrivacyProtocolLimitsV1,
+            PrivacyProtocolPolicyV1,
+        };
+        let (protocol, archive) = available_exact12_capability_manifest_archive();
+        let mut manifest = decode_privacy_exact12_capability_manifest_v1(&archive).unwrap();
+        assert!(manifest.protocols.iter().all(|row| row.policy.is_none()));
+        let row = manifest
+            .protocols
+            .iter_mut()
+            .find(|row| row.protocol_id == protocol)
+            .unwrap();
+        let mut limits = row.effective_protocol_limits_v1().unwrap();
+        let PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut pgc) = limits else {
+            panic!("selected PGC limits")
+        };
+        pgc.max_recipient_count = 1;
+        row.policy = Some(PrivacyProtocolPolicyV1 {
+            protocol_id: protocol,
+            current_limits: limits,
+            pending_update: None,
+        });
+        manifest.manifest_digest = manifest.computed_manifest_digest().unwrap();
+        assert!(
+            privacy_require_exact12_capability_tuple_v1(
+                Uint8Array::from(manifest.canonical_bytes().unwrap()),
+                protocol.canonical_label().to_owned(),
+                test_network_id_bytes(b"privacy-exact12-network"),
+            )
+            .unwrap()
+        );
+        let row = manifest
+            .protocols
+            .iter_mut()
+            .find(|row| row.protocol_id == protocol)
+            .unwrap();
+        let PrivacyCompiledProfileResultV1::Available(ref mut profile) = row.compiled_profile
+        else {
+            panic!("compiled PGC")
+        };
+        profile.parameter_digest = PrivacyParameterDigestV1::new([0x91; 32]);
+        manifest.manifest_digest = manifest.computed_manifest_digest().unwrap();
+        let error = privacy_require_exact12_capability_tuple_v1(
+            Uint8Array::from(manifest.canonical_bytes().unwrap()),
+            protocol.canonical_label().to_owned(),
+            test_network_id_bytes(b"privacy-exact12-network"),
+        )
+        .expect_err("valid resource policy cannot authorize another native tuple");
+        assert!(
+            error
+                .reason
+                .contains("does not match the available committed Exact12 capability tuple"),
+            "{error}"
+        );
+    }
+    #[test]
     fn privacy_exact12_manifest_napi_validates_decodes_and_requires_local_tuple() {
-        let (active_protocol, archive) = active_exact12_capability_manifest_archive();
+        let (active_protocol, archive) = available_exact12_capability_manifest_archive();
         assert_eq!(
             privacy_validate_exact12_capability_manifest_v1(Uint8Array::from(archive.clone())),
             iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
@@ -9111,8 +9140,9 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             .expect("decode canonical Exact12 manifest JSON");
         assert!(json.contains("manifest_digest"));
         assert!(json.contains("operation_schema"));
-        assert!(json.contains("missing-production-qualification"));
-        assert!(json.contains("qualification"));
+        assert!(json.contains("\"readiness\":\"available\""));
+        assert!(json.contains("network_id"));
+        assert!(!json.contains("qualification"));
         assert!(!json.contains("production_qualification"));
         assert!(!json.contains("available-experimental"));
         assert!(!json.contains("limitation"));
@@ -9122,18 +9152,27 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 active_protocol.canonical_label().to_owned(),
                 test_network_id_bytes(b"privacy-exact12-network"),
             )
-            .is_err()
+            .is_ok()
         );
         assert!(
             privacy_require_exact12_capability_tuple_v1(
                 Uint8Array::from(archive.clone()),
-                PrivacyProtocolIdV1::IrohaZkAmsV1
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
                     .canonical_label()
                     .to_owned(),
                 test_network_id_bytes(b"privacy-exact12-network"),
             )
             .is_err(),
-            "local compilation without committed Active state must not authorize"
+            "incomplete native X509 security must not be authorized by a manifest"
+        );
+        assert!(
+            privacy_require_exact12_capability_tuple_v1(
+                Uint8Array::from(archive.clone()),
+                active_protocol.canonical_label().to_owned(),
+                test_network_id_bytes(b"privacy-exact12-other-network"),
+            )
+            .is_err(),
+            "a valid foreign manifest cannot cross the authenticated network boundary"
         );
         for retired in [
             "jindo-lattice-pcs-zk-v0",
@@ -9158,19 +9197,12 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         );
     }
     #[test]
-    fn privacy_exact12_admission_binds_expected_network_and_genesis() {
+    fn privacy_exact12_admission_binds_the_committed_network_genesis() {
         let expected = test_network_id(b"privacy-exact12-network");
         let other = test_network_id(b"privacy-exact12-other-network");
-        assert!(
-            require_privacy_exact12_network_v1(&expected, expected.as_bytes(), &expected).is_ok()
-        );
-        assert!(
-            require_privacy_exact12_network_v1(&other, expected.as_bytes(), &expected).is_err()
-        );
-        assert!(
-            require_privacy_exact12_network_v1(&expected, other.as_bytes(), &expected).is_err()
-        );
-        assert!(require_privacy_exact12_network_v1(&other, other.as_bytes(), &expected).is_err());
+        assert!(require_privacy_exact12_network_v1(&expected, &expected).is_ok());
+        assert!(require_privacy_exact12_network_v1(&other, &expected).is_err());
+        assert!(require_privacy_exact12_network_v1(&expected, &other).is_err());
     }
     fn hash_literal(byte: u8) -> String {
         let mut buf = [byte; Hash::LENGTH];

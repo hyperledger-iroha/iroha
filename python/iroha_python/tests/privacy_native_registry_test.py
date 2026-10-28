@@ -63,14 +63,15 @@ def test_runtime_readiness_is_only_built_from_a_fresh_committed_torii_view() -> 
 
     snapshot_start = state.index("fn privacy_capability_snapshot_v1(")
     snapshot = state[
-        snapshot_start:state.index("fn qualified_privacy_activation_v1(", snapshot_start)
+        snapshot_start:state.index("fn admitted_privacy_protocol_v1(", snapshot_start)
     ]
     assert "PrivacyCapabilitySnapshotV1" in snapshot
     assert "u64::try_from(self.height())" in snapshot
     assert "crate::privacy_profiles::committed_privacy_capability_snapshot_v1(" in snapshot
     assert "*world.privacy_consensus_policy()" in snapshot
-    assert "world.privacy_exact12_qualification().clone()" in snapshot
-    assert re.search(r"world\s*\.privacy_activations\(\)", snapshot)
+    assert "world.privacy_exact12_qualification()" not in snapshot
+    assert "*self.network_id()" in snapshot
+    assert re.search(r"world\s*\.privacy_protocol_policies\(\)", snapshot)
     assert "async fn privacy_capabilities_are_built_from_one_committed_state_view()" in runtime
 
 
@@ -91,5 +92,8 @@ def test_python_native_action_registry_covers_all_exact_twelve_protocols() -> No
     for protocol_id in PRIVACY_PROTOCOL_IDS_V1:
         assert f'"{protocol_id}"' in source
     assert 'operation_schema: "zk_x509_identity_presentation_v1"' in source
-    assert "PrivacyNativeActionRequestV1::ZkX509" in source
-    assert "ZK-X509 is intentionally absent" not in source
+    assert "PrivacyNativeActionRequestV1::ZkX509" not in source
+    owner = (ROOT / "python/iroha_python/iroha_python_rs/src/privacy_x509_transaction.rs").read_text()
+    assert "struct PyPrivacyX509PreparedTransactionV1" in owner
+    assert "SubmitPrivacyZkX509CertificateV1" in owner
+    assert "SignedAttachmentPlanV1" in owner

@@ -454,7 +454,10 @@ Facts it records about the current tree:
 - The twelve protocols share one instruction and one dispatch. This binary
   refuses the compiled profile of ZK-ACE, ZK-AMS, Vega and ZK-X509 and
   constructs the other eight, which a default test asserts. The effects of
-  all twelve are behind the activation and all-twelve qualification records.
+  all twelve still require the relevant per-protocol policy/lifecycle record.
+  Runtime admission no longer depends on the all-twelve release/deployment
+  qualification record: completed implementations are admitted independently,
+  while X509 reports its missing joint security reduction explicitly.
 - The twelve protocols have thirteen typed roles (`PrivacyActionRoleV1`;
   ZK-AMS has two actions). `exact12.roles` records, for each role and as
   separate facts, whether the dispatch runs a native verifier for it, which
@@ -512,10 +515,11 @@ Facts it records about the current tree:
   verifier description, a drifted SoraCloud role key, a changed envelope
   digest, a release manifest with another catalog commitment and a fee-sponsor
   proof under another policy are each rejected by a test that reaches the
-  site. Still open, with owners in the inventory: the all-twelve
-  qualification record decides admission (its registration also requires the
-  running binary's ABI hash and syscall list, the chain id and the
-  four-validator roster), the compiled-profile digests bind implementation
+  site. The release/deployment record remains documentary evidence and no
+  longer decides protocol admission. Capability snapshots/manifests instead
+  bind the canonical network genesis from the same committed State, and SDK
+  admission compares that identity with its authenticated expected network.
+  Still open, with owners in the inventory: compiled-profile digests bind implementation
   provenance, the RaceV1 and classed-race profile ids hash Rust source bytes,
   a Cargo feature decides whether a SoraCloud key payload is validated, and
   atomic settlement needs a node-configured activation.
@@ -1427,7 +1431,16 @@ quiet-host full-proof speedup is inferred.
 Full semantic, soundness, zero-knowledge, transcript and side-channel qualification
 remain open. Conditional classical-ROM/masking derivations do not establish
 adaptive shared-transcript simulation, quantum hiding, complete relation
-correspondence or resource compliance. Soundness/resource activation pins stay zero.
+correspondence or resource compliance. X509 consensus use returns the typed
+`JointSecurityReductionIncomplete` failure: the concrete joint round-by-round
+theorem for both FRI domains, shared transcript challenges and correlated
+cross-domain openings, and its exact Fiat–Shamir work-security reduction,
+remain unfinished X.3 work. Component error arithmetic alone is insufficient.
+Reviewer signatures, soundness/resource capture pins and unrelated protocol
+qualification are not runtime validity authority. Fixed parameters, current
+State, permissions, revocation, replay checks and resource ceilings remain
+mandatory. Removing the remaining protocol activation/lifecycle machinery
+while retaining committed policy/revocation semantics remains P.5 work.
 
 ### ZK06 — cryptographic qualification
 

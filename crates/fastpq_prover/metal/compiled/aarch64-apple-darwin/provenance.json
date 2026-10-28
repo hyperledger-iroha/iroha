@@ -5,10 +5,10 @@
   "language": "macos-metal2.4",
   "library": {
     "path": "fastpq.metallib",
-    "bytes": 141566,
-    "sha256": "83dcd29444a84b2fed58da786cac7282c9b8183fbccac957da987d84ddb61051"
+    "bytes": 142270,
+    "sha256": "f0ab89fccfd8a8acc7454a99fed935c808e93b0befb9831a694fa0fce97e5b2b"
   },
-  "source_sha256": "c54c6343b6b79b54cc5d0c6c62f11c81f79d1671dfc2853594edb4e7e6cb3d9e",
+  "source_sha256": "63067991c34bc5893ac53f0c1ca47fbfdcb5b5959ebc524fd85dd4c1ef764f8e",
   "sources": [
     {
       "path": "crates/fastpq_prover/metal/include/params.h",
@@ -27,8 +27,8 @@
     },
     {
       "path": "crates/fastpq_prover/metal/kernels/exact_root.metal",
-      "bytes": 5313,
-      "sha256": "76fee7330040fbec7eb10b3a422dab91a9f2bc3acf272f2a583c878521f7462c"
+      "bytes": 5835,
+      "sha256": "486c60e036be041e283a91f601d2510f26a1d77a4c9e4a5e4d4be4f622c4c0c2"
     },
     {
       "path": "crates/fastpq_prover/metal/kernels/poseidon.metal",
@@ -99,15 +99,17 @@
       "help_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   },
-  "source_receipt_sha256": "1d1204ddbd7c105ee2c3f94ab98eee3d1c380ab41e768dfff908852b3304a4eb",
+  "source_receipt_sha256": "90ce4ccad31516f51186f659c28a8034abdb2e2302e30d977b7782299ee80a9d",
   "generation_records_sha256": [
-    "b110d7bd4ceaf2d94c923736cbc84cd146bd7eaa679685ed3ace204fe2eab806",
-    "14ef23411c03ef31a35ed7618ff10550ead77a96a9565182bc6b861fb0253c03"
+    "aff9b23b3cab16c9b0b1ea7d2e09a4b44e08fa3c4c25e4508583bfd8bd079584",
+    "1f9e643673c7a0be3efa0322234844b49ded6a656764c73a9ff9ebe84bfea348"
   ],
   "original_guarded_result_sha256": [
-    "111c95a3e839c891a540b193ca78850372d938d1629872027454c361432dd3fc",
-    "d47afc5cf19c04d8ab996c6ac170098a7c43e739cb52bb12c58a9982512d608d"
+    "fc69617938b9cdc636c21e01f14a53c6d7fd361392b38163964311e91cd8bf57",
+    "83af314abfd4e53cfc8234d4c16ae3f8736e957f4a4f2bbb7e0274f0205e75e0"
   ],
   "repeated_original_library_bytes_equal": true,
+  "signed_provenance": false,
+  "hardware_qualification": false,
   "scope": "Source and compiled-byte integrity only. No signed provenance, GPU numerical qualification, measured cost, driver allocation custody, settlement authority, or release qualification is established by this record."
 }

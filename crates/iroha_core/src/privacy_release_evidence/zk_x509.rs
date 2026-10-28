@@ -18,12 +18,12 @@ use crate::privacy_engines::zk_x509::{
 };
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
-    isi::InstructionBox,
+    isi::{InstructionBox, privacy::SubmitPrivacyZkX509CertificateV1},
     privacy::{
         PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
         PrivacyZkX509TrustAnchorRecordV1,
     },
-    transaction::SignedTransaction,
+    transaction::{Executable, SignedTransaction, signed_attachments::*},
 };
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 const ZK_X509_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x95; 32];
@@ -449,20 +449,53 @@ pub const fn privacy_release_process_profile_v1(
         _ => None,
     }
 }
+// Generated proof length/hash are normalized by the canonical ordered-intent owner.
+// The executable retains only independent inputs and the exact original occurrence reference.
 fn zk_x509_network_transaction_payload_v1(
     context: &PrivacyReleaseTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    statement: &IrohaZkX509StarkP256StatementV1,
+    proof: Vec<u8>,
 ) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
-    if context.network_id.as_bytes() != &context.genesis_hash {
+    if context.network_id.as_bytes() != &context.genesis_hash
+        || statement.context.network_id != context.network_id
+        || statement.wallet_account != context.authority
+    {
         return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
     }
-    let instructions = vec![InstructionBox::from(SubmitPrivacyProofV1::new(envelope))];
+    let mut independent = statement.clone();
+    independent.context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+    let request = SubmitPrivacyZkX509CertificateV1::new(
+        independent,
+        ActionAttachmentRefV1 {
+            action_index: 0,
+            slot_index: 0,
+        },
+    );
+    let mut plan = SignedAttachmentPlanV1::new();
+    plan.push_action(PlannedActionV1 {
+        operation: ActionOperationV1::NativeInstruction(
+            SubmitPrivacyZkX509CertificateV1::WIRE_ID.into(),
+        ),
+        role: ActionRoleV1::ProofEffect,
+        authority: ActionAuthorityBindingV1::TransactionAuthority,
+        invocation: ActionInvocationBindingV1::Direct {
+            instruction_index: 0,
+        },
+        public_inputs_digest: request
+            .public_inputs_digest_v1()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        attachments: vec![PlannedAttachmentV1 {
+            kind: AttachmentKindV1::Proof,
+            role: AttachmentRoleV1::ActionProof,
+            bytes: proof,
+        }],
+    });
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions(instructions)
+    .with_instructions([InstructionBox::from(request)])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(time_to_live) = context.time_to_live {
@@ -471,37 +504,56 @@ fn zk_x509_network_transaction_payload_v1(
     if let Some(nonce) = context.nonce {
         builder.set_nonce(nonce);
     }
-    builder
+    let mut payload = builder
         .into_payload()
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    // An empty proof is permitted only during local planning. The signing path
+    // below validates the complete original signed declaration before signing.
+    payload.attachments = Some(plan.declare());
+    payload
+        .bind_attachment_statements_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    Ok(payload)
 }
-fn zk_x509_network_envelope_v1(
-    profile: CompiledPrivacyProfileV1,
-    statement: &IrohaZkX509StarkP256StatementV1,
-    proof: Vec<u8>,
-) -> Result<PrivacyProofEnvelopeV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
-    let envelope = PrivacyProofEnvelopeV1::bind_v1(
-        typed_statement,
-        PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(proof)),
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    if !profile.matches_envelope_v1(&envelope) {
-        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
-    }
-    envelope
-        .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    Ok(envelope)
+
+fn zk_x509_network_materialized_statement_v1(
+    payload: &TransactionPayload,
+) -> Result<IrohaZkX509StarkP256StatementV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let failure = PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant;
+    let Executable::Instructions(instructions) = &payload.instructions else {
+        return Err(failure);
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err(failure);
+    };
+    let request = instruction
+        .as_any()
+        .downcast_ref::<SubmitPrivacyZkX509CertificateV1>()
+        .ok_or(failure)?;
+    let action = payload
+        .attachments
+        .as_ref()
+        .and_then(|a| a.action(0))
+        .ok_or(failure)?;
+    request
+        .materialize_statement_v1(
+            action,
+            payload.ordered_intent_digest_v1().map_err(|_| failure)?,
+            &PrivacyConsensusLimitsV1::taira_default(),
+        )
+        .map_err(|_| failure)
 }
 fn sign_zk_x509_network_payload_v1(
     payload: TransactionPayload,
     expected_intent: PrivacyTransactionIntentDigestV1,
     private_key: &PrivateKey,
 ) -> Result<SignedTransaction, PrivacyReleaseEvidenceErrorClassV1> {
-    if payload
-        .validate_privacy_transaction_intent_binding_v1()
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+    payload
+        .validate_signed_attachments_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if zk_x509_network_materialized_statement_v1(&payload)?
+        .context
+        .transaction_intent_digest
         != expected_intent
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -658,20 +710,6 @@ fn zk_x509_network_statement_context_v1(
         engine_manifest_digest: profile.engine_manifest_digest,
     }
 }
-fn zk_x509_network_draft_envelope_v1(
-    profile: CompiledPrivacyProfileV1,
-    statement: &IrohaZkX509StarkP256StatementV1,
-) -> Result<PrivacyProofEnvelopeV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let envelope = PrivacyProofEnvelopeV1::bind_v1(
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone()),
-        PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(Vec::new())),
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    if !profile.matches_envelope_v1(&envelope) {
-        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
-    }
-    Ok(envelope)
-}
 /// Build one genuine canonical X.509 action and a corruption control.
 ///
 /// The production compiled-profile accessor is deliberately the first gate.
@@ -735,7 +773,8 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
     }
     let malformed_payload = zk_x509_network_transaction_payload_v1(
         transaction_context,
-        zk_x509_network_envelope_v1(profile, &fixture.statement, malformed_proof)?,
+        &fixture.statement,
+        malformed_proof,
     )?;
     let malformed_transaction =
         sign_zk_x509_network_payload_v1(malformed_payload, intent, private_key)?;
@@ -844,12 +883,14 @@ fn prepare_zk_x509_network_action_v1(
     if draft_fixture.statement.wallet_account != transaction_context.authority {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let intent = zk_x509_network_transaction_payload_v1(
+    let planned_payload = zk_x509_network_transaction_payload_v1(
         transaction_context,
-        zk_x509_network_draft_envelope_v1(profile, &draft_fixture.statement)?,
-    )?
-    .privacy_transaction_intent_digest_v1()
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+        &draft_fixture.statement,
+        Vec::new(),
+    )?;
+    let intent = zk_x509_network_materialized_statement_v1(&planned_payload)?
+        .context
+        .transaction_intent_digest;
     if intent.is_zero() {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
@@ -882,7 +923,8 @@ fn prepare_zk_x509_network_action_v1(
     }
     let canonical_payload = zk_x509_network_transaction_payload_v1(
         transaction_context,
-        zk_x509_network_envelope_v1(profile, &fixture.statement, proof.clone())?,
+        &fixture.statement,
+        proof.clone(),
     )?;
     let transaction = sign_zk_x509_network_payload_v1(canonical_payload, intent, private_key)?;
     if !zk_x509_network_window_has_reserve_v1(
@@ -934,11 +976,13 @@ fn prepare_zk_x509_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<PreparedZkX509StageV1, PrivacyReleaseEvidenceErrorClassV1> {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
-    let profile = compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
-        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+    let profile = compiled_privacy_profile_v1(protocol_id).map_err(|error| {
+        match error {
+        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete {
             protocol_id: unavailable,
         } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
         _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+    }
     })?;
     let context =
         PrivacyStatementContextV1 {
@@ -1151,27 +1195,26 @@ pub(super) fn run_zk_x509_stage_v1(
                     );
                 }
             }
-            let activation_mutations: [fn(&mut PrivacyProtocolActivationRecordV1); 9] = [
-                |activation| {
-                    activation.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+            let profile_mutations: [fn(&mut PrivacyCompiledProfileSnapshotV1); 9] = [
+                |bindings| {
+                    bindings.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
                 },
-                |activation| {
-                    activation.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
+                |bindings| {
+                    bindings.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
                 },
-                |activation| {
-                    activation.engine_id = PrivacyEngineIdV1::NativeJindo;
+                |bindings| {
+                    bindings.engine_id = PrivacyEngineIdV1::NativeJindo;
                 },
-                |activation| activation.parameter_id.0[0] ^= 0x80,
-                |activation| activation.parameter_digest.0[0] ^= 0x80,
-                |activation| activation.verifier_digest.0[0] ^= 0x80,
-                |activation| activation.statement_schema_digest.0[0] ^= 0x80,
-                |activation| activation.engine_manifest_digest.0[0] ^= 0x80,
-                |activation| {
-                    activation.protocol_limits =
-                        PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV1;
+                |bindings| bindings.parameter_id.0[0] ^= 0x80,
+                |bindings| bindings.parameter_digest.0[0] ^= 0x80,
+                |bindings| bindings.verifier_digest.0[0] ^= 0x80,
+                |bindings| bindings.statement_schema_digest.0[0] ^= 0x80,
+                |bindings| bindings.engine_manifest_digest.0[0] ^= 0x80,
+                |bindings| {
+                    bindings.protocol_limits = PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1;
                 },
             ];
-            for mutate_activation in activation_mutations {
+            for mutate_profile in profile_mutations {
                 if verify_zk_x509_release_production_envelope_with_mutations_v1(
                     &profile,
                     &fixture.statement,
@@ -1182,7 +1225,7 @@ pub(super) fn run_zk_x509_stage_v1(
                     ZK_X509_RELEASE_GENESIS_HASH_V1,
                     ZK_X509_RELEASE_ACTION_INDEX_V1,
                     trusted_block_timestamp_ms,
-                    mutate_activation,
+                    mutate_profile,
                     |_| {},
                 )
                 .is_ok()
@@ -1448,7 +1491,7 @@ fn verify_zk_x509_release_production_envelope_v1(
 }
 #[allow(clippy::too_many_arguments)]
 fn verify_zk_x509_release_production_envelope_with_mutations_v1<
-    A: FnOnce(&mut PrivacyProtocolActivationRecordV1),
+    A: FnOnce(&mut PrivacyCompiledProfileSnapshotV1),
     E: FnOnce(&mut PrivacyProofEnvelopeV1),
 >(
     profile: &CompiledPrivacyProfileV1,
@@ -1460,17 +1503,11 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
-    mutate_activation: A,
+    mutate_profile: A,
     mutate_envelope: E,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
-    let mut activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
-    mutate_activation(&mut activation);
+    let mut bindings: PrivacyCompiledProfileSnapshotV1 = (*profile).into();
+    mutate_profile(&mut bindings);
     let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -1489,7 +1526,8 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,
@@ -1915,3 +1953,7 @@ mod resource_certificate_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "zk_x509_attachment_tests.rs"]
+mod attachment_tests;

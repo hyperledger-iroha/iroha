@@ -4,20 +4,11 @@
   "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
   "network_id": null,
   "chain_discriminant": 369,
-  "genesis_authority": "testu\uff9b1P\uff75Em\uff77jMZZ\uff91\uff99e\uff71\uff81\uff8e\uff85\uff82\uff8amECepdb\uff8e\uff732uW\uff83\uff78\uff8a\uff98v\uff75i2\uff66P1Y18A",
+  "genesis_authority": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
   "governance_permission": "CanEnactGovernance",
-  "governance_rollout": {
-    "activation_state": "not-executed",
-    "controller_observation_required": true,
-    "mode": "explicit-register-then-activate",
-    "execution_height": 1,
-    "instruction_count": 24,
-    "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "7cde3248ec1c88819590bd8846b04e31d8f45f86a08b081ce602f1a964f345b2"
-  },
   "privacy_catalog": {
     "matrix_version": 1,
-    "matrix_file_sha256": "1e8c12983c3fe0e3894e51c5839c27bccb47c075229c80f3720bf6d1d058697d",
+    "matrix_file_sha256": "a1f81474a4f8a70e218fe5dbd181d886f813004d0a88ce65d75c3f744a6c23e3",
     "registry_sha256": "7730a8f3d6b59735fd4f2dd7c611f4e5123e13e3fdc540686d92ffd2ab5cdfb5",
     "protocols": [
       {
@@ -110,5 +101,12 @@
       "record_digest_hex": null
     },
     "secret_material_permitted": false
+  },
+  "network_rollout": {
+    "state": "not-executed",
+    "controller_observation_required": true,
+    "mode": "ordered-restart-canary-convergence",
+    "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
+    "rollout_plan_sha256": "57f6ba80eb0573d6f3161e51112be325f7b1465cc498eaeab4b61eb8725b0469"
   }
 }

@@ -45,16 +45,25 @@ fn private_sha_product_owners_clear_explicit_storage_on_success_error_and_unwind
             2 => assert!(result.is_err()),
             _ => unreachable!(),
         }
+        // Two retained product states each own 28 cells: three four-lane
+        // products (projection, source and digest), plus sixteen RFC products.
+        // The scratch row owns another 89 cells and its factor owns one.
+        let mut erased_extents = observations
+            .iter()
+            .map(|item| item.cells)
+            .collect::<Vec<_>>();
+        erased_extents.sort_unstable();
+        assert_eq!(erased_extents, [1, 4, 4, 4, 4, 4, 4, 16, 16, 89]);
         assert_eq!(
             observations.iter().map(|item| item.cells).sum::<usize>(),
-            138
+            146
         );
         assert_eq!(
             observations
                 .iter()
                 .map(|item| item.nonzero_before)
                 .sum::<usize>(),
-            138
+            146
         );
         assert!(observations.iter().all(|item| item.nonzero_after == 0));
     }

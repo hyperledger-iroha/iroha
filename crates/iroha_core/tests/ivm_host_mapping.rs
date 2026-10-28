@@ -722,7 +722,10 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
         ivm_sys::SYSCALL_TRANSFER_V1_BATCH_APPLY,
         &[(10, ptr_batch)],
     );
-    let queued = with_core_host(&mut vm, |host| host.drain_instructions());
+    let queued = with_core_host(&mut vm, |host| {
+        host.drain_instructions()
+            .expect("ordinary instruction inspection retains no attachment owner")
+    });
     assert_eq!(queued.len(), 1, "transfer batch apply enqueues instruction");
     let batch_instr = queued[0]
         .as_any()

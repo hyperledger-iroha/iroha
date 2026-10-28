@@ -34,6 +34,7 @@ pub mod lexer;
 pub mod linker;
 pub mod lint;
 pub mod parser;
+mod pointer_literals;
 pub mod policy;
 pub mod regalloc;
 pub mod resolved;

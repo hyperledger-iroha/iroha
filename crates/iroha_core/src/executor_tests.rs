@@ -3832,15 +3832,10 @@ fn initial_executor_classifies_verifying_key_bootstrap_as_genesis_only() {
 fn initial_executor_routes_native_privacy_corridor_to_core() {
     use crate::privacy_profiles::compiled_privacy_profile_v1;
     use iroha_data_model::{
-        isi::privacy::{
-            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
-        },
+        isi::privacy::SubmitPrivacyProofV1,
         privacy::{
-            IrohaJindoPolynomialCommitmentStatementV1, PrivacyActiveLifecycleV1,
-            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1,
-            PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementContextV1,
+            IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1,
+            PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
             PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         },
     };
@@ -3848,11 +3843,6 @@ fn initial_executor_routes_native_privacy_corridor_to_core() {
     let profile =
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .expect("load compiled Jindo profile");
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 {
-            proposed_at_height: 2,
-        },
-    ));
     let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
         IrohaJindoPolynomialCommitmentStatementV1 {
             context: PrivacyStatementContextV1 {
@@ -3888,19 +3878,7 @@ fn initial_executor_routes_native_privacy_corridor_to_core() {
             0x55,
         ])),
     };
-    let instructions: [InstructionBox; 3] = [
-        RegisterPrivacyProtocolActivationV1::new(activation).into(),
-        TransitionPrivacyProtocolLifecycleV1::new(
-            profile.protocol_id,
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: 2,
-                activated_at_height: 2,
-                state_since_height: 2,
-            }),
-        )
-        .into(),
-        SubmitPrivacyProofV1::new(envelope).into(),
-    ];
+    let instructions: [InstructionBox; 1] = [SubmitPrivacyProofV1::new(envelope).into()];
     for instruction in &instructions {
         assert!(
             initial_native_instruction_is_explicitly_admitted(instruction),
@@ -15494,4 +15472,80 @@ fn execution_fee_meter_keeps_genesis_exemption_and_no_work_without_policy_fallba
     assert_eq!(fresh.nexus.fees, local_before);
     assert_eq!(fresh.last_tx_gas_used, 0);
     assert!(fresh.pending_nexus_fee_receipt.is_none());
+}
+
+#[test]
+fn installed_executor_denies_original_x509_request_before_native_or_state_effects() {
+    use crate::executor::attachment_custody::{
+        AttachmentCustody,
+        x509::tests::{planned, request},
+    };
+    use iroha_data_model::transaction::{
+        Executable, FeePaymentIntent, TransactionBuilder, TransactionEntrypoint,
+        signed_attachments::*,
+    };
+    let authority = ALICE_ID.clone();
+    let state = state_after_genesis(World::with(
+        [],
+        [Account::new(authority.clone()).build(&authority)],
+        [],
+    ));
+    let request = request(*state.network_id_ref(), authority.clone());
+    let mut plan = SignedAttachmentPlanV1::new();
+    plan.push_action(planned(
+        &request,
+        ActionInvocationBindingV1::Direct {
+            instruction_index: 0,
+        },
+        ActionAuthorityBindingV1::TransactionAuthority,
+    ));
+    let source = TransactionBuilder::new(
+        *state.network_id_ref(),
+        authority.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([request])
+    .with_attachment_plan(plan)
+    .unwrap()
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
+        generate_denied_program("installed executor rejects X509 request"),
+    ));
+    let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).unwrap());
+    let mut block = state.block(BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    crate::state::seed_committed_transaction_context(
+        &mut tx,
+        &TransactionEntrypoint::External(source.clone()),
+        0,
+    );
+    let before = tx.privacy_budget_for_testing();
+    let Executable::Instructions(instructions) = source.instructions() else {
+        panic!("direct signed source")
+    };
+    let mut custody = AttachmentCustody::new(&source).unwrap();
+    let error = executor
+        .execute_original_direct_instruction(
+            &mut tx,
+            &authority,
+            &instructions[0],
+            0,
+            Some(&mut custody),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("installed executor rejects X509 request"),
+        "{error}"
+    );
+    assert_eq!(tx.privacy_budget_for_testing(), before);
+    assert!(tx.world.privacy_nullifiers.iter().next().is_none());
+    assert!(custody.finish().is_err());
 }

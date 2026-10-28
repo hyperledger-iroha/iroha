@@ -8,10 +8,14 @@ namespace Hyperledger.Iroha.Privacy;
 /// <summary>
 /// Strict native-independent codec for the canonical first-release exact-12 fixture bundle.
 /// </summary>
-public static class PrivacyExact12FixtureCodecV1
+public static partial class PrivacyExact12FixtureCodecV1
 {
     public const string SchemaName = "iroha.privacy.exact12-typed-fixture-bundle.v1";
     public const string SubmitProofWireId = "iroha.privacy.submit_proof.v1";
+    /// <summary>Sole X509 signed-attachment instruction wire.</summary>
+    public const string SubmitX509WireId = "iroha.privacy.submit_zk_x509_certificate.v1";
+    internal static string SubmitWireIdFor(PrivacyProtocolIdV1 protocol) =>
+        protocol == PrivacyProtocolIdV1.IrohaZkX509StarkP256V1 ? SubmitX509WireId : SubmitProofWireId;
     public const uint Version = 1;
     public const int RowCount = 12;
     public const int HashBytes = 32;
@@ -30,7 +34,6 @@ public static class PrivacyExact12FixtureCodecV1
     private const int HeaderPayloadLengthOffset = 23;
     private const int HeaderFlagsOffset = NoritoHeader.EncodedLength - 1;
     private const int MaximumRowEncodedBytes = MaxArchiveBytes;
-    private const int CanonicalWireIdEncodedBytes = 1 + SubmitProofWireIdUtf8Bytes;
     private const int MaximumPayloadBytes = MaxArchiveBytes - NoritoHeader.EncodedLength;
 
     private static readonly UTF8Encoding StrictUtf8 = new(
@@ -296,7 +299,7 @@ public static class PrivacyExact12FixtureCodecV1
             MaxEnvelopeBytes,
             budget,
             "envelope");
-        var wireId = ReadWireId(ref reader, budget);
+        var wireId = ReadWireId(ref reader, budget, (PrivacyProtocolIdV1)protocolTag);
         var instruction = ReadRawBytesField(
             ref reader,
             MaxInstructionBytes,
@@ -482,14 +485,14 @@ public static class PrivacyExact12FixtureCodecV1
         return hash;
     }
 
-    private static string ReadWireId(ref CanonicalReader reader, DecodeBudget budget)
+    private static string ReadWireId(ref CanonicalReader reader, DecodeBudget budget, PrivacyProtocolIdV1 protocol)
     {
+        var expectedWire = SubmitWireIdFor(protocol);
+        var expectedBytes = Encoding.UTF8.GetByteCount(expectedWire);
         var fieldReader = reader.ReadSizedField(
-            CanonicalWireIdEncodedBytes,
-            "submit-proof wire ID",
-            minimum: CanonicalWireIdEncodedBytes);
+            1 + expectedBytes, "submit-proof wire ID", minimum: 1 + expectedBytes);
         var byteLength = fieldReader.ReadCompactLength("submit-proof wire ID byte length");
-        if (byteLength != SubmitProofWireIdUtf8Bytes
+        if (byteLength != (ulong)expectedBytes
             || byteLength != (ulong)fieldReader.Remaining)
         {
             throw new ArgumentException(
@@ -508,7 +511,7 @@ public static class PrivacyExact12FixtureCodecV1
             throw new ArgumentException("Submit-proof wire ID is not valid UTF-8.", error);
         }
 
-        if (!string.Equals(wireId, SubmitProofWireId, StringComparison.Ordinal))
+        if (!string.Equals(wireId, expectedWire, StringComparison.Ordinal))
         {
             throw new ArgumentException("Unknown or retired submit-proof wire ID.");
         }

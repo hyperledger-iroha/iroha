@@ -2,9 +2,9 @@
 
 //! Release-only ZK-X509 four-peer production-action gate.
 //!
-//! Synthetic source-pin/readiness tests live beside the compiled profile. This
-//! sole network target has no unavailable-as-success path: it becomes runnable
-//! only after authenticated evidence makes the production profile available.
+//! This network target has no unavailable-as-success path. The actual native
+//! profile must be available; unresolved joint security obligations remain an
+//! explicit delivery failure. Resource evidence configures the measured run.
 //!
 //! Release gate:
 //! ```text
@@ -27,21 +27,18 @@ use iroha::{
             Grant, InstructionBox, Log, SetParameter,
             error::{InstructionExecutionError, InvalidParameterError},
             privacy::{
-                RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkX509CertificatePolicyV1,
-                RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
-                RotatePrivacyZkX509CrlV1, TransitionPrivacyProtocolLifecycleV1,
+                RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
+                RegisterPrivacyZkX509TrustAnchorV1, RotatePrivacyZkX509CrlV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
         prelude::QueryBuilderExt,
         privacy::{
-            IrohaZkX509StarkP256StatementV1, PrivacyActiveLifecycleV1,
-            PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
+            IrohaZkX509StarkP256StatementV1, PrivacyCapabilityReadinessV1,
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementV1,
+            PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementV1,
         },
         query::{
             CommittedTransaction, block::prelude::FindBlocks,
@@ -775,7 +772,6 @@ fn assert_zk_x509_capability(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     expected_height: u64,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: PrivacyProtocolActivationRecordV1,
     expected_readiness: PrivacyCapabilityReadinessV1,
     context: &str,
 ) -> Result<()> {
@@ -799,13 +795,13 @@ fn assert_zk_x509_capability(
     );
     ensure!(
         row.readiness == expected_readiness,
-        "{context}: ZK-X509 readiness differs from evidence-derived state: expected {expected_readiness:?}, got {:?}",
+        "{context}: ZK-X509 readiness differs from the native profile and policy: expected {expected_readiness:?}, got {:?}",
         row.readiness
     );
     ensure!(
-        row.activation == Some(activation),
-        "{context}: ZK-X509 activation mismatch: expected {activation:?}, got {:?}",
-        row.activation
+        row.policy.is_none(),
+        "{context}: unexpected ZK-X509 protocol policy: {:?}",
+        row.policy
     );
     ensure!(
         row.operation_schema == PrivacyOperationSchemaV1::ZkX509IdentityPresentationV1
@@ -815,11 +811,8 @@ fn assert_zk_x509_capability(
     );
     ensure!(
         row.is_network_available()
-            == matches!(
-                expected_readiness,
-                PrivacyCapabilityReadinessV1::ProductionQualified
-            ),
-        "{context}: ZK-X509 network availability disagrees with registered qualification"
+            == matches!(expected_readiness, PrivacyCapabilityReadinessV1::Available),
+        "{context}: ZK-X509 network availability disagrees with native profile and policy"
     );
     Ok(())
 }
@@ -827,7 +820,6 @@ async fn wait_for_available_snapshots(
     clients: &[Client],
     expected_height: u64,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: PrivacyProtocolActivationRecordV1,
     expected_readiness: PrivacyCapabilityReadinessV1,
     context: &str,
 ) -> Result<()> {
@@ -843,7 +835,6 @@ async fn wait_for_available_snapshots(
                     &snapshot,
                     expected_height,
                     compiled,
-                    activation,
                     expected_readiness,
                     context,
                 ) {
@@ -892,14 +883,6 @@ async fn wait_for_available_snapshots(
         }
         sleep(POLL_INTERVAL).await;
     }
-}
-async fn next_incoming_height(client: &Client) -> Result<u64> {
-    privacy_capabilities(&client)
-        .await
-        .wrap_err("query committed height before ZK-X509 governance transaction")?
-        .committed_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("incoming ZK-X509 governance height overflowed"))
 }
 async fn advance_to_semantic_base_after_crl_second(
     clients: &[Client],
@@ -972,12 +955,12 @@ async fn advance_to_semantic_base_after_crl_second(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart() -> Result<()> {
-    // This is intentionally an error today. There is no unavailable-as-success
-    // branch: authenticated release pins must make the production accessor
-    // succeed before this gate can start a network or construct candidate data.
+    // The actual compiled profile must succeed before any network or proof is
+    // constructed. JointSecurityReductionIncomplete remains an explicit error;
+    // a refusal never counts as successful delivery.
     let compiled = compiled_privacy_profile_v1(ZK_X509_PROTOCOL).wrap_err(
-        "ZK-X509 four-peer release gate requires the complete authenticated Linux/aarch64 KAT, \
-         expectation, and resource-certificate pins; compiled profile remains unavailable",
+        "ZK-X509 four-peer delivery requires the actual canonical native profile; \
+         unresolved joint security obligations leave this delivery unsuccessful",
     )?;
     let compiled_snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
     let resource_certificate = installed_resource_certificate().wrap_err(
@@ -1078,60 +1061,10 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "native ZK-X509 governance permission convergence",
         )
         .await?;
-        let proposed_at_height = next_incoming_height(&client).await?;
-        let proposed = compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-            PrivacyProposedLifecycleV1 {
-                proposed_at_height,
-            },
-        ));
-        let (activation_transaction, _) = submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(proposed),
-            50_001,
-            "register exact compiled ZK-X509 activation",
-        )
-        .await?;
-        wait_for_transaction_on_peers(
-            &all_clients,
-            &activation_transaction,
-            "exact proposed ZK-X509 activation convergence",
-        )
-        .await?;
-        wait_for_available_snapshots(
-            &all_clients,
-            proposed_at_height,
-            compiled_snapshot,
-            proposed,
-            PrivacyCapabilityReadinessV1::Unavailable(
-                PrivacyCapabilityUnavailableReasonV1::Proposed,
-            ),
-            "exact proposed ZK-X509 capability row",
-        )
-        .await?;
-        let activated_at_height = next_incoming_height(&client).await?;
-        let active = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height,
-                activated_at_height,
-                state_since_height: activated_at_height,
-            },
-        ));
-        let (active_transaction, _) = submit_instruction(&client,
-            TransitionPrivacyProtocolLifecycleV1::new(ZK_X509_PROTOCOL, active.lifecycle),
-            50_002, "explicitly activate the exact ZK-X509 profile").await?;
-        wait_for_transaction_on_peers(&all_clients, &active_transaction,
-            "explicit ZK-X509 activation convergence").await?;
-        wait_for_available_snapshots(
-            &all_clients,
-            activated_at_height,
-            compiled_snapshot,
-            active,
-            PrivacyCapabilityReadinessV1::Unavailable(
-                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
-            ),
-            "exact active ZK-X509 capability row",
-        )
-        .await?;
+        let ready_height = privacy_capabilities(&client).await?.committed_height;
+        wait_for_available_snapshots(&all_clients, ready_height, compiled_snapshot,
+            PrivacyCapabilityReadinessV1::Available,
+            "native ZK-X509 is available with no protocol policy row").await?;
         let trusted_block_timestamp_ms = latest_committed_block_timestamp_ms(&client).await?;
         let creation_time = now_duration()?;
         let action_context = PrivacyReleaseTransactionContextV1 {
@@ -1285,11 +1218,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &all_clients,
             pre_outage_tip.height,
             compiled_snapshot,
-            active,
-            PrivacyCapabilityReadinessV1::Unavailable(
-                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
-            ),
-            "pre-outage byte-identical active ZK-X509 manifests",
+            PrivacyCapabilityReadinessV1::Available,
+            "pre-outage byte-identical default-policy ZK-X509 manifests",
         )
         .await?;
         let restart_index = all_clients.len() - 1;
@@ -1297,7 +1227,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         let config_layers = network.config_layers().collect::<Vec<_>>();
         ensure!(
             restart_peer.shutdown_if_started().await,
-            "selected active ZK-X509 validator was not running before restart coverage"
+            "selected ZK-X509 validator was not running before restart coverage"
         );
         let healthy_clients = all_clients[..restart_index].to_vec();
         require_live_x509_submission_window(
@@ -1421,11 +1351,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &recovered_clients,
             sentinel_block.height,
             compiled_snapshot,
-            active,
-            PrivacyCapabilityReadinessV1::Unavailable(
-                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
-            ),
-            "post-restart byte-identical active ZK-X509 manifests at the exact sentinel",
+            PrivacyCapabilityReadinessV1::Available,
+            "post-restart byte-identical default-policy ZK-X509 manifests at the exact sentinel",
         )
         .await?;
         wait_for_transaction_on_peers(
@@ -1735,11 +1662,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &recovered_clients,
             successor_block.height,
             compiled_snapshot,
-            active,
-            PrivacyCapabilityReadinessV1::Unavailable(
-                PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
-            ),
-            "all-four byte-identical active ZK-X509 manifests at the exact successor",
+            PrivacyCapabilityReadinessV1::Available,
+            "all-four byte-identical default-policy ZK-X509 manifests at the exact successor",
         )
         .await?;
         for (index, replay_client) in recovered_clients.iter().enumerate() {

@@ -17,7 +17,7 @@ final class PrivacyExact12FixtureBundleTests: XCTestCase {
         XCTAssertEqual(bundle.rows.map(\.protocolId), PrivacyProtocolIdV1.allCases)
         XCTAssertEqual(
             Set(bundle.rows.map(\.submitProofWireId)),
-            [PrivacyExact12FixtureCodecV1.submitProofWireId]
+            [PrivacyExact12FixtureCodecV1.submitProofWireId, PrivacyExact12FixtureCodecV1.submitX509WireId]
         )
         for row in bundle.rows {
             XCTAssertFalse(row.statementNorito.isEmpty)

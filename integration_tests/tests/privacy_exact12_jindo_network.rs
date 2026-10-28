@@ -1,7 +1,7 @@
 #![cfg(feature = "privacy-release-evidence")]
 
-//! Four-peer lifecycle and restart coverage proving that an active Jindo
-//! protocol remains unavailable without registered Exact12 evidence.
+//! Four-peer native Jindo actions with default and scheduled ordinary policies.
+//! Exercises profile binding, malformed proofs, atomic policy rollback, replay and restart.
 use super::privacy_exact12_network_support::{privacy_capabilities, wait_for_transaction_on_peers};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::TryStreamExt as _;
@@ -13,23 +13,24 @@ use iroha_core_privacy::{
         JindoPrivacyActionWitnessV1, prepare_jindo_privacy_action_v1,
         sign_prepared_jindo_privacy_action_v1,
     },
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+    privacy_profiles::compiled_privacy_profile_v1,
 };
 use iroha_data_model::{
     Level,
     isi::{
         Grant, InstructionBox, Log,
-        privacy::{RegisterPrivacyProtocolActivationV1, TransitionPrivacyProtocolLifecycleV1},
+        privacy::{SchedulePrivacyProtocolLimitsUpdateV1, SubmitPrivacyProofV1},
     },
     permission::Permission,
     privacy::{
-        PrivacyCapabilityReadinessV1, PrivacyCapabilityRowV1, PrivacyCapabilityUnavailableReasonV1,
-        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
-        PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1,
-        PrivacyParameterDigestV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        JindoLimitsV1, PrivacyCapabilityReadinessV1, PrivacyCompiledProfileResultV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyExact12CapabilityRowV1, PrivacyParameterDigestV1, PrivacyProofBytesV1,
+        PrivacyProofV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, PrivacyStatementDigestV1,
+        PrivacyTransactionIntentDigestV1,
     },
-    transaction::{FeePaymentIntent, SignedTransaction},
+    transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_model_base::metadata::Metadata;
@@ -86,12 +87,12 @@ fn jindo_row(
 fn assert_exact_jindo_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: Option<PrivacyProtocolActivationRecordV1>,
+    policy: Option<PrivacyProtocolPolicyV1>,
     context: &str,
 ) -> Result<()> {
     snapshot
         .validate()
-        .wrap_err_with(|| format!("{context}: invalid capability snapshot"))?;
+        .wrap_err_with(|| format!("{context}: invalid capability manifest"))?;
     let row = jindo_row(snapshot)?;
     ensure!(
         row.compiled_profile == PrivacyCompiledProfileResultV1::Available(compiled),
@@ -99,70 +100,19 @@ fn assert_exact_jindo_row(
         row.compiled_profile
     );
     ensure!(
-        row.activation == activation,
-        "{context}: Jindo activation mismatch: expected {activation:?}, got {:?}",
-        row.activation
+        row.policy == policy,
+        "{context}: Jindo policy mismatch: expected {policy:?}, got {:?}",
+        row.policy
     );
-    let expected_readiness = match activation {
-        None => PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCapabilityUnavailableReasonV1::NotRegistered,
-        ),
-        Some(PrivacyProtocolActivationRecordV1 {
-            lifecycle: PrivacyProtocolLifecycleV1::Proposed(_),
-            ..
-        }) => PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCapabilityUnavailableReasonV1::Proposed,
-        ),
-        Some(PrivacyProtocolActivationRecordV1 {
-            lifecycle: PrivacyProtocolLifecycleV1::Active(_),
-            ..
-        }) if snapshot.qualification.is_none() => PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification,
-        ),
-        Some(PrivacyProtocolActivationRecordV1 {
-            lifecycle: PrivacyProtocolLifecycleV1::Suspended(_),
-            ..
-        }) => PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCapabilityUnavailableReasonV1::Suspended,
-        ),
-        Some(PrivacyProtocolActivationRecordV1 {
-            lifecycle: PrivacyProtocolLifecycleV1::Retired(_),
-            ..
-        }) => {
-            PrivacyCapabilityReadinessV1::Unavailable(PrivacyCapabilityUnavailableReasonV1::Retired)
-        }
-        Some(PrivacyProtocolActivationRecordV1 {
-            lifecycle: PrivacyProtocolLifecycleV1::Active(_),
-            ..
-        }) => {
-            if snapshot
-                .qualification
-                .as_ref()
-                .is_some_and(|qualification| {
-                    qualification
-                        .validate_protocol_at_snapshot(
-                            snapshot.committed_height,
-                            &PrivacyCapabilityRowV1 {
-                                protocol_id: row.protocol_id,
-                                compiled_profile: row.compiled_profile,
-                                activation: row.activation,
-                            },
-                        )
-                        .is_ok()
-                })
-            {
-                PrivacyCapabilityReadinessV1::ProductionQualified
-            } else {
-                PrivacyCapabilityReadinessV1::Unavailable(
-                    PrivacyCapabilityUnavailableReasonV1::InvalidProductionQualification,
-                )
-            }
-        }
-    };
     ensure!(
-        row.readiness == expected_readiness,
-        "{context}: Jindo readiness was not evidence-derived: expected {expected_readiness:?}, got {:?}",
+        row.readiness == PrivacyCapabilityReadinessV1::Available && row.is_network_available(),
+        "{context}: actual native Jindo should be available: {:?}",
         row.readiness
+    );
+    ensure!(
+        row.effective_protocol_limits_v1()
+            == Some(policy.map_or(compiled.protocol_limits, |record| record.current_limits)),
+        "{context}: effective Jindo protocol limits drifted"
     );
     Ok(())
 }
@@ -204,14 +154,6 @@ async fn next_execution_height(client: &Client) -> Result<u64> {
         .await?
         .checked_add(EXECUTION_CARRIER_BLOCKS)
         .ok_or_else(|| eyre!("native transaction privacy-governance height overflowed"))
-}
-fn proposed_activation(
-    compiled: CompiledPrivacyProfileV1,
-    proposed_at_height: u64,
-) -> PrivacyProtocolActivationRecordV1 {
-    compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 { proposed_at_height },
-    ))
 }
 fn jindo_field(value: u64) -> iroha_data_model::privacy::PrivacyJindoFieldElementV1 {
     let mut encoding = [0_u8; 32];
@@ -359,11 +301,11 @@ async fn submit_signed_transaction(
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TASK_TIMEOUT:?}"))?
     .wrap_err_with(|| context.to_owned())
 }
-async fn wait_for_all_peer_activations(
+async fn wait_for_all_peer_policies(
     network: &sandbox::SerializedNetwork,
     minimum_height: u64,
     compiled: PrivacyCompiledProfileSnapshotV1,
-    activation: Option<PrivacyProtocolActivationRecordV1>,
+    policy: Option<PrivacyProtocolPolicyV1>,
     context: &str,
 ) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
@@ -378,12 +320,11 @@ async fn wait_for_all_peer_activations(
                     let row = jindo_row(&snapshot)?;
                     if snapshot.committed_height < minimum_height {
                         last_observed.push(format!(
-                            "peer {index}: height={} below {minimum_height}, lifecycle={:?}",
-                            snapshot.committed_height,
-                            row.activation.map(|record| record.lifecycle)
+                            "peer {index}: height={} below {minimum_height}, policy={:?}",
+                            snapshot.committed_height, row.policy
                         ));
                     } else {
-                        match assert_exact_jindo_row(&snapshot, compiled, activation, context) {
+                        match assert_exact_jindo_row(&snapshot, compiled, policy, context) {
                             Ok(()) => {
                                 last_observed.push(format!(
                                     "peer {index}: exact row at height {}",
@@ -415,12 +356,92 @@ async fn wait_for_all_peer_activations(
         sleep(POLL_INTERVAL).await;
     }
 }
+#[derive(Clone, Copy)]
+enum JindoTamper {
+    ProofMagic,
+    ParameterDigest,
+}
+fn independently_resigned_jindo_tamper(
+    transaction: &SignedTransaction,
+    tamper: JindoTamper,
+    client: &Client,
+) -> Result<SignedTransaction> {
+    let (original_intent, submission) = transaction
+        .privacy_transaction_intent_binding_if_present_v1()?
+        .ok_or_else(|| eyre!("canonical Jindo transaction omitted its direct submission"))?;
+    let mut envelope = submission.envelope.clone();
+    match tamper {
+        JindoTamper::ProofMagic => {
+            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &mut envelope.proof
+            else {
+                return Err(eyre!("Jindo tamper reached a different native proof"));
+            };
+            let mut bytes = proof.as_bytes().to_vec();
+            *bytes
+                .first_mut()
+                .ok_or_else(|| eyre!("canonical Jindo proof is empty"))? ^= 1;
+            *proof = PrivacyProofBytesV1::new(bytes);
+        }
+        JindoTamper::ParameterDigest => {
+            let mut digest = *envelope.parameter_digest.as_bytes();
+            digest[0] ^= 0x80;
+            envelope.parameter_digest = PrivacyParameterDigestV1::new(digest);
+            envelope.statement.context_mut().parameter_digest = envelope.parameter_digest;
+            envelope.statement.context_mut().transaction_intent_digest =
+                PrivacyTransactionIntentDigestV1::new([0; 32]);
+            envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+        }
+    }
+    let mut payload = transaction.payload().clone();
+    let executable = |value| {
+        Executable::Instructions(
+            vec![InstructionBox::from(SubmitPrivacyProofV1::new(value))].into(),
+        )
+    };
+    payload.instructions = executable(envelope.clone());
+    if matches!(tamper, JindoTamper::ParameterDigest) {
+        let intent = payload.privacy_transaction_intent_digest_v1()?;
+        envelope.statement.context_mut().transaction_intent_digest = intent;
+        envelope.statement_digest = envelope.statement.digest()?;
+        payload.instructions = executable(envelope);
+    } else {
+        ensure!(
+            payload.validate_privacy_transaction_intent_binding_v1()? == original_intent,
+            "proof-only corruption changed the proof-independent transaction intent"
+        );
+    }
+    payload.validate_privacy_transaction_intent_binding_v1()?;
+    let signed = TransactionBuilder::from_payload(payload)?
+        .try_sign(client.client().key_pair().private_key())?;
+    signed.verify_signature()?;
+    signed
+        .privacy_transaction_intent_binding_if_present_v1()?
+        .ok_or_else(|| eyre!("independently signed Jindo tamper lost its submission"))?;
+    Ok(signed)
+}
+async fn assert_exact_jindo_replay_rejected(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<()> {
+    let error = timeout(
+        SUBMISSION_TASK_TIMEOUT,
+        client.account_client().submit_transaction(transaction),
+    )
+    .await
+    .map_err(|_| eyre!("exact Jindo replay submission timed out"))?
+    .expect_err("exact finalized Jindo transaction was accepted again");
+    ensure!(
+        ["already_committed", "transaction already committed"]
+            .iter()
+            .any(|reason| error_chain_contains(&error, reason)),
+        "exact Jindo replay rejected for the wrong reason: {error:?}"
+    );
+    Ok(())
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn active_jindo_stays_unavailable_without_exact12_qualification_across_restart() -> Result<()>
-{
+async fn canonical_jindo_actions_survive_four_peer_policy_replay_and_restart() -> Result<()> {
     init_instruction_registry();
-    let context =
-        stringify!(active_jindo_stays_unavailable_without_exact12_qualification_across_restart);
+    let context = stringify!(canonical_jindo_actions_survive_four_peer_policy_replay_and_restart);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -457,13 +478,13 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
                     1_i64,
                 );
         });
-    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
-        return Ok(());
-    };
+    let network = sandbox::start_network_async_or_skip(builder, context)
+        .await?
+        .ok_or_else(|| eyre!("{context}: four-peer delivery requires a running network"))?;
     let result: Result<()> = async {
         ensure!(
             network.peers().len() == 4,
-            "Jindo lifecycle test requires exactly four trusted peers"
+            "Jindo policy test requires exactly four trusted peers"
         );
         let client = bounded_client(network.client());
         let genesis_hash = canonical_genesis_hash(&client).await?;
@@ -471,14 +492,14 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
             .wrap_err("load canonical compiled Jindo profile")?;
         let compiled_snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
         let submission_start_height =
-            committed_height(&client, "begin native transaction lifecycle preflight").await?;
+            committed_height(&client, "begin native transaction policy preflight").await?;
         let preflight_transaction = submit_instruction(
             &client,
             Log::new(
                 Level::INFO,
-                "Jindo native transaction lifecycle preflight".to_owned(),
+                "Jindo native transaction policy preflight".to_owned(),
             ),
-            "complete Jindo native transaction lifecycle preflight",
+            "complete Jindo native transaction policy preflight",
         )
         .await?;
         let preflight_clients = network
@@ -494,236 +515,127 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
         )
         .await?;
         let submission_end_height =
-            committed_height(&client, "finish native transaction lifecycle preflight").await?;
+            committed_height(&client, "finish native transaction policy preflight").await?;
         let expected_submission_end_height = submission_start_height
             .checked_add(EXECUTION_CARRIER_BLOCKS)
-            .ok_or_else(|| eyre!("native transaction lifecycle preflight height overflowed"))?;
+            .ok_or_else(|| eyre!("native transaction policy preflight height overflowed"))?;
         ensure!(
             submission_end_height == expected_submission_end_height,
-            "native transaction lifecycle preflight ended at height {submission_end_height}, expected \
+            "native transaction policy preflight ended at height {submission_end_height}, expected \
              exact admission, autonomous payload, and merge carriers through height \
              {expected_submission_end_height}"
         );
-        wait_for_all_peer_activations(
+        wait_for_all_peer_policies(
             &network,
             submission_end_height,
             compiled_snapshot,
             None,
-            "native transaction preflight preserves unregistered Jindo state",
+            "native transaction preflight preserves default Jindo policy",
         )
         .await?;
-        let rejected_execution_height = next_execution_height(&client).await?;
-        let forged_activation_height = rejected_execution_height.checked_add(1)
-            .ok_or_else(|| eyre!("forged Jindo activation height overflowed"))?;
-        let rejected_error = submit_instructions(&client, vec![
-            RegisterPrivacyProtocolActivationV1::new(proposed_activation(
-                compiled, rejected_execution_height,
-            )).into(),
-            TransitionPrivacyProtocolLifecycleV1::new(JINDO_PROTOCOL,
-                PrivacyProtocolLifecycleV1::Active(iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                    proposed_at_height: rejected_execution_height,
-                    activated_at_height: forged_activation_height,
-                    state_since_height: forged_activation_height,
-                }),
-            ).into(),
-        ], "forged effective height in atomic Jindo registration plus activation must reject")
-            .await.expect_err("future-dated Jindo activation was accepted");
-        ensure!(error_chain_contains(&rejected_error, "differs from current height"),
-            "forged activation rejected for wrong reason: {rejected_error:?}");
-        let rejected_terminal_height = committed_height(&client, "observe rejected activation").await?;
-        ensure!(rejected_terminal_height == rejected_execution_height,
-            "rejected activation landed at {rejected_terminal_height}, expected {rejected_execution_height}");
-        wait_for_all_peer_activations(&network, rejected_terminal_height, compiled_snapshot, None,
-            "failed explicit activation rolls back registration on every peer").await?;
-        let mismatch_execution_height = next_execution_height(&client).await?;
-        let mut mismatched = proposed_activation(
-            compiled,
-            mismatch_execution_height,
-        );
-        mismatched.parameter_digest = PrivacyParameterDigestV1::new([0xA5; 32]);
-        ensure!(
-            mismatched.parameter_digest != compiled.parameter_digest,
-            "mismatched digest fixture accidentally equals the compiled digest"
-        );
-        let mismatch_error = submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(mismatched),
-            "mismatched Jindo compiled digest must reject",
-        )
-        .await
-        .expect_err("mismatched Jindo compiled digest was accepted");
-        ensure!(
-            error_chain_contains(&mismatch_error, "does not match compiled native profile"),
-            "compiled-digest rejection had the wrong reason: {mismatch_error:?}"
-        );
-        let mismatch_terminal_height =
-            committed_height(&client, "observe compiled-digest rejection").await?;
-        ensure!(
-            mismatch_terminal_height == mismatch_execution_height,
-            "compiled-digest native transaction rejection landed at height {mismatch_terminal_height}, \
-             expected {mismatch_execution_height}"
-        );
-        wait_for_all_peer_activations(
-            &network,
-            mismatch_terminal_height,
-            compiled_snapshot,
-            None,
-            "compiled-digest rejection must not register state",
-        )
-        .await?;
-        let forged_execution_height = next_execution_height(&client).await?;
-        let forged_proposal_height = forged_execution_height
-            .checked_add(1)
-            .ok_or_else(|| eyre!("forged proposal height overflowed"))?;
-        let forged = proposed_activation(
-            compiled,
-            forged_proposal_height,
-        );
-        let forged_error = submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(forged),
-            "forged Jindo proposal height must reject",
-        )
-        .await
-        .expect_err("forged Jindo proposal height was accepted");
-        ensure!(
-            error_chain_contains(&forged_error, "differs from current height"),
-            "forged-height rejection had the wrong reason: {forged_error:?}"
-        );
-        let forged_terminal_height =
-            committed_height(&client, "observe forged-height rejection").await?;
-        ensure!(
-            forged_terminal_height == forged_execution_height,
-            "forged-height native transaction rejection landed at height {forged_terminal_height}, \
-             expected {forged_execution_height}"
-        );
-        wait_for_all_peer_activations(
-            &network,
-            forged_terminal_height,
-            compiled_snapshot,
-            None,
-            "forged-height rejection must not register state",
-        )
-        .await?;
-        let registration_height = next_execution_height(&client).await?;
-        let proposed = proposed_activation(compiled, registration_height);
-        submit_instruction(
-            &client,
-            RegisterPrivacyProtocolActivationV1::new(proposed),
-            "register exact compiled Jindo activation",
-        )
-        .await?;
-        let observed_registration_height =
-            committed_height(&client, "observe exact Jindo registration").await?;
-        ensure!(
-            observed_registration_height == registration_height,
-            "Jindo registration landed at height {observed_registration_height}, expected \
-             {registration_height}"
-        );
-        wait_for_all_peer_activations(
-            &network,
-            registration_height,
-            compiled_snapshot,
-            Some(proposed),
-            "exact proposed Jindo activation",
-        )
-        .await?;
-        let preactivation_probe_start_height = observed_registration_height;
-        let preactivation_probe = build_jindo_action(&client, genesis_hash, 1).await?;
-        let probe_error = submit_signed_transaction(
-            &client,
-            &preactivation_probe,
-            "Jindo action while governance is intentionally pending must reject",
-        )
-        .await
-        .expect_err("Jindo action was admitted while lifecycle was Proposed");
-        ensure!(
-            error_chain_contains(&probe_error, "activation is not active"),
-            "pre-activation action rejected for the wrong reason: {probe_error:?}"
-        );
-        let expected_probe_terminal_height = preactivation_probe_start_height
-            .checked_add(EXECUTION_CARRIER_BLOCKS)
-            .ok_or_else(|| eyre!("pre-activation probe height overflowed"))?;
-        let probe_terminal_height =
-            committed_height(&client, "observe pre-activation Jindo rejection").await?;
-        ensure!(
-            probe_terminal_height == expected_probe_terminal_height,
-            "pre-activation Jindo rejection landed at height {probe_terminal_height}, expected \
-             {expected_probe_terminal_height}"
-        );
-        wait_for_all_peer_activations(
-            &network,
-            probe_terminal_height,
-            compiled_snapshot,
-            Some(proposed),
-            "Jindo remains Proposed after a real rejected action advances the chain",
-        )
-        .await?;
-        let activation_height = next_execution_height(&client).await?;
-        let active_lifecycle = PrivacyProtocolLifecycleV1::Active(
-            iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                proposed_at_height: registration_height,
-                activated_at_height: activation_height,
-                state_since_height: activation_height,
-            },
-        );
-        submit_instruction(&client,
-            TransitionPrivacyProtocolLifecycleV1::new(JINDO_PROTOCOL, active_lifecycle),
-            "explicitly activate the intentionally pending Jindo proposal").await?;
-        let observed_activation_height =
-            committed_height(&client, "observe exact Jindo activation").await?;
-        ensure!(
-            observed_activation_height == activation_height,
-            "Jindo activation transaction landed at height {observed_activation_height}, \
-             expected {activation_height}"
-        );
-        let active = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
-            iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                proposed_at_height: registration_height,
-                activated_at_height: activation_height,
-                state_since_height: activation_height,
-            },
-        ));
-        wait_for_all_peer_activations(
-            &network,
-            activation_height,
-            compiled_snapshot,
-            Some(active),
-            "exact active Jindo state on all peers",
-        )
-        .await?;
-        let final_action = build_jindo_action(&client, genesis_hash, 2).await?;
-        let qualification_error = submit_signed_transaction(
-            &client,
-            &final_action,
-            "active Jindo action without Exact12 qualification must reject",
-        )
-        .await
-        .expect_err("active Jindo action bypassed missing Exact12 qualification");
-        ensure!(
-            error_chain_contains(
-                &qualification_error,
-                "production qualification is not registered"
-            ),
-            "unqualified Jindo action rejected for the wrong reason: {qualification_error:?}"
-        );
-        let rejection_height = privacy_capabilities(&client).await
-            .wrap_err("query height after unqualified Jindo rejection")?
-            .committed_height;
-        wait_for_all_peer_activations(
-            &network,
-            rejection_height,
-            compiled_snapshot,
-            Some(active),
-            "qualification rejection must preserve Active-but-unavailable state",
-        )
-        .await?;
+        let default_action = build_jindo_action(&client, genesis_hash, 1).await?;
+        for (tamper, expected, label) in [
+            (JindoTamper::ProofMagic, "native Jindo verification failed", "malformed native Jindo proof"),
+            (JindoTamper::ParameterDigest, "privacy profile parameter digest differs from envelope", "substituted native Jindo profile"),
+        ] {
+            let transaction = independently_resigned_jindo_tamper(&default_action, tamper, &client)?;
+            let incoming = next_execution_height(&client).await?;
+            let error = submit_signed_transaction(&client, &transaction, label).await
+                .expect_err("independently signed invalid Jindo action was accepted");
+            ensure!(error_chain_contains(&error, expected), "{label}: wrong rejection: {error:?}");
+            wait_for_all_peer_policies(&network, incoming, compiled_snapshot, None,
+                "invalid native action preserves absent optional policy").await?;
+        }
+        submit_signed_transaction(&client, &default_action,
+            "native Jindo action succeeds without a protocol policy row").await?;
+        wait_for_transaction_on_peers(&preflight_clients, &default_action,
+            "all-four native Jindo default-policy finality", PEER_CONVERGENCE_TIMEOUT).await?;
+        let default_height = committed_height(&client, "default-policy finality").await?;
+        wait_for_all_peer_policies(&network, default_height, compiled_snapshot, None,
+            "successful native proof leaves optional policy absent").await?;
+        assert_exact_jindo_replay_rejected(&client, &default_action).await?;
+        ensure!(committed_height(&client, "exact replay height").await? == default_height,
+            "exact Jindo replay committed another block");
+
+        let restricted_limits = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+            JindoLimitsV1 { max_polynomial_count: 3 });
+        let incoming = next_execution_height(&client).await?;
+        let effective = incoming.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?;
+        let atomic_error = submit_instructions(&client, vec![
+            SchedulePrivacyProtocolLimitsUpdateV1::new(JINDO_PROTOCOL, effective, restricted_limits).into(),
+            SchedulePrivacyProtocolLimitsUpdateV1::new(PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+                incoming, PrivacyProtocolLimitsV1::VegaExistingCredentialZkV1).into(),
+        ], "invalid second policy schedule rolls back the first").await
+            .expect_err("non-future atomic policy schedule was accepted");
+        ensure!(error_chain_contains(&atomic_error, "must be later than scheduled height"),
+            "atomic policy schedule failed for wrong reason: {atomic_error:?}");
+        wait_for_all_peer_policies(&network, incoming, compiled_snapshot, None,
+            "failed atomic schedule leaves no Jindo policy on any peer").await?;
+        let bad_limits = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+            JindoLimitsV1 { max_polynomial_count: 5 });
+        let incoming = next_execution_height(&client).await?;
+        let invalid_limit_error = submit_instruction(&client,
+            SchedulePrivacyProtocolLimitsUpdateV1::new(JINDO_PROTOCOL,
+                incoming.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?, bad_limits),
+            "protocol policy cannot exceed the canonical hard ceiling").await
+            .expect_err("oversized Jindo policy was accepted");
+        ensure!(error_chain_contains(&invalid_limit_error, "privacy protocol-limit update rejected"),
+            "oversized Jindo policy failed for wrong reason: {invalid_limit_error:?}");
+        wait_for_all_peer_policies(&network, incoming, compiled_snapshot, None,
+            "invalid limits preserve absent optional policy").await?;
+
+        let scheduled_at_height = next_execution_height(&client).await?;
+        let effective_at_height = scheduled_at_height.checked_add(1)
+            .ok_or_else(|| eyre!("policy height overflowed"))?;
+        submit_instruction(&client, SchedulePrivacyProtocolLimitsUpdateV1::new(
+            JINDO_PROTOCOL, effective_at_height, restricted_limits), "schedule ordinary Jindo limits").await?;
+        let pending_policy = PrivacyProtocolPolicyV1 { protocol_id: JINDO_PROTOCOL,
+            current_limits: compiled_snapshot.protocol_limits,
+            pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height, effective_at_height, next_limits: restricted_limits }) };
+        wait_for_all_peer_policies(&network, scheduled_at_height, compiled_snapshot, Some(pending_policy),
+            "exact pending ordinary Jindo policy on all peers").await?;
+        submit_instruction(&client, Log::new(Level::INFO, "apply scheduled Jindo limits".to_owned()),
+            "execute exact Jindo policy boundary").await?;
+        let restricted_policy = PrivacyProtocolPolicyV1 { protocol_id: JINDO_PROTOCOL,
+            current_limits: restricted_limits, pending_update: None };
+        wait_for_all_peer_policies(&network, effective_at_height, compiled_snapshot, Some(restricted_policy),
+            "scheduled Jindo limits apply at the exact boundary").await?;
+        let restricted_action = build_jindo_action(&client, genesis_hash, 2).await?;
+        let limit_error = submit_signed_transaction(&client, &restricted_action,
+            "four-polynomial native action exceeds ordinary limit three").await
+            .expect_err("native Jindo action exceeded committed protocol limits");
+        ensure!(error_chain_contains(&limit_error, "privacy statement violates active protocol limits"),
+            "restricted action failed for wrong reason: {limit_error:?}");
+
+        let scheduled_at_height = next_execution_height(&client).await?;
+        let effective_at_height = scheduled_at_height.checked_add(1)
+            .ok_or_else(|| eyre!("policy height overflowed"))?;
+        submit_instruction(&client, SchedulePrivacyProtocolLimitsUpdateV1::new(JINDO_PROTOCOL,
+            effective_at_height, compiled_snapshot.protocol_limits),
+            "restore ordinary Jindo limits within the same canonical ceiling").await?;
+        let pending_restore = PrivacyProtocolPolicyV1 { pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height, effective_at_height, next_limits: compiled_snapshot.protocol_limits }),
+            ..restricted_policy };
+        wait_for_all_peer_policies(&network, scheduled_at_height, compiled_snapshot, Some(pending_restore),
+            "authorized ordinary increase remains pending until its exact block").await?;
+        submit_instruction(&client, Log::new(Level::INFO, "restore scheduled Jindo limits".to_owned()),
+            "execute ordinary Jindo increase boundary").await?;
+        let restored_policy = PrivacyProtocolPolicyV1 { protocol_id: JINDO_PROTOCOL,
+            current_limits: compiled_snapshot.protocol_limits, pending_update: None };
+        wait_for_all_peer_policies(&network, effective_at_height, compiled_snapshot, Some(restored_policy),
+            "ordinary Jindo increase applies without profile rebinding").await?;
+        let final_action = build_jindo_action(&client, genesis_hash, 3).await?;
+        submit_signed_transaction(&client, &final_action, "native Jindo succeeds under restored limits").await?;
+        wait_for_transaction_on_peers(&preflight_clients, &final_action,
+            "native Jindo finality before restart", PEER_CONVERGENCE_TIMEOUT).await?;
+        let final_height = committed_height(&client, "native Jindo finality before restart").await?;
         let restart_index = network.peers().len() - 1;
         let restart_peer = network.peers()[restart_index].clone();
         let config_layers = network.config_layers().collect::<Vec<_>>();
         ensure!(
             restart_peer.shutdown_if_started().await,
-            "selected Active Jindo peer was not running before restart coverage"
+            "selected Jindo peer was not running before restart coverage"
         );
         timeout(
             RESTART_TIMEOUT,
@@ -732,20 +644,29 @@ async fn active_jindo_stays_unavailable_without_exact12_qualification_across_res
         .await
         .map_err(|_| eyre!("Jindo peer restart exceeded {RESTART_TIMEOUT:?}"))?
         .wrap_err("restart Jindo peer")?;
-        wait_for_all_peer_activations(
+        wait_for_all_peer_policies(
             &network,
-            rejection_height,
+            final_height,
             compiled_snapshot,
-            Some(active),
-            "post-restart Active-but-unavailable Jindo binding and state",
+            Some(restored_policy),
+            "post-restart native Jindo binding and ordinary policy",
         )
         .await?;
         ensure!(
             canonical_genesis_hash(&bounded_client(restart_peer.client())).await? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
         );
+        let restarted_client = bounded_client(restart_peer.client());
+        wait_for_transaction_on_peers(&[restarted_client.clone()], &default_action,
+            "restarted peer restores default-policy native Jindo transaction", RESTART_TIMEOUT).await?;
+        wait_for_transaction_on_peers(&[restarted_client.clone()], &final_action,
+            "restarted peer restores governed native Jindo transaction", RESTART_TIMEOUT).await?;
+        assert_exact_jindo_replay_rejected(&restarted_client, &default_action).await?;
+        assert_exact_jindo_replay_rejected(&restarted_client, &final_action).await?;
+        ensure!(committed_height(&restarted_client, "post-restart replay height").await? == final_height,
+            "post-restart exact Jindo replay committed another block");
         println!(
-            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_jindo_network::active_jindo_stays_unavailable_without_exact12_qualification_across_restart:passed"
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_jindo_network::canonical_jindo_actions_survive_four_peer_policy_replay_and_restart:passed"
         );
         Ok(())
     }

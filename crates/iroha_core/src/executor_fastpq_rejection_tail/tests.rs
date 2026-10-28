@@ -107,7 +107,7 @@ fn fee_penalty_and_combined_tail_use_one_exact_statement_frame() {
 }
 
 /// Public-material shape fixtures carry no private signing or execution authority.
-fn mldsa_tail_account(members: usize, marker: u8) -> AccountId {
+pub(super) fn mldsa_tail_account(members: usize, marker: u8) -> AccountId {
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::account::controller::{MultisigMember, MultisigPolicy};
     let keys: Vec<_> = (0..members)

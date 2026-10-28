@@ -806,6 +806,9 @@ mod native_proof_reader_tests {
     #[test]
     fn native_block_proof_preserves_original_cumulative_metadata_refusal() {
         use ivm::error::ExecutionDeferral;
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
         chain.commit(Vec::new());

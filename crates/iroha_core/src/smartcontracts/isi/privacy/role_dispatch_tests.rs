@@ -1,8 +1,8 @@
 // Single-path tests of the `SubmitPrivacyProofV1` handler for every Exact12 role.
 // Included in `privacy::tests`.
 //
-// The role samples are structurally valid envelopes with placeholder proofs and an activation
-// record that admits them. They are never accepted by a native verifier, so every test here
+// The role samples are structurally valid envelopes with placeholder proofs and a canonical
+// profile that admits them. They are never accepted by a native verifier, so every test here
 // ends in a rejection and checks which part of the one handler produced it and that no privacy
 // State was written.
 
@@ -43,18 +43,18 @@ fn action_role_sample_state(samples: &[PrivacyActionRoleSampleV1]) -> State {
     state
 }
 
-/// Run the whole handler body under `activation`. Only the qualification lookup of
-/// `Execute` is replaced by the supplied record; intent binding, budget preflight, role
+/// Run the whole handler body under the supplied canonical profile. Only the selected admission lookup of
+/// `Execute` is replaced by the supplied structural profile; intent binding, budget preflight, role
 /// resolution, trusted-state loading, the verifier dispatch and the effect executor are the
 /// production code.
 fn execute_action_role_sample(
     instruction: SubmitPrivacyProofV1,
-    activation: PrivacyProtocolActivationRecordV1,
+    profile: PrivacyCompiledProfileSnapshotV1,
     transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     bind_submit_privacy_instruction(transaction, &instruction);
     let submission = PreparedPrivacySubmissionV1::prepare(instruction, &ALICE_ID, transaction)?;
-    submission.execute_after_admission(&ALICE_ID, transaction, activation)
+    submission.execute_after_admission(&ALICE_ID, transaction, profile, profile.protocol_limits)
 }
 
 /// Every privacy map is empty, no account was added and no action budget is charged.
@@ -116,7 +116,7 @@ fn substituted_envelopes(
 
 /// An envelope whose protocol, statement and proof name different roles is refused by the
 /// single role resolver, before any trusted state of either role is read and whatever
-/// activation record is offered.
+/// canonical profile is offered.
 #[test]
 fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_roles() {
     let samples = action_role_samples();
@@ -129,11 +129,11 @@ fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_ro
                 continue;
             }
             for (what, envelope) in substituted_envelopes(own, other) {
-                for activation in [own.activation, other.activation] {
+                for profile in [own.profile, other.profile] {
                     let case = format!("{} with the {what} of {}", own.role, other.role);
                     let error = execute_action_role_sample(
                         SubmitPrivacyProofV1::new(envelope.clone()),
-                        activation,
+                        profile,
                         &mut transaction,
                     )
                     .expect_err("a substituted envelope is never executed");
@@ -209,7 +209,7 @@ fn every_role_enters_its_own_branch_of_the_single_handler() {
         let mut transaction = block.transaction();
         let error = execute_action_role_sample(
             SubmitPrivacyProofV1::new(sample.envelope.clone()),
-            sample.activation,
+            sample.profile,
             &mut transaction,
         )
         .expect_err("a placeholder proof on a blank State is never applied");
@@ -225,12 +225,12 @@ fn every_role_enters_its_own_branch_of_the_single_handler() {
 fn typed_handler_and_registry_dispatch_are_one_entry_for_every_role() {
     let samples = action_role_samples();
     // The boxed route reads execution authority before entering the privacy handler.
-    // Use the original signed genesis, while keeping Exact12 qualification absent.
-    let state = activation_execution_state();
+    // Use the original signed genesis, with no optional protocol policy rows.
+    let state = governance_execution_state();
     let original_accounts = state.view().world.accounts.iter().count();
     for sample in &samples {
         let instruction = SubmitPrivacyProofV1::new(sample.envelope.clone());
-        let mut block = state.block(activation_execution_header(&state));
+        let mut block = state.block(governance_execution_header(&state));
         let mut transaction = block.transaction();
         assert!(
             crate::executor::root_scope::execution_root_scope(&mut transaction).is_ok(),
@@ -240,7 +240,7 @@ fn typed_handler_and_registry_dispatch_are_one_entry_for_every_role() {
         let typed = instruction
             .clone()
             .execute(&ALICE_ID, &mut transaction)
-            .expect_err("State without Exact12 qualification");
+            .expect_err("placeholder proof or its actual selected implementation is rejected");
         assert_no_privacy_state_with_account_count(
             &transaction,
             sample.role.canonical_label(),
@@ -261,14 +261,14 @@ fn typed_handler_and_registry_dispatch_are_one_entry_for_every_role() {
             "{}",
             sample.role
         );
-        // TODO: P.5 removes the all-twelve qualification gate; this message then becomes the
-        // role's own rejection from `every_role_enters_its_own_branch_of_the_single_handler`.
-        assert_eq!(
-            smart_contract_parameter_message(&typed),
-            "privacy Exact12 production qualification is not registered",
-            "{}",
-            sample.role
+        let message = smart_contract_parameter_message(&typed);
+        assert!(
+            !message.contains("qualification") && !message.contains("activation"),
+            "{message}"
         );
+        if let Err(unavailable) = compiled_privacy_profile_v1(sample.role.protocol_id()) {
+            assert!(message.contains(&unavailable.to_string()), "{message}");
+        }
     }
 }
 

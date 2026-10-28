@@ -309,6 +309,9 @@ fn terminal_schedule_failure_after_valid_qc_cannot_deliver_original_target() {
 fn terminal_amx_original_scratch_admission(rs16_only: bool) {
     use iroha_sumeragi::availability::AvailabilityFrame;
 
+    // Keep retired fixture cells fixed while checking the reader's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let view = chain.state().view();
     let budget = view.execution_budget();

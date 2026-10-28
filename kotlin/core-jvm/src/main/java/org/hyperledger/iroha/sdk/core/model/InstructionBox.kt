@@ -6,6 +6,7 @@ import org.hyperledger.iroha.sdk.core.model.instructions.InstructionKind
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1
 import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1
+import org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -69,12 +70,17 @@ class InstructionBox private constructor(
      */
     fun requirePrivacyExact12ConstructionAdmission() {
         val wire = payload as? WirePayload ?: return
-        if (wire.wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID_V1) return
+        if (wire.wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID_V1 &&
+            wire.wireName != SubmitPrivacyZkX509CertificateV1.WIRE_ID) return
         val admission = requireNotNull(privacyAdmission) {
             "Exact12 submit-proof construction requires committed native admission"
         }
         val protocolId = requireNotNull(privacyProtocolId) {
             "Exact12 submit-proof construction is missing its protocol binding"
+        }
+        require((wire.wireName == SubmitPrivacyZkX509CertificateV1.WIRE_ID) ==
+            (protocolId == PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1)) {
+            "X509 requires its canonical attached request wire"
         }
         PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
             admission,
@@ -86,7 +92,8 @@ class InstructionBox private constructor(
     /** Bind retained privacy admission to the enclosing transaction's exact network. */
     internal fun requirePrivacyExact12Network(networkId: NetworkId) {
         val wire = payload as? WirePayload ?: return
-        if (wire.wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID_V1) return
+        if (wire.wireName != PRIVACY_SUBMIT_PROOF_WIRE_ID_V1 &&
+            wire.wireName != SubmitPrivacyZkX509CertificateV1.WIRE_ID) return
         requireNotNull(privacyAdmission) {
             "Exact12 submit-proof construction requires authenticated Torii admission"
         }.requireNetwork(networkId)
@@ -114,6 +121,9 @@ class InstructionBox private constructor(
             protocolId: PrivacyProtocolIdV1,
             payloadBytes: ByteArray,
         ): InstructionBox {
+            require(protocolId != PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1) {
+                "X509 requires fromPrivacyZkX509CertificateV1 with an attached proof-free request"
+            }
             PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
                 admission,
                 protocolId,
@@ -124,6 +134,19 @@ class InstructionBox private constructor(
                 admission,
                 protocolId,
             )
+        }
+
+        /** Build the sole executing X509 request after current committed/native admission. */
+        @JvmStatic
+        fun fromPrivacyZkX509CertificateV1(
+            admission: PrivacyExact12CapabilityTupleAdmissionV1,
+            request: SubmitPrivacyZkX509CertificateV1,
+        ): InstructionBox {
+            val protocol = PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1
+            val bytes = request.canonicalRequestBytes()
+            PrivacyExact12CapabilityAdmissionV1.requireForConstruction(admission, protocol, bytes)
+            return InstructionBox(WireInstructionPayload(SubmitPrivacyZkX509CertificateV1.WIRE_ID, bytes),
+                admission, protocol)
         }
 
         /**

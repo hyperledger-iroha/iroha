@@ -836,17 +836,17 @@ state_test! { sync feature_stable_fallible_constructor_preserves_chain_id
 constructor_world.sccp_committee_generations.allocation_budget().clone(), constructor_world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), chain_id.clone(), StateTelemetry::default(), ) .expect("feature-stable State construction must validate empty durable storage") };
     assert_eq!(state.chain_id, chain_id);
 }
-fn world_with_privacy_tightenings(
+fn world_with_privacy_updates(
     protocol_scheduled_at_height: u64,
     protocol_effective_at_height: u64,
 ) -> (
     World,
     iroha_data_model::privacy::PrivacyConsensusLimitsV1,
-    iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1,
+    iroha_data_model::privacy::PrivacyProtocolLimitsV1,
 ) {
     use iroha_data_model::privacy::{
-        PrivacyConsensusPolicyTighteningV1, PrivacyConsensusPolicyV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        PrivacyConsensusPolicyUpdateV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLimitsUpdateV1,
     };
     let mut world = World::default();
     let current_limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
@@ -855,54 +855,56 @@ fn world_with_privacy_tightenings(
     next_limits.retained_root_count -= 1;
     world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
         current_limits,
-        pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+        pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
             scheduled_at_height: 100,
             effective_at_height: 400,
             next_limits,
         }),
     });
-    let_row! { mut activation = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) .expect("compiled VeRange profile") .activation_record(PrivacyProtocolLifecycleV1::Proposed( PrivacyProposedLifecycleV1 { proposed_at_height: 100, }, )) };
-    let mut next_protocol_limits = activation.protocol_limits;
-    let_row! { iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
+    let mut protocol_policy = iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
+        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        current_limits: iroha_data_model::privacy::PrivacyProtocolLimitsV1::canonical_default_v1(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        ),
+        pending_update: None,
+    };
+    let mut next_protocol_limits = protocol_policy.current_limits;
+    let_row! { iroha_data_model::privacy::PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
     limits.max_aggregation_count -= 1;
-    activation.pending_protocol_limits_tightening = Some(PrivacyProtocolLimitsTighteningV1 {
+    protocol_policy.pending_update = Some(PrivacyProtocolLimitsUpdateV1 {
         scheduled_at_height: protocol_scheduled_at_height,
         effective_at_height: protocol_effective_at_height,
         next_limits: next_protocol_limits,
     });
-    world.privacy_activations.insert(
-        crate::privacy_state::PrivacyActivationKeyV1::new(
+    world.privacy_protocol_policies.insert(
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
         ),
-        activation,
+        protocol_policy,
     );
     (world, next_limits, next_protocol_limits)
 }
-state_test! { sync privacy_policy_and_protocol_tightenings_apply_atomically_at_block_start
+state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block_start
     use iroha_data_model::privacy::{
-        PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-    };
-    let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+        PrivacyProtocolLimitsV1, PrivacyProtocolIdV1, };
+    let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let policy = *block.world.privacy_consensus_policy.get();
     assert_eq!(policy.current_limits, next_limits);
-    assert_eq!(policy.pending_tightening, None);
+    assert_eq!(policy.pending_update, None);
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
-    let_row! { key = crate::privacy_state::PrivacyActivationKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
-    let_row! { activation = *block .world .privacy_activations .get(&key) .expect("activation with updated limits") };
-    assert_eq!(activation.protocol_limits, next_protocol_limits);
-    assert_eq!(activation.pending_protocol_limits_tightening, None);
+    let_row! { key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { protocol_policy = *block .world .privacy_protocol_policies .get(&key) .expect("protocol_policy with updated limits") };
+    assert_eq!(protocol_policy.current_limits, next_protocol_limits);
+    assert_eq!(protocol_policy.pending_update, None);
+
     assert!(matches!(
-        activation.lifecycle,
-        PrivacyProtocolLifecycleV1::Proposed(_)
-    ), "a protocol-limit schedule must not activate a pending proposal");
-    assert!(matches!(
-        activation.protocol_limits,
-        PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(_)
+        protocol_policy.current_limits,
+        PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(_)
     ));
     {
         let mut transaction = block.transaction();
@@ -920,10 +922,10 @@ state_test! { sync privacy_policy_and_protocol_tightenings_apply_atomically_at_b
 state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    let (world, _, _) = world_with_privacy_tightenings(99, 399);
+    let (world, _, _) = world_with_privacy_updates(99, 399);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let_row! { activation_key = crate::privacy_state::PrivacyActivationKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
-    let_row! { original_activation = *world .privacy_activations .view() .get(&activation_key) .expect("scheduled activation") };
+    let_row! { protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { original_protocol_policy = *world .privacy_protocol_policies .view() .get(&protocol_policy_key) .expect("scheduled protocol_policy") };
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
     let_row! { error = catch_unwind(AssertUnwindSafe(|| { let _block = state.block(header); })) .expect_err("missed protocol schedule must abort block construction") };
@@ -935,24 +937,24 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
         "a failed later start hook must not publish the earlier due policy write"
     );
     assert_eq!(
-        state.world.privacy_activations.view().get(&activation_key),
-        Some(&original_activation),
-        "a failed start hook must leave the base activation unchanged"
+        state.world.privacy_protocol_policies.view().get(&protocol_policy_key),
+        Some(&original_protocol_policy),
+        "a failed start hook must leave the base protocol_policy unchanged"
     );
 }
 state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overlay
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
 
-    let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+    let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(
+    let protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
     );
-    let original_activation = *world
-        .privacy_activations
+    let original_protocol_policy = *world
+        .privacy_protocol_policies
         .view()
-        .get(&activation_key)
-        .expect("scheduled activation");
+        .get(&protocol_policy_key)
+        .expect("scheduled protocol_policy");
     let state = State::new(
         world,
         Kura::blank_kura_for_testing(),
@@ -963,22 +965,22 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
         assert!(!block.start_of_block_effects_applied);
         assert_eq!(block.world.privacy_consensus_policy.get(), &original_policy);
         assert_eq!(
-            block.world.privacy_activations.get(&activation_key),
-            Some(&original_activation),
+            block.world.privacy_protocol_policies.get(&protocol_policy_key),
+            Some(&original_protocol_policy),
             "the pristine stage must precede due privacy effects",
         );
-        let mut staged_activation = original_activation;
+        let mut staged_activation = original_protocol_policy;
         // If construction continues past the failed stage, the start hook must
         // reject this missed schedule instead of silently discarding its writes.
         staged_activation
-            .pending_protocol_limits_tightening
+            .pending_update
             .as_mut()
             .expect("pending protocol tightening")
             .effective_at_height = 399;
         block
             .world
-            .privacy_activations
-            .insert(activation_key, staged_activation);
+            .privacy_protocol_policies
+            .insert(protocol_policy_key, staged_activation);
         Err("rejected pristine stage")
     }) {
         Ok(_) => panic!("a rejected pristine stage must not construct a block"),
@@ -987,29 +989,29 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
     assert!(matches!(error, StateBlockStartError::Stage("rejected pristine stage")));
     assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
     assert_eq!(
-        state.world.privacy_activations.view().get(&activation_key),
-        Some(&original_activation),
-        "a failed stage must discard its activation write",
+        state.world.privacy_protocol_policies.view().get(&protocol_policy_key),
+        Some(&original_protocol_policy),
+        "a failed stage must discard its protocol_policy write",
     );
 
     // Taking a new block scope also proves that failure released every overlay lock.
     let block = state.block(header);
     assert!(block.start_of_block_effects_applied);
     assert_eq!(block.world.privacy_consensus_policy.get().current_limits, next_limits);
-    assert_eq!(block.world.privacy_consensus_policy.get().pending_tightening, None);
+    assert_eq!(block.world.privacy_consensus_policy.get().pending_update, None);
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
-    let activation = block
+    let protocol_policy = block
         .world
-        .privacy_activations
-        .get(&activation_key)
-        .expect("activation survives the discarded stage");
-    assert_eq!(activation.protocol_limits, next_protocol_limits);
-    assert_eq!(activation.pending_protocol_limits_tightening, None);
+        .privacy_protocol_policies
+        .get(&protocol_policy_key)
+        .expect("protocol_policy survives the discarded stage");
+    assert_eq!(protocol_policy.current_limits, next_protocol_limits);
+    assert_eq!(protocol_policy.pending_update, None);
     drop(block);
     assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
     assert_eq!(
-        state.world.privacy_activations.view().get(&activation_key),
-        Some(&original_activation),
+        state.world.privacy_protocol_policies.view().get(&protocol_policy_key),
+        Some(&original_protocol_policy),
         "dropping a successful block scope must also discard its start effects",
     );
 }
@@ -3225,9 +3227,8 @@ state_test! { sync asset_domain_index_rebuild_uses_only_definition_ownership
 }
 fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     use iroha_data_model::privacy::{
-        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRootRoleV1,
     };
     let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -3247,19 +3248,6 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     let_row! { root_key = crate::privacy_state::PrivacyRootKeyV1::new( namespace, PrivacyRootRoleV1::NoteCommitmentAnchor, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, root, ) .expect("canonical Orchard bootstrap root key") };
     let_row! { head_key = crate::privacy_state::PrivacyRootHeadKeyV1::new( namespace, PrivacyRootRoleV1::NoteCommitmentAnchor, ) .expect("canonical Orchard root-head key") };
     let_row! { state_key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace) .expect("canonical Orchard pool-state key") };
-    let_row! { profile = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::OrchardHalo2ActionsV1, ) .expect("compiled Orchard profile") };
-    world.privacy_activations.insert(
-        crate::privacy_state::PrivacyActivationKeyV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-        ),
-        profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 1,
-                state_since_height: 1,
-            },
-        )),
-    );
     world.privacy_commitments.insert(
         state_key,
         crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
@@ -3294,6 +3282,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
             root,
             provenance,
             None,
+            1,
         )
         .expect("canonical Orchard root head"),
     );

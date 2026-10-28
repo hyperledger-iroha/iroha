@@ -233,6 +233,26 @@ fn torii_receipt_signer_or_derived(
     );
     Ok(key)
 }
+/// Retain both private-settlement signing capabilities from the original node key.
+/// Torii owns Emergency Fast refusal and durable-store admission; key custody is always validated.
+fn private_settlement_signers_from_node_key(
+    node_key_pair: &KeyPair,
+) -> ReportResult<
+    (
+        Arc<iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1>,
+        Arc<iroha_core::private_settlement::PrivateSettlementPhaseSignerV1>,
+    ),
+    StartError,
+> {
+    let availability = iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1::new(
+        node_key_pair.clone(),
+    )
+    .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+    let phase =
+        iroha_core::private_settlement::PrivateSettlementPhaseSignerV1::new(node_key_pair.clone())
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+    Ok((Arc::new(availability), Arc::new(phase)))
+}
 type ConsensusHandshakeMeta = ConsensusHandshakeMetadata;
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
     let metadata: ConsensusHandshakeMeta =
@@ -4506,30 +4526,8 @@ impl Iroha {
                 emergency_fast,
             )
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
-        let private_settlement_availability_signer = state
-            .nexus_snapshot()
-            .atomic_private_settlement
-            .enabled
-            .then(|| {
-                iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1::new(
-                    config.common.key_pair.clone(),
-                )
-            })
-            .transpose()
-            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
-            .map(Arc::new);
-        let private_settlement_phase_signer = state
-            .nexus_snapshot()
-            .atomic_private_settlement
-            .enabled
-            .then(|| {
-                iroha_core::private_settlement::PrivateSettlementPhaseSignerV1::new(
-                    config.common.key_pair.clone(),
-                )
-            })
-            .transpose()
-            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
-            .map(Arc::new);
+        let (private_settlement_availability_signer, private_settlement_phase_signer) =
+            private_settlement_signers_from_node_key(&config.common.key_pair)?;
         // Keep the late by-value builder scratch in a separate synchronous call frame
         // instead of the activation poll; no State observation or startup stage moves.
         #[allow(clippy::redundant_closure_call)]
@@ -4537,16 +4535,9 @@ impl Iroha {
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
-        let runtime_deps = if let Some(signer) = private_settlement_availability_signer {
-            runtime_deps.with_private_settlement_availability_signer(signer)
-        } else {
-            runtime_deps
-        };
-        let runtime_deps = if let Some(signer) = private_settlement_phase_signer {
-            runtime_deps.with_private_settlement_phase_signer(signer)
-        } else {
-            runtime_deps
-        };
+        let runtime_deps = runtime_deps
+            .with_private_settlement_availability_signer(private_settlement_availability_signer)
+            .with_private_settlement_phase_signer(private_settlement_phase_signer);
         let runtime_deps = if let Some(inventory) = native_provider_attestation_inventory.as_ref() {
             runtime_deps.with_sorafs_provider_attestation_inventory(Arc::clone(inventory))
         } else {
@@ -10954,6 +10945,36 @@ mod tests {
             assert!(fastpq_poseidon_word_preflight_enabled(&cfg));
             cfg.poseidon_mode = FastpqPoseidonMode::Cpu;
             assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
+        }
+    }
+    mod private_settlement_signer_selection {
+        use super::*;
+
+        #[test]
+        fn both_signers_retain_each_original_node_identity() {
+            for seed in [0xA1, 0xA2] {
+                let node = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS node key");
+                let (availability, phase) = private_settlement_signers_from_node_key(&node)
+                    .expect("both node-owned signing capabilities");
+                assert_eq!(availability.peer_id().public_key(), node.public_key());
+                assert_eq!(phase.peer_id().public_key(), node.public_key());
+            }
+        }
+
+        #[test]
+        fn invalid_node_algorithm_preserves_startup_failure_and_signer_error() {
+            let node = KeyPair::try_from_seed(vec![0xA3; 32], Algorithm::Ed25519)
+                .expect("deterministic non-BLS node key");
+            let error = private_settlement_signers_from_node_key(&node)
+                .expect_err("invalid custody must fail daemon startup");
+            assert!(matches!(error.current_context(), StartError::StartTorii));
+            assert!(error.frames().any(|frame| matches!(
+                frame.downcast_ref::<
+                    iroha_core::private_settlement::PrivateSettlementAvailabilityErrorV1,
+                >(),
+                Some(iroha_core::private_settlement::PrivateSettlementAvailabilityErrorV1::InvalidSigner)
+            )));
         }
     }
     mod torii_receipt_signer_selection {

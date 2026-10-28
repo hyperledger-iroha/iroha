@@ -566,8 +566,8 @@ gas = "G_hash + bytes"
 
 [[syscall]]
 number = "0xA0"
-args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot)"
-ret = "u64=0"
+args = "r10=&NoritoBytes(InstructionBox), r11=operation_tag(1=SubmitBallot;2=SubmitPrivacyZkX509CertificateV1)"
+ret = "tag1:u64=0;tag2:r10=PendingAction(original signed action ordinal;queued only;no proof/effect authority)"
 gas = "G_sci"
 
 [[syscall]]

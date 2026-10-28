@@ -319,6 +319,7 @@ internal object InstructionWireIdsV1 {
         "iroha.privacy.schedule_consensus_policy_tightening.v1",
         "iroha.privacy.schedule_protocol_limits_tightening.v1",
         "iroha.privacy.submit_proof.v1",
+        "iroha.privacy.submit_zk_x509_certificate.v1",
         "iroha.privacy.transition_protocol_lifecycle.v1",
         "iroha.private_dataspace.anchor.v1",
         "iroha.private_dataspace.register.v1",

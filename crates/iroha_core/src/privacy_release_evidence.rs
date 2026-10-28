@@ -200,16 +200,16 @@ use iroha_data_model::{
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
         BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
         IrohaBootleLanternAnoncredStatementV1, IrohaZkAmsProofV1, IrohaZkAmsStatementV1,
-        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyActiveLifecycleV1,
-        PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
-        PrivacyEngineIdV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterIdV1,
-        PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
-        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1,
-        PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        IrohaZkX509StarkP256StatementV1, OrchardHalo2ActionsStatementV1, PrivacyChallengeV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
+        PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1, PrivacyIssuerIdV1,
+        PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLimitsV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
         PrivacyStatementContextV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVegaIssuerRecordLifecycleV1,
         PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
@@ -3938,13 +3938,7 @@ fn verify_zk_ams_release_production_envelope_v1(
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
+    let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
     let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -3967,7 +3961,8 @@ fn verify_zk_ams_release_production_envelope_v1(
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,
@@ -4284,13 +4279,7 @@ fn verify_jindo_release_production_envelope_v1(
     let profile =
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-        PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        },
-    ));
+    let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
     let typed_statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
@@ -4304,7 +4293,8 @@ fn verify_jindo_release_production_envelope_v1(
     let effects = verify_privacy_envelope_v1(
         &envelope,
         &PrivacyVerificationContextV1 {
-            activation: &activation,
+            profile: &bindings,
+            protocol_limits: &bindings.protocol_limits,
             consensus_limits: &limits,
             network_id: authoritative_network_id,
             genesis_hash,

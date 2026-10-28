@@ -84,6 +84,25 @@ final class NativeBridgeLoaderTests: XCTestCase {
         }
     }
 
+    func testEveryCurrentPrivacyExportIsRequiredForAdmission() {
+        let required = [
+            "iroha_privacy_compiled_profile_catalog_v1",
+            "iroha_privacy_validate_compiled_profile_catalog_v1",
+            "iroha_privacy_validate_exact12_capability_manifest_v1",
+            "iroha_privacy_validate_exact12_submit_proof_construction_v1",
+            "iroha_privacy_exact12_fixture_bundle_v1",
+            "iroha_privacy_validate_exact12_fixture_bundle_v1",
+            "iroha_privacy_free_buffer"
+        ]
+        XCTAssertTrue(NoritoBridgeLoader.hasRequiredExports(resolving: { _ in true }))
+        for missing in required {
+            XCTAssertFalse(
+                NoritoBridgeLoader.hasRequiredExports(resolving: { $0 != missing }),
+                "Missing privacy export must reject native admission: \(missing)"
+            )
+        }
+    }
+
     func testEveryCurrentAccelerationExportIsRequiredForAdmission() {
         XCTAssertEqual(NoritoBridgeLoader.accelerationRequiredSymbols, [
             "connect_norito_acceleration_config_set_v1",

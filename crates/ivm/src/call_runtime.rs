@@ -342,6 +342,7 @@ impl IVM {
         }
         match role {
             CallTypeNodeV1::Unit if word == 0 => Ok(()),
+            CallTypeNodeV1::PendingAction if u32::try_from(word).is_ok() => Ok(()),
             CallTypeNodeV1::Struct { fields, .. } if fields.is_empty() && word == 0 => Ok(()),
             CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool) if word <= 1 => Ok(()),
             CallTypeNodeV1::Error(error)
@@ -503,6 +504,104 @@ mod tests {
         vm.load_program(&bytes).unwrap();
         vm.set_program_counter(pc).unwrap();
         vm
+    }
+
+    #[test]
+    fn compiled_x509_queue_preserves_host_ordinal_across_internal_calls() {
+        use crate::{IVMHost, syscalls};
+        struct QueueHost {
+            fallback: DefaultHost,
+            ordinal: u64,
+        }
+        impl IVMHost for QueueHost {
+            fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+                if number == syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION {
+                    return Ok(0);
+                }
+                self.fallback.prepare_syscall(number, vm)
+            }
+            fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+                if number == syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION {
+                    assert_eq!(
+                        vm.register(11),
+                        syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509
+                    );
+                    let request = vm.validate_tlv(vm.register(10))?;
+                    assert_eq!(
+                        request.type_id,
+                        crate::pointer_abi::PointerType::NoritoBytes
+                    );
+                    assert_eq!(request.payload, b"typed transport control");
+                    vm.set_register(10, self.ordinal);
+                    return Ok(0);
+                }
+                self.fallback.syscall(number, vm)
+            }
+            fn as_any(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+        // This host exercises typed transport only. It deliberately provides no
+        // credential verification or signed-custody authority.
+        let code = KotodamaCompiler::new()
+            .compile_source(
+                r#"seiyaku Queues {
+            fn relay(PendingAction _ queued) -> PendingAction { queued }
+            fn queue(bytes _ request) -> PendingAction {
+                ledger::credentials::present_x509(request: request)
+            }
+            kotoage fn main() authorize(anyone) {
+                let PendingAction queued = queue(b"typed transport control");
+                let PendingAction copied = relay(queued);
+            }
+        }"#,
+            )
+            .unwrap();
+        for ordinal in [0, 7, u64::from(u32::MAX), u64::from(u32::MAX) + 1] {
+            let mut vm = IVM::new(1_000_000);
+            vm.set_host(QueueHost {
+                fallback: DefaultHost::default(),
+                ordinal,
+            });
+            vm.load_program(&code).unwrap();
+            vm.select_entrypoint("main").unwrap();
+            let result = vm.run();
+            if u32::try_from(ordinal).is_ok() {
+                result.unwrap();
+            } else {
+                assert!(matches!(result, Err(VMError::DecodeError)), "{result:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pending_action_words_are_public_u32_ordinals_without_result_authority() {
+        let mut vm = IVM::new(u64::MAX);
+        let address = vm.alloc_heap(8).unwrap();
+        for word in [0, 1, 7, u64::from(u32::MAX)] {
+            assert!(
+                vm.validate_call_word(address, word, &CallTypeNodeV1::PendingAction)
+                    .is_ok()
+            );
+        }
+        for word in [u64::from(u32::MAX) + 1, u64::MAX] {
+            assert!(matches!(
+                vm.validate_call_word(address, word, &CallTypeNodeV1::PendingAction),
+                Err(VMError::DecodeError)
+            ));
+        }
+        assert!(
+            vm.validate_call_word(address, 7, &CallTypeNodeV1::PendingAction)
+                .is_ok()
+        );
+        assert!(matches!(
+            vm.validate_call_word(
+                address,
+                7,
+                &CallTypeNodeV1::Leaf(EntrypointValueKindV1::Bool)
+            ),
+            Err(VMError::DecodeError)
+        ));
     }
 
     #[test]

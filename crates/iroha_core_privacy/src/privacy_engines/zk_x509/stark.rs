@@ -270,7 +270,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claim-free-key-openings-plus-length-delimited-aggregate-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log12-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=9-normalized-producer+9-actual-consumer-four-lane-aux-accumulators+36-private-equalities+4-private-CA-governed-root-consumer-links+16-private-sha-bridges+20-quartic-joins:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-no-extra-openings:rfc5280-calendar-and-numeric=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-39relation-bound:local-component-history:both-original-aux-roots-before-active-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then17-key-and-digest-join-descriptors-and-fp4-alphas:then20-private-sha-union-descriptors-and-fp4-alphas:then108-CA-private-link-descriptors-and-fp4-alphas:private-links-linear-and-quartic-quotients-original-masks-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-binary-fold-arity2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask2100-coefficients:one-shared-transcript-derived-deep-point-current+next+MAIN24-CA108-original-openings-both-local-records-bound-before-mixes:MAIN31-derived-key-and-digest-openings-power2,8,32-admissibility-and-DEEP-authentication:ca-complete-fp4-local-air1363-plus-MAIN108-original-cross-equations-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
+pub const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claim-free-key-openings-plus-length-delimited-aggregate-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-logical-trace-groups-main-joined-base-and-aux-roots:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log12-13-chunks:sha3-384-opaque48-vector-row-merkle:p256-binding-sink-degree3-including-fixed-selectors:sha-capacity-and-call-degree6-including-fixed-selectors:sha-digest-address-polynomial-select:sha-canonical-frame-prefix-and-static-field-headers-with-carried-private-crl-length:sha-fixed-algebraic-width548-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-polynomials-verifier-derived-at-deep-point-and-native-translates:x5b1-shared-challenge-pre-aux=single-joined-main-base-root-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-shared-sha-family-for-projection-hash-bus-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=9-normalized-producer+9-actual-consumer-four-lane-aux-accumulators+36-private-equalities+4-private-CA-governed-root-consumer-links+16-private-sha-bridges+20-quartic-joins:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings-degree526102:main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings-degree526095:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links+4-projection-to-sha-point1-links-original-masks-no-extra-openings:rfc5280-calendar-and-numeric=base285-aux280-fixed147-constraints2145-degree4-basic-constraints-fixed3x12-signed-parent-complete-canonical-u32-and-32bit-nonwrapping-slack-source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-length-pairs-live-prefix-count-node-continuity-source-start-helper-projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa-output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity-authenticated72-time-census-73-relations-38bit-slack-affine-loglookup-39relation-bound:local-component-history:both-original-aux-roots-before-active-fp4-local-constraint-alphas:then192-private-endpoint-link-descriptors-and-fp4-link-alphas:then21-key-and-digest-join-descriptors-and-fp4-alphas:then24-private-sha-union-descriptors-and-fp4-alphas:then108-CA-private-link-descriptors-and-fp4-alphas:private-links-linear-and-quartic-quotients-original-masks-before-composition-commitment:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:canonical-quotient-stride=fri-cap-minus137:independent-fp4-adjacent-chunk-masks137-before-composition-root:fri-rate9over64:binary-fri:ordered-low-high-pair-leaves:affine-batching-m3-binary-fold-arity2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask2100-coefficients:one-shared-transcript-derived-deep-point-current+next+MAIN24-CA108-original-openings-both-local-records-bound-before-mixes:MAIN31-derived-key-and-digest-openings-power2,8,32-admissibility-and-DEEP-authentication:ca-complete-fp4-local-air1363-plus-MAIN108-original-cross-equations-at-deep-current-only-queried-trace-rows:main-complete-fp4-air49-native-vanishing-and-six-chunk-recomposition-at-deep-current-only-queried-trace-rows:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-independent-qualification";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -482,7 +482,7 @@ const MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1: usize =
 /// Exact canonical framing and original key openings around the inner X5S1.
 pub const ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1: usize =
     MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 + 4;
-pub const ZK_X509_MAIN_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-proof-v1-incompatible:wire=X5M1+version1+exact31-canonical-Fp4-key-and-digest-join-openings992+u32be-inner-X5S1-length+exact-X5S1:no-fixed-sidecar:no-omitted-reordered-duplicated-or-trailing-records:private-der-rfc8-and-p256184-linear-endpoint-quotients+rfc-normalized-private-producer-consumer36-equalities-and-four-private-CA-governed-root-consumer-links+16-private-native-constant-bridges+20-quartic-original-masked-column-sha-rfc-endpoint-joins-no-extra-openings:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links-original-masks-no-extra-openings:fixed-openings-derived-by-verifier-only-after-main-transcript-grinding:no-proof-supplied-fixed-values:x5b1-shared-main-ca-pre-aux-challenges:local-component-history:both-original-aux-roots-then-active-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas-then-17-key-and-digest-join-descriptors-and-alphas-then-20-private-sha-union-descriptors-and-alphas-then-108-ordered-CA-private-link-descriptors-and-alphas:additional31-derived-openings-plus-ordered132-MAIN24-CA108-openings-and-both-local-DEEP-records-before-independent-key-DEEP-and-FRI-mixes:first-release-no-legacy";
+pub const ZK_X509_MAIN_PROOF_DESCRIPTOR_V1: &[u8] = b"zk-x509-main-proof-v1-incompatible:wire=X5M1+version1+exact31-canonical-Fp4-key-and-digest-join-openings992+u32be-inner-X5S1-length+exact-X5S1:no-fixed-sidecar:no-omitted-reordered-duplicated-or-trailing-records:private-der-rfc8-and-p256184-linear-endpoint-quotients+rfc-normalized-private-producer-consumer36-equalities-and-four-private-CA-governed-root-consumer-links+16-private-native-constant-bridges+20-quartic-original-masked-column-sha-rfc-endpoint-joins-no-extra-openings:main-key-byte-joins=12-blocks647-equalities-root-powers2,8:main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings-degree526102:main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings-degree526095:main-sha-digest-joins=5-blocks40-u32-equalities-root-power32:main-sha-rfc-private-union=16-constant-native-bridges+16-segment-quartic-links+4-role-quartic-links+4-projection-to-sha-point1-links-original-masks-no-extra-openings:fixed-openings-derived-by-verifier-only-after-main-transcript-grinding:no-proof-supplied-fixed-values:x5b1-shared-main-ca-pre-aux-challenges:local-component-history:both-original-aux-roots-then-active-local-constraint-alphas-then-192-ordered-private-link-descriptors-and-link-alphas-then-21-key-and-digest-join-descriptors-and-alphas-then-24-private-sha-union-descriptors-and-alphas-then-108-ordered-CA-private-link-descriptors-and-alphas:additional31-derived-openings-plus-ordered132-MAIN24-CA108-openings-and-both-local-DEEP-records-before-independent-key-DEEP-and-FRI-mixes:first-release-no-legacy";
 const _: () = assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_002);
 const _: () =
     assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == ZK_X509_MAIN_FRAME_BYTES_V1 as usize);
@@ -3344,6 +3344,8 @@ fn build_projection_base_material_v1(
 fn derive_projection_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
 ) -> Result<ZkX509ProjectionChallengesV1, ZkX509StarkErrorV1> {
+    let hash_bus = super::sha_call_bus_stark::derive_zk_x509_sha_call_bus_challenges_v1(transcript)
+        .map_err(map_transparent_error_v1)?;
     let mut sampled = [F::ZERO; ZK_X509_PROJECTION_COPY_LANES_V1 * 7];
     for (index, challenge) in sampled.iter_mut().enumerate() {
         let label = ZK_X509_PROJECTION_CHALLENGE_LABELS_V1[index / 7][index % 7];
@@ -3352,6 +3354,7 @@ fn derive_projection_challenges_v1(
             .map_err(map_transparent_error_v1)?;
     }
     Ok(ZkX509ProjectionChallengesV1 {
+        hash_bus,
         copy: core::array::from_fn(|lane| ZkX509ProjectionCopyChallengesV1 {
             beta: sampled[lane * 7],
             gamma: sampled[lane * 7 + 1],
@@ -7085,10 +7088,10 @@ const P256_MAIN_LOG19_REGISTRATION_COUNT_V1: usize = 15;
 const MAIN_LOG19_NON_P256_REGISTRATION_COUNT_V1: usize = 6;
 const MAIN_LOG19_REGISTRATION_COUNT_V1: usize = 21;
 const MAIN_LOG19_BASE_WIDTH_V1: usize = 2_112;
-const MAIN_LOG19_AUX_WIDTH_V1: usize = 1_788;
+const MAIN_LOG19_AUX_WIDTH_V1: usize = 1_804;
 const MAIN_LOG19_PHYSICAL_CHUNKS_V1: usize = 52;
 const P256_MAIN_LOG19_BASE_START_V1: usize = 717;
-const P256_MAIN_LOG19_AUX_START_V1: usize = 788;
+const P256_MAIN_LOG19_AUX_START_V1: usize = 804;
 const P256_MAIN_LOG19_BASE_WIDTH_V1: usize = P256_SIGNATURE_COUNT_V1
     * (P256_ARITHMETIC_BASE_WIDTH_V1 + 2 * P256_VALUE_BUS_STARK_BASE_WIDTH_V1);
 const P256_MAIN_LOG19_AUX_WIDTH_V1: usize = P256_SIGNATURE_COUNT_V1
@@ -7103,16 +7106,16 @@ const P256_MAIN_LOG19_BASE_STARTS_V1: [usize; P256_MAIN_LOG19_REGISTRATION_COUNT
     2_078,
 ];
 const P256_MAIN_LOG19_AUX_STARTS_V1: [usize; P256_MAIN_LOG19_REGISTRATION_COUNT_V1] = [
-    788, 860, 932, 1_004, 1_076, 1_148, 1_264, 1_276, 1_392, 1_404, 1_520, 1_532, 1_648, 1_660,
-    1_776,
+    804, 876, 948, 1_020, 1_092, 1_164, 1_280, 1_292, 1_408, 1_420, 1_536, 1_548, 1_664, 1_676,
+    1_792,
 ];
 const MAIN_LOG19_BASE_STARTS_V1: [usize; MAIN_LOG19_REGISTRATION_COUNT_V1] = [
     0, 76, 361, 450, 539, 628, 717, 928, 1_139, 1_350, 1_561, 1_772, 1_806, 1_840, 1_874, 1_908,
     1_942, 1_976, 2_010, 2_044, 2_078,
 ];
 const MAIN_LOG19_AUX_STARTS_V1: [usize; MAIN_LOG19_REGISTRATION_COUNT_V1] = [
-    0, 196, 476, 554, 632, 710, 788, 860, 932, 1_004, 1_076, 1_148, 1_264, 1_276, 1_392, 1_404,
-    1_520, 1_532, 1_648, 1_660, 1_776,
+    0, 196, 476, 558, 640, 722, 804, 876, 948, 1_020, 1_092, 1_164, 1_280, 1_292, 1_408, 1_420,
+    1_536, 1_548, 1_664, 1_676, 1_792,
 ];
 const MAIN_LOG19_NON_P256_KEYS_V1: [(SegmentAdapterIdV1, u16);
     MAIN_LOG19_NON_P256_REGISTRATION_COUNT_V1] = [
@@ -7130,7 +7133,7 @@ const _: () = assert!(
         == MAIN_LOG19_REGISTRATION_COUNT_V1
 );
 const _: () = assert!(P256_MAIN_LOG19_BASE_START_V1 + P256_MAIN_LOG19_BASE_WIDTH_V1 == 2_112);
-const _: () = assert!(P256_MAIN_LOG19_AUX_START_V1 + P256_MAIN_LOG19_AUX_WIDTH_V1 == 1_788);
+const _: () = assert!(P256_MAIN_LOG19_AUX_START_V1 + P256_MAIN_LOG19_AUX_WIDTH_V1 == 1_804);
 const _: () = assert!(
     P256_MAIN_LOG19_NEXT_STRIDE_V1
         == 1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
@@ -8884,9 +8887,9 @@ const MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1: usize = ZK_X509_RFC5280_STARK_FIXED_WIDT
     + ZK_X509_SHA_SEGMENT_COUNT_V1 * MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1;
 const MAIN_LOG19_AFFINE_SEGMENT_GROWTH_V1: usize = 4_096;
 const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_START_V1 == 91);
-const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1 == 27);
-const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 == 255);
-const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 <= u8::MAX as usize);
+const _: () = assert!(MAIN_LOG19_SHA_PUBLIC_FIXED_WIDTH_V1 == 46);
+const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 == 331);
+const _: () = assert!(MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1 <= u16::MAX as usize);
 const _: () = assert!(
     P256_MAIN_LOG19_NEXT_STRIDE_V1
         == 1_usize << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
@@ -8897,7 +8900,7 @@ const _: () = assert!(
 /// Zero ranges are implicit and never retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MainLog19PublicFixedAffineSegmentV1 {
-    column: u8,
+    column: u16,
     start: u32,
     end: u32,
     start_value: F,
@@ -9017,7 +9020,7 @@ impl MainLog19PublicFixedAffineScheduleV1 {
                 .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         }
         self.segments.push(MainLog19PublicFixedAffineSegmentV1 {
-            column: u8::try_from(column).map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?,
+            column: u16::try_from(column).map_err(|_| ZkX509StarkErrorV1::InternalInvariant)?,
             start,
             end,
             start_value,

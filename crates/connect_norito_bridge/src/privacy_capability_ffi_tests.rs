@@ -1,15 +1,17 @@
-//! Native capability evidence rejection at the foreign-language trust boundary.
+//! Native implementation/policy capability validation at the foreign-language boundary.
 
 use super::*;
 use iroha_data_model::privacy::*;
 use iroha_model_base::chain::ChainId;
 
-fn unqualified_manifest() -> PrivacyExact12CapabilityManifestV1 {
+fn unavailable_manifest() -> PrivacyExact12CapabilityManifestV1 {
     PrivacyCapabilitySnapshotV1 {
         version: 1,
+        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed([0x91; 32]),
+        )),
         committed_height: 3,
         consensus_policy: PrivacyConsensusPolicyV1::default(),
-        qualification: None,
         protocols: PrivacyProtocolIdV1::ALL
             .into_iter()
             .map(|protocol_id| PrivacyCapabilityRowV1 {
@@ -17,7 +19,7 @@ fn unqualified_manifest() -> PrivacyExact12CapabilityManifestV1 {
                 compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
                     PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
                 ),
-                activation: None,
+                policy: None,
             })
             .collect(),
     }
@@ -92,14 +94,6 @@ fn unsigned_qualification() -> PrivacyExact12QualificationRecordV1 {
             )),
             genesis_hash: *Hash::prehashed([0xD0; 32]).as_ref(),
             release_manifest_digest: release_digest,
-            activation_transaction_digest: artifact,
-            activations: PrivacyProtocolIdV1::ALL
-                .into_iter()
-                .map(|protocol_id| PrivacyDeploymentActivationV1 {
-                    protocol_id,
-                    activation_height: 2,
-                })
-                .collect(),
             validator_roster_digest: artifact,
             endpoint_version: "v1".to_owned(),
             convergence_height: 3,
@@ -112,8 +106,8 @@ fn unsigned_qualification() -> PrivacyExact12QualificationRecordV1 {
 }
 
 #[test]
-fn native_capability_validator_rejects_unsigned_exact12_evidence() {
-    let mut manifest = unqualified_manifest();
+fn native_capability_validator_separates_documentary_evidence_from_availability() {
+    let mut manifest = unavailable_manifest();
     let archive = norito::encode_canonical(&manifest).expect("unqualified archive");
     let validate = |bytes: &[u8]| unsafe {
         iroha_privacy_validate_exact12_capability_manifest_v1(
@@ -126,22 +120,17 @@ fn native_capability_validator_rejects_unsigned_exact12_evidence() {
         PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
     );
 
-    // Exact twelve bindings, valid per-claim digests, matching release links and
-    // recomputed outer framing cannot substitute for any omitted signed evidence.
-    manifest.qualification = Some(unsigned_qualification());
+    // Invalid documentary evidence remains invalid in its own owner, but is not
+    // present in runtime capability data and never decides operation validity.
     assert_eq!(
-        manifest
-            .qualification
-            .as_ref()
-            .expect("unsigned evidence")
-            .release_manifest
-            .validate(),
+        unsigned_qualification().release_manifest.validate(),
         Err(PrivacyExact12ReleaseManifestValidationErrorV1::ExecutableArtifact)
     );
+    manifest.protocols[0].readiness = PrivacyCapabilityReadinessV1::Available;
     manifest.manifest_digest = manifest.computed_manifest_digest().expect("outer digest");
-    let unsigned = norito::encode_canonical(&manifest).expect("unsigned archive");
+    let forged = norito::encode_canonical(&manifest).expect("forged readiness archive");
     assert_eq!(
-        validate(&unsigned),
+        validate(&forged),
         PrivacyCapabilityArchiveValidationStatusV1::InvalidManifest.code()
     );
     assert_ne!(validate(&archive[..archive.len() - 1]), 0);

@@ -233,6 +233,7 @@ async fn anonymous_entrypoint_unavailable_returns_503_before_queue_mutation() {
 /// These controls deliberately use pristine State instead of the ready app policy fixture.
 mod committed_crypto_policy_admission {
     use super::*;
+    use crate::routing::MaybeTelemetry;
     use iroha_core::tx::{DecodedVersionedSignedTransaction, SignatureRejectionCode};
     use iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1;
     use iroha_version::codec::EncodeVersioned as _;

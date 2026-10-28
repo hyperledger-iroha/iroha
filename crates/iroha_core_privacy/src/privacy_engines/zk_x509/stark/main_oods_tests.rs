@@ -310,6 +310,12 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         &layout,
         &statement,
         ZkX509Rfc5280StarkShapeV1::from_statement(&main_log19_statement_fixture_v1()).unwrap(),
+        crate::privacy_engines::zk_x509::verifier_profile::ZkX509CrlPublicInputsV1 {
+            crl_der: [7; 32],
+            issuer_spki: [8; 32],
+            this_update: 1,
+            next_update: 2,
+        },
     )
     .unwrap();
     assert!(key_plan.admissible_v1(point, &shared).unwrap());

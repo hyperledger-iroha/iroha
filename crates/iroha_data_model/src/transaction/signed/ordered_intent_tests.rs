@@ -1182,6 +1182,10 @@ fn privacy_intent_vectors() -> Vec<norito::json::Value> {
     let bundle = crate::privacy::privacy_exact12_fixture_bundle_v1().expect("exact12 fixture");
     let mut rows = Vec::new();
     for (index, row) in bundle.rows.into_iter().enumerate() {
+        if row.protocol_id == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+            rows.extend(x509_privacy_intent_vectors(&row, index));
+            continue;
+        }
         let instruction =
             norito::decode_canonical::<SubmitPrivacyProofV1>(&row.submit_proof_instruction_norito)
                 .expect("typed instruction");
@@ -1283,6 +1287,119 @@ fn privacy_intent_vectors() -> Vec<norito::json::Value> {
                 ),
             ]));
         }
+    }
+    rows
+}
+
+/// The X509 request has no generated fields; only its signed occurrence changes after intent.
+fn x509_privacy_intent_vectors(
+    row: &crate::privacy::PrivacyExact12TypedFixtureRowV1,
+    index: usize,
+) -> Vec<norito::json::Value> {
+    use crate::isi::privacy::SubmitPrivacyZkX509CertificateV1;
+    let request: SubmitPrivacyZkX509CertificateV1 =
+        norito::decode_canonical(&row.submit_proof_instruction_norito)
+            .expect("proof-free X509 request");
+    let projection = norito::encode_canonical(&request).unwrap();
+    let generated_frame = projection.clone();
+    let mut independent = request.clone();
+    independent.statement.context.action_index += 1;
+    let independent_frame = norito::encode_canonical(&independent).unwrap();
+    assert_ne!(independent_frame, projection);
+    let direct = TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
+        .unwrap()
+        .into_payload()
+        .unwrap();
+    let mut changed = direct.clone();
+    changed
+        .attachments
+        .as_mut()
+        .unwrap()
+        .set_occurrence_bytes(0, vec![0x91, 0x92, 0x93])
+        .unwrap();
+    changed.bind_attachment_statements_v1().unwrap();
+    changed.validate_signed_attachments_v1().unwrap();
+    assert_eq!(
+        changed.ordered_intent_projection_bytes_v1().unwrap(),
+        direct.ordered_intent_projection_bytes_v1().unwrap()
+    );
+    assert_ne!(payload_bytes(&changed), payload_bytes(&direct));
+    let mut plan = SignedAttachmentPlanV1::new();
+    plan.push_action(PlannedActionV1 {
+        operation: ActionOperationV1::NativeInstruction(
+            SubmitPrivacyZkX509CertificateV1::WIRE_ID.into(),
+        ),
+        role: ActionRoleV1::ProofEffect,
+        authority: ActionAuthorityBindingV1::TransactionAuthority,
+        invocation: ActionInvocationBindingV1::Direct {
+            instruction_index: 1,
+        },
+        public_inputs_digest: request.public_inputs_digest_v1().unwrap(),
+        attachments: vec![proof_slot(
+            direct
+                .attachments
+                .as_ref()
+                .unwrap()
+                .occurrence(0)
+                .unwrap()
+                .bytes
+                .clone(),
+        )],
+    });
+    let mut batch = direct.clone();
+    batch.instructions = Executable::Batch(
+        vec![
+            ExecutableBatchItem::Instruction(log("before")),
+            ExecutableBatchItem::Instruction(request.into()),
+            ExecutableBatchItem::ContractCall(contract_call()),
+        ]
+        .into(),
+    );
+    batch.attachments = Some(plan.declare());
+    batch.bind_attachment_statements_v1().unwrap();
+    batch.validate_signed_attachments_v1().unwrap();
+    let mut rows = Vec::new();
+    for (kind, payload) in [("direct", direct), ("batch", batch)] {
+        rows.push(json_object(vec![
+            ("name", json_value(&format!("privacy_{index}_{kind}"))),
+            (
+                "generated_fields_changed_frame_hex",
+                json_value(&hex::encode(&generated_frame)),
+            ),
+            (
+                "independent_context_changed_frame_hex",
+                json_value(&hex::encode(&independent_frame)),
+            ),
+            (
+                "instruction_frame_hex",
+                json_value(&hex::encode(&row.submit_proof_instruction_norito)),
+            ),
+            (
+                "instruction_projection_hex",
+                json_value(&hex::encode(&projection)),
+            ),
+            (
+                "payload_hex",
+                json_value(&hex::encode(payload_bytes(&payload))),
+            ),
+            (
+                "ordered_intent_projection_hex",
+                json_value(&hex::encode(
+                    payload
+                        .ordered_intent_projection_bytes_v1()
+                        .expect("projection"),
+                )),
+            ),
+            (
+                "ordered_intent_digest_hex",
+                json_value(&hex::encode(
+                    payload
+                        .ordered_intent_digest_v1()
+                        .expect("digest")
+                        .as_bytes(),
+                )),
+            ),
+        ]));
     }
     rows
 }

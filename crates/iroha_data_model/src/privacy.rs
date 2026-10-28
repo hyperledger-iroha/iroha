@@ -1244,7 +1244,8 @@ define_privacy_digest!(
     "iroha_data_model::privacy::PrivacyStatementDigestV1"
 );
 define_privacy_digest!(
-    /// Digest of the canonical transaction-intent projection bound by a privacy statement.
+    /// Canonical transaction binding: the privacy intent projection for ordinary
+    /// statements, or the original ActionStatementV1 digest for attached X.509.
     PrivacyTransactionIntentDigestV1,
     "iroha_data_model::privacy::PrivacyTransactionIntentDigestV1"
 );

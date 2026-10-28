@@ -8,7 +8,7 @@
 #![allow(clippy::missing_safety_doc)]
 use super::*;
 use iroha_data_model::{
-    isi::privacy::SubmitPrivacyProofV1,
+    isi::privacy::{SubmitPrivacyProofV1, SubmitPrivacyZkX509CertificateV1},
     privacy::{
         PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
         PrivacyExact12CapabilityManifestV1, validate_privacy_capability_archive_v1,
@@ -39,6 +39,7 @@ mod kagemusha_wallet_advance;
 mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;
 mod privacy_intent;
+mod privacy_x509_request;
 mod zk_x509_holder;
 
 include!("platform_jni/part_1.rs");

@@ -33,20 +33,14 @@ pub(super) fn state_fixture_with_repetitions(
     repetitions: u32,
     periodic: bool,
 ) -> (State, TriggerId) {
-    let world = World::default();
-    {
-        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
-            .expect("fund original fixture parameter cell");
-        crate::state::set_parameter_cell_for_testing(
-            &mut parameters,
+    let mut world = World::default();
+    world
+        .set_parameter_for_testing(
             crate::sumeragi::test_chain::crypto_fixture_policy()
                 .into_parameter()
                 .unwrap(),
-            world.sccp_committee_generations.allocation_budget(),
         )
         .unwrap();
-        parameters.commit();
-    }
     let id: TriggerId = "journal_retry".parse().unwrap();
     {
         let mut block = world.triggers.block();

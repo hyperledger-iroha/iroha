@@ -424,6 +424,7 @@ object ContractManifestJsonParser {
         "NftView",
         "QueryPage",
         "AssetUidHoldingQuote",
+        "PendingAction",
         "AxtDescriptor",
         "AxtAnchoredSpendV1",
         "ProofBlob",

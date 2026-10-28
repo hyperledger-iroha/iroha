@@ -29,7 +29,7 @@ from .crypto import (
     Instruction,
     NetworkId,
     PrivacyExact12CapabilityManifestV1,
-    PrivacyNativeActionBuildResultV1,
+    PrivacyX509PreparedTransactionV1,
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
@@ -1491,54 +1491,26 @@ class TransactionDraft:
     def prepare_privacy_zk_x509_identity_presentation_action_v1(
         self,
         *,
-        canonical_statement_archive: bytes,
-    ) -> bytes:
-        """Freeze a draft X509 statement and return its transaction intent.
+        canonical_request_archive: bytes,
+    ) -> PrivacyX509PreparedTransactionV1:
+        """Freeze one proof-free request and return its native immutable owner.
 
-        The draft's typed ``NetworkId`` selects the exact transaction network.
-        ``canonical_statement_archive`` must contain the native typed X509
-        statement with a zero transaction-intent field. The returned digest is
-        the exact intent that an isolated credential prover must bind into the
-        finalized statement and ``X5S1`` proof container.
+        Give ``materialized_statement_norito`` to the holder prover, then call
+        the returned owner's ``sign(private_key, credential_proof)``. Network,
+        authority, creation time, nonce, fee intent, metadata and occurrence
+        remain the original captured values even if this draft later changes.
+        Preparation and signing both require the authenticated selected native
+        capability; an incomplete joint security construction remains unavailable.
         """
-
+        if type(canonical_request_archive) is not bytes:
+            raise TypeError("canonical_request_archive must be exact immutable bytes")
         if self._explicit_batch or self._entries or self._lane_privacy_attachments:
             raise ValueError(
                 "native ZK-X509 presentation action requires an otherwise "
                 "empty transaction draft"
             )
-        return bytes(
-            self.to_builder().prepare_privacy_zk_x509_identity_presentation_action_v1(
-                canonical_statement_archive,
-            )
-        )
-
-    def sign_privacy_zk_x509_identity_presentation_action_v1(
-        self,
-        private_key: bytes,
-        *,
-        canonical_statement_archive: bytes,
-        credential_proof: bytes,
-    ) -> PrivacyNativeActionBuildResultV1:
-        """Validate and sign one worker-produced ZK-X509 presentation action.
-
-        The native signer accepts only a canonical, intent-bound typed
-        statement and an exact ``X5S1`` credential proof whose public header is
-        bound to the draft's exact ``NetworkId``. Certificate, CRL, and witness
-        material stays in the isolated prover and never enters this draft.
-        Signing fails closed until the production compiled profile has passed
-        its release-readiness gates; unsigned candidate material is not enough.
-        """
-
-        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
-            raise ValueError(
-                "native ZK-X509 presentation action requires an otherwise "
-                "empty transaction draft"
-            )
-        return self.to_builder().sign_privacy_zk_x509_identity_presentation_action_v1(
-            private_key,
-            canonical_statement_archive,
-            credential_proof,
+        return self.to_builder().prepare_privacy_zk_x509_identity_presentation_action_v1(
+            canonical_request_archive,
         )
 
     def sign_with_keypair(

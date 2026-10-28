@@ -112,7 +112,7 @@ fn maximum_sha_fixed_sets_preserve_every_coefficient_and_registration() {
             let actual = main_log19_fixed_polynomial_set_v1(&prover, registration).unwrap();
             assert_eq!(actual.registration, registration);
             assert_eq!(actual.columns.len(), registration.segment.fixed_width);
-            assert_eq!(actual.columns.len(), 118);
+            assert_eq!(actual.columns.len(), 137);
             for (column, coefficients) in actual.columns.iter().enumerate() {
                 // Exact previous production path; retain every native coefficient.
                 let mut expected = source.native_fixed_column_v1(registration, column).unwrap();

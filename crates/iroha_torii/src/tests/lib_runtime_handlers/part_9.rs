@@ -1488,6 +1488,7 @@ impl RuntimeApiRouterFixture {
             tokio::sync::broadcast::channel(1).0,
         ));
         let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
         let torii = Torii::new_with_handle(
             ChainId::from(chain_id),
             *state.network_id_ref(),
@@ -1501,7 +1502,10 @@ impl RuntimeApiRouterFixture {
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
             None,
-            runtime_deps,
+            crate::test_utils::with_private_settlement_test_signers(
+                runtime_deps,
+                &private_settlement_node_key,
+            ),
         )
         .expect("valid Torii runtime API fixture");
         Self {

@@ -38,356 +38,126 @@ class PrivacyCapabilityModelInvariantV1Test {
     }
 
     @Test
-    fun consensusPolicyRejectsMalformedSchedulesIncreasesAndNoOps() {
+    fun consensusPolicyAllowsBoundedUpdatesAndRejectsMalformedSchedulesAndNoOps() {
         val current = consensusLimits()
         val next = consensusLimits(retainedRootCount = 1024)
         validPolicySchedules().forEach { (scheduled, effective) ->
-            val pending = PrivacyConsensusPolicyTighteningV1(scheduled, effective, next)
-            assertEquals(pending, PrivacyConsensusPolicyV1(current, pending).pendingTightening)
+            val pending = PrivacyConsensusPolicyUpdateV1(scheduled, effective, next)
+            val policy = PrivacyConsensusPolicyV1(current, pending)
+            assertEquals(pending, policy.pendingUpdate)
+            assertEquals(policy, PrivacyConsensusPolicyV1(current, pending))
+            assertEquals(policy.hashCode(), PrivacyConsensusPolicyV1(current, pending).hashCode())
+            assertEquals(current, PrivacyConsensusPolicyV1(next,
+                PrivacyConsensusPolicyUpdateV1(scheduled, effective, current)).pendingUpdate!!.nextLimits)
         }
-
-        invalidPolicySchedules().forEachIndexed { index, (scheduled, effective) ->
-            assertFailsWith<IllegalArgumentException>("hostile consensus schedule $index") {
-                PrivacyConsensusPolicyTighteningV1(scheduled, effective, next)
-            }
-        }
-
-        val noOp = PrivacyConsensusPolicyTighteningV1(height(10), height(11), current)
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyConsensusPolicyV1(current, noOp)
-        }
-        val lowerCurrent = consensusLimits(retainedRootCount = 1024)
-        val increase = PrivacyConsensusPolicyTighteningV1(height(10), height(11), current)
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyConsensusPolicyV1(lowerCurrent, increase)
-        }
-    }
-
-    @Test
-    fun lifecycleRejectsWrongVariantShapeAndHostileHeightOrdering() {
-        assertEquals(height(2), activeLifecycle().stateSinceHeight)
-        assertEquals(
-            PrivacyProtocolLifecycleStateV1.RETIRED,
-            retiredLifecycle(activatedAtHeight = null, stateSinceHeight = height(2)).state,
-        )
-
-        val hostile = listOf<() -> Unit>(
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.PROPOSED,
-                    stateSinceHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.PROPOSED,
-                    activatedAtHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.ACTIVE,
-                    proposedAtHeight = height(3),
-                    activatedAtHeight = height(2),
-                    stateSinceHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.RETIRED,
-                    activatedAtHeight = null,
-                    stateSinceHeight = height(1),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.ACTIVE,
-                    activatedAtHeight = null,
-                    stateSinceHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.ACTIVE,
-                    activatedAtHeight = height(2),
-                    stateSinceHeight = null,
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.SUSPENDED,
-                    activatedAtHeight = height(2),
-                    stateSinceHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.RETIRED,
-                    activatedAtHeight = null,
-                    stateSinceHeight = null,
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.RETIRED,
-                    activatedAtHeight = height(2),
-                    stateSinceHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.ACTIVE,
-                    proposedAtHeight = BigInteger.ZERO,
-                    activatedAtHeight = height(2),
-                    stateSinceHeight = height(2),
-                )
-            },
-            {
-                lifecycle(
-                    PrivacyProtocolLifecycleStateV1.ACTIVE,
-                    proposedAtHeight = U64_MAX_TEST.add(BigInteger.ONE),
-                    activatedAtHeight = height(2),
-                    stateSinceHeight = height(2),
-                )
-            },
-        )
-        hostile.forEachIndexed { index, construct ->
-            assertFailsWith<IllegalArgumentException>("hostile lifecycle $index") {
-                construct()
-            }
-        }
-    }
-
-    @Test
-    fun explicitActivationAllowsSameProposalHeightAndKeepsLaterHistoryStrict() {
-        val proposed = lifecycle(PrivacyProtocolLifecycleStateV1.PROPOSED)
-        assertEquals(PrivacyProtocolLifecycleStateV1.PROPOSED, proposed.state)
-        assertEquals(proposed, lifecycle(PrivacyProtocolLifecycleStateV1.PROPOSED))
-        assertEquals(
-            proposed.hashCode(),
-            lifecycle(PrivacyProtocolLifecycleStateV1.PROPOSED).hashCode(),
-        )
-        val active = lifecycle(
-            PrivacyProtocolLifecycleStateV1.ACTIVE,
-            activatedAtHeight = height(1),
-            stateSinceHeight = height(1),
-        )
-        assertEquals(height(1), active.activatedAtHeight)
-        for (state in listOf(
-            PrivacyProtocolLifecycleStateV1.SUSPENDED,
-            PrivacyProtocolLifecycleStateV1.RETIRED,
-        )) {
-            assertEquals(
-                height(1),
-                lifecycle(state, activatedAtHeight = height(1), stateSinceHeight = height(2))
-                    .activatedAtHeight,
-            )
+        invalidPolicySchedules().forEach { (scheduled, effective) ->
             assertFailsWith<IllegalArgumentException> {
-                lifecycle(state, activatedAtHeight = height(1), stateSinceHeight = height(1))
+                PrivacyConsensusPolicyUpdateV1(scheduled, effective, next)
             }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConsensusPolicyV1(current, PrivacyConsensusPolicyUpdateV1(height(10), height(11), current))
         }
     }
 
     @Test
-    fun activationRejectsMalformedOrNonMonotonicProtocolTightening() {
-        val currentLimits = pgcLimits(64, 8)
-        val currentProfile = profile(
-            PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1,
-            currentLimits,
-        )
+    fun protocolPolicyAllowsBoundedUpdatesAndRejectsMalformedSchedulesAndNoOps() {
+        val current = pgcLimits(64, 8)
+        val next = pgcLimits(32, 4)
         validPolicySchedules().forEach { (scheduled, effective) ->
-            val pending = PrivacyProtocolLimitsTighteningV1(scheduled, effective, pgcLimits(32, 4))
-            assertEquals(pending, activation(currentProfile, pending = pending).pendingProtocolLimitsTightening)
+            val update = PrivacyProtocolLimitsUpdateV1(scheduled, effective, next)
+            val policy = PrivacyProtocolPolicyV1(current.protocolId, current, update)
+            assertEquals(update, policy.pendingUpdate)
+            assertEquals(policy, PrivacyProtocolPolicyV1(current.protocolId, current, update))
+            assertEquals(policy.hashCode(), PrivacyProtocolPolicyV1(current.protocolId, current, update).hashCode())
+            assertEquals(current, PrivacyProtocolPolicyV1(current.protocolId, next,
+                PrivacyProtocolLimitsUpdateV1(scheduled, effective, current)).pendingUpdate!!.nextLimits)
         }
-
-        invalidPolicySchedules().forEachIndexed { index, (scheduled, effective) ->
-            assertFailsWith<IllegalArgumentException>("hostile protocol schedule $index") {
-                PrivacyProtocolLimitsTighteningV1(scheduled, effective, pgcLimits(32, 4))
-            }
+        invalidPolicySchedules().forEach { (scheduled, effective) ->
+            assertFailsWith<IllegalArgumentException> { PrivacyProtocolLimitsUpdateV1(scheduled, effective, next) }
         }
+        assertFailsWith<IllegalArgumentException> { pgcLimits(48, 4) }
+        assertFailsWith<IllegalArgumentException> { pgcLimits(64, 9) }
         assertFailsWith<IllegalArgumentException> {
-            pgcLimits(48, 4)
+            PrivacyProtocolPolicyV1(current.protocolId, current,
+                PrivacyProtocolLimitsUpdateV1(height(10), height(11), current))
         }
-
-        val noOp = PrivacyProtocolLimitsTighteningV1(height(10), height(11), currentLimits)
+        val other = PrivacyProtocolLimitsV1(PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
+            mapOf("max_aggregation_count" to 4))
+        assertFailsWith<IllegalArgumentException> { PrivacyProtocolPolicyV1(other.protocolId, current, null) }
         assertFailsWith<IllegalArgumentException> {
-            activation(currentProfile, pending = noOp)
-        }
-
-        val restrictedProfile = profile(
-            PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1,
-            pgcLimits(32, 4),
-        )
-        val increase = PrivacyProtocolLimitsTighteningV1(
-            height(10),
-            height(11),
-            pgcLimits(64, 4),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            activation(restrictedProfile, pending = increase)
-        }
-
-        val otherProtocol = PrivacyProtocolLimitsTighteningV1(
-            height(10),
-            height(11),
-            PrivacyProtocolLimitsV1(
-                PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
-                mapOf("max_aggregation_count" to 4),
-            ),
-        )
-        assertFailsWith<IllegalArgumentException> {
-            activation(currentProfile, pending = otherProtocol)
+            PrivacyProtocolPolicyV1(current.protocolId, current,
+                PrivacyProtocolLimitsUpdateV1(height(10), height(11), other))
         }
     }
 
     @Test
-    fun exactCapabilityRowRejectsUnavailableCrossProtocolAndSubstitutedBindings() {
+    fun optionalPolicyUsesCanonicalLimitsWithoutGrantingUnavailableImplementation() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
-        val compiled = profile(protocol, pgcLimits(64, 8))
-        val governed = profile(protocol, pgcLimits(32, 4))
-        val valid = exactRow(
-            protocol,
-            PrivacyCompiledProfileResultV1.Available(compiled),
-            activation(governed),
-            unavailableReadiness(
-                PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-            ),
-        )
-        assertEquals(protocol, valid.protocolId)
-        assertTrue(!valid.isNetworkAvailable())
-
-        assertFailsWith<IllegalArgumentException> {
-            exactRow(
-                PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
-                PrivacyCompiledProfileResultV1.Available(compiled),
-                null,
-                unavailableReadiness(PrivacyCapabilityUnavailableReasonV1.NotRegistered),
-            )
-        }
-
+        val canonical = pgcLimits(64, 8)
+        val compiled = PrivacyCompiledProfileResultV1.Available(profile(protocol, canonical))
+        val absent = exactRow(protocol, compiled, null, PrivacyCapabilityReadinessV1.Available)
+        assertTrue(absent.isNetworkAvailable())
+        assertEquals(canonical, absent.effectiveProtocolLimits())
+        val policy = PrivacyProtocolPolicyV1(protocol, pgcLimits(32, 4), null)
+        val governed = exactRow(protocol, compiled, policy, PrivacyCapabilityReadinessV1.Available)
+        assertEquals(policy.currentLimits, governed.effectiveProtocolLimits())
+        assertTrue(governed.isNetworkAvailable())
         val unavailable = unavailable()
+        val closed = exactRow(protocol, unavailable, policy, PrivacyCapabilityReadinessV1.Unavailable(
+            PrivacyCapabilityUnavailableReasonV1.CompiledProfile(unavailable)))
+        assertEquals(null, closed.effectiveProtocolLimits())
+        assertEquals(false, closed.isNetworkAvailable())
         assertFailsWith<IllegalArgumentException> {
-            exactRow(
-                protocol,
-                unavailable,
-                activation(governed),
-                unavailableReadiness(
-                    PrivacyCapabilityUnavailableReasonV1.CompiledProfile(unavailable),
-                ),
-            )
+            exactRow(protocol, unavailable, policy, PrivacyCapabilityReadinessV1.Available)
         }
+    }
 
-        val otherProfile = profile(
-            PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
-            PrivacyProtocolLimitsV1(
-                PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
-                mapOf("max_aggregation_count" to 8),
-            ),
-        )
+    @Test
+    fun exactCapabilityRowsRejectCrossProtocolAndForgedAvailability() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        val compiled = PrivacyCompiledProfileResultV1.Available(profile(protocol, pgcLimits(64, 8)))
+        val other = PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1
         assertFailsWith<IllegalArgumentException> {
-            exactRow(
-                protocol,
-                PrivacyCompiledProfileResultV1.Available(compiled),
-                activation(otherProfile),
-                unavailableReadiness(
-                    PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-                ),
-            )
+            exactRow(other, compiled, null, PrivacyCapabilityReadinessV1.Available)
         }
-
-        val substitutedDigest = profile(
-            protocol,
-            pgcLimits(32, 4),
-            parameterDigestByte = 99,
-        )
+        val otherPolicy = PrivacyProtocolPolicyV1(other,
+            PrivacyProtocolLimitsV1(other, mapOf("max_aggregation_count" to 4)), null)
         assertFailsWith<IllegalArgumentException> {
-            exactRow(
-                protocol,
-                PrivacyCompiledProfileResultV1.Available(compiled),
-                activation(substitutedDigest),
-                unavailableReadiness(
-                    PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-                ),
-            )
+            exactRow(protocol, compiled, otherPolicy, PrivacyCapabilityReadinessV1.Available)
         }
-
-        val lowCompiledCeiling = profile(protocol, pgcLimits(32, 4))
-        val excessiveActivation = profile(protocol, pgcLimits(64, 8))
         assertFailsWith<IllegalArgumentException> {
-            exactRow(
-                protocol,
-                PrivacyCompiledProfileResultV1.Available(lowCompiledCeiling),
-                activation(excessiveActivation),
-                unavailableReadiness(
-                    PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-                ),
-            )
+            exactRow(protocol, compiled, null, PrivacyCapabilityReadinessV1.Unavailable(
+                PrivacyCapabilityUnavailableReasonV1.CompiledProfile(unavailable())))
+        }
+    }
+
+    @Test
+    fun canonicalProfileBindingCheckStillRejectsSubstitutedDigestsAndProtocols() {
+        val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
+        val expected = profile(protocol, pgcLimits(64, 8))
+        requirePrivacyProfileBindingsEqualV1(expected, expected, "canonical profile")
+        assertFailsWith<IllegalArgumentException> {
+            requirePrivacyProfileBindingsEqualV1(profile(protocol, pgcLimits(64, 8), 99), expected, "canonical profile")
+        }
+        val other = PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1
+        assertFailsWith<IllegalArgumentException> {
+            requirePrivacyProfileBindingsEqualV1(profile(other,
+                PrivacyProtocolLimitsV1(other, mapOf("max_aggregation_count" to 4))), expected, "canonical profile")
         }
     }
 
     private fun unavailable(): PrivacyCompiledProfileResultV1.Unavailable =
-        PrivacyCompiledProfileResultV1.Unavailable(
-            PrivacyCompiledProfileUnavailableReasonV1.ENGINE_UNAVAILABLE,
-            null,
-        )
+        PrivacyCompiledProfileResultV1.Unavailable(PrivacyCompiledProfileUnavailableReasonV1.ENGINE_UNAVAILABLE, null)
 
     private fun exactRow(
         protocol: PrivacyProtocolIdV1,
         compiled: PrivacyCompiledProfileResultV1,
-        activation: PrivacyProtocolActivationRecordV1?,
+        policy: PrivacyProtocolPolicyV1?,
         readiness: PrivacyCapabilityReadinessV1,
     ): PrivacyExact12CapabilityRowV1 = PrivacyExact12CapabilityRowV1(
-        protocol,
-        expectedOperationSchema(protocol),
-        expectedExecutionMode(protocol),
-        expectedFeatureMask(protocol),
-        compiled,
-        readiness,
-        activation,
-        false,
-        null,
-        height(42),
-    )
-
-    private fun unavailableReadiness(
-        reason: PrivacyCapabilityUnavailableReasonV1,
-    ): PrivacyCapabilityReadinessV1 = PrivacyCapabilityReadinessV1.Unavailable(reason)
-
-    private fun activation(
-        profile: PrivacyCompiledProfileV1,
-        lifecycle: PrivacyProtocolLifecycleV1 = activeLifecycle(),
-        pending: PrivacyProtocolLimitsTighteningV1? = null,
-    ): PrivacyProtocolActivationRecordV1 = PrivacyProtocolActivationRecordV1(
-        profile,
-        lifecycle,
-        pending,
-    )
-
-    private fun activeLifecycle(): PrivacyProtocolLifecycleV1 = lifecycle(
-        PrivacyProtocolLifecycleStateV1.ACTIVE,
-        activatedAtHeight = height(2),
-        stateSinceHeight = height(2),
-    )
-
-    private fun retiredLifecycle(
-        activatedAtHeight: BigInteger?,
-        stateSinceHeight: BigInteger,
-    ): PrivacyProtocolLifecycleV1 = lifecycle(
-        PrivacyProtocolLifecycleStateV1.RETIRED,
-        activatedAtHeight = activatedAtHeight,
-        stateSinceHeight = stateSinceHeight,
-    )
-
-    private fun lifecycle(
-        state: PrivacyProtocolLifecycleStateV1,
-        proposedAtHeight: BigInteger = BigInteger.ONE,
-        activatedAtHeight: BigInteger? = null,
-        stateSinceHeight: BigInteger? = null,
-    ): PrivacyProtocolLifecycleV1 = PrivacyProtocolLifecycleV1(
-        state,
-        proposedAtHeight,
-        activatedAtHeight,
-        stateSinceHeight,
+        protocol, expectedOperationSchema(protocol), expectedExecutionMode(protocol), expectedFeatureMask(protocol),
+        compiled, readiness, policy, false,
     )
 
     private fun profile(

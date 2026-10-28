@@ -2538,7 +2538,10 @@ where
             .execution_depth(),
     );
     let mut visited_triggers = BTreeSet::new();
-    for isi in host.drain_instructions() {
+    for isi in host
+        .drain_instructions()
+        .map_err(|error| dynamic_execution::vm_error("host.drain_instructions", error))?
+    {
         set.union_with(derive_from_instruction(
             &isi,
             Some(state_ro),

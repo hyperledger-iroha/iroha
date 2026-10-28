@@ -59,7 +59,7 @@ fn interrupted_atomic_staging_cleanup_preserves_original_state_and_lock() {
     drop(partial);
     assert_eq!(
         store
-            .reconcile_atomic_staging(&["lock", "state"], 2, 7)
+            .reconcile_atomic_staging(&["lock", "state"], 16, 2, 7)
             .unwrap(),
         2
     );
@@ -77,7 +77,7 @@ fn interrupted_atomic_staging_cleanup_preserves_original_state_and_lock() {
     );
     assert_eq!(
         store
-            .reconcile_atomic_staging(&["lock", "state"], 0, 0)
+            .reconcile_atomic_staging(&["lock", "state"], 16, 0, 0)
             .unwrap(),
         0
     );
@@ -94,7 +94,7 @@ fn atomic_staging_cleanup_never_recovers_a_missing_committed_file() {
     let before = store.entries(2).unwrap();
     assert_eq!(
         store
-            .reconcile_atomic_staging(&["lock", "state"], 1, 32)
+            .reconcile_atomic_staging(&["lock", "state"], 16, 1, 32)
             .unwrap_err()
             .kind(),
         io::ErrorKind::NotFound
@@ -124,7 +124,7 @@ fn atomic_staging_cleanup_validates_every_name_and_extent_before_mutation() {
     for (count, bytes) in [(1, 6), (2, 5), (17, 6)] {
         assert!(
             store
-                .reconcile_atomic_staging(&["lock", "state"], count, bytes)
+                .reconcile_atomic_staging(&["lock", "state"], 16, count, bytes)
                 .is_err()
         );
         assert_eq!(store.entries(4).unwrap(), before);
@@ -135,7 +135,7 @@ fn atomic_staging_cleanup_validates_every_name_and_extent_before_mutation() {
         vec!["../escape"],
         vec![".iroha-fs-1-0.tmp"],
     ] {
-        assert!(store.reconcile_atomic_staging(&required, 2, 6).is_err());
+        assert!(store.reconcile_atomic_staging(&required, 16, 2, 6).is_err());
         assert_eq!(store.entries(4).unwrap(), before);
     }
     store
@@ -144,7 +144,7 @@ fn atomic_staging_cleanup_validates_every_name_and_extent_before_mutation() {
     let before = store.entries(5).unwrap();
     assert!(
         store
-            .reconcile_atomic_staging(&["lock", "state"], 3, 6)
+            .reconcile_atomic_staging(&["lock", "state"], 16, 3, 6)
             .is_err()
     );
     assert_eq!(store.entries(5).unwrap(), before);
@@ -164,7 +164,7 @@ fn atomic_staging_cleanup_refuses_a_directory_before_removing_any_file() {
         .write_atomic(".iroha-fs-1-0.tmp", b"retained", PublishMode::CreateNew)
         .unwrap();
     let child = store.create_child(".iroha-fs-1-1.tmp").unwrap();
-    assert!(store.reconcile_atomic_staging(&["lock"], 2, 8).is_err());
+    assert!(store.reconcile_atomic_staging(&["lock"], 16, 2, 8).is_err());
     assert_eq!(store.entries(3).unwrap().len(), 3);
     assert_eq!(
         store.read(".iroha-fs-1-0.tmp", 8).unwrap().as_slice(),
@@ -208,7 +208,7 @@ fn atomic_staging_cleanup_refuses_links_modes_and_replaced_ancestors() {
         }
         assert!(
             store
-                .reconcile_atomic_staging(&["lock", "state"], 2, 16)
+                .reconcile_atomic_staging(&["lock", "state"], 16, 2, 16)
                 .is_err(),
             "{attack}"
         );
@@ -1611,4 +1611,398 @@ fn local_identity_projection_preserves_original_file_and_directory_through_publi
         reopened.identity().unwrap().local_parts(),
         directory_identity
     );
+}
+
+#[test]
+fn atomic_staging_recovery_obeys_the_callers_exact_required_inventory_bound() {
+    let (_temporary, store) = store();
+    let lock = store.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    let mut required = vec![String::from("lock")];
+    for index in 0..17 {
+        let name = format!("record-{index}");
+        store
+            .write_atomic(&name, &[index], PublishMode::CreateNew)
+            .unwrap();
+        required.push(name);
+    }
+    store
+        .write_atomic(".iroha-fs-1-0.tmp", b"partial", PublishMode::CreateNew)
+        .unwrap();
+    let names = required.iter().map(String::as_str).collect::<Vec<_>>();
+    let before = store.entries(19).unwrap();
+    for bound in [0, 16, 17, 100_001] {
+        assert!(store.reconcile_atomic_staging(&names, bound, 1, 7).is_err());
+        assert_eq!(store.entries(19).unwrap(), before);
+    }
+    assert_eq!(store.reconcile_atomic_staging(&names, 18, 1, 7).unwrap(), 1);
+    assert_eq!(store.entries(18).unwrap().len(), 18);
+    for index in 0..17 {
+        assert_eq!(
+            store.read(format!("record-{index}"), 1).unwrap().as_slice(),
+            &[index]
+        );
+    }
+    assert!(
+        store
+            .open_existing_lock("lock")
+            .unwrap()
+            .try_lock()
+            .is_err()
+    );
+}
+
+#[test]
+fn separate_staging_publication_preserves_original_bytes_and_syncs_both_namespaces() {
+    let (_temporary, parent) = store();
+    let destination = parent.create_child("destination").unwrap();
+    let staging = parent.create_child("staging").unwrap();
+    let lock = staging.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    let mut synced = Vec::new();
+    destination
+        .inner
+        .write_atomic_from_staging_observed(
+            &staging.inner,
+            OsStr::new("record"),
+            b"original",
+            PublishMode::CreateNew,
+            AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 1,
+            },
+            &mut |step, path| {
+                if step == AtomicWriteStep::SyncDirectory {
+                    synced.push(path.to_path_buf());
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(synced, [destination.path(), staging.path()]);
+    assert_eq!(
+        destination.read("record", 8).unwrap().as_slice(),
+        b"original"
+    );
+    assert_eq!(staging.entries(1).unwrap(), ["lock"]);
+    let original = destination.open_retained_private("record").unwrap();
+    assert!(
+        destination
+            .write_atomic_from_staging(&staging, "record", b"collision", PublishMode::CreateNew)
+            .is_err()
+    );
+    original.revalidate().unwrap();
+    assert_eq!(
+        destination.read("record", 8).unwrap().as_slice(),
+        b"original"
+    );
+    drop(original);
+    destination
+        .write_atomic_from_staging(&staging, "record", b"replacement", PublishMode::Replace)
+        .unwrap();
+    assert_eq!(
+        destination.read("record", 11).unwrap().as_slice(),
+        b"replacement"
+    );
+    assert_eq!(staging.entries(1).unwrap(), ["lock"]);
+    assert!(
+        staging
+            .open_existing_lock("lock")
+            .unwrap()
+            .try_lock()
+            .is_err()
+    );
+}
+
+#[test]
+fn separate_staging_native_failures_preserve_exact_publication_and_cleanup_boundaries() {
+    for failure in [0, 1, 2, 3, 4, 5, 6] {
+        let (_temporary, parent) = store();
+        let destination = parent.create_child("destination").unwrap();
+        let staging = parent.create_child("staging").unwrap();
+        destination
+            .write_atomic("record", b"before", PublishMode::CreateNew)
+            .unwrap();
+        let mut observed = 0;
+        let result = destination.inner.write_atomic_from_staging_observed(
+            &staging.inner,
+            OsStr::new("record"),
+            b"after",
+            PublishMode::Replace,
+            AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 1,
+            },
+            &mut |_, _| {
+                let current = observed;
+                observed += 1;
+                if current == failure {
+                    return Err(io::Error::other("injected native boundary refusal"));
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err(), "failure boundary {failure}");
+        assert_eq!(observed, failure + 1);
+        let expected: &[u8] = if failure < 5 { b"before" } else { b"after" };
+        assert_eq!(destination.read("record", 6).unwrap().as_slice(), expected);
+        // Both sync refusals occur after the one original temp has become the destination.
+        assert!(staging.entries(0).unwrap().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn separate_staging_refuses_either_original_directory_substitution_before_publication() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for replace_staging in [false, true] {
+        let (temporary, parent) = store();
+        let destination = parent.create_child("destination").unwrap();
+        let staging = parent.create_child("staging").unwrap();
+        destination
+            .write_atomic("record", b"before", PublishMode::CreateNew)
+            .unwrap();
+        let selected = if replace_staging {
+            &staging
+        } else {
+            &destination
+        };
+        let displaced = temporary.path().join("displaced");
+        let result = destination.inner.write_atomic_from_staging_observed(
+            &staging.inner,
+            OsStr::new("record"),
+            b"after",
+            PublishMode::Replace,
+            AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 1,
+            },
+            &mut |step, _| {
+                if step == AtomicWriteStep::Publish {
+                    fs::rename(selected.path(), &displaced)?;
+                    fs::create_dir(selected.path())?;
+                    fs::set_permissions(selected.path(), fs::Permissions::from_mode(0o700))?;
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read_dir(selected.path()).unwrap().count(), 0);
+        let original_record = if replace_staging {
+            destination.path().join("record")
+        } else {
+            displaced.join("record")
+        };
+        assert_eq!(fs::read(original_record).unwrap(), b"before");
+        // Rollback used only the original staging descriptor, so the replacement
+        // namespace stays untouched and the original temporary is already gone.
+        // Restoring the original directories needs no unpublished-file recovery.
+        fs::remove_dir(selected.path()).unwrap();
+        fs::rename(&displaced, selected.path()).unwrap();
+        destination.revalidate().unwrap();
+        staging.revalidate().unwrap();
+        assert!(staging.entries(0).unwrap().is_empty());
+        let lock = staging.create_lock("lock").unwrap();
+        lock.try_lock().unwrap();
+        assert_eq!(
+            staging
+                .reconcile_atomic_staging(&["lock"], 1, 1, 5)
+                .unwrap(),
+            0
+        );
+        assert_eq!(destination.read("record", 6).unwrap().as_slice(), b"before");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn separate_staging_recovery_fits_256_descriptors_with_4096_committed_files() {
+    const CHILD_MARKER: &str = "IROHA_FS_SEPARATE_STAGING_LIMIT_TEST";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let result = std::process::Command::new("/bin/sh")
+            .args(["-c", "limit=$(ulimit -n); if [ \"$limit\" = unlimited ] || [ \"$limit\" -gt 256 ]; then ulimit -n 256 || exit; fi; exec \"$1\" --exact tests::separate_staging_recovery_fits_256_descriptors_with_4096_committed_files --nocapture", "iroha-fs-separate-staging-test"])
+            .arg(std::env::current_exe().unwrap()).env(CHILD_MARKER, "1").output().unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            result.status.success()
+                && stdout.contains("running 1 test")
+                && stdout.contains("test result: ok. 1 passed; 0 failed"),
+            "{}{}",
+            stdout,
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let (_temporary, parent) = store();
+    let destination = parent.create_child("destination").unwrap();
+    let staging = parent.create_child("staging").unwrap();
+    let lock = staging.create_lock("lock").unwrap();
+    lock.try_lock().unwrap();
+    for index in 0u32..4096 {
+        destination
+            .write_atomic_from_staging(
+                &staging,
+                format!("record-{index}"),
+                &index.to_le_bytes(),
+                PublishMode::CreateNew,
+            )
+            .unwrap();
+    }
+    staging
+        .write_atomic(".iroha-fs-1-0.tmp", b"interrupted", PublishMode::CreateNew)
+        .unwrap();
+    assert_eq!(
+        staging
+            .reconcile_atomic_staging(&["lock"], 1, 1, 11)
+            .unwrap(),
+        1
+    );
+    assert_eq!(destination.entries(4096).unwrap().len(), 4096);
+    assert_eq!(staging.entries(1).unwrap(), ["lock"]);
+    for index in 0u32..4096 {
+        assert_eq!(
+            destination
+                .read(format!("record-{index}"), 4)
+                .unwrap()
+                .as_slice(),
+            &index.to_le_bytes()
+        );
+    }
+    // The original flat recovery contract still refuses at this genuine native resource
+    // limit before deleting anything. Do not weaken its all-originals retention guarantee.
+    let committed_lock = destination.create_lock("lock").unwrap();
+    committed_lock.try_lock().unwrap();
+    destination
+        .write_atomic(".iroha-fs-1-0.tmp", b"interrupted", PublishMode::CreateNew)
+        .unwrap();
+    let mut required = (0..4096)
+        .map(|index| format!("record-{index}"))
+        .collect::<Vec<_>>();
+    required.push(String::from("lock"));
+    let required = required.iter().map(String::as_str).collect::<Vec<_>>();
+    let inventory = destination.entries(4098).unwrap();
+    let failure = destination
+        .reconcile_atomic_staging(&required, 4097, 1, 11)
+        .unwrap_err();
+    assert_eq!(failure.raw_os_error(), Some(24));
+    assert_eq!(destination.entries(4098).unwrap(), inventory);
+    assert_eq!(
+        destination
+            .read(".iroha-fs-1-0.tmp", 11)
+            .unwrap()
+            .as_slice(),
+        b"interrupted"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn separate_staging_windows_retains_both_original_directory_owners_through_publication() {
+    let (temporary, parent) = store();
+    let destination = parent.create_child("destination").unwrap();
+    let staging = parent.create_child("staging").unwrap();
+    destination
+        .inner
+        .write_atomic_from_staging_observed(
+            &staging.inner,
+            OsStr::new("record"),
+            b"original",
+            PublishMode::CreateNew,
+            AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 1,
+            },
+            &mut |step, _| {
+                if step == AtomicWriteStep::Publish {
+                    assert!(
+                        fs::rename(
+                            destination.path(),
+                            temporary.path().join("moved-destination")
+                        )
+                        .is_err()
+                    );
+                    assert!(
+                        fs::rename(staging.path(), temporary.path().join("moved-staging")).is_err()
+                    );
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        destination.read("record", 8).unwrap().as_slice(),
+        b"original"
+    );
+    assert!(staging.entries(0).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_rollback_refuses_a_substituted_temp_in_either_retained_staging_owner() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for separate_staging in [false, true] {
+        let (temporary, parent) = store();
+        let destination = parent.create_child("destination").unwrap();
+        let separate = parent.create_child("staging").unwrap();
+        let staging = if separate_staging {
+            &separate
+        } else {
+            &destination
+        };
+        destination
+            .write_atomic("record", b"before", PublishMode::CreateNew)
+            .unwrap();
+        let displaced = temporary.path().join("displaced-directory");
+        let original_file = temporary.path().join("displaced-original-file");
+        let mut temporary_name = None;
+        let mut original_identity = None;
+        let result = destination.inner.write_atomic_from_staging_observed(
+            &staging.inner,
+            OsStr::new("record"),
+            b"original",
+            PublishMode::Replace,
+            AtomicWriteOptions {
+                private_destination: true,
+                temporary_attempts: 1,
+            },
+            &mut |step, path| {
+                if step == AtomicWriteStep::WriteHead {
+                    temporary_name = Some(path.file_name().unwrap().to_owned());
+                    original_identity = Some(FileIdentity::of(&File::open(path)?)?);
+                }
+                if step == AtomicWriteStep::Publish {
+                    fs::rename(staging.path(), &displaced)?;
+                    fs::create_dir(staging.path())?;
+                    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))?;
+                    fs::write(staging.path().join("untouched"), b"replacement namespace")?;
+                    let original_name = displaced.join(temporary_name.as_ref().unwrap());
+                    fs::rename(&original_name, &original_file)?;
+                    fs::write(original_name, b"substituted temporary")?;
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&original_file).unwrap(), b"original");
+        assert_eq!(
+            FileIdentity::of(&File::open(&original_file).unwrap()).unwrap(),
+            original_identity.unwrap()
+        );
+        assert_eq!(
+            fs::read(displaced.join(temporary_name.unwrap())).unwrap(),
+            b"substituted temporary"
+        );
+        assert_eq!(
+            fs::read(staging.path().join("untouched")).unwrap(),
+            b"replacement namespace"
+        );
+        assert_eq!(fs::read_dir(staging.path()).unwrap().count(), 1);
+        let original_record = if separate_staging {
+            destination.path().join("record")
+        } else {
+            displaced.join("record")
+        };
+        assert_eq!(fs::read(original_record).unwrap(), b"before");
+    }
 }

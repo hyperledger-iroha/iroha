@@ -1,20 +1,66 @@
 //! Direct native dispatch retains the exact signed source and approved executor path.
 //!
-//! Contract/ABI requests stay closed until their actual invocation queue is wired.
+//! The deployed contract queue borrows the same canonical verifier and effect owner.
+//! Native transaction admission remains closed until its real security construction and
+//! complete signed execution requirements are satisfied.
 //! No request reference or audit digest is a permission or verification capability.
 use super::{
     Executor, InstructionExecutionProfile,
-    attachment_custody::{AttachmentCustody, CustodyError, Invocation},
+    attachment_custody::{
+        AttachmentCustody, CustodyError, Invocation,
+        x509::{X509Binding, X509Error},
+    },
 };
 use crate::{smartcontracts::isi::privacy, state::StateTransaction};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     isi::{
-        InstructionBox, error::InstructionExecutionError, privacy::BootstrapPrivacyPgcAccountsV1,
+        InstructionBox,
+        error::InstructionExecutionError,
+        privacy::{BootstrapPrivacyPgcAccountsV1, SubmitPrivacyZkX509CertificateV1},
     },
     transaction::{signed::TransactionSignatureError, signed_attachments::SignedAttachmentErrorV1},
 };
+
+/// The actual direct invocation or a move-only queued owner's borrowed original proof.
+/// This context is never constructed from an instruction or guest-supplied digest.
+pub(super) enum AttachmentExecution<'a, 'owner, 'tx> {
+    Direct(&'a mut Invocation<'owner, 'tx>),
+    QueuedX509 {
+        binding: &'a X509Binding,
+        proof: &'a [u8],
+    },
+}
+
+pub(super) fn x509_instruction_error(
+    state: &mut StateTransaction<'_, '_>,
+    error: X509Error,
+) -> InstructionExecutionError {
+    use crate::execution_attempt::ExecutionAttemptError;
+    match error {
+        X509Error::Execution(original) => original,
+        X509Error::AllocationUnavailable => state.attempt_error_to_instruction_error(
+            ExecutionAttemptError::Deferred(ivm::ExecutionDeferral::AllocationUnavailable.into()),
+        ),
+        X509Error::Capacity(original) => state
+            .attempt_error_to_instruction_error(ExecutionAttemptError::Deferred(original.into())),
+        X509Error::Custody(CustodyError::Declaration(SignedAttachmentErrorV1::LocalResource(
+            original,
+        )))
+        | X509Error::Request(
+            iroha_data_model::isi::privacy::PrivacyZkX509RequestErrorV1::Attachment(
+                SignedAttachmentErrorV1::LocalResource(original),
+            ),
+        ) => state
+            .attempt_error_to_instruction_error(ExecutionAttemptError::Deferred(original.into())),
+        original => InstructionExecutionError::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(format!(
+                "original X.509 attachment refused: {original}"
+            )),
+        ),
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 enum DirectError {
@@ -77,7 +123,7 @@ impl Executor {
                 instruction,
                 InstructionExecutionProfile::Runtime,
                 None,
-                Some(invocation),
+                Some(AttachmentExecution::Direct(invocation)),
             )
             .map_err(Into::into)
         });
@@ -88,20 +134,93 @@ impl Executor {
     }
 }
 
+impl Executor {
+    /// Apply one queued X.509 request through the ordinary initial/installed permission owner.
+    pub(crate) fn execute_queued_x509_instruction(
+        &self,
+        state: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &InstructionBox,
+        runtime: Option<&super::ContractRuntimeExecutionContext>,
+        binding: &X509Binding,
+        proof: &[u8],
+    ) -> Result<(), ValidationFail> {
+        self.execute_instruction_with_attachment_context(
+            state,
+            authority,
+            instruction,
+            InstructionExecutionProfile::Runtime,
+            runtime,
+            Some(AttachmentExecution::QueuedX509 { binding, proof }),
+        )
+    }
+}
+
 /// The shared application point after either executor has authorized the instruction.
 pub(super) fn apply_authorized_instruction(
     instruction: &InstructionBox,
     authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
-    invocation: Option<&mut Invocation<'_, '_>>,
+    attachment: Option<AttachmentExecution<'_, '_, '_>>,
 ) -> Result<(), InstructionExecutionError> {
-    if let Some(bootstrap) = instruction
+    if let Some(request) = instruction
         .as_any()
-        .downcast_ref::<BootstrapPrivacyPgcAccountsV1>()
+        .downcast_ref::<SubmitPrivacyZkX509CertificateV1>()
     {
-        if let Some(invocation) = invocation {
-            return privacy::execute_pgc_bootstrap(bootstrap, authority, state, invocation);
+        return match attachment {
+            Some(AttachmentExecution::Direct(invocation)) => {
+                use crate::state::StateReadOnly as _;
+                let limits = state.world.privacy_consensus_policy.get().current_limits;
+                let budget = state.execution_budget();
+                let source_byte_limit = state
+                    .world
+                    .parameters
+                    .get()
+                    .transaction()
+                    .max_tx_bytes()
+                    .get();
+                invocation
+                    .with_x509_action(
+                        request,
+                        &limits,
+                        source_byte_limit,
+                        &budget,
+                        |binding, proof| {
+                            privacy::execute_x509_submission(
+                                request, &binding, proof, authority, state,
+                            )
+                            .map_err(X509Error::from)
+                        },
+                    )
+                    .map_err(|error| x509_instruction_error(state, error))
+            }
+            Some(AttachmentExecution::QueuedX509 { binding, proof }) => {
+                privacy::execute_x509_submission(request, binding, proof, authority, state)
+            }
+            None => Err(InstructionExecutionError::InvalidParameter(
+                iroha_data_model::isi::error::InvalidParameterError::SmartContract(
+                    "X.509 request requires its original signed attachment owner".into(),
+                ),
+            )),
+        };
+    }
+    match attachment {
+        Some(AttachmentExecution::Direct(invocation)) => {
+            if let Some(bootstrap) = instruction
+                .as_any()
+                .downcast_ref::<BootstrapPrivacyPgcAccountsV1>()
+            {
+                return privacy::execute_pgc_bootstrap(bootstrap, authority, state, invocation);
+            }
         }
+        Some(AttachmentExecution::QueuedX509 { .. }) => {
+            return Err(InstructionExecutionError::InvalidParameter(
+                iroha_data_model::isi::error::InvalidParameterError::SmartContract(
+                    "queued X.509 attachment cannot authorize a different instruction".into(),
+                ),
+            ));
+        }
+        None => {}
     }
     crate::smartcontracts::isi::execute_borrowed_instruction(instruction, authority, state)
 }

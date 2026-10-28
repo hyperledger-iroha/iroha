@@ -738,29 +738,29 @@ def render_semantic_policy(policy: Policy) -> str:
         _rust_array(
             "V1_STATE_MAP_KEY_TYPE_NAMES",
             dynamic_access.state_map_key_types,
-            "Exact canonical scalar types permitted as durable StateMap keys.",
+            "Exact canonical scalar types permitted as durable `StateMap` keys.",
         ),
         _rust_array(
             "V1_DYNAMIC_ACCESS_BOUND_KINDS",
             dynamic_access.bound_kinds,
-            "Canonical bounded StateMap scan provenance in manifest order.",
+            "Canonical bounded `StateMap` scan provenance in manifest order.",
         ),
         (
             "/// Maximum keys advertised by one bounded dynamic-access hint.\n"
             f"pub const V1_DYNAMIC_ACCESS_MAX_KEYS: u32 = {dynamic_access.max_keys};"
         ),
         (
-            "/// Canonical prefix for a direct durable StateMap hint base.\n"
+            "/// Canonical prefix for a direct durable `StateMap` hint base.\n"
             "pub const V1_DYNAMIC_ACCESS_BASE_PREFIX: &str = "
             f"{json.dumps(dynamic_access.base_prefix)};"
         ),
         (
-            "/// Canonical validation policy for the StateMap base identifier.\n"
+            "/// Canonical validation policy for the `StateMap` base identifier.\n"
             "pub const V1_DYNAMIC_ACCESS_BASE_IDENTIFIER_POLICY: &str = "
             f"{json.dumps(dynamic_access.base_identifier)};"
         ),
         (
-            "/// Dynamic hints may refer only to a directly declared top-level StateMap.\n"
+            "/// Dynamic hints may refer only to a directly declared top-level `StateMap`.\n"
             "pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = "
             f"{str(dynamic_access.requires_declared_state_map).lower()};"
         ),

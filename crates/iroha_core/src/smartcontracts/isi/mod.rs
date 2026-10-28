@@ -776,7 +776,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
-    // Privacy governance checks exact native permissions and lifecycle state. Proof
+    // Privacy governance checks exact native permissions and committed policy. Proof
     // submissions and settlement carriers enforce their signed transaction bindings
     // and exhaustive verification in Core before committing persistent effects.
     // Asset-effect metadata is an independent audit: governance, roots, bootstraps and APS
@@ -784,19 +784,10 @@ define_instruction_handlers! {
     // Their ordinary signed network fees remain payable. SubmitPrivacyProof can authorize
     // transparent transfers, whose user payment legs retain the common signed assessment checks.
     dispatch_instruction::<
-        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
+        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
-        iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
+        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -839,6 +830,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
@@ -1145,11 +1137,8 @@ mod registry_dispatch_tests {
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;
-        assert_native_registration::<privacy::RegisterPrivacyProtocolActivationV1>();
-        assert_native_registration::<privacy::RegisterPrivacyExact12QualificationV1>();
-        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>();
-        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>();
-        assert_native_registration::<privacy::TransitionPrivacyProtocolLifecycleV1>();
+        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyUpdateV1>();
+        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsUpdateV1>();
         assert_native_registration::<privacy::PublishPrivacyRootV1>();
         assert_native_registration::<privacy::BootstrapPrivacyOrchardPoolV1>();
         assert_native_registration::<privacy::BootstrapPrivacyProofManagedPoolV1>();

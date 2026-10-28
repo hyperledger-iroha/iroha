@@ -8,7 +8,8 @@ fn public_fixed_matrix_matches_column_replay_and_builds_each_row_once() {
         2 * core::mem::size_of::<[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>()
             + core::mem::size_of::<ShaPublicFixedMatrixDestinationV1<'_>>()
             + 8 * core::mem::size_of::<usize>()
-            <= 2 * core::mem::size_of::<[F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1]>()
+            <= 2 * ZK_X509_SHA_BATCH_FIXED_WIDTH_V1.max(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1)
+                * core::mem::size_of::<F>()
                 + core::mem::size_of::<[usize; 16]>()
     );
     let mut reference_calls = 0;
@@ -101,9 +102,9 @@ fn public_fixed_matrix_refuses_geometry_before_writing_and_clears_late_failures(
 }
 
 #[test]
-#[ignore = "all 118 fixed columns/all 524288 rows of all 4 segments and all 5 disclosure shapes; about 472 MiB public matrix; run explicitly"]
+#[ignore = "all 137 fixed columns/all 524288 rows of all 4 segments and all 5 disclosure shapes; about 548 MiB public matrix; run explicitly"]
 fn public_fixed_matrix_preserves_every_canonical_cell_for_all_supported_shapes() {
-    assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 118);
+    assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 137);
     for disclosed_attributes in 0..=4 {
         let provider = ZkX509ShaBatchFixedProviderV1::new_v1(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes,

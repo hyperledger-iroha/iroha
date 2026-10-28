@@ -424,9 +424,12 @@ fn build_router() -> iroha_torii::TestApiRouterRuntime {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::ToriiRuntimeDeps::new(
-            build_identity_test_fixture::build_identity(),
-            iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::test_utils::with_private_settlement_test_signers(
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                iroha_torii::MaybeTelemetry::disabled(),
+            ),
+            &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
     .expect("valid first-release Torii fixture");

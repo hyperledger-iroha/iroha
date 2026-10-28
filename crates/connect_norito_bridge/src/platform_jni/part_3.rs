@@ -606,7 +606,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
         java_native_privacy_inspect_exact12_capability_manifest(&mut env, archive)
     })
 }
-/// Require active committed admission and exact local tuple equality for Kotlin/JVM.
+/// Require current network policy and exact local canonical-profile equality for Kotlin/JVM.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeRequireExact12CapabilityTupleForNetworkV1(
     env: jni::EnvUnowned<'_>,
@@ -654,6 +654,36 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
     crate::platform_jni::with_java_env(env, |mut env| {
         privacy_intent::java_native_submit_proof_intent_projection(&mut env, archive)
     })
+}
+/// Create a proof-free X509 request from independent inputs and an attachment ordinal.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeCreateZkX509RequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    statement: jni::objects::JByteArray<'_>,
+    attachment_action_index: jni::sys::jlong,
+) -> jni::sys::jbyteArray {
+    privacy_x509_request::java_create_request(&mut env, statement, attachment_action_index)
+}
+/// Inspect a canonical proof-free X509 request without supplying proof or authority.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeInspectZkX509RequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    privacy_x509_request::java_inspect_request(&mut env, request)
+}
+/// Materialize X509 public inputs from the original action and ordered intent.
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeMaterializeZkX509StatementV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request: jni::objects::JByteArray<'_>,
+    action: jni::objects::JByteArray<'_>,
+    ordered_intent: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    privacy_x509_request::java_materialize_statement(&mut env, request, action, ordered_intent)
 }
 /// Return the canonical exact-12 privacy fixture bundle to the Kotlin/JVM SDK.
 #[unsafe(no_mangle)]

@@ -2112,29 +2112,17 @@ pub enum PrivacyConsensusLimitsValidationError {
         larger_value: u32,
     },
 }
-/// Validation failure for a component-wise consensus-policy tightening.
+/// Validation failure for a component-wise consensus-policy update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum PrivacyConsensusLimitsTighteningErrorV1 {
+pub enum PrivacyConsensusLimitsUpdateErrorV1 {
     /// The currently persisted policy is malformed.
     #[error("current privacy consensus limits are invalid: {0}")]
     InvalidCurrent(PrivacyConsensusLimitsValidationError),
     /// The proposed successor policy is malformed.
     #[error("next privacy consensus limits are invalid: {0}")]
     InvalidNext(PrivacyConsensusLimitsValidationError),
-    /// A purported tightening increases one component.
-    #[error(
-        "privacy limit {field:?} cannot increase from {current} to {candidate} in a tightening"
-    )]
-    Increase {
-        /// Increased component.
-        field: PrivacyLimitFieldV1,
-        /// Current component value.
-        current: u32,
-        /// Rejected successor value.
-        candidate: u32,
-    },
-    /// A tightening must change at least one component.
-    #[error("privacy consensus policy tightening is a no-op")]
+    /// An update must change at least one component.
+    #[error("privacy consensus policy update is a no-op")]
     NoChange,
 }
 /// Scheduled successor for the singleton chain-wide privacy policy.
@@ -2154,13 +2142,13 @@ pub enum PrivacyConsensusLimitsTighteningErrorV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyConsensusPolicyTighteningV1")]
-pub struct PrivacyConsensusPolicyTighteningV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyConsensusPolicyUpdateV1")]
+pub struct PrivacyConsensusPolicyUpdateV1 {
     /// Exact block which admitted this schedule.
     pub scheduled_at_height: u64,
     /// Exact incoming block at whose start the successor becomes effective.
     pub effective_at_height: u64,
-    /// Complete component-wise-lower successor policy.
+    /// Complete successor policy.
     pub next_limits: PrivacyConsensusLimitsV1,
 }
 /// Singleton chain-wide privacy admission policy.
@@ -2184,8 +2172,8 @@ pub struct PrivacyConsensusPolicyTighteningV1 {
 pub struct PrivacyConsensusPolicyV1 {
     /// Limits effective for the current committed state.
     pub current_limits: PrivacyConsensusLimitsV1,
-    /// At most one component-wise tightening for an explicitly chosen future block.
-    pub pending_tightening: Option<PrivacyConsensusPolicyTighteningV1>,
+    /// At most one ordinary update for an explicitly chosen future block.
+    pub pending_update: Option<PrivacyConsensusPolicyUpdateV1>,
 }
 /// Validation failure for a singleton privacy-policy value or schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -2193,9 +2181,9 @@ pub enum PrivacyPolicyValidationErrorV1 {
     /// Current limits are malformed.
     #[error("current privacy policy limits are invalid: {0}")]
     InvalidCurrentLimits(PrivacyConsensusLimitsValidationError),
-    /// A scheduled consensus tightening is invalid.
-    #[error("privacy consensus limits tightening is invalid: {0}")]
-    ConsensusTightening(PrivacyConsensusLimitsTighteningErrorV1),
+    /// A scheduled consensus update is invalid.
+    #[error("privacy consensus limits update is invalid: {0}")]
+    ConsensusUpdate(PrivacyConsensusLimitsUpdateErrorV1),
     /// Schedule admission height must be a real block height.
     #[error("privacy policy scheduled-at height must be non-zero")]
     ZeroScheduledHeight,
@@ -2233,383 +2221,6 @@ pub enum PrivacyPolicyValidationErrorV1 {
         committed_height: u64,
     },
 }
-/// Proposed lifecycle state fields.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProposedLifecycleV1")]
-pub struct PrivacyProposedLifecycleV1 {
-    /// Height at which the proposal became canonical.
-    pub proposed_at_height: u64,
-}
-/// Active lifecycle state fields.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyActiveLifecycleV1")]
-pub struct PrivacyActiveLifecycleV1 {
-    /// Height at which the proposal became canonical.
-    pub proposed_at_height: u64,
-    /// Height at which the protocol was first activated.
-    pub activated_at_height: u64,
-    /// Height at which the current active interval began.
-    pub state_since_height: u64,
-}
-/// Suspended lifecycle state fields.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacySuspendedLifecycleV1")]
-pub struct PrivacySuspendedLifecycleV1 {
-    /// Height at which the proposal became canonical.
-    pub proposed_at_height: u64,
-    /// Height at which the protocol was first activated.
-    pub activated_at_height: u64,
-    /// Height at which the current suspension began.
-    pub state_since_height: u64,
-}
-/// Retired lifecycle state fields.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyRetiredLifecycleV1")]
-pub struct PrivacyRetiredLifecycleV1 {
-    /// Height at which the proposal became canonical.
-    pub proposed_at_height: u64,
-    /// First activation height, or `None` if retired before activation.
-    pub activated_at_height: Option<u64>,
-    /// Height at which retirement became effective.
-    pub state_since_height: u64,
-}
-/// Governed lifecycle of a protocol activation record.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(tag = "state", content = "record", deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLifecycleV1")]
-pub enum PrivacyProtocolLifecycleV1 {
-    /// Governance registered a protocol awaiting an explicit activation instruction.
-    #[norito(rename = "proposed")]
-    Proposed(PrivacyProposedLifecycleV1),
-    /// The protocol is currently active.
-    #[norito(rename = "active")]
-    Active(PrivacyActiveLifecycleV1),
-    /// The protocol is temporarily fail-closed.
-    #[norito(rename = "suspended")]
-    Suspended(PrivacySuspendedLifecycleV1),
-    /// The protocol is permanently unavailable.
-    #[norito(rename = "retired")]
-    Retired(PrivacyRetiredLifecycleV1),
-}
-impl PrivacyProtocolLifecycleV1 {
-    /// Validate internal height ordering.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PrivacyLifecycleValidationError`] when a transition height is
-    /// zero or violates the ordering required for its lifecycle state. Initial
-    /// activation may share the proposal height; later lifecycle changes must advance.
-    pub fn validate(&self) -> Result<(), PrivacyLifecycleValidationError> {
-        match *self {
-            Self::Proposed(state) => validate_nonzero_height(
-                PrivacyLifecycleHeightFieldV1::Proposed,
-                state.proposed_at_height,
-            ),
-            Self::Active(state) => {
-                validate_not_earlier(
-                    PrivacyLifecycleHeightFieldV1::Proposed,
-                    state.proposed_at_height,
-                    PrivacyLifecycleHeightFieldV1::Activated,
-                    state.activated_at_height,
-                )?;
-                if state.state_since_height < state.activated_at_height {
-                    return Err(PrivacyLifecycleValidationError::HeightOrder {
-                        earlier_field: PrivacyLifecycleHeightFieldV1::Activated,
-                        earlier_height: state.activated_at_height,
-                        later_field: PrivacyLifecycleHeightFieldV1::StateSince,
-                        later_height: state.state_since_height,
-                    });
-                }
-                Ok(())
-            }
-            Self::Suspended(state) => {
-                validate_not_earlier(
-                    PrivacyLifecycleHeightFieldV1::Proposed,
-                    state.proposed_at_height,
-                    PrivacyLifecycleHeightFieldV1::Activated,
-                    state.activated_at_height,
-                )?;
-                validate_strictly_later(
-                    PrivacyLifecycleHeightFieldV1::Activated,
-                    state.activated_at_height,
-                    PrivacyLifecycleHeightFieldV1::StateSince,
-                    state.state_since_height,
-                )
-            }
-            Self::Retired(state) => {
-                if let Some(activated_at_height) = state.activated_at_height {
-                    validate_not_earlier(
-                        PrivacyLifecycleHeightFieldV1::Proposed,
-                        state.proposed_at_height,
-                        PrivacyLifecycleHeightFieldV1::Activated,
-                        activated_at_height,
-                    )?;
-                    validate_strictly_later(
-                        PrivacyLifecycleHeightFieldV1::Activated,
-                        activated_at_height,
-                        PrivacyLifecycleHeightFieldV1::StateSince,
-                        state.state_since_height,
-                    )
-                } else {
-                    validate_strictly_later(
-                        PrivacyLifecycleHeightFieldV1::Proposed,
-                        state.proposed_at_height,
-                        PrivacyLifecycleHeightFieldV1::StateSince,
-                        state.state_since_height,
-                    )
-                }
-            }
-        }
-    }
-    /// Return `true` only for the active lifecycle state.
-    #[must_use]
-    pub const fn is_active(&self) -> bool {
-        matches!(self, Self::Active(_))
-    }
-    /// Return whether `next` is a valid forward lifecycle transition.
-    #[must_use]
-    pub fn can_transition_to(&self, next: &Self) -> bool {
-        self.validate_transition_to(next).is_ok()
-    }
-    /// Validate a forward lifecycle transition and its immutable history.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PrivacyLifecycleTransitionError`] for invalid states, unsupported edges,
-    /// mismatched proposal/activation history, or a non-increasing later transition height.
-    /// Initial explicit activation may occur at the proposal height.
-    pub fn validate_transition_to(
-        &self,
-        next: &Self,
-    ) -> Result<(), PrivacyLifecycleTransitionError> {
-        self.validate()
-            .map_err(PrivacyLifecycleTransitionError::CurrentState)?;
-        next.validate()
-            .map_err(PrivacyLifecycleTransitionError::NextState)?;
-        match (*self, *next) {
-            (Self::Proposed(current), Self::Active(next))
-                if proposed_activation_history_matches(current, next) =>
-            {
-                Ok(())
-            }
-            (Self::Proposed(current), Self::Retired(next))
-                if current.proposed_at_height == next.proposed_at_height
-                    && next.activated_at_height.is_none() =>
-            {
-                Ok(())
-            }
-            (Self::Active(current), Self::Suspended(next))
-                if current.proposed_at_height == next.proposed_at_height
-                    && current.activated_at_height == next.activated_at_height
-                    && next.state_since_height > current.state_since_height =>
-            {
-                Ok(())
-            }
-            (Self::Active(current), Self::Retired(next))
-                if current.proposed_at_height == next.proposed_at_height
-                    && next.activated_at_height == Some(current.activated_at_height)
-                    && next.state_since_height > current.state_since_height =>
-            {
-                Ok(())
-            }
-            (Self::Suspended(current), Self::Active(next))
-                if current.proposed_at_height == next.proposed_at_height
-                    && current.activated_at_height == next.activated_at_height
-                    && next.state_since_height > current.state_since_height =>
-            {
-                Ok(())
-            }
-            (Self::Suspended(current), Self::Retired(next))
-                if current.proposed_at_height == next.proposed_at_height
-                    && next.activated_at_height == Some(current.activated_at_height)
-                    && next.state_since_height > current.state_since_height =>
-            {
-                Ok(())
-            }
-            (Self::Retired(_), _) => Err(PrivacyLifecycleTransitionError::RetiredIsTerminal),
-            _ => Err(PrivacyLifecycleTransitionError::InvalidTransition),
-        }
-    }
-}
-const fn proposed_activation_history_matches(
-    proposed: PrivacyProposedLifecycleV1,
-    active: PrivacyActiveLifecycleV1,
-) -> bool {
-    if proposed.proposed_at_height != active.proposed_at_height {
-        return false;
-    }
-    active.activated_at_height == active.state_since_height
-}
-fn validate_nonzero_height(
-    field: PrivacyLifecycleHeightFieldV1,
-    height: u64,
-) -> Result<(), PrivacyLifecycleValidationError> {
-    if height == 0 {
-        return Err(PrivacyLifecycleValidationError::ZeroHeight { field });
-    }
-    Ok(())
-}
-fn validate_not_earlier(
-    earlier_field: PrivacyLifecycleHeightFieldV1,
-    earlier_height: u64,
-    later_field: PrivacyLifecycleHeightFieldV1,
-    later_height: u64,
-) -> Result<(), PrivacyLifecycleValidationError> {
-    validate_nonzero_height(earlier_field, earlier_height)?;
-    validate_nonzero_height(later_field, later_height)?;
-    if later_height < earlier_height {
-        return Err(PrivacyLifecycleValidationError::HeightOrder {
-            earlier_field,
-            earlier_height,
-            later_field,
-            later_height,
-        });
-    }
-    Ok(())
-}
-fn validate_strictly_later(
-    earlier_field: PrivacyLifecycleHeightFieldV1,
-    earlier_height: u64,
-    later_field: PrivacyLifecycleHeightFieldV1,
-    later_height: u64,
-) -> Result<(), PrivacyLifecycleValidationError> {
-    validate_nonzero_height(earlier_field, earlier_height)?;
-    validate_nonzero_height(later_field, later_height)?;
-    if later_height <= earlier_height {
-        return Err(PrivacyLifecycleValidationError::HeightOrder {
-            earlier_field,
-            earlier_height,
-            later_field,
-            later_height,
-        });
-    }
-    Ok(())
-}
-/// Height field within a privacy lifecycle record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrivacyLifecycleHeightFieldV1 {
-    /// Proposal height.
-    Proposed,
-    /// First activation height.
-    Activated,
-    /// Height at which the current state began.
-    StateSince,
-}
-/// Validation failure for one [`PrivacyProtocolLifecycleV1`] value.
-#[allow(variant_size_differences)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum PrivacyLifecycleValidationError {
-    /// A lifecycle height is zero.
-    #[error("privacy lifecycle height {field:?} must be non-zero")]
-    ZeroHeight {
-        /// Invalid height field.
-        field: PrivacyLifecycleHeightFieldV1,
-    },
-    /// Lifecycle heights violate the ordering required by their state.
-    #[error(
-        "privacy lifecycle has invalid {earlier_field:?} height {earlier_height} and {later_field:?} height {later_height} ordering"
-    )]
-    HeightOrder {
-        /// Earlier height field.
-        earlier_field: PrivacyLifecycleHeightFieldV1,
-        /// Earlier height value.
-        earlier_height: u64,
-        /// Later height field.
-        later_field: PrivacyLifecycleHeightFieldV1,
-        /// Later height value.
-        later_height: u64,
-    },
-}
-/// Validation failure for a lifecycle state transition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum PrivacyLifecycleTransitionError {
-    /// The current state is internally invalid.
-    #[error("current privacy lifecycle state is invalid: {0}")]
-    CurrentState(PrivacyLifecycleValidationError),
-    /// The proposed next state is internally invalid.
-    #[error("next privacy lifecycle state is invalid: {0}")]
-    NextState(PrivacyLifecycleValidationError),
-    /// The lifecycle edge or immutable history is invalid.
-    #[error("privacy lifecycle transition is invalid")]
-    InvalidTransition,
-    /// A retired protocol cannot transition again.
-    #[error("retired privacy protocol lifecycle is terminal")]
-    RetiredIsTerminal,
-}
 /// Exact security target required from every final privacy protocol claim.
 pub const PRIVACY_MINIMUM_SECURITY_BITS_V1: u16 = 128;
 /// Domain separator for canonical security-claim content addressing.
@@ -2618,7 +2229,7 @@ pub const PRIVACY_SECURITY_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:secur
 /// Final, independently reviewable security claim for one privacy protocol.
 ///
 /// The model is always the weakest model in the full composition. Parameter
-/// and verifier digests bind the claim to the exact native activation rather
+/// and verifier digests bind the claim to the exact native profile rather
 /// than to a family name or caller-selected profile.
 #[derive(
     Clone,
@@ -2677,7 +2288,7 @@ impl PrivacySecurityClaimV1 {
         Ok(PrivacySecurityClaimDigestV1::new(hasher.finalize().into()))
     }
 
-    /// Validate the claim against exact activated protocol artifacts.
+    /// Validate the claim against exact canonical protocol identities.
     ///
     /// # Errors
     ///
@@ -2773,11 +2384,11 @@ pub enum PrivacySecurityClaimValidationErrorV1 {
         /// Reviewed conservative bound.
         achieved: u16,
     },
-    /// Parameter digest differs from the activation.
-    #[error("privacy security claim parameter digest differs from activation")]
+    /// Parameter digest differs from the profile.
+    #[error("privacy security claim parameter digest differs from profile")]
     ParameterDigest,
-    /// Verifier digest differs from the activation.
-    #[error("privacy security claim verifier digest differs from activation")]
+    /// Verifier digest differs from the profile.
+    #[error("privacy security claim verifier digest differs from profile")]
     VerifierDigest,
     /// Reduction artifact digest is zero.
     #[error("privacy security claim reduction digest must be non-zero")]
@@ -2787,7 +2398,7 @@ pub enum PrivacySecurityClaimValidationErrorV1 {
     ZeroAuditBundleDigest,
 }
 
-/// Activation-specific Anonymous PGC policy limits.
+/// Protocol-specific Anonymous PGC policy limits.
 #[derive(
     Clone,
     Copy,
@@ -2804,14 +2415,14 @@ pub enum PrivacySecurityClaimValidationErrorV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::AnonymousPgcActivationLimitsV1")]
-pub struct AnonymousPgcActivationLimitsV1 {
-    /// Maximum anonymity-set size `n` for this activation.
+#[norito_schema(name = "iroha_data_model::privacy::AnonymousPgcLimitsV1")]
+pub struct AnonymousPgcLimitsV1 {
+    /// Maximum anonymity-set size `n` for this policy.
     pub max_anonymity_set_size: u32,
-    /// Maximum intended recipient count `k` for this activation.
+    /// Maximum intended recipient count `k` for this policy.
     pub max_recipient_count: u32,
 }
-/// Activation-specific `VeRange` aggregation policy.
+/// Protocol-specific `VeRange` aggregation policy.
 #[derive(
     Clone,
     Copy,
@@ -2828,12 +2439,12 @@ pub struct AnonymousPgcActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::VeRangeActivationLimitsV1")]
-pub struct VeRangeActivationLimitsV1 {
-    /// Maximum aggregation count `T` admitted by this activation.
+#[norito_schema(name = "iroha_data_model::privacy::VeRangeLimitsV1")]
+pub struct VeRangeLimitsV1 {
+    /// Maximum aggregation count `T` admitted by this policy.
     pub max_aggregation_count: u32,
 }
-/// Activation-specific ZK-AMS admission and provisioning policy.
+/// Protocol-specific ZK-AMS admission and provisioning policy.
 #[derive(
     Clone,
     Copy,
@@ -2850,14 +2461,14 @@ pub struct VeRangeActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::ZkAmsActivationLimitsV1")]
-pub struct ZkAmsActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::ZkAmsLimitsV1")]
+pub struct ZkAmsLimitsV1 {
     /// Maximum ordered admission anchors in one batch settlement.
     pub max_batch_size: u32,
     /// Maximum admitted seed-key ring size in one provisioning action.
     pub max_ring_size: u32,
 }
-/// Activation-specific Jindo batched univariate-opening policy.
+/// Protocol-specific Jindo batched univariate-opening policy.
 #[derive(
     Clone,
     Copy,
@@ -2874,12 +2485,12 @@ pub struct ZkAmsActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::JindoActivationLimitsV1")]
-pub struct JindoActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::JindoLimitsV1")]
+pub struct JindoLimitsV1 {
     /// Maximum polynomial commitments per statement.
     pub max_polynomial_count: u32,
 }
-/// Activation-specific Orchard action policy.
+/// Protocol-specific Orchard action policy.
 #[derive(
     Clone,
     Copy,
@@ -2896,12 +2507,12 @@ pub struct JindoActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::OrchardActivationLimitsV1")]
-pub struct OrchardActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::OrchardLimitsV1")]
+pub struct OrchardLimitsV1 {
     /// Maximum one-to-one spend/output actions per statement.
     pub max_action_count: u32,
 }
-/// Activation-specific FCMP++ transfer policy.
+/// Protocol-specific FCMP++ transfer policy.
 #[derive(
     Clone,
     Copy,
@@ -2918,14 +2529,14 @@ pub struct OrchardActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::FcmpActivationLimitsV1")]
-pub struct FcmpActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::FcmpLimitsV1")]
+pub struct FcmpLimitsV1 {
     /// Maximum consumed outputs per transfer.
     pub max_input_count: u32,
     /// Maximum new outputs per transfer.
     pub max_output_count: u32,
 }
-/// Activation-specific native IVM private-note policy.
+/// Protocol-specific native IVM private-note policy.
 #[derive(
     Clone,
     Copy,
@@ -2942,14 +2553,14 @@ pub struct FcmpActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::IvmPrivateNoteActivationLimitsV1")]
-pub struct IvmPrivateNoteActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::IvmPrivateNoteLimitsV1")]
+pub struct IvmPrivateNoteLimitsV1 {
     /// Maximum consumed notes per action.
     pub max_input_count: u32,
     /// Maximum new notes per action.
     pub max_output_count: u32,
 }
-/// Activation-specific PQ-MASP policy.
+/// Protocol-specific PQ-MASP policy.
 #[derive(
     Clone,
     Copy,
@@ -2966,14 +2577,14 @@ pub struct IvmPrivateNoteActivationLimitsV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PqMaspActivationLimitsV1")]
-pub struct PqMaspActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PqMaspLimitsV1")]
+pub struct PqMaspLimitsV1 {
     /// Maximum consumed notes per action.
     pub max_input_count: u32,
     /// Maximum new notes per action.
     pub max_output_count: u32,
 }
-/// Protocol-specific governed limits carried by an activation record.
+/// Protocol-specific governed limits carried by an profile snapshot.
 #[derive(
     Clone,
     Copy,
@@ -2990,20 +2601,20 @@ pub struct PqMaspActivationLimitsV1 {
 )]
 #[norito(tag = "protocol", content = "limits", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1")]
-pub enum PrivacyProtocolActivationLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLimitsV1")]
+pub enum PrivacyProtocolLimitsV1 {
     /// ZK-ACE has no additional first-release count limits.
     #[norito(rename = "zk-ace-pq-authorization-v1")]
     ZkAcePqAuthorizationV1,
     /// Anonymous PGC receiver policy.
     #[norito(rename = "anonymous-pgc-k-out-of-n-v1")]
-    AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1),
+    AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1),
     /// `VeRange` aggregation policy.
     #[norito(rename = "verange-transparent-range-v1")]
-    VeRangeTransparentRangeV1(VeRangeActivationLimitsV1),
+    VeRangeTransparentRangeV1(VeRangeLimitsV1),
     /// ZK-AMS batch-admission and account-provisioning policy.
     #[norito(rename = "iroha-zk-ams-v1")]
-    IrohaZkAmsV1(ZkAmsActivationLimitsV1),
+    IrohaZkAmsV1(ZkAmsLimitsV1),
     /// Vega has no additional first-release count limits.
     #[norito(rename = "vega-existing-credential-zk-v1")]
     VegaExistingCredentialZkV1,
@@ -3012,25 +2623,76 @@ pub enum PrivacyProtocolActivationLimitsV1 {
     IrohaZkX509StarkP256V1,
     /// Jindo batched opening policy.
     #[norito(rename = "iroha-jindo-polynomial-commitment-v1")]
-    IrohaJindoPolynomialCommitmentV1(JindoActivationLimitsV1),
+    IrohaJindoPolynomialCommitmentV1(JindoLimitsV1),
     /// Lantern anonymous credentials have a fixed first-release parameter profile.
     #[norito(rename = "iroha-bootle-lantern-anoncred-v1")]
     IrohaBootleLanternAnoncredV1,
     /// Orchard one-to-one action policy.
     #[norito(rename = "orchard-halo2-actions-v1")]
-    OrchardHalo2ActionsV1(OrchardActivationLimitsV1),
+    OrchardHalo2ActionsV1(OrchardLimitsV1),
     /// FCMP++ input/output policy.
     #[norito(rename = "monero-fcmp-plus-plus-v1")]
-    MoneroFcmpPlusPlusV1(FcmpActivationLimitsV1),
+    MoneroFcmpPlusPlusV1(FcmpLimitsV1),
     /// Native private-note input/output policy.
     #[norito(rename = "iroha-ivm-private-note-stark-v1")]
-    IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteActivationLimitsV1),
+    IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1),
     /// PQ-MASP input/output policy.
     #[norito(rename = "pq-masp-stark-v1")]
-    PqMaspStarkV1(PqMaspActivationLimitsV1),
+    PqMaspStarkV1(PqMaspLimitsV1),
 }
-impl PrivacyProtocolActivationLimitsV1 {
-    /// Exact protocol to which these activation-specific limits apply.
+impl PrivacyProtocolLimitsV1 {
+    /// Canonical default limits and immutable safety ceilings for the selected protocol.
+    /// These defaults do not imply that a native implementation is available.
+    #[must_use]
+    pub const fn canonical_default_v1(protocol_id: PrivacyProtocolIdV1) -> Self {
+        match protocol_id {
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => Self::ZkAcePqAuthorizationV1,
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+                Self::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+                    max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
+                    max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
+                })
+            }
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
+                Self::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+                    max_aggregation_count: VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1,
+                })
+            }
+            PrivacyProtocolIdV1::IrohaZkAmsV1 => Self::IrohaZkAmsV1(ZkAmsLimitsV1 {
+                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
+            }),
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => Self::VegaExistingCredentialZkV1,
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => Self::IrohaZkX509StarkP256V1,
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+                Self::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                    max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+                })
+            }
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => Self::IrohaBootleLanternAnoncredV1,
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+                Self::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+                    max_action_count: ORCHARD_MAX_ACTIONS_V1,
+                })
+            }
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => Self::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
+                max_input_count: FCMP_MAX_INPUTS_V1,
+                max_output_count: FCMP_MAX_OUTPUTS_V1,
+            }),
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+                Self::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                    max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
+                    max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
+                })
+            }
+            PrivacyProtocolIdV1::PqMaspStarkV1 => Self::PqMaspStarkV1(PqMaspLimitsV1 {
+                max_input_count: PQ_MASP_MAX_INPUTS_V1,
+                max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
+            }),
+        }
+    }
+
+    /// Exact protocol to which these protocol-specific limits apply.
     #[must_use]
     pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
         match self {
@@ -3050,100 +2712,98 @@ impl PrivacyProtocolActivationLimitsV1 {
             Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
         }
     }
-    /// Validate activation-specific values against first-release hard ceilings.
+    /// Validate protocol-specific values against first-release hard ceilings.
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyProtocolActivationLimitsValidationError`] for zero or
+    /// Returns [`PrivacyProtocolLimitsValidationError`] for zero or
     /// over-ceiling configuration values.
-    pub fn validate(&self) -> Result<(), PrivacyProtocolActivationLimitsValidationError> {
+    pub fn validate(&self) -> Result<(), PrivacyProtocolLimitsValidationError> {
         match *self {
             Self::AnonymousPgcKOutOfNV1(limits) => {
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
+                    PrivacyProtocolLimitFieldV1::AnonymousPgcAnonymitySetSize,
                     limits.max_anonymity_set_size,
                     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
                 )?;
                 if !ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1.contains(&limits.max_anonymity_set_size) {
                     return Err(
-                        PrivacyProtocolActivationLimitsValidationError::InvalidPgcAnonymitySetSize {
+                        PrivacyProtocolLimitsValidationError::InvalidPgcAnonymitySetSize {
                             size: limits.max_anonymity_set_size,
                         },
                     );
                 }
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::AnonymousPgcRecipientCount,
+                    PrivacyProtocolLimitFieldV1::AnonymousPgcRecipientCount,
                     limits.max_recipient_count,
                     ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
                 )
             }
             Self::VeRangeTransparentRangeV1(limits) => validate_profile_limit(
-                PrivacyActivationLimitFieldV1::VeRangeAggregationCount,
+                PrivacyProtocolLimitFieldV1::VeRangeAggregationCount,
                 limits.max_aggregation_count,
                 VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1,
             ),
             Self::IrohaZkAmsV1(limits) => {
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
+                    PrivacyProtocolLimitFieldV1::ZkAmsBatchSize,
                     limits.max_batch_size,
                     ZK_AMS_MAX_BATCH_SIZE_V1,
                 )?;
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+                    PrivacyProtocolLimitFieldV1::ZkAmsRingSize,
                     limits.max_ring_size,
                     ZK_AMS_MAX_RING_SIZE_V1,
                 )?;
                 if !ZK_AMS_RING_SIZES_V1.contains(&limits.max_ring_size) {
-                    return Err(
-                        PrivacyProtocolActivationLimitsValidationError::InvalidZkAmsRingSize {
-                            size: limits.max_ring_size,
-                        },
-                    );
+                    return Err(PrivacyProtocolLimitsValidationError::InvalidZkAmsRingSize {
+                        size: limits.max_ring_size,
+                    });
                 }
                 Ok(())
             }
             Self::IrohaJindoPolynomialCommitmentV1(limits) => validate_profile_limit(
-                PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                PrivacyProtocolLimitFieldV1::JindoPolynomialCount,
                 limits.max_polynomial_count,
                 IROHA_JINDO_MAX_POLYNOMIALS_V1,
             ),
             Self::OrchardHalo2ActionsV1(limits) => validate_profile_limit(
-                PrivacyActivationLimitFieldV1::OrchardActionCount,
+                PrivacyProtocolLimitFieldV1::OrchardActionCount,
                 limits.max_action_count,
                 ORCHARD_MAX_ACTIONS_V1,
             ),
             Self::MoneroFcmpPlusPlusV1(limits) => {
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::FcmpInputCount,
+                    PrivacyProtocolLimitFieldV1::FcmpInputCount,
                     limits.max_input_count,
                     FCMP_MAX_INPUTS_V1,
                 )?;
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::FcmpOutputCount,
+                    PrivacyProtocolLimitFieldV1::FcmpOutputCount,
                     limits.max_output_count,
                     FCMP_MAX_OUTPUTS_V1,
                 )
             }
             Self::IrohaIvmPrivateNoteStarkV1(limits) => {
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::IvmPrivateNoteInputCount,
+                    PrivacyProtocolLimitFieldV1::IvmPrivateNoteInputCount,
                     limits.max_input_count,
                     IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
                 )?;
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::IvmPrivateNoteOutputCount,
+                    PrivacyProtocolLimitFieldV1::IvmPrivateNoteOutputCount,
                     limits.max_output_count,
                     IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
                 )
             }
             Self::PqMaspStarkV1(limits) => {
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::PqMaspInputCount,
+                    PrivacyProtocolLimitFieldV1::PqMaspInputCount,
                     limits.max_input_count,
                     PQ_MASP_MAX_INPUTS_V1,
                 )?;
                 validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::PqMaspOutputCount,
+                    PrivacyProtocolLimitFieldV1::PqMaspOutputCount,
                     limits.max_output_count,
                     PQ_MASP_MAX_OUTPUTS_V1,
                 )
@@ -3159,13 +2819,13 @@ impl PrivacyProtocolActivationLimitsV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyProtocolActivationLimitsValidationError`] for an
+    /// Returns [`PrivacyProtocolLimitsValidationError`] for an
     /// intrinsically invalid value or ceiling, a protocol-variant mismatch, or
     /// a component exceeding its configured ceiling.
     pub fn validate_with_ceiling(
         &self,
         ceiling: &Self,
-    ) -> Result<(), PrivacyProtocolActivationLimitsValidationError> {
+    ) -> Result<(), PrivacyProtocolLimitsValidationError> {
         self.validate()?;
         ceiling.validate()?;
         match (*self, *ceiling) {
@@ -3175,31 +2835,31 @@ impl PrivacyProtocolActivationLimitsV1 {
             | (Self::IrohaBootleLanternAnoncredV1, Self::IrohaBootleLanternAnoncredV1) => Ok(()),
             (Self::AnonymousPgcKOutOfNV1(value), Self::AnonymousPgcKOutOfNV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
+                    PrivacyProtocolLimitFieldV1::AnonymousPgcAnonymitySetSize,
                     value.max_anonymity_set_size,
                     max.max_anonymity_set_size,
                 )?;
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::AnonymousPgcRecipientCount,
+                    PrivacyProtocolLimitFieldV1::AnonymousPgcRecipientCount,
                     value.max_recipient_count,
                     max.max_recipient_count,
                 )
             }
             (Self::VeRangeTransparentRangeV1(value), Self::VeRangeTransparentRangeV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::VeRangeAggregationCount,
+                    PrivacyProtocolLimitFieldV1::VeRangeAggregationCount,
                     value.max_aggregation_count,
                     max.max_aggregation_count,
                 )
             }
             (Self::IrohaZkAmsV1(value), Self::IrohaZkAmsV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
+                    PrivacyProtocolLimitFieldV1::ZkAmsBatchSize,
                     value.max_batch_size,
                     max.max_batch_size,
                 )?;
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+                    PrivacyProtocolLimitFieldV1::ZkAmsRingSize,
                     value.max_ring_size,
                     max.max_ring_size,
                 )
@@ -3208,70 +2868,68 @@ impl PrivacyProtocolActivationLimitsV1 {
                 Self::IrohaJindoPolynomialCommitmentV1(value),
                 Self::IrohaJindoPolynomialCommitmentV1(max),
             ) => validate_profile_limit_ceiling(
-                PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                PrivacyProtocolLimitFieldV1::JindoPolynomialCount,
                 value.max_polynomial_count,
                 max.max_polynomial_count,
             ),
             (Self::OrchardHalo2ActionsV1(value), Self::OrchardHalo2ActionsV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::OrchardActionCount,
+                    PrivacyProtocolLimitFieldV1::OrchardActionCount,
                     value.max_action_count,
                     max.max_action_count,
                 )
             }
             (Self::MoneroFcmpPlusPlusV1(value), Self::MoneroFcmpPlusPlusV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::FcmpInputCount,
+                    PrivacyProtocolLimitFieldV1::FcmpInputCount,
                     value.max_input_count,
                     max.max_input_count,
                 )?;
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::FcmpOutputCount,
+                    PrivacyProtocolLimitFieldV1::FcmpOutputCount,
                     value.max_output_count,
                     max.max_output_count,
                 )
             }
             (Self::IrohaIvmPrivateNoteStarkV1(value), Self::IrohaIvmPrivateNoteStarkV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::IvmPrivateNoteInputCount,
+                    PrivacyProtocolLimitFieldV1::IvmPrivateNoteInputCount,
                     value.max_input_count,
                     max.max_input_count,
                 )?;
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::IvmPrivateNoteOutputCount,
+                    PrivacyProtocolLimitFieldV1::IvmPrivateNoteOutputCount,
                     value.max_output_count,
                     max.max_output_count,
                 )
             }
             (Self::PqMaspStarkV1(value), Self::PqMaspStarkV1(max)) => {
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::PqMaspInputCount,
+                    PrivacyProtocolLimitFieldV1::PqMaspInputCount,
                     value.max_input_count,
                     max.max_input_count,
                 )?;
                 validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::PqMaspOutputCount,
+                    PrivacyProtocolLimitFieldV1::PqMaspOutputCount,
                     value.max_output_count,
                     max.max_output_count,
                 )
             }
-            _ => Err(
-                PrivacyProtocolActivationLimitsValidationError::ProtocolMismatch {
-                    actual: self.protocol_id(),
-                    ceiling: ceiling.protocol_id(),
-                },
-            ),
+            _ => Err(PrivacyProtocolLimitsValidationError::ProtocolMismatch {
+                actual: self.protocol_id(),
+                ceiling: ceiling.protocol_id(),
+            }),
         }
     }
 }
 fn validate_profile_limit_ceiling(
-    field: PrivacyActivationLimitFieldV1,
+    field: PrivacyProtocolLimitFieldV1,
     value: u32,
     ceiling: u32,
-) -> Result<(), PrivacyProtocolActivationLimitsValidationError> {
+) -> Result<(), PrivacyProtocolLimitsValidationError> {
     if value > ceiling {
         return Err(
-            PrivacyProtocolActivationLimitsValidationError::ExceedsConfiguredCeiling {
+            PrivacyProtocolLimitsValidationError::ExceedsConfiguredCeiling {
                 field,
                 value,
                 ceiling,
@@ -3281,27 +2939,25 @@ fn validate_profile_limit_ceiling(
     Ok(())
 }
 fn validate_profile_limit(
-    field: PrivacyActivationLimitFieldV1,
+    field: PrivacyProtocolLimitFieldV1,
     value: u32,
     hard_max: u32,
-) -> Result<(), PrivacyProtocolActivationLimitsValidationError> {
+) -> Result<(), PrivacyProtocolLimitsValidationError> {
     if value == 0 {
-        return Err(PrivacyProtocolActivationLimitsValidationError::Zero { field });
+        return Err(PrivacyProtocolLimitsValidationError::Zero { field });
     }
     if value > hard_max {
-        return Err(
-            PrivacyProtocolActivationLimitsValidationError::ExceedsHardMaximum {
-                field,
-                value,
-                hard_max,
-            },
-        );
+        return Err(PrivacyProtocolLimitsValidationError::ExceedsHardMaximum {
+            field,
+            value,
+            hard_max,
+        });
     }
     Ok(())
 }
-/// Activation-specific limit field selected by validation diagnostics.
+/// Protocol-specific limit field selected by validation diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrivacyActivationLimitFieldV1 {
+pub enum PrivacyProtocolLimitFieldV1 {
     /// Anonymous PGC anonymity-set size.
     AnonymousPgcAnonymitySetSize,
     /// Anonymous PGC intended recipient count.
@@ -3329,61 +2985,57 @@ pub enum PrivacyActivationLimitFieldV1 {
     /// PQ-MASP output count.
     PqMaspOutputCount,
 }
-/// Validation failure for protocol-specific activation limits.
+/// Validation failure for protocol-specific protocol limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub enum PrivacyProtocolActivationLimitsValidationError {
-    /// One activation-specific limit is zero.
-    #[error("privacy activation limit {field:?} must be non-zero")]
+pub enum PrivacyProtocolLimitsValidationError {
+    /// One protocol-specific limit is zero.
+    #[error("privacy protocol limit {field:?} must be non-zero")]
     Zero {
         /// Invalid field.
-        field: PrivacyActivationLimitFieldV1,
+        field: PrivacyProtocolLimitFieldV1,
     },
-    /// One activation-specific limit exceeds its first-release hard maximum.
-    #[error("privacy activation limit {field:?} value {value} exceeds hard maximum {hard_max}")]
+    /// One protocol-specific limit exceeds its first-release hard maximum.
+    #[error("privacy protocol limit {field:?} value {value} exceeds hard maximum {hard_max}")]
     ExceedsHardMaximum {
         /// Invalid field.
-        field: PrivacyActivationLimitFieldV1,
+        field: PrivacyProtocolLimitFieldV1,
         /// Configured value.
         value: u32,
         /// First-release hard maximum.
         hard_max: u32,
     },
-    /// Activation limits and their configured ceiling target different protocols.
-    #[error(
-        "privacy activation limit protocol {actual:?} differs from ceiling protocol {ceiling:?}"
-    )]
+    /// Protocol limits and their configured ceiling target different protocols.
+    #[error("privacy protocol limit protocol {actual:?} differs from ceiling protocol {ceiling:?}")]
     ProtocolMismatch {
         /// Governed protocol variant.
         actual: PrivacyProtocolIdV1,
         /// Compiled-ceiling protocol variant.
         ceiling: PrivacyProtocolIdV1,
     },
-    /// One activation-specific limit exceeds a valid configured ceiling.
-    #[error(
-        "privacy activation limit {field:?} value {value} exceeds configured ceiling {ceiling}"
-    )]
+    /// One protocol-specific limit exceeds a valid configured ceiling.
+    #[error("privacy protocol limit {field:?} value {value} exceeds configured ceiling {ceiling}")]
     ExceedsConfiguredCeiling {
         /// Invalid field.
-        field: PrivacyActivationLimitFieldV1,
+        field: PrivacyProtocolLimitFieldV1,
         /// Governed value.
         value: u32,
         /// Component-wise ceiling.
         ceiling: u32,
     },
-    /// Anonymous PGC activation size is not one of the closed set sizes.
+    /// Anonymous PGC policy size is not one of the closed set sizes.
     #[error("Anonymous PGC anonymity-set size {size} is not one of 16, 32, or 64")]
     InvalidPgcAnonymitySetSize {
         /// Invalid configured size.
         size: u32,
     },
-    /// ZK-AMS activation ring size is not one of the closed profile sizes.
+    /// ZK-AMS policy ring size is not one of the closed profile sizes.
     #[error("ZK-AMS ring size {size} is not one of 16, 32, or 64")]
     InvalidZkAmsRingSize {
         /// Invalid configured size.
         size: u32,
     },
 }
-/// Scheduled component-wise tightening for one protocol activation.
+/// Scheduled ordinary update for one protocol policy.
 #[derive(
     Clone,
     Copy,
@@ -3400,29 +3052,32 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1")]
-pub struct PrivacyProtocolLimitsTighteningV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1")]
+pub struct PrivacyProtocolLimitsUpdateV1 {
     /// Exact block which admitted this schedule.
     pub scheduled_at_height: u64,
     /// Exact incoming block at whose start the successor becomes effective.
     pub effective_at_height: u64,
     /// Complete protocol-tagged successor limit set.
-    pub next_limits: PrivacyProtocolActivationLimitsV1,
+    pub next_limits: PrivacyProtocolLimitsV1,
 }
-/// Validation failure for a scheduled protocol-specific tightening.
+/// Validation failure for a scheduled protocol-specific update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
+pub enum PrivacyProtocolLimitsUpdateValidationErrorV1 {
     /// Scheduled/effective heights violate the strictly future block rule.
     #[error("privacy protocol-limit schedule is invalid: {0}")]
     Schedule(PrivacyPolicyValidationErrorV1),
-    /// Successor limits are invalid, mismatched, or increase a component.
-    #[error("privacy protocol-limit tightening is invalid: {0}")]
-    Limits(PrivacyProtocolActivationLimitsValidationError),
-    /// A tightening must change at least one component.
-    #[error("privacy protocol-limit tightening is a no-op")]
+    /// Successor limits are invalid, mismatched, or exceed a canonical bound.
+    #[error("privacy protocol-limit update is invalid: {0}")]
+    Limits(PrivacyProtocolLimitsValidationError),
+    /// An update must change at least one component.
+    #[error("privacy protocol-limit update is a no-op")]
     NoChange,
 }
-/// Governed activation record for one exact privacy protocol implementation.
+/// Optional committed limits for one canonical protocol.
+///
+/// Absence selects canonical defaults. This record contains no implementation artifact,
+/// activation state, signer receipt or authorization to execute a proof relation.
 #[derive(
     Clone,
     Copy,
@@ -3439,147 +3094,35 @@ pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1")]
-pub struct PrivacyProtocolActivationRecordV1 {
-    /// Exact protocol identity.
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolPolicyV1")]
+pub struct PrivacyProtocolPolicyV1 {
+    /// Protocol whose resource limits are governed by this record.
     pub protocol_id: PrivacyProtocolIdV1,
-    /// Exact proof-system profile.
-    pub proof_system_id: PrivacyProofSystemIdV1,
-    /// Exact native engine identity.
-    pub engine_id: PrivacyEngineIdV1,
-    /// Governed public-parameter set identifier.
-    pub parameter_id: PrivacyParameterIdV1,
-    /// Governed public-parameter digest.
-    pub parameter_digest: PrivacyParameterDigestV1,
-    /// Governed verifier artifact digest.
-    pub verifier_digest: PrivacyVerifierDigestV1,
-    /// Governed public-statement schema digest.
-    pub statement_schema_digest: PrivacyStatementSchemaDigestV1,
-    /// Governed native engine-manifest digest.
-    pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
-    /// Current governed lifecycle.
-    pub lifecycle: PrivacyProtocolLifecycleV1,
-    /// Protocol-specific governed count limits.
-    pub protocol_limits: PrivacyProtocolActivationLimitsV1,
-    /// At most one component-wise protocol-limit tightening for an explicitly chosen future block.
-    pub pending_protocol_limits_tightening: Option<PrivacyProtocolLimitsTighteningV1>,
+    /// Limits effective for the current committed state.
+    pub current_limits: PrivacyProtocolLimitsV1,
+    /// At most one authorized change effective at a future block boundary.
+    pub pending_update: Option<PrivacyProtocolLimitsUpdateV1>,
 }
-impl PrivacyProtocolActivationRecordV1 {
-    /// Validate exact protocol mappings, non-zero digests, lifecycle, and limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PrivacyActivationValidationError`] on the first invalid
-    /// binding in deterministic field order.
-    pub fn validate(&self) -> Result<(), PrivacyActivationValidationError> {
-        let expected_proof_system = self.protocol_id.expected_proof_system();
-        if self.proof_system_id != expected_proof_system {
-            return Err(PrivacyActivationValidationError::ProofSystemMismatch {
-                protocol_id: self.protocol_id,
-                expected: expected_proof_system,
-                actual: self.proof_system_id,
-            });
-        }
-        let expected_engine = self.protocol_id.expected_engine();
-        if self.engine_id != expected_engine {
-            return Err(PrivacyActivationValidationError::EngineMismatch {
-                protocol_id: self.protocol_id,
-                expected: expected_engine,
-                actual: self.engine_id,
-            });
-        }
-        if self.parameter_id.is_zero() {
-            return Err(PrivacyActivationValidationError::ZeroParameterId);
-        }
-        if self.parameter_digest.is_zero() {
-            return Err(PrivacyActivationValidationError::ZeroParameterDigest);
-        }
-        if self.verifier_digest.is_zero() {
-            return Err(PrivacyActivationValidationError::ZeroVerifierDigest);
-        }
-        if self.statement_schema_digest.is_zero() {
-            return Err(PrivacyActivationValidationError::ZeroStatementSchemaDigest);
-        }
-        if self.engine_manifest_digest.is_zero() {
-            return Err(PrivacyActivationValidationError::ZeroEngineManifestDigest);
-        }
-        let limits_protocol = self.protocol_limits.protocol_id();
-        if limits_protocol != self.protocol_id {
-            return Err(PrivacyActivationValidationError::ProtocolLimitsMismatch {
-                protocol_id: self.protocol_id,
-                limits_protocol,
-            });
-        }
-        self.protocol_limits
-            .validate()
-            .map_err(PrivacyActivationValidationError::ProtocolLimits)?;
-        if let Some(pending) = self.pending_protocol_limits_tightening {
-            pending
-                .validate_against(&self.protocol_limits)
-                .map_err(PrivacyActivationValidationError::PendingProtocolLimits)?;
-        }
-        self.lifecycle
-            .validate()
-            .map_err(PrivacyActivationValidationError::Lifecycle)
-    }
-}
-/// Validation failure for [`PrivacyProtocolActivationRecordV1`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum PrivacyActivationValidationError {
-    /// Protocol and proof-system identities do not match.
-    #[error("privacy protocol {protocol_id:?} requires proof system {expected:?}, got {actual:?}")]
-    ProofSystemMismatch {
-        /// Protocol being activated.
+/// Structural or committed-height failure for an ordinary protocol policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyProtocolPolicyValidationErrorV1 {
+    /// The policy key and limit variant identify different protocols.
+    #[error("privacy policy protocol {protocol_id:?} differs from limits {limits_protocol:?}")]
+    ProtocolMismatch {
+        /// Policy identity.
         protocol_id: PrivacyProtocolIdV1,
-        /// Required proof system.
-        expected: PrivacyProofSystemIdV1,
-        /// Supplied proof system.
-        actual: PrivacyProofSystemIdV1,
-    },
-    /// Protocol and native engine identities do not match.
-    #[error("privacy protocol {protocol_id:?} requires engine {expected:?}, got {actual:?}")]
-    EngineMismatch {
-        /// Protocol being activated.
-        protocol_id: PrivacyProtocolIdV1,
-        /// Required native engine.
-        expected: PrivacyEngineIdV1,
-        /// Supplied native engine.
-        actual: PrivacyEngineIdV1,
-    },
-    /// Governed parameter-set identifier is zero.
-    #[error("privacy activation parameter id must be non-zero")]
-    ZeroParameterId,
-    /// Governed parameter digest is zero.
-    #[error("privacy activation parameter digest must be non-zero")]
-    ZeroParameterDigest,
-    /// Governed verifier digest is zero.
-    #[error("privacy activation verifier digest must be non-zero")]
-    ZeroVerifierDigest,
-    /// Governed statement-schema digest is zero.
-    #[error("privacy activation statement-schema digest must be non-zero")]
-    ZeroStatementSchemaDigest,
-    /// Governed engine-manifest digest is zero.
-    #[error("privacy activation engine-manifest digest must be non-zero")]
-    ZeroEngineManifestDigest,
-    /// Protocol-specific limits are tagged for another protocol.
-    #[error(
-        "privacy activation protocol {protocol_id:?} differs from protocol-limit tag {limits_protocol:?}"
-    )]
-    ProtocolLimitsMismatch {
-        /// Activated protocol.
-        protocol_id: PrivacyProtocolIdV1,
-        /// Protocol encoded by the activation-specific limits.
+        /// Limit identity.
         limits_protocol: PrivacyProtocolIdV1,
     },
-    /// Protocol-specific activation limits are invalid.
-    #[error("privacy activation protocol limits are invalid: {0}")]
-    ProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
-    /// A pending protocol-specific tightening is invalid.
-    #[error("privacy activation pending protocol limits are invalid: {0}")]
-    PendingProtocolLimits(PrivacyProtocolLimitsTighteningValidationErrorV1),
-    /// Lifecycle is invalid.
-    #[error("privacy activation lifecycle is invalid: {0}")]
-    Lifecycle(PrivacyLifecycleValidationError),
+    /// Current limits violate canonical protocol safety bounds.
+    #[error("privacy protocol policy limits are invalid: {0}")]
+    Limits(PrivacyProtocolLimitsValidationError),
+    /// The pending limit change is invalid.
+    #[error("privacy protocol policy update is invalid: {0}")]
+    PendingUpdate(PrivacyProtocolLimitsUpdateValidationErrorV1),
+    /// The pending schedule is inconsistent with the committed snapshot height.
+    #[error("privacy protocol policy schedule is invalid: {0}")]
+    Schedule(PrivacyPolicyValidationErrorV1),
 }
 /// Exact public capability-snapshot wire version.
 pub const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1: u32 = 1;
@@ -3589,7 +3132,7 @@ pub const PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1: u32 = 1;
 ///
 /// This is a wire-model counterpart of the core-only compiled profile. It
 /// deliberately contains no lifecycle or readiness boolean: governance state
-/// is carried separately by [`PrivacyCapabilityRowV1::activation`].
+/// is carried separately by [`PrivacyCapabilityRowV1::policy`].
 #[derive(
     Clone,
     Copy,
@@ -3625,7 +3168,7 @@ pub struct PrivacyCompiledProfileSnapshotV1 {
     /// Digest of the complete compiled engine manifest.
     pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
     /// Exact protocol-specific limits compiled into the verifier.
-    pub protocol_limits: PrivacyProtocolActivationLimitsV1,
+    pub protocol_limits: PrivacyProtocolLimitsV1,
 }
 impl PrivacyCompiledProfileSnapshotV1 {
     /// Validate the closed protocol mappings and every fixed binding.
@@ -3738,7 +3281,7 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
     },
     /// Compiled protocol-specific limits are malformed.
     #[error("compiled privacy protocol limits are invalid: {0}")]
-    ProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
+    ProtocolLimits(PrivacyProtocolLimitsValidationError),
 }
 /// Typed failure canonicalizing a compiled public-statement schema.
 #[derive(
@@ -3794,6 +3337,9 @@ pub enum PrivacyCompiledProfileUnavailableReasonV1 {
     /// The locally generated statement schema was ambiguous or incomplete.
     #[norito(rename = "statement-schema-invalid")]
     StatementSchemaInvalid(PrivacyCompiledStatementSchemaErrorV1),
+    /// The X509 joint protocol has no complete round-by-round/Fiat–Shamir security reduction.
+    #[norito(rename = "joint-security-reduction-incomplete")]
+    JointSecurityReductionIncomplete,
 }
 /// Closed result of obtaining one locally compiled privacy profile.
 #[derive(
@@ -4028,302 +3574,88 @@ pub struct PrivacyCapabilityRowV1 {
     pub protocol_id: PrivacyProtocolIdV1,
     /// Exact local compiled-profile result.
     pub compiled_profile: PrivacyCompiledProfileResultV1,
-    /// Exact committed governance record, if registered.
-    pub activation: Option<PrivacyProtocolActivationRecordV1>,
+    /// Optional ordinary limits committed by the network.
+    pub policy: Option<PrivacyProtocolPolicyV1>,
 }
 impl PrivacyCapabilityRowV1 {
-    /// Validate a row against its committed snapshot height.
+    /// Validate semantic profile identity and ordinary policy at a committed height.
     ///
+    /// A policy may persist when a local implementation is unavailable. Its presence never
+    /// enables that implementation, and its absence never disables a supported implementation.
     /// # Errors
-    ///
-    /// Rejects embedded identity mismatches, malformed compiled profiles,
-    /// activation without an executable engine, activation/profile binding
-    /// drift, and lifecycle or policy heights inconsistent with the snapshot.
+    /// Rejects malformed profiles, wrong protocol identities and invalid policy schedules.
     pub fn validate_at_committed_height(
         &self,
         committed_height: u64,
     ) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
-        let profile = match self.compiled_profile {
-            PrivacyCompiledProfileResultV1::Available(profile) => {
-                profile
-                    .validate()
-                    .map_err(PrivacyCapabilityRowValidationErrorV1::CompiledProfile)?;
-                if profile.protocol_id != self.protocol_id {
-                    return Err(
-                        PrivacyCapabilityRowValidationErrorV1::CompiledProfileProtocolMismatch {
-                            row_protocol: self.protocol_id,
-                            profile_protocol: profile.protocol_id,
-                        },
-                    );
-                }
-                Some(profile)
+        if let PrivacyCompiledProfileResultV1::Available(profile) = self.compiled_profile {
+            profile
+                .validate()
+                .map_err(PrivacyCapabilityRowValidationErrorV1::CompiledProfile)?;
+            if profile.protocol_id != self.protocol_id {
+                return Err(
+                    PrivacyCapabilityRowValidationErrorV1::CompiledProfileProtocolMismatch {
+                        row_protocol: self.protocol_id,
+                        profile_protocol: profile.protocol_id,
+                    },
+                );
             }
+        }
+        if let Some(policy) = self.policy {
+            if policy.protocol_id != self.protocol_id {
+                return Err(
+                    PrivacyCapabilityRowValidationErrorV1::PolicyProtocolMismatch {
+                        row_protocol: self.protocol_id,
+                        policy_protocol: policy.protocol_id,
+                    },
+                );
+            }
+            policy
+                .validate_at_committed_height(committed_height)
+                .map_err(PrivacyCapabilityRowValidationErrorV1::Policy)?;
+        }
+        Ok(())
+    }
+    /// Effective limits for an available implementation, without an activation prerequisite.
+    #[must_use]
+    pub const fn effective_protocol_limits_v1(&self) -> Option<PrivacyProtocolLimitsV1> {
+        match self.compiled_profile {
             PrivacyCompiledProfileResultV1::Unavailable(_) => None,
-        };
-        let Some(activation) = self.activation else {
-            return Ok(());
-        };
-        let Some(profile) = profile else {
-            return Err(
-                PrivacyCapabilityRowValidationErrorV1::UnavailableActivation {
-                    protocol_id: self.protocol_id,
-                },
-            );
-        };
-        activation
-            .validate()
-            .map_err(PrivacyCapabilityRowValidationErrorV1::Activation)?;
-        if activation.protocol_id != self.protocol_id {
-            return Err(
-                PrivacyCapabilityRowValidationErrorV1::ActivationProtocolMismatch {
-                    row_protocol: self.protocol_id,
-                    activation_protocol: activation.protocol_id,
-                },
-            );
-        }
-        validate_privacy_capability_activation_profile_v1(&activation, &profile)?;
-        validate_privacy_capability_activation_height_v1(&activation, committed_height)
-    }
-}
-fn validate_privacy_capability_activation_profile_v1(
-    activation: &PrivacyProtocolActivationRecordV1,
-    profile: &PrivacyCompiledProfileSnapshotV1,
-) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
-    if activation.proof_system_id != profile.proof_system_id {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::ProofSystem,
-            },
-        );
-    }
-    if activation.engine_id != profile.engine_id {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::Engine,
-            },
-        );
-    }
-    if activation.parameter_id != profile.parameter_id {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::ParameterId,
-            },
-        );
-    }
-    if activation.parameter_digest != profile.parameter_digest {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::ParameterDigest,
-            },
-        );
-    }
-    if activation.verifier_digest != profile.verifier_digest {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::VerifierDigest,
-            },
-        );
-    }
-    if activation.statement_schema_digest != profile.statement_schema_digest {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::StatementSchemaDigest,
-            },
-        );
-    }
-    if activation.engine_manifest_digest != profile.engine_manifest_digest {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
-                field: PrivacyCapabilityBindingFieldV1::EngineManifestDigest,
-            },
-        );
-    }
-    activation
-        .protocol_limits
-        .validate_with_ceiling(&profile.protocol_limits)
-        .map_err(PrivacyCapabilityRowValidationErrorV1::ActivationProtocolLimits)
-}
-fn validate_privacy_capability_activation_height_v1(
-    activation: &PrivacyProtocolActivationRecordV1,
-    committed_height: u64,
-) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
-    let (proposed_at_height, activated_at_height, state_since_height) = match activation.lifecycle {
-        PrivacyProtocolLifecycleV1::Proposed(state) => (state.proposed_at_height, None, None),
-        PrivacyProtocolLifecycleV1::Active(state) => (
-            state.proposed_at_height,
-            Some(state.activated_at_height),
-            Some(state.state_since_height),
-        ),
-        PrivacyProtocolLifecycleV1::Suspended(state) => (
-            state.proposed_at_height,
-            Some(state.activated_at_height),
-            Some(state.state_since_height),
-        ),
-        PrivacyProtocolLifecycleV1::Retired(state) => (
-            state.proposed_at_height,
-            state.activated_at_height,
-            Some(state.state_since_height),
-        ),
-    };
-    if proposed_at_height > committed_height {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ProposalAfterCommitted {
-                proposed_at_height,
-                committed_height,
-            },
-        );
-    }
-    if let Some(activated_at_height) = activated_at_height
-        && activated_at_height > committed_height
-    {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::ActivationAfterCommitted {
-                activated_at_height,
-                committed_height,
-            },
-        );
-    }
-    if let Some(state_since_height) = state_since_height
-        && state_since_height > committed_height
-    {
-        return Err(
-            PrivacyCapabilityRowValidationErrorV1::LifecycleStateAfterCommitted {
-                state_since_height,
-                committed_height,
-            },
-        );
-    }
-    if let Some(pending) = activation.pending_protocol_limits_tightening {
-        if pending.scheduled_at_height > committed_height {
-            return Err(
-                PrivacyCapabilityRowValidationErrorV1::ProtocolLimitsScheduledAfterCommitted {
-                    scheduled_at_height: pending.scheduled_at_height,
-                    committed_height,
-                },
-            );
-        }
-        if pending.effective_at_height <= committed_height {
-            return Err(
-                PrivacyCapabilityRowValidationErrorV1::ProtocolLimitsNotFuture {
-                    effective_at_height: pending.effective_at_height,
-                    committed_height,
-                },
-            );
+            PrivacyCompiledProfileResultV1::Available(profile) => Some(match self.policy {
+                Some(policy) => policy.current_limits,
+                None => profile.protocol_limits,
+            }),
         }
     }
-    Ok(())
 }
-/// Immutable binding selected when comparing activation and compiled profile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PrivacyCapabilityBindingFieldV1 {
-    /// Proof-system identity.
-    ProofSystem,
-    /// Native-engine identity.
-    Engine,
-    /// Parameter-set identifier.
-    ParameterId,
-    /// Parameter-set digest.
-    ParameterDigest,
-    /// Verifier digest.
-    VerifierDigest,
-    /// Statement-schema digest.
-    StatementSchemaDigest,
-    /// Engine-manifest digest.
-    EngineManifestDigest,
-}
-/// Validation failure for one [`PrivacyCapabilityRowV1`].
+/// Validation failure for one canonical capability row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivacyCapabilityRowValidationErrorV1 {
-    /// Locally compiled profile is malformed.
+    /// The native semantic profile is malformed.
     #[error("privacy capability compiled profile is invalid: {0}")]
     CompiledProfile(PrivacyCompiledProfileSnapshotValidationErrorV1),
-    /// Row and compiled-profile identities differ.
+    /// Row and profile select different protocols.
     #[error(
-        "privacy capability row protocol {row_protocol:?} differs from compiled profile {profile_protocol:?}"
+        "privacy capability row protocol {row_protocol:?} differs from profile {profile_protocol:?}"
     )]
     CompiledProfileProtocolMismatch {
         /// Row identity.
         row_protocol: PrivacyProtocolIdV1,
-        /// Embedded profile identity.
+        /// Profile identity.
         profile_protocol: PrivacyProtocolIdV1,
     },
-    /// A governance activation exists for an unavailable local engine.
-    #[error("unavailable privacy protocol {protocol_id:?} cannot have an activation")]
-    UnavailableActivation {
-        /// Unavailable protocol.
-        protocol_id: PrivacyProtocolIdV1,
-    },
-    /// Governed activation is malformed.
-    #[error("privacy capability activation is invalid: {0}")]
-    Activation(PrivacyActivationValidationError),
-    /// Row and governed activation identities differ.
+    /// The committed policy is malformed.
+    #[error("privacy capability policy is invalid: {0}")]
+    Policy(PrivacyProtocolPolicyValidationErrorV1),
+    /// Row and policy select different protocols.
     #[error(
-        "privacy capability row protocol {row_protocol:?} differs from activation {activation_protocol:?}"
+        "privacy capability row protocol {row_protocol:?} differs from policy {policy_protocol:?}"
     )]
-    ActivationProtocolMismatch {
+    PolicyProtocolMismatch {
         /// Row identity.
         row_protocol: PrivacyProtocolIdV1,
-        /// Embedded activation identity.
-        activation_protocol: PrivacyProtocolIdV1,
-    },
-    /// An immutable governed binding differs from the compiled profile.
-    #[error("privacy activation differs from compiled profile at {field:?}")]
-    ActivationProfileMismatch {
-        /// Mismatched immutable field.
-        field: PrivacyCapabilityBindingFieldV1,
-    },
-    /// Governed protocol limits exceed the compiled profile.
-    #[error("privacy activation limits differ from compiled profile: {0}")]
-    ActivationProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
-    /// Proposal admission is later than the snapshot that contains it.
-    #[error(
-        "privacy proposal height {proposed_at_height} is after committed height {committed_height}"
-    )]
-    ProposalAfterCommitted {
-        /// Persisted proposal height.
-        proposed_at_height: u64,
-        /// Snapshot height.
-        committed_height: u64,
-    },
-    /// First activation is later than the committed snapshot.
-    #[error(
-        "privacy activation height {activated_at_height} is after committed height {committed_height}"
-    )]
-    ActivationAfterCommitted {
-        /// Claimed first activation height.
-        activated_at_height: u64,
-        /// Snapshot height.
-        committed_height: u64,
-    },
-    /// Current lifecycle interval begins after the committed snapshot.
-    #[error(
-        "privacy lifecycle state height {state_since_height} is after committed height {committed_height}"
-    )]
-    LifecycleStateAfterCommitted {
-        /// Claimed current-state start height.
-        state_since_height: u64,
-        /// Snapshot height.
-        committed_height: u64,
-    },
-    /// Protocol-limit schedule claims admission after the snapshot.
-    #[error(
-        "privacy protocol-limit schedule height {scheduled_at_height} is after committed height {committed_height}"
-    )]
-    ProtocolLimitsScheduledAfterCommitted {
-        /// Claimed admission height.
-        scheduled_at_height: u64,
-        /// Snapshot height.
-        committed_height: u64,
-    },
-    /// Protocol-limit schedule was retained after its exact effective height.
-    #[error(
-        "privacy protocol-limit effective height {effective_at_height} is not after committed height {committed_height}"
-    )]
-    ProtocolLimitsNotFuture {
-        /// Scheduled effective height.
-        effective_at_height: u64,
-        /// Snapshot height.
-        committed_height: u64,
+        /// Policy identity.
+        policy_protocol: PrivacyProtocolIdV1,
     },
 }
 /// Authoritative committed privacy capability snapshot.
@@ -4348,14 +3680,12 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
 pub struct PrivacyCapabilitySnapshotV1 {
     /// Exact snapshot schema version.
     pub version: u32,
+    /// Canonical genesis identity read from the same committed State as this snapshot.
+    pub network_id: crate::NetworkId,
     /// Height of the committed state from which this snapshot was read.
     pub committed_height: u64,
     /// Authoritative singleton chain-wide privacy policy.
     pub consensus_policy: PrivacyConsensusPolicyV1,
-    /// Full registered Exact12 release and network deployment evidence.
-    ///
-    /// Absence is valid snapshot state but keeps every protocol unavailable.
-    pub qualification: Option<PrivacyExact12QualificationRecordV1>,
     /// Exactly twelve protocol rows in canonical discriminant order.
     pub protocols: Vec<PrivacyCapabilityRowV1>,
 }
@@ -4402,11 +3732,6 @@ impl PrivacyCapabilitySnapshotV1 {
                         source,
                     },
                 )?;
-        }
-        if let Some(qualification) = &self.qualification {
-            qualification
-                .validate()
-                .map_err(PrivacyCapabilitySnapshotValidationErrorV1::Qualification)?;
         }
         Ok(())
     }
@@ -4512,10 +3837,9 @@ pub fn validate_privacy_compiled_profile_catalog_archive_v1(
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Maximum elements accepted in any sequence while decoding a capability archive.
 ///
-/// Qualification embeds the 48 receipts, 54 artifacts, audit dispositions, and
-/// signature/key byte sequences. The twelve-row catalog cardinality is enforced
-/// by semantic validation; it is not a bound on every nested sequence.
-pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize = 16 * 1024;
+/// The sole dynamic sequence is the closed twelve-row protocol catalog.
+/// Documentary evidence has its own schema and never expands runtime decode bounds.
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize = PrivacyProtocolIdV1::COUNT;
 /// Maximum cumulative elements accepted while decoding a capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize =
     PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1;
@@ -4525,8 +3849,8 @@ pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1: usize =
 /// Maximum cumulative allocation permitted while decoding a capability archive.
 ///
 /// The decoder charges nested field slices, aligned copies, and owned values
-/// cumulatively. A complete signed qualification therefore requires more than
-/// its archive length; this fixed 4 MiB budget still bounds hostile allocations.
+/// cumulatively. This fixed 4 MiB budget bounds hostile nested/aligned allocations
+/// independently of the archive byte and twelve-row sequence ceilings.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
     16 * PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1;
 /// Maximum data-dependent nesting depth permitted in a capability archive.
@@ -4575,8 +3899,9 @@ impl PrivacyCapabilityArchiveValidationStatusV1 {
 /// cumulative-element, allocation, and nesting budgets. The canonical decoder enforces the exact
 /// [`PrivacyExact12CapabilityManifestV1`] schema and byte-for-byte canonical re-encoding. Finally
 /// [`PrivacyExact12CapabilityManifestV1::validate`] enforces the exact twelve rows in
-/// [`PrivacyProtocolIdV1::ALL`] order and all operation, profile, readiness, activation, policy,
-/// production-qualification, and self-digest bindings. Every other schema is rejected.
+/// [`PrivacyProtocolIdV1::ALL`] order and all operation, profile, readiness, policy,
+/// network and self-digest bindings. Every other schema is rejected. Local compiled-profile
+/// equality and selected-protocol admission are checked separately by the caller.
 #[must_use]
 pub fn validate_privacy_capability_archive_v1(
     archive: &[u8],
@@ -4627,9 +3952,6 @@ pub enum PrivacyCapabilitySnapshotValidationErrorV1 {
     /// Singleton policy is invalid at the committed height.
     #[error("privacy capability consensus policy is invalid: {0}")]
     ConsensusPolicy(PrivacyPolicyValidationErrorV1),
-    /// Registered release/deployment evidence does not match this snapshot.
-    #[error("privacy capability qualification is invalid: {0}")]
-    Qualification(PrivacyExact12QualificationRecordValidationErrorV1),
     /// Protocol row count differs from the closed registry.
     #[error("privacy capability snapshot has {actual} rows; expected {expected}")]
     ProtocolCount {

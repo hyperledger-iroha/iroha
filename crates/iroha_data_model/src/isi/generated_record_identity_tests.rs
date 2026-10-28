@@ -88,11 +88,7 @@ fn missing_record_values() -> Vec<Value> {
     let mut records = values::values();
     records.extend(super::musubi::generated_identity_values::values());
     records.extend(super::private_settlement::generated_identity_values::values());
-    records.push(capture(
-        super::privacy::RegisterPrivacyExact12QualificationV1::new(
-            crate::privacy::tests::generated_instruction_qualification(),
-        ),
-    ));
+    records.push(capture(super::privacy::current_zk_x509_request_fixture_v1()));
     assert_eq!(
         records.len(),
         58,
@@ -257,18 +253,6 @@ fn populated_record_values_preserve_the_original_capture() {
         assert_eq!(cases.len(), 1, "one original populated value for each gap");
         fixture_json::assert_json_matches(&cases[0], &frame_fields(&actual), nominal);
     }
-}
-
-#[test]
-#[ignore = "explicit maintenance command prints the canonical privacy qualification record"]
-fn print_privacy_qualification_record_fixture_row() {
-    let row = capture(super::privacy::RegisterPrivacyExact12QualificationV1::new(
-        crate::privacy::tests::generated_instruction_qualification(),
-    ));
-    println!(
-        "PRIVACY_QUALIFICATION_FIXTURE_ROW={}",
-        json::to_json(&row).expect("privacy qualification record")
-    );
 }
 
 #[test]

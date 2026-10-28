@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Audit fail-closed Exact12 capability-manifest admission across SDKs.
 
-ABI33 intentionally has exactly six privacy C exports. Its no-argument
-compiled-profile getter can expose only immutable local build metadata; it
-cannot manufacture Torii's committed height, lifecycle, or registered release
-and network qualification. The capability-manifest validator accepts only
-caller-supplied canonical bytes and verifies their complete signed evidence.
-Consequently an SDK is release-ready only when it preserves Torii's canonical
-manifest bytes, validates them, and compares the selected row's complete
+ABI33 has one explicit privacy C export inventory, including construction
+validation. Its no-argument compiled-profile getter can expose only immutable
+local build metadata; it cannot manufacture Torii's committed height, network
+identity or resource policy.
+The capability-manifest validator accepts only caller-supplied canonical bytes
+and validates their canonical profile and policy structure.
+Consequently this source contract is complete only when it preserves Torii's
+canonical manifest bytes, validates them, and compares the selected row's complete
 compiled-profile tuple with the native local catalog before constructing a
 privacy transaction.
 
@@ -37,6 +38,7 @@ APPROVED_PRIVACY_EXPORTS = frozenset(
         "iroha_privacy_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_fixture_bundle_v1",
         "iroha_privacy_validate_exact12_capability_manifest_v1",
+        "iroha_privacy_validate_exact12_submit_proof_construction_v1",
         "iroha_privacy_free_buffer",
     }
 )
@@ -49,7 +51,9 @@ _RUST_BRIDGE_PLATFORM_JNI_PARTS = (
     "crates/connect_norito_bridge/src/platform_jni/part_3.rs",
     "crates/connect_norito_bridge/src/platform_jni/private_settlement.rs",
 )
+_RUST_CONSTRUCTION = "crates/connect_norito_bridge/src/privacy_construction.rs"
 _RUST_BRIDGE_SOURCE_FILES = (
+    _RUST_CONSTRUCTION,
     RUST_BRIDGE,
     _RUST_BRIDGE_PLATFORM_JNI,
     *_RUST_BRIDGE_PLATFORM_JNI_PARTS,
@@ -109,8 +113,8 @@ SDK_CONTRACTS = (
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "qualification",
-            "parsePrivacyExact12QualificationV1",
+            "policy",
+            "parseProtocolPolicy",
         ),
         (
             "privacyValidateExact12CapabilityManifestV1",
@@ -130,7 +134,7 @@ SDK_CONTRACTS = (
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "ProductionQualified",
+            "PrivacyCapabilityReadinessV1::Available",
         ),
         (
             "privacy_validate_exact12_capability_manifest_v1",
@@ -162,8 +166,8 @@ SDK_CONTRACTS = (
             "operationSchema",
             "executionMode",
             "privacyFeatureMask",
-            "qualification",
-            "PrivacyExact12QualificationRecordV1",
+            "policy",
+            "PrivacyProtocolPolicyV1",
         ),
         (
             "nativeValidateExact12CapabilityManifest",
@@ -186,8 +190,8 @@ SDK_CONTRACTS = (
             "OperationSchema",
             "ExecutionMode",
             "PrivacyFeatureMask",
-            "Qualification",
-            "PrivacyExact12QualificationRecordV1",
+            "PolicyCanonicalBytes",
+            "ParsePolicy(",
         ),
         (
             "ValidateExact12CapabilityManifestV1",
@@ -212,8 +216,8 @@ SDK_CONTRACTS = (
             "operationSchema",
             "executionMode",
             "privacyFeatureMask",
-            "qualification",
-            "PrivacyExact12QualificationRecordV1",
+            "policy",
+            "PrivacyProtocolPolicyV1",
         ),
         ("validateExact12CapabilityManifestV1", "validateCompiledProfileCatalogV1"),
         ("requireExact12CapabilityTupleV1", "compiledProfileCatalogV1"),
@@ -284,7 +288,7 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
         _JAVASCRIPT_CAPABILITIES: (
             "const transport = consumePrivacyExact12CapabilityManifestTransportV1(receipt);",
             "state.expectedNetworkId = Uint8Array.from(transport.expectedNetworkId);",
-            "byte === qualification.genesis_hash[index]",
+            "byte === actualNetworkId[index]",
             "protocolId, Uint8Array.from(state.expectedNetworkId)",
         ),
         "javascript/iroha_js/src/toriiClient.js": (
@@ -302,7 +306,7 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
         "crates/iroha_js_host/src/lib.rs": (
             "expected_network_id: Uint8Array,",
             "require_privacy_exact12_network_v1(",
-            "if actual != expected || genesis_hash != expected.as_bytes()",
+            "if actual != expected {",
         ),
     },
     "python-pyo3": {
@@ -310,7 +314,7 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
             "authenticated_network_id: Option<NetworkId>",
             "authenticated_network_id: None,",
             "fn from_authenticated_torii(archive: &[u8], expected_network_id: NetworkId)",
-            "qualification.deployment_qualification.network_id != expected_network_id",
+            "decoded.manifest.network_id != expected_network_id",
             "decoded.authenticated_network_id = Some(expected_network_id);",
             "if network_id != expected_network_id",
             'client.get_type().is(&owner.getattr("ToriiClient")?)',
@@ -340,7 +344,7 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
             "admission.expectedNetworkId,",
         ),
         _JVM_KOTLIN_TRANSPORT: (
-            'require(config.baseUri().scheme == "https")',
+            'require(config.baseUri().scheme.equals("https", ignoreCase = true))',
             "val expectedNetworkId = config.requireLocalSigningContext().networkId()",
             "requestNoStore = true,",
             "requireExactResponseProvenance = true,",
@@ -354,10 +358,9 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
             "is WirePayload -> WireInstructionPayload(payload.wireName, payload.payloadBytes)",
         ),
         _RUST_BRIDGE_PLATFORM_JNI_PARTS[1]: (
-            "if !java_privacy_manifest_network_matches(&manifest, expected_network)",
-            "network.as_bytes() == expected_network",
-            "genesis_hash == expected_network",
-            ".context()\n            .network_id\n            .as_bytes()\n            == expected_network",
+            "java_privacy_manifest_network_matches(&manifest, &network)",
+            "manifest.network_id.as_bytes() == expected_network",
+            "crate::privacy_construction::tuple_admitted(archive, index, expected_network)",
         ),
         _RUST_BRIDGE_PLATFORM_JNI_PARTS[2]: (
             "nativeValidateExact12CapabilityManifestForNetworkV1(",
@@ -371,9 +374,8 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
             "authenticatedNetworkId: NetworkId? = nil",
             "guard let expectedNetworkId = manifest.authenticatedNetworkId else",
             "networkId == expectedNetworkId else",
-            "deployment.networkId == expectedNetworkId,",
-            "deployment.genesisHash == expectedNetworkId.bytes else",
-            "guard genesisHash.count == 32, genesisHash == networkId.bytes else",
+            "guard manifest.networkId == expectedNetworkId else",
+            "PrivacyExact12CapabilityManifestCodecV1.requireNetworkV1(",
             "for index in 0..<13",
             "guard fields[0] == proofWireMagic, fields[1] == exact12CatalogCommitment else",
             "fields[11], protocolId: row.protocolId, expectedNetworkId: expectedNetworkId",
@@ -385,7 +387,7 @@ _NETWORK_AUTHORITY_REQUIREMENTS = {
             "let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)",
         ),
         _SWIFT_TRANSACTION: (
-            "guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId else",
+            "guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId,",
             "expectedNetworkId: expectedNetworkId,",
         ),
         _SWIFT_ENCODER: (
@@ -485,7 +487,10 @@ def _rust_bridge_source(root: Path) -> str:
     parts = tuple(
         _read_required_source(root, path) for path in _RUST_BRIDGE_PLATFORM_JNI_PARTS
     )
-    return "\n".join((bridge, platform_jni) + parts)
+    if len(re.findall(r"^mod privacy_construction;$", bridge, flags=re.MULTILINE)) != 1:
+        raise AuditError("Rust bridge must own exactly one privacy_construction module")
+    construction = _read_required_source(root, _RUST_CONSTRUCTION)
+    return "\n".join((bridge, platform_jni, construction) + parts)
 
 
 def _rust_exports(source: str) -> frozenset[str]:
@@ -511,12 +516,12 @@ def _require_exact_abi33(root: Path) -> None:
     header = _header_exports(_read(root, C_HEADER))
     if rust != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "Rust ABI33 privacy exports differ from the exact approved six: "
+            "Rust ABI33 privacy exports differ from the exact approved inventory: "
             f"found {sorted(rust)}"
         )
     if header != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "C ABI33 privacy declarations differ from the exact approved six: "
+            "C ABI33 privacy declarations differ from the exact approved inventory: "
             f"found {sorted(header)}"
         )
 
@@ -550,9 +555,9 @@ def _require_rust_manifest_contract(root: Path) -> None:
         "privacy_feature_mask",
         "readiness",
         "PrivacyCapabilityUnavailableReasonV1",
-        "qualification",
-        "PrivacyExact12QualificationRecordV1",
-        "InvalidProductionQualification",
+        "policy",
+        "PrivacyProtocolPolicyV1",
+        "PrivacyCapabilityReadinessV1::Available",
     )
     if not all(marker in model for marker in required):
         raise AuditError("Rust canonical Exact12 manifest contract is incomplete")
@@ -560,8 +565,11 @@ def _require_rust_manifest_contract(root: Path) -> None:
         raise AuditError("Rust canonical Exact12 manifest archive validator is absent")
     if "exact12_capability_manifest_v1" not in torii:
         raise AuditError("Torii does not project committed state into the Exact12 manifest")
-    if "production_qualification" in model:
-        raise AuditError("Rust Exact12 activation still carries caller-owned qualification")
+    if any(retired in model for retired in (
+        "PrivacyProtocolActivationRecordV1", "PrivacyProtocolLifecycleV1",
+        "PrivacyExact12QualificationRecordV1", "ProductionQualified",
+    )):
+        raise AuditError("Rust runtime capability manifest retains retired documentary prerequisites")
 
 
 def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
@@ -603,10 +611,10 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "qualification",
-            "parsePrivacyExact12QualificationV1",
-            "invalid-production-qualification",
-            "missing-production-qualification",
+            '"policy"',
+            "parseProtocolPolicy",
+            '"current_limits"',
+            '"pending_update"',
         )
     )
     authenticated_native_authority = all(
@@ -637,9 +645,7 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
     exact_tuple_match = all(
         marker in capabilities
         for marker in (
-            "readiness !== \"production-qualified\"",
-            "manifest.qualification === null",
-            "qualificationMatchesCapabilityRowV1",
+            'readiness !== "available"',
             "row.compiled_profile.status !== \"available\"",
             "compiledProfileCatalogFromNativeV1(native)",
             '"privacyRequireExact12CapabilityTupleV1"',
@@ -704,8 +710,8 @@ def _python_cutover_gates(root: Path) -> dict[str, bool]:
             "operation_schema",
             "execution_mode",
             "privacy_feature_mask",
-            "ProductionQualified",
-            "MissingProductionQualification",
+            "PrivacyCapabilityReadinessV1::Available",
+            ".effective_protocol_limits_v1()",
         )
     )
     native_validation = all(
@@ -722,7 +728,7 @@ def _python_cutover_gates(root: Path) -> dict[str, bool]:
     exact_tuple_match = all(
         marker in manifest
         for marker in (
-            "if !row.is_network_available()",
+            "if let PrivacyCapabilityReadinessV1::Unavailable(reason) = row.readiness",
             "compiled_privacy_profile_v1(protocol_id)",
             "if network_profile != local_snapshot",
             "self.require_network_profile(protocol_id)?",
@@ -751,12 +757,62 @@ def _python_cutover_gates(root: Path) -> dict[str, bool]:
     }
 
 
+def _rust_owner_function(source: str, name: str) -> str:
+    """Select one rustfmt-shaped top-level owner, excluding comment-only markers.
+
+    This is a source-prerequisite check, not a Rust parser or execution proof.
+    Requiring a unique function and its own rejecting branch prevents an
+    incidental validator call or a guard in another owner from satisfying it.
+    """
+
+    declarations = list(re.finditer(
+        rf"(?m)^(?:pub(?:\([^\n()]*\))?\s+)?(?:unsafe\s+)?fn\s+{re.escape(name)}\s*\(",
+        source,
+    ))
+    if len(declarations) != 1:
+        return ""
+    start = declarations[0].start()
+    end = re.search(r"(?m)^}\s*$", source[declarations[0].end():])
+    if end is None:
+        return ""
+    body = source[start:declarations[0].end() + end.end()]
+    return re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.DOTALL)
+
+
+def _relocated_native_validation_guards(construction: str, jni: str) -> bool:
+    """Require actual archive/network refusals in the shared native owners."""
+
+    tuple_owner = _rust_owner_function(construction, "tuple_admitted")
+    inspection_owner = _rust_owner_function(
+        jni, "java_privacy_exact12_capability_manifest_inspection"
+    )
+    return all((
+        re.search(
+            r"if\s+network\[31\]\s*&\s*1\s*!=\s*1\s*\|\|\s*"
+            r"!validate_privacy_capability_archive_v1\(archive\)\.is_valid\(\)\s*"
+            r"\{\s*return\s+false\s*;\s*\}",
+            tuple_owner,
+        ) is not None,
+        re.search(
+            r"if\s+manifest\.network_id\.as_bytes\(\)\s*!=\s*network\s*"
+            r"\{\s*return\s+false\s*;\s*\}",
+            tuple_owner,
+        ) is not None,
+        re.search(
+            r"let\s+status\s*=\s*validate_privacy_capability_archive_v1\(archive\)\s*;\s*"
+            r"if\s+!status\.is_valid\(\)\s*\{\s*return\s+Err\(",
+            inspection_owner,
+        ) is not None,
+    ))
+
+
 def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
     """Audit the JVM cutover's authority-bearing statements, not documentation markers."""
 
     model = _read(root, _JVM_MODEL)
     kotlin_bridge = _read(root, _JVM_KOTLIN_BRIDGE)
     rust_bridge = _rust_bridge_source(root)
+    rust_construction = _read(root, _RUST_CONSTRUCTION)
     rust_manifest_admission = _read(root, _RUST_BRIDGE_PLATFORM_JNI_PARTS[1])
     kotlin_transport = _read(root, _JVM_KOTLIN_TRANSPORT)
     java_transport = _read(root, _JVM_JAVA_TRANSPORT)
@@ -779,15 +835,10 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "privacyFeatureMask",
             "compiledProfile",
             "manifestDigest",
-            "PrivacySecurityModelV1",
-            "PrivacySecurityClaimV1",
-            "PrivacyExact12QualificationRecordV1",
-            "PrivacyExact12ReleaseManifestV1",
-            "PrivacyExact12DeploymentQualificationV1",
-            "qualificationMatchesCapabilityRowV1",
-            "ProductionQualified",
-            "MissingProductionQualification",
-            "InvalidProductionQualification",
+            "PrivacyProtocolPolicyV1",
+            "policy?.currentLimits ?: it.profile.protocolLimits",
+            "PrivacyCapabilityReadinessV1.Available",
+            "pendingUpdate",
         )
     ) and all(
         retired not in model
@@ -803,8 +854,7 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
             "nativeInspectExact12CapabilityManifest" in kotlin_bridge,
             "check(nativeAvailable)" in kotlin_bridge,
             not (root / _RETIRED_JVM_JAVA_BRIDGE).exists(),
-            "if !validate_privacy_capability_archive_v1(archive).is_valid()"
-            in rust_manifest_admission,
+            _relocated_native_validation_guards(rust_construction, rust_manifest_admission),
             "PrivacyExact12CapabilityManifestV1>(archive)" in rust_bridge,
             "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_"
             "nativeValidateExact12CapabilityManifestForNetworkV1" in rust_bridge,
@@ -813,8 +863,8 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
     )
     exact_tuple_match = all(
         (
-            "committed.protocol_id == local.protocol_id" in rust_bridge,
-            "committed.compiled_profile == local.compiled_profile" in rust_bridge,
+            "local.protocol_id == protocol" in rust_construction,
+            "committed.compiled_profile == local.compiled_profile" in rust_construction,
             '"local_compiled_tuple_matches"' in rust_bridge,
             "require(row.localCompiledTupleMatches)" in model,
             "compiledProfileCatalogTypedV1" in model,
@@ -861,8 +911,9 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
 def _swift_cutover_gates(root: Path) -> dict[str, bool]:
     """Audit Swift's canonical Rust validator and mandatory local catalog anchor.
 
-    The manifest validator must authenticate the complete signed qualification
-    before managed projection. Every fetch, admission, construction, and final
+    The manifest validator validates canonical profile and optional policy structure
+    before managed projection; authenticated Torii transport supplies origin.
+    Every fetch, admission, construction, and final
     encode also re-enters native validation before exact tuple comparison.
     """
 
@@ -893,7 +944,7 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
         else ""
     )
     network_admission_start = model.find("    public static func requireExact12CapabilityTupleV1(")
-    network_admission_end = model.find("        let row = current.row(", network_admission_start)
+    network_admission_end = model.find("        let row = try PrivacyExact12CapabilityManifestCodecV1.requireAvailableLocalRowV1(", network_admission_start)
     network_admission = (
         model[network_admission_start:network_admission_end]
         if network_admission_start >= 0 and network_admission_end > network_admission_start
@@ -927,8 +978,9 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "maxNullifiersPerAction",
             "maxCommitmentsPerAction",
             "retainedRootCount",
-            "pendingTightening",
-            "PrivacyProtocolActivationRecordV1",
+            "pendingUpdate",
+            "PrivacyProtocolPolicyV1",
+            "public let policy: PrivacyProtocolPolicyV1?",
             "proofSystemId",
             "engineId",
             "parameterId",
@@ -936,19 +988,8 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "verifierDigest",
             "statementSchemaDigest",
             "engineManifestDigest",
-            "lifecycle",
             "protocolLimits",
-            "pendingProtocolLimitsTightening",
-            "public let qualification: PrivacyExact12QualificationRecordV1?",
-            "PrivacySecurityModelV1",
-            "PrivacySecurityClaimV1",
-            "PrivacyExact12QualificationRecordV1",
-            "PrivacyExact12ReleaseManifestV1",
-            "PrivacyExact12DeploymentQualificationV1",
-            "qualificationMatches(",
-            "missingProductionQualification",
-            "invalidProductionQualification",
-            "productionQualified",
+            "policy?.currentLimits ?? profile.protocolLimits",
             "canonicalNorito",
             "protocols must contain exactly 12 rows",
             "protocol rows are missing, duplicated, or reordered",
@@ -984,10 +1025,10 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
     exact_tuple_match = all(
         marker in model
         for marker in (
-            "guard compiledBytes == localCompiledProfile",
-            "activation proof system differs from the compiled tuple",
+            "let localCompiledTupleMatches = compiledBytes == localCompiledProfile",
+            "guard row.isNetworkAvailable else",
             "profile.engineManifestDigest",
-            "guard binding == expectedBindings[index]",
+            "guard row.localCompiledTupleMatches else",
             "submit-proof envelope differs from the admitted compiled profile tuple",
             "PrivacyNativeBridge.validateExact12CapabilityManifestV1(",
             "row.localCompiledTupleMatches",
@@ -1017,7 +1058,7 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
                 transaction,
             )
             is None,
-            "wireName != PrivacyExact12FixtureCodecV1.submitProofWireId" in transaction,
+            "guard !PrivacyExact12FixtureCodecV1.isPrivacyInstructionWire(wireName) else" in transaction,
             "public static func privacyExact12SubmitProof" in transaction,
             "private let privacyAdmission" in transaction,
             "func compactInstructionBoxPayload(expectedNetworkId: NetworkId? = nil) throws" in transaction,
@@ -1062,7 +1103,10 @@ _CATALOG_CONSUMER_FILES = {
         "IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift",
         "IrohaSwift/Sources/IrohaSwift/PrivacyExact12FixtureBundle.swift",
     ),
-    "csharp": ("csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs",),
+    "csharp": (
+        "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs",
+        "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.X509.cs",
+    ),
 }
 
 
@@ -1106,25 +1150,24 @@ def _native_catalog_identity(root: Path, sdk: str) -> bool:
             "if fields[1] != _CATALOG_COMMITMENT_V1:" in sources[0]
         )
     if sdk == "jvm-android":
-        return array(sources[0], r"CANONICAL_BYTES: ByteArray = byteArrayOf\((.*?)\n        \)") == expected and all((
-            "require(value.contentEquals(CANONICAL_BYTES))" in sources[0],
-            "private const val CATALOG_COMMITMENT_BYTES = 32" in sources[1],
-            'fixedBytes(claim["catalog_commitment"], CATALOG_COMMITMENT_BYTES,' in sources[1],
-        ))
+        return array(sources[0], r"CANONICAL_BYTES: ByteArray = byteArrayOf\((.*?)\n        \)") == expected and (
+            "require(value.contentEquals(CANONICAL_BYTES))" in sources[0]
+            and "PrivacyNativeBridge.requireExact12SubmitProofConstruction(" in sources[1]
+        )
     if sdk == "swift":
         return all(array(source, pattern) == expected for source, pattern in zip(sources, (
             r"private static let exact12CatalogCommitment = Data\(\[(.*?)\]\)",
             r"private static let catalogCommitment = Data\(\[(.*?)\]\)",
         ))) and all((
-            'maximum: 32,\n            label: "release catalog commitment"' in sources[0],
-            'maximum: 32,\n            label: "security claim catalog commitment"' in sources[0],
-            "guard catalogCommitment == exact12CatalogCommitment else" in sources[0],
             "guard fields[0] == proofWireMagic, fields[1] == exact12CatalogCommitment else" in sources[0],
             "guard fields[1] == catalogCommitment else" in sources[1],
         ))
-    return hexadecimal(sources[0], r"Exact12CatalogCommitment = Convert\.FromHexString\((.*?)\);") == expected and all((
-        "catalogCommitment.AsSpan().SequenceEqual(Exact12CatalogCommitment)" in sources[0],
-        "catalogCommitment.SequenceEqual(Exact12CatalogCommitment)" in sources[0],
+    # C# validates the X509 envelope catalog in its canonical codec; native
+    # profile archive checks remain mandatory before selected-row admission.
+    return hexadecimal(sources[1], r'X509Equal\(envelope\[1\], Convert\.FromHexString\((.*?)\), "catalog commitment"\)') == expected and all((
+        "RequireSelectedRuntimeProfile(row)" in sources[0],
+        "PrivacyNative.RequireValidCapabilityArchive(manifestArchive);" in sources[0],
+        "PrivacyNative.CompiledProfileCatalogV1().NoritoBytes" in sources[0],
     ))
 
 
@@ -1203,20 +1246,13 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
             "RequireValidCapabilityArchive(snapshot);" in native
             and "PrivacyNative.RequireValidCapabilityArchive(archive);" in model
         )
-        manifest_model = manifest_model and all(
-            marker in model
-            for marker in (
-                "ParseQualificationOption(",
-                "QualificationMatches(",
-                "InvalidProductionQualification",
-            )
-        ) and all(
-            retired not in model
-            for retired in (
-                "ValidateProductionQualificationOption",
-                "HasProductionQualification",
-            )
-        )
+        manifest_model = manifest_model and all(marker in model for marker in (
+            "ParsePolicy(", "ValidatePendingProtocolLimits(",
+            "RequireSelectedRuntimeProfile(row)", "PrivacyCapabilityReadinessV1.Available",
+        )) and all(retired not in model for retired in (
+            "PrivacyProtocolActivationRecordV1", "PrivacyProtocolLifecycleV1",
+            "ParseQualificationOption(", "QualificationMatches(",
+        ))
         fetch_start = model.find("    internal static async Task<PrivacyExact12CapabilityManifestV1> FetchAuthenticatedToriiAsync(")
         fetch_end = model.find("    private static void RequireExactNoritoContentType(", fetch_start)
         fetch = model[fetch_start:fetch_end] if fetch_start >= 0 and fetch_end > fetch_start else ""
@@ -1227,16 +1263,16 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
             "private PrivacyExact12CapabilityManifestV1(" in model,
             "public NetworkId NetworkId { get; }" in model,
             "client.Options.NetworkId ?? throw" in fetch,
-            "decoded.Qualification, expectedNetworkId" in fetch,
+            "decoded.NetworkId, expectedNetworkId" in fetch,
             "private readonly byte[] manifestArchive;" in token,
             "private readonly object seal;" in token,
-            "decoded.Qualification, manifest.NetworkId, requireQualification: true" in token,
+            "decoded.NetworkId, manifest.NetworkId" in token,
             "|| !NetworkId.Equals(expectedNetworkId)" in token,
-            "decoded.Qualification, expectedNetworkId, requireQualification: true" in token,
+            "decoded.NetworkId, expectedNetworkId" in token,
             "PrivacyNative.RequireValidCapabilityArchive(manifestArchive);" in token,
             "PrivacyNative.CompiledProfileCatalogV1().NoritoBytes" in token,
-            "if (!genesisHash.SequenceEqual(networkId.AsSpan()))" in model,
-            "if (!qualification.DeploymentQualification.NetworkId.Equals(expectedNetworkId))" in model,
+            "if (!manifestNetworkId.Equals(expectedNetworkId))" in model,
+            "PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(row);" in model,
             "admission.RequireAuthentic(protocol, expectedNetworkId);" in model,
             "internal void RequireExact12CapabilityAdmission(" in transactions,
             "RequireForConstruction(admission, protocol, NetworkId)" in transactions,
@@ -1287,7 +1323,7 @@ def _format_human(report: dict[str, object]) -> str:
     lines = [
         "Exact12 cross-SDK capability-manifest parity: "
         + ("READY" if report["ready"] else "NOT READY"),
-        "ABI33 privacy exports: exact six",
+        f"ABI33 privacy exports: exact {len(APPROVED_PRIVACY_EXPORTS)}",
         "Network authority: Torii committed canonical manifest bytes",
     ]
     sdks = report["sdk"]
