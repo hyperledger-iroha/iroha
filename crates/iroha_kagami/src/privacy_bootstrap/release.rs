@@ -2210,7 +2210,7 @@ mod tests {
         obsolete
             .as_object_mut()
             .unwrap()
-            .insert("activation_contract".to_owned(), norito::json::json!({}));
+            .insert("activation_contract".to_owned(), norito::json!({}));
         assert!(
             validate_rollout_plan_v1(&json_pretty_bytes_v1(&obsolete, "obsolete rollout").unwrap())
                 .is_err()

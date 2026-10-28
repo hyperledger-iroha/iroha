@@ -88,6 +88,7 @@ jobs:
         with:
           cache: "false"
           target: ${{ matrix.target }}
+          build-warnings: warn
 
       - name: Preflight Windows native source manifest
         if: runner.os == 'Windows'
@@ -170,6 +171,7 @@ jobs:
         with:
           cache: "false"
           target: aarch64-unknown-linux-gnu
+          build-warnings: warn
 
       - name: Test the Linux ARM cross-build handoff contract
         run: python -I scripts/tests/csharp_linux_arm_cross_handoff_test.py

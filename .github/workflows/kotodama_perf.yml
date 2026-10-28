@@ -74,8 +74,20 @@ jobs:
           cache-dependency-path: javascript/iroha_js/package-lock.json
       - name: Install JavaScript SDK dependencies
         run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Prime locked Cargo dependencies for the offline native build
+        run: cargo fetch --locked
       - name: Build the Rust native binding and run the zero-skip hermetic JavaScript suite
-        run: npm test --prefix javascript/iroha_js
+        run: >-
+          env -u CARGO_PROFILE_DEV_DEBUG -u CARGO_BUILD_WARNINGS
+          CARGO_BUILD_JOBS=1
+          CARGO_INCREMENTAL=0
+          CARGO_NET_OFFLINE=true
+          CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target"
+          IROHA_JS_CARGO_LOCKFILE_PATH="${GITHUB_WORKSPACE}/Cargo.lock"
+          IROHA_JS_CARGO_PATH="$(rustup which --toolchain 1.99.1 cargo)"
+          RUSTC="$(rustup which --toolchain 1.99.1 rustc)"
+          RUSTDOC="$(rustup which --toolchain 1.99.1 rustdoc)"
+          npm test --prefix javascript/iroha_js
 
   javascript-provenance-platforms:
     name: JavaScript native provenance (${{ matrix.os }})
