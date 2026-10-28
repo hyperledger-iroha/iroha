@@ -23871,6 +23871,7 @@ mod tests {
         secrecy::SecretString,
     };
     use base64::Engine as _;
+    use eyre::WrapErr as _;
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
     use iroha_data_model::{
         account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},

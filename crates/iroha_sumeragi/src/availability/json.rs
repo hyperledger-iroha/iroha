@@ -52,7 +52,8 @@ impl PayloadEncoding {
                     if details.is_some() {
                         return Err(invalid("duplicate encoding details").into());
                     }
-                    details = Some(object.parse_value_with_parser(|parser| parser.parse_null())?);
+                    details =
+                        Some(object.parse_value_with_parser(norito::json::Parser::parse_null)?);
                 }
                 _ => return Err(invalid("unknown payload encoding field").into()),
             }
