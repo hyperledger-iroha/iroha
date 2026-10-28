@@ -83,13 +83,23 @@ X.509 proving expands thousands of masked columns onto the common evaluation
 domain and replays native sources to stay within the memory ceiling. CPU coset
 evaluation skips butterflies outside the public coefficient extent, including
 the complete masking tail; it never inspects private values to choose work.
+For common-domain log22 queries, the native-log5/log8 columns use direct Horner
+evaluation when their complete masked coefficient extent and selected rows fit
+the public bounds. This avoids a full device transform for a sparse query.
 Bounded P-256 value replay returns only its requested columns while preserving
 the original product traversal and terminal checks. These optimizations retain
 the same polynomial values, proof format, transcript and resource limits.
+The memory plan derives its peak from complete MAIN/CA phase lifetimes,
+including retained Merkle cuts, and explicitly reserves two bounded coefficient
+replay batches for caching. Admission and cache capacity therefore do not rely
+on incidental padding in the hash-state representation.
 
 The ignored release tests `common22_prefix_fft_reports_full_output_parity_and_timings`
 and `value_auxiliary_compact_projection_cost_diagnostic` compare these kernels
-with their dense references. Measure complete proving separately with
+with their dense references. The ignored
+`selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows` comparison
+forces the original Metal path alongside both CPU paths and checks exact values.
+Measure complete proving separately with
 `maximum_structural_credential_proof_with_retained_public_receipt`; its retained
 phase tree distinguishes source replay, transforms, composition and verification,
 and its unchanged 300-second assertion remains a qualification requirement.

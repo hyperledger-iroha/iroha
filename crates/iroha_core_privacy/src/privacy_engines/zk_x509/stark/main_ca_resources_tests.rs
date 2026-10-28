@@ -10,7 +10,10 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
         plan.common,
         MainProverBufferPlanV1::new_v1(&layout).unwrap()
     );
-    assert_eq!(plan.common.maximum_live_buffers, 3_698_327_264);
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
     assert_eq!(
         plan.ca_originals,
         823 * (6196 * core::mem::size_of::<F>() + core::mem::size_of::<Vec<F>>())
@@ -66,6 +69,46 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
             > plan.common.maximum_live_buffers,
         "creating all24 original MAIN columns during a registration exceeds the unchanged ceiling"
     );
+}
+
+#[test]
+fn joint_phase_forecasts_precede_admission_and_retain_two_cache_batches() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let mut unadmitted = plan.common;
+    unadmitted.maximum_live_buffers = 0;
+    let forecast = MainCaJointBufferPlanV1::from_common_v1(unadmitted).unwrap();
+    for phase in [
+        MainCaBufferPhaseV1::OriginalCommitments,
+        MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::PrivateLinks,
+        MainCaBufferPhaseV1::Finalization,
+    ] {
+        assert_eq!(forecast.phase_payload_v1(phase), plan.required_v1(phase));
+        assert_eq!(
+            forecast.required_v1(phase),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        );
+    }
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        plan.common.masks
+            + plan.common.retained_cuts
+            + plan.ca_originals
+            + plan.metadata
+            + plan.common.quotient_stage
+            + plan.common.replay_batch
+            + plan.common.quotient_cache_reserve
+    );
+    let rfc = layout
+        .registered_segment(SegmentAdapterIdV1::Rfc5280, 0)
+        .unwrap();
+    let cache = plan.quotient_cache_plan_v1(&layout, rfc).unwrap();
+    assert_eq!(
+        cache.base_columns + cache.aux_columns,
+        2 * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+    );
+    assert!(plan.common.check_before_sources_v1(421_806_624).is_ok());
 }
 
 #[test]
@@ -188,7 +231,10 @@ fn phase_ownership_requires_actual_capacity_and_disallows_early_main24() {
 fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
-    assert_eq!(plan.common.maximum_live_buffers, 3_698_327_264);
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
     assert_eq!(plan.common.retained_cuts, 25_165_984);
     // Independent floor arithmetic is constant throughout this inline-owner
     // interval. The native type must remain in that interval for these pins.
@@ -227,7 +273,7 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
             assert_eq!((cache.base_columns, cache.aux_columns), (211, 72));
         }
         if segment.base_width == 285 && segment.aux_width == 280 {
-            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (26, 0));
+            assert_eq!((ordinary.base_columns, ordinary.aux_columns), (25, 0));
             assert_eq!((cache.base_columns, cache.aux_columns), (16, 0));
         }
         let ordinary_cached = (ordinary.base_columns + ordinary.aux_columns) as u64;
@@ -243,7 +289,7 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
             assert_eq!(cached, 0);
         }
         if cached != ordinary_cached {
-            assert_eq!(ordinary_cached - cached, 10);
+            assert_eq!(ordinary_cached - cached, 9);
             assert_eq!(stripes, 4);
             changed += 1;
         }
@@ -262,10 +308,10 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
     assert_eq!(native_cells, 2_125_242_880);
     assert_eq!(masked_cells, 2_135_831_976);
     assert_eq!(quotient_rows, 53_215_232);
-    assert_eq!(ordinary_cached_columns, 3_444);
+    assert_eq!(ordinary_cached_columns, 3_443);
     assert_eq!(changed, 1);
     // The five arithmetic registrations retain all their columns. Only RFC
-    // loses ten cache columns, adding 10 * (4 - 1) = 30 native IFFTs.
+    // loses nine cache columns, adding 9 * (4 - 1) = 27 native IFFTs.
     assert_eq!(cached_columns, 3_434);
     assert_eq!(native_iffts, 7_478);
     assert_eq!(native_butterflies, 28_301_242_880);

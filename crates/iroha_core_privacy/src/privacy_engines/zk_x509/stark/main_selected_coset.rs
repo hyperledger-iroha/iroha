@@ -1,4 +1,4 @@
-//! Output-pruned exact-root coset FFT with one clearing full-domain scratch.
+//! Exact selected-row coset evaluation with clearing scratch owners.
 //!
 //! At each radix-two DIF split the even outputs transform `a[j]+a[j+n/2]`,
 //! and the odd outputs transform `(a[j]-a[j+n/2])*root^j`, at root squared.
@@ -6,11 +6,29 @@
 //! zero suffix stays zero in both DIF children outside the inherited prefix.
 //! Traversal is bit-reversed;
 //! final gathers restore the caller's strictly increasing global-row order.
+//! The measured low-degree common22 route instead evaluates only requested
+//! points by Horner, retaining all coefficients and the complete masking tail.
 
 use super::*;
 
 const PARALLEL_VALUES_V1: usize = 1 << 14;
 const PAIRS_PER_TASK_V1: usize = 1 << 10;
+
+/// Select only the measured public geometry; coefficient contents never select
+/// a backend. Larger polynomials, selections and other domains retain the FFT.
+pub(super) fn prefer_horner_v1(
+    native_log: u8,
+    common_log: u8,
+    coefficient_count: usize,
+    selected_count: usize,
+) -> bool {
+    common_log == 22
+        && matches!(native_log, 5 | 8)
+        && coefficient_count > 0
+        && coefficient_count <= (1usize << native_log) + MASK_DEGREE + 1
+        && selected_count > 0
+        && selected_count <= 2176
+}
 
 /// Evaluate unchanged masked coefficients at the selected canonical coset rows.
 /// Full input validation precedes private writes; output/index storage is reused
@@ -228,14 +246,10 @@ fn prune_v1<const INNER_PARALLEL: bool>(
 #[path = "main_selected_coset_tests.rs"]
 mod tests;
 
-/// Diagnostic alternative for public low-degree selected-coordinate geometry.
-///
-/// TODO: use same-fixture native timing to select a public dispatch threshold.
-/// This remains test-only; the production pruned transform is unchanged.
+/// Evaluate requested public points without allocating a full-domain FFT output.
 /// Output chunks contain 128 public points, avoiding recursive FFT task wakes;
 /// no branch or iteration count depends on a private coefficient value.
-#[cfg(test)]
-fn evaluate_horner_v1(
+pub(super) fn evaluate_horner_v1(
     coefficients: &[F],
     native_log: u8,
     common_log: u8,
@@ -244,7 +258,6 @@ fn evaluate_horner_v1(
     evaluate_horner_with_v1(coefficients, native_log, common_log, selected, |_| {})
 }
 
-#[cfg(test)]
 fn evaluate_horner_with_v1(
     coefficients: &[F],
     native_log: u8,
