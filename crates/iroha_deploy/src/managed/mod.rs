@@ -15,6 +15,7 @@ mod deployment_report;
 pub(crate) mod gateway_compliance;
 mod generated_service_runtime;
 mod generation;
+mod listeners;
 pub(crate) mod native_operation;
 mod provider_advert;
 mod provider_capacity;
@@ -65,6 +66,7 @@ pub use deployment_report::{
     ManagedDeploymentExecution, ManagedDeploymentReport, ManagedDeploymentTarget,
     ManagedParentObservation, ManagedParentReport,
 };
+pub use listeners::{RuntimeListeners, adopt_runtime_listeners};
 pub use native_operation::ManagedTransactionFinality;
 pub use provider_advert::{ManagedProviderAdvertisement, ManagedProviderAdvertisementReport};
 pub use provider_capacity::{ManagedProviderCapacity, ManagedProviderCapacityProgress};
@@ -492,6 +494,8 @@ struct ControlRequest {
     deny_unknown_fields
 )]
 enum ControlAction {
+    /// Adopt bound sockets through the separate managed startup endpoint.
+    ListenerAdoption,
     /// Report the live worker status.
     Status,
     /// Stop every owned validator and end the worker.

@@ -600,8 +600,16 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
                 let reason = output.result().as_ref().err()?;
                 let source = match output {
                     ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
-                    ExecutionOutputV1::Pipeline(_) => format!("pipeline output[{output_index}]"),
-                    ExecutionOutputV1::Time(_) => format!("time output[{output_index}]"),
+                    ExecutionOutputV1::NetworkWithLifecycle(row) => {
+                        format!("transaction[{}]", row.execution.input_index)
+                    }
+                    ExecutionOutputV1::Pipeline(_)
+                    | ExecutionOutputV1::PipelineWithLifecycle(_) => {
+                        format!("pipeline output[{output_index}]")
+                    }
+                    ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                        format!("time output[{output_index}]")
+                    }
                 };
                 Some(format!("{source}: {reason:?}"))
             })

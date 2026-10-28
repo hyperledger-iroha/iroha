@@ -35,14 +35,16 @@ pub(super) fn state_fixture_with_repetitions(
 ) -> (State, TriggerId) {
     let world = World::default();
     {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .unwrap(),
-            )
-            .unwrap();
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
+            .expect("fund original fixture parameter cell");
+        crate::state::set_parameter_cell_for_testing(
+            &mut parameters,
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .unwrap(),
+            world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap();
         parameters.commit();
     }
     let id: TriggerId = "journal_retry".parse().unwrap();
@@ -50,7 +52,11 @@ pub(super) fn state_fixture_with_repetitions(
         let mut block = world.triggers.block();
         let mut tx = block.transaction();
         let schedule = Schedule::starting_at(Duration::from_millis(10));
-        let schedule = if periodic { schedule.with_period(Duration::from_millis(10)) } else { schedule };
+        let schedule = if periodic {
+            schedule.with_period(Duration::from_millis(10))
+        } else {
+            schedule
+        };
         let mut action = SpecializedAction::new(
             Executable::Instructions(Vec::<InstructionBox>::new().into()),
             Repeats::Exactly(repetitions),

@@ -378,6 +378,30 @@ fn port_reservations_are_live_disjoint_and_released_on_drop() {
 }
 
 #[test]
+fn retained_port_reservations_preserve_generated_endpoints_and_refuse_a_live_owner() {
+    let _resources = super::native_test_guard();
+    let temporary = tempfile::tempdir().unwrap();
+    let original = LocalnetPorts::reserve().unwrap();
+    let prepared = crate::localnet::prepare_localnet_at(
+        "retained-listeners",
+        &temporary.path().join("generation"),
+        &original,
+        crate::localnet::LocalnetServiceProfile::Standard,
+        None,
+    )
+    .unwrap();
+    let bases = (original.base_api, original.base_p2p);
+    assert!(LocalnetPorts::reserve_prepared(&prepared).is_err());
+    drop(original);
+    let resumed = LocalnetPorts::reserve_prepared(&prepared).unwrap();
+    assert_eq!((resumed.base_api, resumed.base_p2p), bases);
+    assert_eq!(resumed.reserved_count(), 8);
+    for address in listeners::expected_addresses(&prepared).unwrap() {
+        assert!(TcpListener::bind(address).is_err());
+    }
+}
+
+#[test]
 fn stopped_context_selection_retains_identity_and_never_exposes_keys() {
     let _resources = super::native_test_guard();
     let temporary = tempfile::tempdir().unwrap();

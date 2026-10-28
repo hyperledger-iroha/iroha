@@ -1782,7 +1782,7 @@ mod tests {
     }
     fn fixture_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
         let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-        iroha_deploy::genesis::default_staking_policy(
+        iroha_genesis::default_staking_policy(
             fees.fee_asset_id,
             fees.fee_sink_account_id.clone(),
             fees.fee_sink_account_id,

@@ -1,10 +1,12 @@
 # Kagami and Mochi developer experience
 
-Status: localnet and contract deployment pass installed-runtime end-to-end checks
-on macOS. Native Taira discovery is replacing the separately published signed checkpoint;
-live attachment testing remains open. The deployed account capability response includes
-a retired field rejected by the current client. The disposable parent/private fixture
-uses explicit loopback HTTP and awaits verification of the updated native flow.
+Status: localnet, contract deployment and disposable parent/private attachment pass
+installed-runtime end-to-end checks on macOS. Native Torii discovery uses signed
+genesis and consensus proofs without a separate publisher. Official Taira attachment
+remains unverified: its deployed account capability response includes a retired field
+and a noncanonical signing-algorithm order rejected by the current client.
+The disposable parent/private fixture uses explicit
+loopback HTTP; public remote profiles require HTTPS.
 The wider native-platform and release gates below remain open. This first release
 requires no backward-compatible command aliases, old wire layouts, or parallel
 orchestration implementations.
@@ -26,7 +28,10 @@ The default localnet has four validators and a funded deployment-capable account
 It uses the existing `Standard` profile and completes the normal signed readiness
 check on all four validators. Storage-service provisioning is not part of ordinary startup.
 Fresh networks use OS-assigned loopback ports; retained networks keep their endpoints.
-An attached private dataspace has four local validators with owner-only application
+The frontend keeps all eight sockets bound until its worker adopts them; the worker
+retains them through validator startup and internal restarts. Starting a stopped
+generation must reacquire its exact endpoints and fails if another process owns them.
+An attached private data space has four local validators with owner-only application
 data, works behind NAT, and publishes only authenticated commitments and certificates
 to its parent. Restricted FullReplica lanes do not satisfy that privacy contract.
 Contract deployment accepts `.ko`, `.to`, and existing Musubi packages. Without a
@@ -218,8 +223,11 @@ Installed-release fixtures exercise both the local four-validator workflow and a
 disposable four-parent/four-private attachment. They check all three contract inputs,
 exact repeat receipts, localnet restart recovery, funded parent provisioning, paid SNS
 ownership, private execution and independently authenticated parent anchoring.
-The combined flows require a fresh run against the current implementation; component
-tests do not establish their completion. The attachment fixture also checks
+The installed macOS attachment fixture passes with four parent and four private
+validators, including native discovery, all three deployments, execution and exact
+recovery. Restricted transaction gossip selects the independently signed private
+root's authenticated next-height committee; it does not require a parent lane record.
+The attachment fixture also checks
 that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression
 does not establish universal secrecy, official Taira readiness, native desktop
@@ -228,9 +236,10 @@ interaction, signed multi-platform release qualification or the DX7 latency targ
 Signed genesis context now selects a global or private dataspace root. A private root binds
 the exact parent network and full 64-bit dataspace identifier; its own genesis and chain label
 derive a native Dataspace instance with root index zero. There is no node-local scope toggle
-or missing-field fallback. Routing, execution-time instruction authorization, artifact scope,
-parent registration and whole-network privacy still require qualification together before
-the managed private-dataspace command can be declared ready.
+or missing-field fallback. Routing, execution-time instruction authorization, artifact
+scope and parent registration are exercised together by the disposable attachment
+fixture. Its bounded privacy checks do not establish universal secrecy or official
+Taira readiness.
 
 Immutable artifacts use `ContractArtifactId { dataspace_id, code_hash }` throughout
 storage, native instructions, queries and access hints. Equal bytecode hashes in
@@ -772,9 +781,9 @@ observation after namespace completion selects the certified native World cut us
 authenticate the active lease owner and generation. Committed parent execution rechecks
 that generation when applying registration; only its verified receipt establishes
 anchoring. Provisioning and relay turns share absolute deadlines. The native supervisor,
-Kagami command and Mochi profile picker call these shared owners; their combined
-real-network qualification remains required before `dataspace up` can meet its
-one-command contract. A retained context rejects substituted endpoints, chain labels,
+Kagami command and Mochi profile picker call these shared owners. The installed CLI
+passes the disposable eight-validator attachment and execution fixture; live Taira and
+native desktop qualification remain separate. A retained context rejects substituted endpoints, chain labels,
 address prefixes and network identities without replacing its private ledger.
 
 Update source-coupled specifications as behavior lands. Public guides belong in

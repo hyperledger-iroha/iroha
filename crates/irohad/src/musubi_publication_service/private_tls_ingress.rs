@@ -599,7 +599,7 @@ mod tests {
     use tokio_rustls::{
         TlsConnector,
         rustls::{
-            ClientConfig, RootCertStore,
+            self, ClientConfig, RootCertStore,
             pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
         },
     };
