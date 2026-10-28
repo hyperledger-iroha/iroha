@@ -21,6 +21,13 @@ I105 strings without surrounding whitespace. For host tests, set
 built bridge. Android packages the bridge through the generated native artifact
 pipeline described in `CLAUDE.md`.
 
+`ParliamentApiV1.Proposal.fromJson` validates all 18 SCCP action bodies and the
+exact ordered subject-revision set. It checks numeric and network bounds,
+duplicate registration destinations and the joint parameter constraints before
+a proposal can be drafted. `release_stranded` uses the native account codec for
+its recipient. The node still authenticates live network identity, authority,
+committee/bootstrap evidence and committed state at admission and enactment.
+
 `ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
 authorizations, signed all-edge beacon DKG records, committee transitions,
 typed registration, bond, withdrawal and slash plans, bounded reward claims with

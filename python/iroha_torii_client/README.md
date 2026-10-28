@@ -475,6 +475,14 @@ Parliament requests reject ambient session auth headers, cookies, and
 `Session.auth`, and suppress Requests' environment/netrc credential fallback
 during preparation.
 
+The governance reader validates all 18 SCCP action bodies, their numeric and
+network bounds, and the exact ordered set of subject revisions before retaining
+an immutable proposal. Route registrations reject repeated destination words;
+parameter changes check both individual bounds and their joint constraints.
+`release_stranded` uses the mandatory native account codec for its recipient.
+The node still checks the live network identity, authorization, authenticated
+committee/bootstrap evidence and committed state at admission and enactment.
+
 Attempt reads whose certificate contains a private-jury body (`policy-jury` or
 `confirmation-jury`) are rejected: the anonymous-ballot result binding is not
 supported yet, so this client admits no certificate that covers a private-jury
