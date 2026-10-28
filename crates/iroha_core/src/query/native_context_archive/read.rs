@@ -94,6 +94,9 @@ pub(super) struct RecordRead {
     file: Option<File>,
     length: Option<usize>,
     bytes: Option<ChargedBuffer<u8>>,
+    // A packed context record is rebuilt into `bytes`; its pieces' descriptors stay pinned here.
+    packed: Option<super::packed::Expansion>,
+    inspected: bool,
     completed: bool,
 }
 impl RecordRead {
@@ -106,6 +109,8 @@ impl RecordRead {
             file: None,
             length: None,
             bytes: None,
+            packed: None,
+            inspected: false,
             completed: false,
         }
     }
@@ -140,10 +145,34 @@ impl RecordRead {
                 actual: length,
             });
         }
-        if file.metadata()?.len() != u64::try_from(length).expect("file length fits u64") {
+        let stored = u64::try_from(length).expect("file length fits u64");
+        if file.metadata()?.len() != stored {
             return Err(NativeContextArchiveError::Source(
                 "record length changed during exact read",
             ));
+        }
+        if !self.inspected {
+            if self.name.is_context() {
+                self.packed = super::packed::Expansion::start(file, length, archive.maximum.get())?;
+            }
+            self.inspected = true;
+        }
+        if let Some(expansion) = self.packed.as_mut() {
+            if self.bytes.is_none() {
+                self.bytes = Some(ChargedBuffer::new(expansion.length(), &archive.budget)?);
+            }
+            let bytes = self.bytes.as_mut().expect("original exact allocation");
+            if !expansion.step(&archive.directory, file, stored, bytes)? {
+                return Ok(None);
+            }
+            if file.metadata()?.len() != stored {
+                return Err(NativeContextArchiveError::Source(
+                    "record changed during exact read",
+                ));
+            }
+            archive.recheck_namespace()?;
+            self.completed = true;
+            return Ok(self.bytes.take());
         }
         if self.bytes.is_none() {
             self.bytes = Some(ChargedBuffer::new(length, &archive.budget)?);

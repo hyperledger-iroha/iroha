@@ -2857,6 +2857,17 @@ Choices beyond the rules above are Appendix E, E58 (node) and E59 (simulator).
   not acknowledge the intent. The authorized parent signer/fee boundary,
   durable transaction journal and autonomous submission remain unimplemented; this is not
   submitted relay or complete H2 qualification.
+- *Packed context records* (`query::native_context_archive::packed`): a `.nrt` record may be
+  stored as an exact partition of its canonical bytes into inline runs and content-addressed
+  `piece-<hash>.ncs` files shared between records: the lane records and signer custody (not the
+  autoscale load samples) when they fill a 4 KiB block, and the complete 4 KiB pieces of the open
+  SCCP anchor chunk, which each SCCP delta rewrites in full. A new record publishes its pieces
+  before itself; an existing record of either form is only rechecked, restoring a missing piece
+  it references. The record keeps the canonical length and hash; every read rebuilds the
+  canonical bytes and checks both before returning them, so the storage form grants no authority
+  and readers see unchanged bytes. Canonical records written by earlier releases stay readable,
+  and publication accepts either form for an existing record.
+  `kagami advanced kura pack-native-contexts` rewrites a stopped node's records in either direction.
 - *Tracker* (`AmxForeignInstanceV1`, item 7): the complete authenticated contexts `C_{J,e}` and
   `C_{J,e−1}`. A certified block verifies only if its header's epoch is one of them and contains
   its height, exactly `q` members of that epoch's committee signed the `CommitQC` (the core's
