@@ -618,19 +618,10 @@ impl MainProverBufferPlanV1 {
             maximum_live_buffers: 0,
             remaining_source_and_runtime_envelope: 0,
         };
-        plan.maximum_live_buffers = sum(&[
-            plan.masks,
-            sum(&[plan.quotient_stage, plan.replay_batch])?.max(sum(&[
-                plan.joined_streams,
-                plan.replay_batch,
-                plan.composition,
-                plan.fri_stage,
-                plan.openings,
-            ])?),
-        ])?;
-        // Preserve the previous arithmetic envelope. Cut roots coexist with
-        // sampling, every registration/cache, DEEP, FRI and final row assembly.
-        // Query replay now owns only its selected hash states, not all LDE rows.
+        // Derive the peak from complete simultaneous owners. In particular,
+        // registration retains both cuts even if a smaller hash-state owner
+        // makes the quotient phase larger than commitment/finalization work.
+        // Query replay owns only its selected hash states, not all LDE rows.
         for stage in [
             sum(&[
                 plan.masks,
@@ -654,9 +645,19 @@ impl MainProverBufferPlanV1 {
                 plan.openings,
             ])?,
         ] {
-            if stage > plan.maximum_live_buffers {
-                return Err(ZkX509StarkErrorV1::ProofTooLarge);
-            }
+            plan.maximum_live_buffers = plan.maximum_live_buffers.max(stage);
+        }
+        // The complete credential also retains CA originals and phase-local
+        // joint owners. Count them explicitly rather than borrowing incidental
+        // headroom from the size of a different phase's hash implementation.
+        let joint = main_ca_resources::MainCaJointBufferPlanV1::from_common_v1(plan)?;
+        for phase in [
+            main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
+            main_ca_resources::MainCaBufferPhaseV1::Registration,
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            main_ca_resources::MainCaBufferPhaseV1::Finalization,
+        ] {
+            plan.maximum_live_buffers = plan.maximum_live_buffers.max(joint.phase_payload_v1(phase)?);
         }
         // Joined finalization runs after its coefficient/FFT batch has dropped.
         // Its bounded digest tile, exact-level prefixes and named worker

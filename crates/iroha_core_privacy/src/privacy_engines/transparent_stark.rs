@@ -1086,13 +1086,19 @@ fn goldilocks_evaluate_coset_with_inner_parallelism_v1<const PARALLEL_INNER: boo
     {
         return Err(TransparentStarkErrorV1::NonCanonicalField);
     }
-    // Reject the same malformed roots as the dense FFT before allocating or
-    // populating witness-bearing output. Coefficient validation retains precedence.
-    if root.0 >= GOLDILOCKS_MODULUS_V1
-        || root.pow(size as u128) != GoldilocksFieldV1::ONE
-        || (size > 1 && root.pow((size / 2) as u128) == GoldilocksFieldV1::ONE)
-    {
-        return Err(TransparentStarkErrorV1::InvalidDomain);
+    // Keep the original dense kernel for small or nearly full polynomials.
+    // Large fourfold-or-greater expansions have enough public zero suffix to
+    // amortize DIF traversal; MAIN's common22 geometries all meet this bound.
+    let use_prefix_fft = size >= 1 << 18 && coefficients.len() <= size / 4;
+    if use_prefix_fft {
+        // Reject malformed roots before populating witness-bearing output.
+        // Coefficient validation retains its original precedence.
+        if root.0 >= GOLDILOCKS_MODULUS_V1
+            || root.pow(size as u128) != GoldilocksFieldV1::ONE
+            || (size > 1 && root.pow((size / 2) as u128) == GoldilocksFieldV1::ONE)
+        {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
     }
     let mut evaluations = vec![GoldilocksFieldV1::ZERO; size];
     let mut shift_power = GoldilocksFieldV1::ONE;
@@ -1100,7 +1106,7 @@ fn goldilocks_evaluate_coset_with_inner_parallelism_v1<const PARALLEL_INNER: boo
         *target = coefficient.mul(shift_power);
         shift_power = shift_power.mul(shift);
     }
-    if coefficients.len() < size {
+    if use_prefix_fft {
         // Only the public coefficient extent selects work; neither coefficient
         // values nor masked trace contents are inspected.
         goldilocks_fft_zero_padded_v1::<PARALLEL_INNER>(&mut evaluations, root, coefficients.len());

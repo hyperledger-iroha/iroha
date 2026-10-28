@@ -36,10 +36,24 @@ fn every_small_prefix_matches_independent_horner_and_dense_fft() {
         let root = goldilocks_primitive_root_v1(log).unwrap();
         for length in 0..=size {
             let input = coefficients(length, 97);
-            for shift in [GoldilocksFieldV1::ONE, GoldilocksFieldV1(7)] {
+            for shift in [
+                GoldilocksFieldV1::ONE,
+                GoldilocksFieldV1(7),
+                GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1 - 1),
+            ] {
                 let expected = dense_coset(&input, size, root, shift);
                 let actual = goldilocks_evaluate_coset_v1(&input, size, root, shift).unwrap();
                 assert_eq!(actual, expected, "log={log}, prefix={length}");
+                // Exercise the primitive directly below the production threshold,
+                // including full prefixes that production deliberately leaves dense.
+                let mut direct = vec![GoldilocksFieldV1::ZERO; size];
+                let mut power = GoldilocksFieldV1::ONE;
+                for (target, value) in direct.iter_mut().zip(&input) {
+                    *target = value.mul(power);
+                    power = power.mul(shift);
+                }
+                goldilocks_fft_zero_padded_v1::<true>(&mut direct, root, length);
+                assert_eq!(direct, expected);
                 let mut point = shift;
                 for value in &actual {
                     let evaluated = input
@@ -79,6 +93,14 @@ fn padded_fft_preserves_public_extent_mask_tail_and_worker_parity() {
                     *last = GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1 - 1);
                 }
                 let expected = dense_coset(&input, size, root, shift);
+                let mut direct = vec![GoldilocksFieldV1::ZERO; size];
+                let mut power = GoldilocksFieldV1::ONE;
+                for (target, value) in direct.iter_mut().zip(&input) {
+                    *target = value.mul(power);
+                    power = power.mul(shift);
+                }
+                goldilocks_fft_zero_padded_v1::<true>(&mut direct, root, length);
+                assert_eq!(direct, expected);
                 for actual in [
                     goldilocks_evaluate_coset_with_inner_parallelism_v1::<true>(
                         &input, size, root, shift,
@@ -90,6 +112,37 @@ fn padded_fft_preserves_public_extent_mask_tail_and_worker_parity() {
                     .unwrap(),
                 ] {
                     assert_eq!(actual, expected, "workers={workers}, prefix={length}");
+                }
+            }
+            for length in [
+                0,
+                1,
+                (1 << 16) - 1,
+                1 << 16,
+                (1 << 16) + 1,
+                (1 << 18) - 1,
+                1 << 18,
+            ] {
+                let input = coefficients(length, 71);
+                let root = goldilocks_primitive_root_v1(18).unwrap();
+                let expected = dense_coset(&input, 1 << 18, root, shift);
+                for actual in [
+                    goldilocks_evaluate_coset_with_inner_parallelism_v1::<true>(
+                        &input,
+                        1 << 18,
+                        root,
+                        shift,
+                    )
+                    .unwrap(),
+                    goldilocks_evaluate_coset_with_inner_parallelism_v1::<false>(
+                        &input,
+                        1 << 18,
+                        root,
+                        shift,
+                    )
+                    .unwrap(),
+                ] {
+                    assert_eq!(actual, expected);
                 }
             }
             for width in [1, 3, 8] {
@@ -128,6 +181,21 @@ fn padded_coset_retains_domain_and_coefficient_error_precedence() {
                 Err(TransparentStarkErrorV1::InvalidDomain)
             );
         }
+    }
+    for size in [16, 1 << 18] {
+        assert_eq!(
+            goldilocks_evaluate_coset_v1(
+                &[GoldilocksFieldV1::ONE],
+                size,
+                invalid,
+                GoldilocksFieldV1(7)
+            ),
+            Err(TransparentStarkErrorV1::InvalidDomain),
+        );
+        assert_eq!(
+            goldilocks_evaluate_coset_v1(&[invalid], size, invalid, GoldilocksFieldV1(7)),
+            Err(TransparentStarkErrorV1::NonCanonicalField),
+        );
     }
     assert_eq!(
         goldilocks_evaluate_coset_v1(&[invalid], 16, invalid, GoldilocksFieldV1(7)),
