@@ -6291,7 +6291,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "http://127.0.0.1:29080/", invalid_tool_cache_hints
             )
 
-    def test_help_exposes_only_up_check_down_and_citizens(self) -> None:
+    def test_help_exposes_only_managed_devnet_operations(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(MODULE_PATH), "--help"],
             check=False,
@@ -6299,7 +6299,7 @@ class TairaDevnetTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("{up,check,down,citizens}", completed.stdout)
+        self.assertIn("{up,check,down,governance-drive,citizens}", completed.stdout)
         self.assertNotIn("promote", completed.stdout.lower())
         self.assertNotIn("publish", completed.stdout.lower())
         up_help = subprocess.run(
@@ -6310,6 +6310,17 @@ class TairaDevnetTests(unittest.TestCase):
         )
         self.assertEqual(up_help.returncode, 0)
         self.assertIn("--inrou-canary-dir", up_help.stdout)
+        drive_help = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "governance-drive", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(drive_help.returncode, 0)
+        self.assertIn("fee-paying governance transactions", drive_help.stdout)
+        self.assertIn("managed disposable devnet", drive_help.stdout)
+        self.assertIn("--citizen", drive_help.stdout)
+        self.assertNotIn("--polls", drive_help.stdout)
 
     def test_retired_taira_orchestration_does_not_reappear(self) -> None:
         def names(directory: Path, pattern: str = "*taira*") -> set[str]:
