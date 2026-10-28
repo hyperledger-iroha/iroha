@@ -197,8 +197,26 @@ const SCCP_ACTION_SUBJECTS = Object.freeze({
   open_reconciliation: "forgery_hold",
   set_fast_pause_suspended: "fast_pause_control",
 });
+const SCCP_VALIDATED_ACTION_FIELDS = Object.freeze({
+  activate_revision: ["revision"],
+  deactivate_outbound: ["revision"],
+  retire_revision: ["revision"],
+  remove_staged: ["revision"],
+  quarantine_revision: ["revision"],
+  switch_revision: ["from", "to"],
+  set_taira_paused: ["paused"],
+  set_destination_paused: ["revision", "paused"],
+  freeze_light_client: [],
+  install_trusted_checkpoint: ["checkpoint"],
+  activate_light_client_profile: ["version", "profile_hash"],
+  attest_deployment_progress: ["revision", "at"],
+  open_reconciliation: ["revision", "window_ms"],
+  set_fast_pause_suspended: ["duration_ms"],
+});
+// Three immutable maximum pause periods (sccp/params.rs), independent of live policy.
+const SCCP_FAST_PAUSE_SUSPENSION_MAX_MS_V1 = 3 * 2_592_000_000;
 
-/** Admit the shared SCCP proposal envelope and its exact subject-revision set. */
+/** Admit the SCCP proposal envelope, supported action bodies and exact subject-revision set. */
 export function normalizeSccpRoute(value, context) {
   const record = exactRecord(value, ["proposal"], context);
   const proposalContext = `${context}.proposal`;
@@ -246,7 +264,7 @@ export function normalizeSccpRoute(value, context) {
     actionSubjects.add(sccpSubjectOrder({ subject: tag, key }));
     return {
       action,
-      payload: key === null ? { ...entry.payload } : { ...entry.payload, network: key },
+      payload: normalizeSccpActionPayload(action, entry.payload, key, `${label}.payload`),
     };
   });
   const expected = [...actionSubjects].sort((left, right) => left - right);
@@ -256,14 +274,112 @@ export function normalizeSccpRoute(value, context) {
       `${basesContext} must list exactly the action subjects in canonical order, without duplicates`,
     );
   }
-  // TODO: validate each typed SCCP action body, including nested parameters,
-  // deployment/light-client invariants and JSON-safe u64 fields (spec §4.14.3).
-  // Torii and the node remain authoritative for those checks and live state.
   return {
     proposal: {
       network_id: networkId,
       base_revisions: baseRevisions,
       actions,
+    },
+  };
+}
+
+function normalizeSccpActionPayload(action, value, network, context) {
+  if (!Object.hasOwn(SCCP_VALIDATED_ACTION_FIELDS, action)) {
+    // TODO: validate register_route, release_stranded, initialize_light_client,
+    // and set_parameters, including their nested
+    // deployment/light-client invariants and JSON-safe u64 fields (spec §4.14.3).
+    // Torii and the node remain authoritative for these bodies and live state.
+    return network === null ? { ...value } : { ...value, network };
+  }
+  const record = exactRecord(value, ["network", ...SCCP_VALIDATED_ACTION_FIELDS[action]], context);
+  const result = { ...record, network };
+  if (Object.hasOwn(record, "revision")) {
+    result.revision = sccpUint32(record.revision, `${context}.revision`);
+  }
+  switch (action) {
+    case "switch_revision":
+      result.from = sccpUint32(record.from, `${context}.from`);
+      result.to = sccpUint32(record.to, `${context}.to`);
+      if (result.from === result.to) {
+        throw new TypeError(`${context}.from and .to must name distinct revisions`);
+      }
+      break;
+    case "set_taira_paused":
+    case "set_destination_paused":
+      if (typeof record.paused !== "boolean") {
+        throw new TypeError(`${context}.paused must be a boolean`);
+      }
+      break;
+    case "activate_light_client_profile":
+      result.version = sccpUint32(record.version, `${context}.version`);
+      if (result.version < 2) {
+        throw new TypeError(`${context}.version must be at least 2; version 1 is active from genesis`);
+      }
+      result.profile_hash = byteArray(record.profile_hash, 32, `${context}.profile_hash`, {
+        nonZero: true,
+      });
+      break;
+    case "install_trusted_checkpoint":
+      if (network.network === "ton_mainnet") {
+        throw new TypeError(`${context}.network cannot be TON; its light client reads no checkpoints`);
+      }
+      result.checkpoint = normalizeSccpCheckpoint(record.checkpoint, `${context}.checkpoint`);
+      break;
+    case "attest_deployment_progress":
+      result.at = normalizeSccpProgress(record.at, `${context}.at`);
+      break;
+    case "open_reconciliation":
+      result.window_ms = jsonUint(record.window_ms, `${context}.window_ms`, { allowZero: false });
+      break;
+    case "set_fast_pause_suspended":
+      result.duration_ms = jsonUint(record.duration_ms, `${context}.duration_ms`);
+      if (result.duration_ms > SCCP_FAST_PAUSE_SUSPENSION_MAX_MS_V1) {
+        throw new TypeError(`${context}.duration_ms exceeds three maximum pause periods`);
+      }
+      break;
+    default:
+      break;
+  }
+  return result;
+}
+
+function normalizeSccpCheckpoint(value, context) {
+  const record = exactRecord(value, [
+    "source_height", "block_hash", "state_root", "receipts_or_tx_root", "source_time_ms",
+  ], context);
+  return {
+    source_height: jsonUint(record.source_height, `${context}.source_height`),
+    block_hash: byteArray(record.block_hash, 32, `${context}.block_hash`),
+    state_root: record.state_root === null ? null : byteArray(record.state_root, 32, `${context}.state_root`),
+    receipts_or_tx_root: byteArray(record.receipts_or_tx_root, 32, `${context}.receipts_or_tx_root`),
+    source_time_ms: jsonUint(record.source_time_ms, `${context}.source_time_ms`),
+  };
+}
+
+function sccpUint32(value, context) {
+  const integer = jsonUint(value, context, { allowZero: false });
+  if (integer > 0xffff_ffff) {
+    throw new TypeError(`${context} must fit in an unsigned 32-bit integer`);
+  }
+  return integer;
+}
+
+function normalizeSccpProgress(value, context) {
+  const record = exactRecord(value, ["at", "detail"], context);
+  if (record.at === "frozen") {
+    if (record.detail !== null) throw new TypeError(`${context}.detail must be null`);
+    return { at: "frozen", detail: null };
+  }
+  if (record.at !== "generation") {
+    throw new TypeError(`${context}.at must be frozen or generation`);
+  }
+  const label = `${context}.detail`;
+  const detail = exactRecord(record.detail, ["generation", "committee_root"], label);
+  return {
+    at: "generation",
+    detail: {
+      generation: jsonUint(detail.generation, `${label}.generation`, { allowZero: false }),
+      committee_root: byteArray(detail.committee_root, 32, `${label}.committee_root`, { nonZero: true }),
     },
   };
 }
@@ -1046,7 +1162,7 @@ function byteArray(value, length, context, options = {}) {
   const bytes = array(value, context);
   if (
     bytes.length !== length ||
-    bytes.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+    Array.from(bytes).some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
   ) {
     throw new TypeError(`${context} must contain exactly ${length} JSON byte values`);
   }

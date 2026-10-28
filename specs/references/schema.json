@@ -8529,6 +8529,21 @@
         "discriminant": 2,
         "tag": "time",
         "type": "TimeExecutionOutputV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "network_with_lifecycle",
+        "type": "NetworkExecutionOutputV2"
+      },
+      {
+        "discriminant": 4,
+        "tag": "pipeline_with_lifecycle",
+        "type": "PipelineExecutionOutputV2"
+      },
+      {
+        "discriminant": 5,
+        "tag": "time_with_lifecycle",
+        "type": "TimeExecutionOutputV2"
       }
     ]
   },
@@ -18372,6 +18387,18 @@
       }
     ]
   },
+  "NetworkExecutionOutputV2": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "NetworkExecutionOutputV1"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "TriggerLifecycleEffectsV1"
+      }
+    ]
+  },
   "NexusDataspaceCatalogStatus": {
     "Struct": [
       {
@@ -19800,6 +19827,9 @@
   },
   "Option<TriggerId>": {
     "Option": "TriggerId"
+  },
+  "Option<TriggerLifecycleRetryStateV1>": {
+    "Option": "TriggerLifecycleRetryStateV1"
   },
   "Option<UniversalAccountId>": {
     "Option": "UniversalAccountId"
@@ -21823,6 +21853,18 @@
       {
         "name": "completions",
         "type": "Vec<InvocationCompletionV1>"
+      }
+    ]
+  },
+  "PipelineExecutionOutputV2": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "PipelineExecutionOutputV1"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "TriggerLifecycleEffectsV1"
       }
     ]
   },
@@ -34673,6 +34715,18 @@
       }
     ]
   },
+  "TimeExecutionOutputV2": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "TimeExecutionOutputV1"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "TriggerLifecycleEffectsV1"
+      }
+    ]
+  },
   "TimeInterval": {
     "Struct": [
       {
@@ -35702,6 +35756,258 @@
       {
         "name": "name",
         "type": "Name"
+      }
+    ]
+  },
+  "TriggerLifecycleActionCodecV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "norito_canonical_v1"
+      }
+    ]
+  },
+  "TriggerLifecycleActionFrameV1": {
+    "Struct": [
+      {
+        "name": "codec",
+        "type": "TriggerLifecycleActionCodecV1"
+      },
+      {
+        "name": "bytes",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "insert",
+        "type": "TriggerLifecycleChangeV1::Insert"
+      },
+      {
+        "discriminant": 1,
+        "tag": "update",
+        "type": "TriggerLifecycleChangeV1::Update"
+      },
+      {
+        "discriminant": 2,
+        "tag": "remove",
+        "type": "TriggerLifecycleChangeV1::Remove"
+      },
+      {
+        "discriminant": 3,
+        "tag": "invoke",
+        "type": "TriggerLifecycleChangeV1::Invoke"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Insert": {
+    "Struct": [
+      {
+        "name": "after",
+        "type": "TriggerLifecycleStateV1"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Invoke": {
+    "Struct": [
+      {
+        "name": "state",
+        "type": "TriggerLifecycleStateV1"
+      },
+      {
+        "name": "callback_index",
+        "type": "u32"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Remove": {
+    "Struct": [
+      {
+        "name": "before",
+        "type": "TriggerLifecycleStateV1"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Update": {
+    "Struct": [
+      {
+        "name": "before",
+        "type": "TriggerLifecycleStateV1"
+      },
+      {
+        "name": "after",
+        "type": "TriggerLifecycleStateV1"
+      }
+    ]
+  },
+  "TriggerLifecycleEffectV1": {
+    "Struct": [
+      {
+        "name": "ordinal",
+        "type": "u32"
+      },
+      {
+        "name": "trigger_id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "origin",
+        "type": "TriggerLifecycleOriginV1"
+      },
+      {
+        "name": "change",
+        "type": "TriggerLifecycleChangeV1"
+      }
+    ]
+  },
+  "TriggerLifecycleEffectsV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "complete",
+        "type": "TriggerLifecycleEffectsV1::Complete"
+      }
+    ]
+  },
+  "TriggerLifecycleEffectsV1::Complete": {
+    "Struct": [
+      {
+        "name": "effects",
+        "type": "Vec<TriggerLifecycleEffectV1>"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "direct_network_instruction",
+        "type": "TriggerLifecycleOriginV1::DirectNetworkInstruction"
+      },
+      {
+        "discriminant": 1,
+        "tag": "derived",
+        "type": "TriggerLifecycleOriginV1::Derived"
+      },
+      {
+        "discriminant": 2,
+        "tag": "invocation_policy",
+        "type": "TriggerLifecycleOriginV1::InvocationPolicy"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1::Derived": {
+    "Struct": [
+      {
+        "name": "callback_index",
+        "type": "Option<u32>"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1::DirectNetworkInstruction": {
+    "Struct": [
+      {
+        "name": "item_index",
+        "type": "u32"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1::InvocationPolicy": {
+    "Struct": [
+      {
+        "name": "callback_index",
+        "type": "u32"
+      },
+      {
+        "name": "policy",
+        "type": "TriggerLifecyclePolicyV1"
+      }
+    ]
+  },
+  "TriggerLifecyclePolicyV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "consume_repeat"
+      },
+      {
+        "discriminant": 1,
+        "tag": "remove_depleted"
+      },
+      {
+        "discriminant": 2,
+        "tag": "clear_time_retry"
+      },
+      {
+        "discriminant": 3,
+        "tag": "advance_time_retry"
+      },
+      {
+        "discriminant": 4,
+        "tag": "exhaust_time_retry"
+      },
+      {
+        "discriminant": 5,
+        "tag": "quarantine_pipeline"
+      }
+    ]
+  },
+  "TriggerLifecycleRetryStateV1": {
+    "Struct": [
+      {
+        "name": "attempt",
+        "type": "u32"
+      },
+      {
+        "name": "next_time_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "TriggerLifecycleStateKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "data"
+      },
+      {
+        "discriminant": 1,
+        "tag": "by_call"
+      },
+      {
+        "discriminant": 2,
+        "tag": "pipeline"
+      },
+      {
+        "discriminant": 3,
+        "tag": "time"
+      }
+    ]
+  },
+  "TriggerLifecycleStateV1": {
+    "Struct": [
+      {
+        "name": "kind",
+        "type": "TriggerLifecycleStateKindV1"
+      },
+      {
+        "name": "registered_at_height",
+        "type": "Option<u64>"
+      },
+      {
+        "name": "action_hash",
+        "type": "Option<Hash>"
+      },
+      {
+        "name": "action",
+        "type": "TriggerLifecycleActionFrameV1"
+      },
+      {
+        "name": "retry_state",
+        "type": "Option<TriggerLifecycleRetryStateV1>"
       }
     ]
   },
@@ -36959,6 +37265,9 @@
   },
   "Vec<TriggerId>": {
     "Vec": "TriggerId"
+  },
+  "Vec<TriggerLifecycleEffectV1>": {
+    "Vec": "TriggerLifecycleEffectV1"
   },
   "Vec<TwitterBindingRecord>": {
     "Vec": "TwitterBindingRecord"

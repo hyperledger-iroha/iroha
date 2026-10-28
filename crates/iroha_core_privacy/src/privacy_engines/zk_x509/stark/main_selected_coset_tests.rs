@@ -689,6 +689,95 @@ fn selected_cpu_horner_pruned_full_cost_uses_public_geometry() {
 }
 
 #[test]
+#[ignore = "isolated common22 low-degree selected-row Metal/CPU comparison; component evidence only"]
+fn selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows() {
+    use std::time::Instant;
+
+    assert_eq!(
+        fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+        "this comparison requires the actual admitted Metal backend"
+    );
+    let common = 22;
+    let rows = 1usize << common;
+    let selected = (0..136)
+        .flat_map(|query| {
+            let block = (query * 1_729 + 17) % (rows / 16);
+            block * 16..block * 16 + 16
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2176);
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    for native in [5, 8] {
+        for width in [1, 8] {
+            let columns = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|row| F((17 * row + 13 * column + 1) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..MASK_DEGREE + 1)
+                        .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = columns
+                .iter()
+                .map(|column| {
+                    full_compact_reference_v1(column, native, common, &selected, |_| {}).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut metal = MainTraceCosetEvaluatorV1::new_v1(&layout, 0).unwrap();
+            assert!(metal.device_columns > 0);
+            for round in 0..3 {
+                for offset in 0..3 {
+                    let path = (round + offset) % 3;
+                    let started = Instant::now();
+                    let actual = if path == 2 {
+                        let before = metal.receipt.metal_columns;
+                        let output = metal
+                            .evaluate_selected_v1(&columns, native, common, &selected)
+                            .unwrap();
+                        assert_eq!(metal.receipt.metal_columns - before, width);
+                        output
+                    } else {
+                        columns
+                            .par_iter()
+                            .map(|column| {
+                                if path == 0 {
+                                    evaluate_horner_v1(column, native, common, &selected)
+                                } else {
+                                    evaluate_v1(column, native, common, &selected)
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap()
+                    };
+                    let transform_ns = started.elapsed().as_nanos();
+                    for (actual, expected) in actual.iter().zip(&expected) {
+                        assert_eq!(actual.as_ref(), expected.as_ref());
+                    }
+                    let clear_started = Instant::now();
+                    drop(actual);
+                    let compact_clear_ns = clear_started.elapsed().as_nanos();
+                    let path_name = ["horner", "pruned", "metal"][path];
+                    println!(
+                        "x509_selected_low_degree native_log={native} common_log={common} width={width} workers={} selected_rows={} coefficient_count={} round={round} path={path_name} transform_gather_scratch_clear_ns={transform_ns} compact_clear_ns={compact_clear_ns} parity=exact",
+                        rayon::current_num_threads(),
+                        selected.len(),
+                        columns[0].len(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn selected_coarse_inner_schedule_preserves_values_validation_and_erasure() {
     for (native, common, mask_length) in [(2, 7, 81), (5, 15, 1816), (8, 16, 1816)] {
         let values = (0..1usize << native)
