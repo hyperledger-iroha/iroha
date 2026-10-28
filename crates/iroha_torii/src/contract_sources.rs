@@ -371,6 +371,15 @@ fn parse_code_hash_hex(raw: &str) -> Result<Hash, Error> {
     Ok(Hash::prehashed(array))
 }
 
+/// Job ids are hex-encoded 32-byte digests (see [`new_job_id`]); reject anything
+/// else before it is joined into a filesystem path.
+fn validate_job_id(raw: &str) -> Result<(), Error> {
+    if raw.len() != 64 || raw.bytes().any(|b| !b.is_ascii_hexdigit()) {
+        return Err(conversion_error("invalid verified source job id"));
+    }
+    Ok(())
+}
+
 fn now_rfc3339() -> String {
     crate::explorer::now_rfc3339()
 }
@@ -1242,6 +1251,7 @@ pub async fn handle_get_verified_source_job(
     job_id: String,
 ) -> Result<impl IntoResponse, Error> {
     parse_code_hash_hex(&code_hash_hex)?;
+    validate_job_id(&job_id)?;
     let job = load_verified_source_job(&code_hash_hex, &job_id)?.ok_or_else(not_found)?;
     Ok(JsonBody(job))
 }
@@ -1547,5 +1557,43 @@ kotoage fn main() {}
             .expect("load job")
             .expect("job exists");
         assert_eq!(stored.status, "mismatch");
+    }
+
+    #[tokio::test]
+    async fn verified_source_job_lookup_rejects_path_traversal() {
+        let guard = TestDataDirGuard::new();
+        let source = "kotoage fn main() {}";
+        let code_hash = "11".repeat(32);
+        let node = sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+
+        let (_, JsonBody(response)) = handle_post_verified_source_job(
+            code_hash.clone(),
+            SubmitVerifiedContractSourceDto {
+                language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
+                source_name: None,
+                source_text: source.to_owned(),
+            },
+            node,
+        )
+        .await
+        .expect("submit job");
+
+        // Plant a job-shaped file outside the per-hash job directory.
+        std::fs::copy(
+            verified_source_job_path(&code_hash, &response.job_id),
+            guard.path().join("outside.json"),
+        )
+        .expect("copy job file");
+
+        assert!(
+            handle_get_verified_source_job(code_hash.clone(), "../../../outside".to_owned())
+                .await
+                .is_err()
+        );
+        assert!(
+            handle_get_verified_source_job(code_hash.clone(), response.job_id.clone())
+                .await
+                .is_ok()
+        );
     }
 }
