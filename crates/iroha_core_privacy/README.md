@@ -79,6 +79,21 @@ Paired-host enrollment, authenticated encrypted transport, host revocation and
 mobile/desktop bindings remain separate X.5 work. Native availability does not
 claim resource qualification or change the current consensus profile policy.
 
+X.509 proving expands thousands of masked columns onto the common evaluation
+domain and replays native sources to stay within the memory ceiling. CPU coset
+evaluation skips butterflies outside the public coefficient extent, including
+the complete masking tail; it never inspects private values to choose work.
+Bounded P-256 value replay returns only its requested columns while preserving
+the original product traversal and terminal checks. These optimizations retain
+the same polynomial values, proof format, transcript and resource limits.
+
+The ignored release tests `common22_prefix_fft_reports_full_output_parity_and_timings`
+and `value_auxiliary_compact_projection_cost_diagnostic` compare these kernels
+with their dense references. Measure complete proving separately with
+`maximum_structural_credential_proof_with_retained_public_receipt`; its retained
+phase tree distinguishes source replay, transforms, composition and verification,
+and its unchanged 300-second assertion remains a qualification requirement.
+
 Focused validation reuses the ordinary warm target and native jobserver. Use a
 stable `--target-slot` only when another build runs concurrently:
 
