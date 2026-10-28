@@ -28,6 +28,11 @@
     "vscode-oniguruma": "2.0.1",
     "vscode-textmate": "9.3.2"
   },
+  "overrides": {
+    "@azure/identity": {
+      "@azure/msal-node": "7.1.2"
+    }
+  },
   "contributes": {
     "commands": [
       { "command": "kotodama.restart", "title": "Kotodama: Restart Language Server" },

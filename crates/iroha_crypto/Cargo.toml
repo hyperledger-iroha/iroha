@@ -102,7 +102,7 @@ tempfile = { workspace = true }
 num-bigint = { version = "0.5.1", default-features = false, features = ["std"], optional = true }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"], optional = true }
 streebog = { version = "0.11.0", default-features = false, optional = true }
-crypto-bigint = { version = "0.7.6", default-features = false, features = ["alloc", "rand_core", "subtle"], optional = true }
+crypto-bigint = { version = "0.7.10", default-features = false, features = ["alloc", "rand_core", "subtle"], optional = true }
 sm2 = { version = "0.14.0", optional = true, default-features = false, features = ["std", "dsa", "pkcs8", "pem"] }
 sm3 = { version = "0.5.0", optional = true }
 sm4 = { version = "0.6.0", optional = true }
