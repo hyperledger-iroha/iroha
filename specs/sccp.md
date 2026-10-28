@@ -1590,11 +1590,17 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
 - **Ingress** (Torii and P2P) checks, in this order: exact lengths and parsing
   (step 1); the record lookup and E0 (steps 2–3); step 5 without the signature
   (the E1/E2 classification or the anchor lookup and witness path);
-  deduplication against state (step 7); an LRU of the last 4 096 `(g, m,
-  signers)` triples seen, accepted or refused, which drops repeats; a node-wide
-  token bucket of 8 pairings per second with a burst of 32; and only then the
-  pairing (step 4). Refused submissions never reach the queue. Per-peer rate
-  limits stay.
+  deduplication against state (step 7); an LRU of the last 4 096 submissions
+  that reached the pairing, keyed by `(g, m, signers, SHA-256(σ))`, which drops
+  exact repeats; a node-wide token bucket of 8 pairings per second with a
+  burst of 32; and only then the pairing (step 4). A submission enters the LRU
+  only once it holds a pairing token, and leaves it again when the pairing
+  meets a local refusal (allocation, cancellation, deadline or unavailable
+  source). A refused signature therefore never shadows the genuine certificate
+  of the same `(g, m, signers)`, and neither a rate refusal nor a local
+  failure can deny a later genuine retry: the forgers themselves must not be
+  able to suppress the evidence of their forgery. Refused submissions never
+  reach the queue. Per-peer rate limits stay.
 - **R-EX.** A block that contains a `ForgeryEvidence` transaction that fails at
   execution is `Invalid`. The verdict is deterministic, from the signed content
   and the parent state. An honest builder runs steps 1–7 against the certified
@@ -2706,8 +2712,11 @@ time `T`):
   - **P5.** `sccp_forgery_max_generation < initial_committee.generation`, or no
     forgery evidence has been recorded; otherwise the revision would start held
     (§4.10).
-  - `revision = latest + 1` for the route; `destination_word` is unused in
-    `sccp_destination_words`; `0 < max_wrapped_supply < 2^128`, and for TON `<
+  - `revision = latest + 1`, where `latest` is the highest revision ever
+    registered for the route, removed ones included (their destination words
+    stay reserved), so a revision number is never reused and no per-revision
+    record of a removed revision can apply to a new deployment;
+    `destination_word` is unused in `sccp_destination_words`; `0 < max_wrapped_supply < 2^128`, and for TON `<
     2^96`. `forgery_floor` starts at the pinned generation and `quarantine` at
     `None`. The same effect transaction persists the full staged revision,
     reserves `destination_word`, sets zero liability and outbound nonce, the
@@ -2730,8 +2739,9 @@ time `T`):
 - `RetireRevision`: `r` is `InboundOnly`, `liability(r) = 0`, no inbound record
   or refund of `r` is `Pending`, and a quarantined `r` is reconciled (§4.10
   R5).
-- `RemoveStaged`: `r` is `Staged` and was never activated; its destination word
-  stays reserved.
+- `RemoveStaged`: `r` is `Staged`, was never activated, is not quarantined and
+  has no reconciliation record (a quarantine and its window never end, §4.10);
+  its destination word and revision number stay reserved.
 - `ReleaseStranded`: `amount ≤ stranded(route)`; the recipient is creditable
   under §4.12.3 step 3 and is registered if absent, and the release movement
   accepts the credit; `stranded −= amount`.
@@ -3418,6 +3428,20 @@ its expiry only consumes its nonce.
     releases, and a void and a mint consume the same nonce bit. The destination
     cap (§5.1.4) is defence in depth and never binds under honest operation; a
     forgery is answered by slashing, holds and reconciliation (§4.9–§4.10).
+- **Balanced entries at run time.** Escrow movements and liability bookkeeping
+  are written by separate steps, so core also enforces the first two
+  invariants on every transition that can move SCCP value:
+  `RecordSccpMessage`, `SubmitSccpInboundMessageV1`, `SettleSccpV1`,
+  `SubmitSccpOutboundVoidV1` and every Parliament enactment capture each
+  route's escrow balance, `Σ_r liability(r)` and `stranded(route)` before they
+  run. Afterwards they MUST refuse unless, for every route, the escrow balance
+  changed by exactly the change of `Σ_r liability(r) + stranded(route)`, and
+  every revision whose liability grew is within its `max_wrapped_supply`
+  (`crates/iroha_core/src/smartcontracts/isi/sccp/conservation.rs`). A refusal
+  is an execution invariant violation that rolls the transition back, so an
+  accounting defect fails closed instead of committing value the escrow does
+  not back. The rule compares changes rather than absolute values, so an
+  earlier inconsistency cannot refuse unrelated work.
 - Tests assert all invariants, including negative tests for a definition-owner
   burn and a permissioned transfer against an escrow. The settlement tests
   (`crates/iroha_core/src/smartcontracts/isi/sccp/settle/tests.rs`) assert the
@@ -5175,7 +5199,16 @@ deadline.
    - no rotation chain from the destination's generation to Taira's current
      generation is available (`/v1/sccp/committees/rotations`), or a generation
      on that chain, or the destination's own `untilMs`, ends before the message
-     could be finalized (`outbound_ttl_ms` plus the margin above).
+     could be finalized (`outbound_ttl_ms` plus the margin above);
+   - the destination head's time lags the wallet's clock by more than five
+     minutes. One endpoint's head is the only destination clock the wallet
+     has, and a halted chain or a stale endpoint would make an expiring
+     committee look live, leaving the escrowed record unable to mint or be
+     voided until that chain resumes. Liveness and the horizon above are judged
+     at the later of the head time and the wallet's clock, and a fast pause at
+     the earlier.
+   - an EVM recipient is spelled in mixed case and fails its EIP-55 checksum. A
+     minted message cannot be voided, so a mistyped recipient loses the value.
 3. `POST /v1/fees/quote`, then sign and `POST /v1/pipeline/transactions` with
    `RecordSccpMessage{network, expected_revision: r, amount, recipient}`. Poll
    the status. Read `message_id` and `deadline_ms` from the
@@ -6488,7 +6521,9 @@ and refused-credit accounting, fast-pause seat/quorum/expiry/lift/suspension,
 signed instruction custody, bounded control enactment, original-parent due work,
 clock budget feasibility, bundled advance expectations and local verifier
 refusal. HC326 rejects substituted TON minter, wallet or bucket code even
-after the caller recomputes its matching StateInit address. These are
+after the caller recomputes its matching StateInit address. HC488 makes the
+§4.15 balanced-entry guard accept a transition whose escrow balance and
+recorded backing changed differently. These are
 source-owned hooks, not aliases for every open SC row.
 
 Format pins owned by `iroha_data_model` and `iroha_crypto` are enforced by the
@@ -6519,7 +6554,7 @@ still missing is named separately from external authority and audit gates.
 |---|---|
 | Payload codec, amounts, transfer leaf, commitment tree, history accumulator (§3.1–§3.5) | Implemented. The sole 199-byte control leaf binds both pause tracks and the exact cause; Rust/Python fixtures and applicable Solidity/Tolk replays cover payloads, tree/history paths and confusion negatives. |
 | `RecordSccpMessage`, signed-only execution and the ABI closure for contract-originated sends (§4.4) | Implemented. Original-parent degradation, forgery/quarantine and pause checks precede monetary, nonce and leaf writes. Tests cover signed instruction custody, nested/repeated dispatch refusal and rollback. |
-| Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
+| Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Every value instruction and Parliament enactment runs under the §4.15 balanced-entry guard (HC488). Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
 | Exempt eligibility predicate and charge-on-failure (§4.19) | Implemented. Shared original-parent predicates, class quotas, keeper advances, Keepalive and R-EX have queue/execution and charge-on-failure tests. |
 | Light clients for Ethereum, BSC and TON; profiles, aged-proof builders and RPC hygiene (§4.13, §8) | Implemented verifiers/builders and Parliament-enacted profile activation, with bootstrap, advance, inclusion, equivocation and profile-switch tests. External gates: BSC/TON live-RPC captures and verified real light-client fork dates. Synthetic and transport fixtures do not complete those captures. |
 | Light-client keeper task | Implemented key generation, independent advances, due Keepalive, bounded destination watches and L5 progress. Tests cover evidence retention, endpoint rotation and unavailable duties. Live deployment and source-network progress qualification remain external. |

@@ -493,7 +493,15 @@ pub fn parse_recipient(network: SccpNetworkV1, text: &str) -> Result<Vec<u8>> {
         bytes.extend(id);
         bytes
     } else {
-        hex::decode(text.strip_prefix("0x").unwrap_or(text)).wrap_err("recipient is not hex")?
+        let digits = text.strip_prefix("0x").unwrap_or(text);
+        let bytes = hex::decode(digits).wrap_err("recipient is not hex")?;
+        // A minted message cannot be voided, so a mistyped recipient loses the value for good.
+        if !eip55_checksum_holds(digits, &bytes) {
+            return Err(eyre!(
+                "recipient fails its EIP-55 checksum; check the address or give it in one case"
+            ));
+        }
+        bytes
     };
     let codec = iroha_sccp::v1::network::account_codec(network);
     if !iroha_sccp::v1::payload::is_valid_account(codec, &bytes) {
@@ -503,6 +511,36 @@ pub fn parse_recipient(network: SccpNetworkV1, text: &str) -> Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
+}
+
+/// Whether the hex `digits` of the EVM address `bytes` are all one case or carry a valid
+/// EIP-55 checksum: each letter is upper case exactly when the matching nibble of
+/// `keccak256(lowercase hex)` is at least 8.
+fn eip55_checksum_holds(digits: &str, bytes: &[u8]) -> bool {
+    let mixed = digits.bytes().any(|digit| digit.is_ascii_lowercase())
+        && digits.bytes().any(|digit| digit.is_ascii_uppercase());
+    if !mixed {
+        return true;
+    }
+    let lower = hex::encode(bytes);
+    let hash = iroha_sccp::v1::hashes::keccak256(&[lower.as_bytes()]);
+    digits
+        .bytes()
+        .zip(lower.bytes())
+        .enumerate()
+        .all(|(index, (given, expected))| {
+            let nibble = if index % 2 == 0 {
+                hash[index / 2] >> 4
+            } else {
+                hash[index / 2] & 0x0f
+            };
+            given
+                == if nibble >= 8 {
+                    expected.to_ascii_uppercase()
+                } else {
+                    expected
+                }
+        })
 }
 
 /// This machine's Unix time in milliseconds.
@@ -1533,6 +1571,24 @@ mod tests {
         .expect("evm");
         assert_eq!(evm, vec![0x11; 20]);
         assert!(parse_recipient(SccpNetworkV1::EthereumMainnet, &"00".repeat(20)).is_err());
+        // EIP-55 test vector: checksummed, lower-case and upper-case spellings are accepted;
+        // one flipped letter case is refused.
+        let checksummed = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+        let expected =
+            parse_recipient(SccpNetworkV1::EthereumMainnet, checksummed).expect("valid checksum");
+        for spelling in [
+            checksummed.to_ascii_lowercase(),
+            format!("0x{}", checksummed[2..].to_ascii_uppercase()),
+        ] {
+            assert_eq!(
+                parse_recipient(SccpNetworkV1::BscMainnet, &spelling).expect("one case"),
+                expected
+            );
+        }
+        let mistyped = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD";
+        let error = parse_recipient(SccpNetworkV1::EthereumMainnet, mistyped)
+            .expect_err("a flipped case bit fails the checksum");
+        assert!(error.to_string().contains("EIP-55"), "{error}");
         for network in [SccpNetworkV1::EthereumMainnet, SccpNetworkV1::BscMainnet] {
             assert!(
                 parse_recipient(network, &format!("41{}", "22".repeat(20))).is_err(),

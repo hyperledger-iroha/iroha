@@ -13,7 +13,7 @@ use iroha_sccp_wallet::{
     pure::{
         bundle::DestinationContextV1,
         control::{DestinationControlStateV1, TairaControlV1, check_may_record},
-        rotation::{check_committee_horizon, verify_rotation_steps},
+        rotation::{check_committee_horizon, destination_times, verify_rotation_steps},
     },
 };
 
@@ -33,13 +33,15 @@ struct RecordObservation {
     fast_pause_until_ms: u64,
 }
 
+/// The idempotency key of one outbound transfer. It omits the optional `--revision`, which
+/// only guards the selection: a retry that adds or drops it after an unknown outcome must find
+/// the original flow instead of signing a second record.
 #[derive(norito::derive::JsonSerialize)]
 struct RecordIntent<'a> {
     sender: &'a iroha::data_model::account::AccountId,
     network: SccpNetworkV1,
     amount: &'a Numeric,
     recipient: String,
-    revision: Option<u32>,
 }
 
 fn require_recordable(
@@ -98,6 +100,9 @@ pub(super) fn preflight(
             && context.consensus_instance == original.instance,
         "destination differs from the independently selected native origin"
     );
+    // The destination clock is one endpoint's head time; a halted chain or a stale endpoint
+    // must not make an expiring committee look live (§7.1).
+    let times = destination_times(context.now_ms, wall_clock_ms())?;
     let from = context.committee_state.generation;
     original.record_interval(from, current)?;
     let candidate = client.sccp().committee(from)?;
@@ -171,7 +176,7 @@ pub(super) fn preflight(
     check_committee_horizon(
         &context.committee_state,
         &plan,
-        context.now_ms,
+        times.horizon_ms,
         parameters.outbound_ttl_ms,
         margin_ms,
     )?;
@@ -208,7 +213,7 @@ pub(super) fn preflight(
             fast_pause_until_ms: control.fast_pause_until_ms,
         })
     };
-    check_may_record(applied, latest.as_ref(), context.now_ms)?;
+    check_may_record(applied, latest.as_ref(), times.pause_ms)?;
     Ok(evidence)
 }
 
@@ -225,7 +230,6 @@ pub(super) fn send<C: RunContext>(context: &mut C, args: &SendArgs) -> Result<()
         network,
         amount: &amount,
         recipient: hex::encode(&recipient),
-        revision: args.revision,
     })?);
     let client = blocking(context)?;
     let original = origin::authenticate_origin(context, &client, &args.origin)?;
@@ -735,11 +739,14 @@ mod tests {
             network: SccpNetworkV1::EthereumMainnet,
             amount: &amount,
             recipient: hex::encode([0, 1, 128, 255]),
-            revision: Some(7),
         })
         .unwrap();
         let value: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
         assert_eq!(value.get("recipient"), Some(&norito::json!("000180ff")));
+        assert!(
+            value.get("revision").is_none(),
+            "`send` and `send --revision N` must share one idempotency key"
+        );
     }
 
     #[test]

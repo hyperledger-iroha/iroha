@@ -2,7 +2,11 @@
 //! charged LRU4096, 8/s burst32, then exactly one native pairing (§4.9).
 //!
 //! Cache membership is local denial-of-service state, never recorded evidence or
-//! execution authority. Failed pairing and post-insertion local refusals stay seen.
+//! execution authority. The cache key binds the aggregate signature, so a submission
+//! with a refused signature never shadows the genuine certificate of the same
+//! `(g, m, signers)`. A key is remembered only once a pairing token is taken, and
+//! forgotten again after a local refusal: neither a rate refusal nor local resource
+//! exhaustion is a verdict on the evidence, so neither may deny a later genuine retry.
 
 use std::time::Instant;
 
@@ -52,8 +56,8 @@ pub enum ForgeryIngressError {
     /// Every slashable selected G6 member already has a permanent offence.
     #[error("SCCP evidence duplicate")]
     Duplicate,
-    /// The exact (generation, message, signer bitmap) was already seen.
-    #[error("SCCP forgery triple already seen")]
+    /// The exact (generation, message, signer bitmap, signature) was already seen.
+    #[error("SCCP forgery submission already seen")]
     Seen,
     /// The node-wide pairing token bucket has no token.
     #[error("SCCP forgery pairing rate limit")]
@@ -103,17 +107,20 @@ impl ForgeryIngressError {
     }
 }
 
+/// The LRU key of one submission: the `(g, m, signers)` triple of spec §4.9 and the
+/// SHA-256 of its aggregate signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Triple {
+struct IngressKey {
     generation: u64,
     message: [u8; 32],
     signers: u32,
+    signature: [u8; 32],
 }
 
 /// The inline Queue mutex owns this exact charged fixed backing until Queue drop.
 /// No route, peer, `StateView`, queue clear or tip change resets it.
 pub(super) struct ForgeryIngressState {
-    seen: ChargedBuffer<Triple>,
+    seen: ChargedBuffer<IngressKey>,
     last_refill: Instant,
     credit_ns: u64,
 }
@@ -133,19 +140,14 @@ impl ForgeryIngressState {
         })
     }
 
-    fn observe(&mut self, triple: Triple, now: Instant) -> Result<(), ForgeryIngressError> {
-        if let Some(index) = self.seen.as_slice().iter().position(|seen| *seen == triple) {
+    fn observe(&mut self, key: IngressKey, now: Instant) -> Result<(), ForgeryIngressError> {
+        if let Some(index) = self.position(&key) {
             // Touching a repeat is an LRU access, but never consumes a pairing token.
             self.seen.as_mut_slice()[index..].rotate_left(1);
             return Err(ForgeryIngressError::Seen);
         }
-        if self.seen.as_slice().len() == CACHE_CAPACITY {
-            self.seen.as_mut_slice().rotate_left(1);
-            self.seen.as_mut_slice()[CACHE_CAPACITY - 1] = triple;
-        } else {
-            self.seen.push_reserved(triple);
-        }
-        // Insert BEFORE rate refusal/pairing. Refused submissions remain seen.
+        // Take the token BEFORE remembering the key: a rate refusal is no verdict on the
+        // evidence, so it stays unseen and a later retry reaches the pairing.
         // Monotonic time prevents wall-clock rollback from minting tokens.
         let elapsed = now.saturating_duration_since(self.last_refill);
         if now >= self.last_refill {
@@ -159,14 +161,34 @@ impl ForgeryIngressState {
             return Err(ForgeryIngressError::RateLimited);
         }
         self.credit_ns -= TOKEN_NS;
+        // Remember the key before the pairing, so concurrent exact repeats share this one
+        // pairing. A refused signature stays seen under its own digest only.
+        if self.seen.as_slice().len() == CACHE_CAPACITY {
+            self.seen.as_mut_slice().rotate_left(1);
+            self.seen.as_mut_slice()[CACHE_CAPACITY - 1] = key;
+        } else {
+            self.seen.push_reserved(key);
+        }
         Ok(())
+    }
+
+    /// Forget `key` after a local refusal that was no verdict on the evidence.
+    fn forget(&mut self, key: &IngressKey) {
+        if let Some(index) = self.position(key) {
+            self.seen.as_mut_slice()[index..].rotate_left(1);
+            self.seen.pop();
+        }
+    }
+
+    fn position(&self, key: &IngressKey) -> Option<usize> {
+        self.seen.as_slice().iter().position(|seen| seen == key)
     }
 }
 
 impl Queue {
     fn observe_forgery(
         &self,
-        triple: Triple,
+        key: IngressKey,
         budget: &AllocationBudget,
         now: Instant,
     ) -> Result<(), ForgeryIngressError> {
@@ -183,8 +205,15 @@ impl Queue {
             if !state.seen.belongs_to(budget) {
                 return Err(ForgeryIngressError::PoolMismatch);
             }
-            state.observe(triple, now)
+            state.observe(key, now)
         })
+    }
+
+    /// Forget `key` after its pairing met a local refusal (§4.9 ingress).
+    fn forget_forgery(&self, key: &IngressKey) {
+        if let Some(state) = self.forgery_ingress.lock().as_mut() {
+            state.forget(key);
+        }
     }
 
     pub(super) fn admit_forgery(
@@ -225,16 +254,23 @@ impl Queue {
         {
             return Err(ForgeryIngressError::Duplicate);
         }
-        let triple = Triple {
+        let key = IngressKey {
             generation: precheck.generation().generation,
             message: *precheck.message(),
             signers: precheck.qc().signers,
+            signature: iroha_crypto::sha256(evidence.aggregate_signature),
         };
-        self.observe_forgery(triple, &budget, Instant::now())?;
+        self.observe_forgery(key, &budget, Instant::now())?;
         // No cache mutex spans cryptography; all observers share its preceding atomic
         // LRU/token decision. No invented read-worker deadline or replacement pool.
-        let _verified = forgery::verify_prechecked(&precheck, &budget)?;
-        let parts = (triple.generation, triple.message, triple.signers);
+        if let Err(error) = forgery::verify_prechecked(&precheck, &budget) {
+            let error = ForgeryIngressError::from(error);
+            if error.is_local() {
+                self.forget_forgery(&key);
+            }
+            return Err(error);
+        }
+        let parts = (key.generation, key.message, key.signers);
         Ok(SccpAdmissionKeysV1::new(SccpExemptClassV1::ForgeryEvidence)
             .with_exclusive(&parts)
             .with_content(&parts))
