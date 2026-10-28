@@ -3915,8 +3915,8 @@
     },
     {
       "asset": "crates/kotodama_lang/src/ir/fixtures/v1/i040.ko",
-      "byte_len": 199,
-      "content_sha256": "0983af6900e608ede71d3aa765df558796befd43d055f8e7da7f444761263a38",
+      "byte_len": 214,
+      "content_sha256": "a448abbd7ef25544d60a3de54e89ceb6830eb35f2f92b008d126b824b99f32dd",
       "ends_with_lf": true,
       "include_path": "ir/fixtures/v1/i040.ko",
       "newline_count": 6,
@@ -4109,7 +4109,7 @@
       "starts_with_lf": true
     }
   ],
-  "fixtures_sha256": "f787969a80eaa6706aa85f06571d88975d52c6ad2592496dbc7d406d8b700eda",
+  "fixtures_sha256": "4f81302e67d72e8809fc25dc066340aff849fc8ff0f364f981decb2e4533a305",
   "format": "iroha.kotodama.test-sources",
   "schema_version": 1,
   "source_files": [

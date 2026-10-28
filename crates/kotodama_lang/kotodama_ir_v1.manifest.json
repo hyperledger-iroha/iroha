@@ -878,8 +878,8 @@
     {
       "path": "crates/kotodama_lang/src/ir/fixtures/v1/i040.ko",
       "owner": "crates/kotodama_lang/src/ir.rs",
-      "bytes": 199,
-      "sha256": "0983af6900e608ede71d3aa765df558796befd43d055f8e7da7f444761263a38"
+      "bytes": 214,
+      "sha256": "a448abbd7ef25544d60a3de54e89ceb6830eb35f2f92b008d126b824b99f32dd"
     },
     {
       "path": "crates/kotodama_lang/src/ir/fixtures/v1/i041.ko",
