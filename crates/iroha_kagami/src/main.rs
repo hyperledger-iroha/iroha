@@ -25,6 +25,7 @@ mod genesis;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
+mod node;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
@@ -53,6 +54,7 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami context list\n",
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
+    "  kagami node init --dir ./node --public-address 203.0.113.7:1337\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
@@ -124,6 +126,9 @@ enum Command {
     /// Start and manage a persistent localnet without supplying configuration
     #[command(subcommand)]
     Localnet(developer::LocalnetCommand),
+    /// Prepare one node directory (keys and starter config) for an existing or new network
+    #[command(subcommand)]
+    Node(node::NodeCommand),
     /// Run an owner-private local dataspace attached to an installed remote network
     #[command(subcommand)]
     Dataspace(developer::DataspaceCommand),
@@ -185,6 +190,7 @@ impl<T: Write> RunArgs<T> for Command {
         match self {
             Wizard(args) => args.run(writer),
             Localnet(args) => args.run(writer),
+            Node(args) => args.run(writer),
             Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),

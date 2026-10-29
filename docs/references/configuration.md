@@ -1,5 +1,29 @@
 # Runtime configuration
 
+## Node essentials
+
+A node file needs only `chain`, `public_key`, `trusted_peers`, `trusted_peers_pop`,
+`network.address`, `network.public_address`, `torii.address` and `[genesis]`, plus
+`data_dir` (`kagami node init` writes such a file). Everything else has a working
+default:
+
+- `data_dir` completes every state path (`kura`, `snapshot`, `tiered_state`, Torii and
+  its DA spools, SoraFS, SoraNet revocations, streaming sessions, Soracloud) under
+  `<data_dir>/state/` and reads `validator.key`, `transport.key` and `streaming.key`
+  from `<data_dir>/secrets/`; the transport and streaming public keys derive from
+  those private keys.
+- Socket addresses are plain `host:port`, `ip:port` or `[ipv6]:port`; the checked
+  `addr:host:port#CRC` literal that tools emit is also accepted and still verified.
+- `streaming.codec.rans_tables_path` is optional. Omitted, the node uses the canonical
+  `SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml`) compiled into
+  `iroha3d`, so no table file has to ship with the node.
+- Omitted governance and `network.soranet_vpn.operator_account_id` accounts keep their
+  default accounts for any `chain_discriminant`. An explicitly configured account
+  literal must use the node's prefix.
+- Without `nexus.storage.local_budget_bytes`, the node derives its storage budget from
+  the free space of each storage filesystem minus a headroom of 20% of its capacity,
+  capped at 64 GiB, and refuses to start when nothing remains.
+
 ## Native execution-proof transport
 
 `network.max_frame_bytes_connect` sets the dedicated reliable Connect P2P topic's

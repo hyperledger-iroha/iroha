@@ -503,16 +503,17 @@ Tool: `iroha.transactions.list`
 
 ```json
 {
-  "query": {
-    "limit": 10
-  }
+  "limit": 10
 }
 ```
 
-Some deployments expose flat shortcuts such as `limit`, but explorer
-pagination may still return the default page size. Always inspect the returned
-`pagination` object and the discovered `inputSchema` before assuming a
-shortcut was honored.
+Explorer list tools (`iroha.transactions.list`, `iroha.instructions.list`,
+`iroha.blocks.list`, ...) take only `filter`, `select`, `limit` and `cursor`.
+Narrow rows with `filter`, for example
+`{"filter": "kind = \"Transfer\" and block >= 1200"}` on
+`iroha.instructions.list`; the tool description lists each feed's fields.
+Pages are `{items, next_cursor}`: pass `next_cursor` as `cursor` until it is
+null, even after an empty page.
 
 ### Transaction status
 

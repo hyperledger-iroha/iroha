@@ -1779,21 +1779,26 @@ fn project_prepared_runtime_config(
         "revocation_store_path",
         "/storage/network/soranet-ticket-revocations.norito",
     )?;
-    let rans_content = read_runtime_file_bounded(
-        &source.streaming.codec.rans_tables_path,
-        "rANS table",
-        RANS_TABLE_MAX_BYTES,
-    )?;
-    let captured_rans_source = materialize_container_readable_file(
-        projection_root,
-        "rans",
-        "rans_seed0.toml",
-        &rans_content,
-    )?;
-    let mut runtime_files = vec![PreparedRuntimeFile {
-        target: RANS_TARGET.to_owned(),
-        content: rans_content,
-    }];
+    let mut runtime_files = Vec::new();
+    // Without a configured table the node uses the canonical tables compiled into `iroha3d`.
+    let captured_rans_source = match &source.streaming.codec.rans_tables_path {
+        Some(path) => {
+            let rans_content =
+                read_runtime_file_bounded(path, "rANS table", RANS_TABLE_MAX_BYTES)?;
+            let captured = materialize_container_readable_file(
+                projection_root,
+                "rans",
+                "rans_seed0.toml",
+                &rans_content,
+            )?;
+            runtime_files.push(PreparedRuntimeFile {
+                target: RANS_TARGET.to_owned(),
+                content: rans_content,
+            });
+            Some(captured)
+        }
+        None => None,
+    };
     let mut secret_files = Vec::new();
     let mut captured_validation_paths = Vec::new();
     set_toml_string(
@@ -2004,12 +2009,14 @@ fn project_prepared_runtime_config(
         "session_store_dir",
         "/storage/streaming",
     )?;
-    set_toml_string(
-        &mut table,
-        &["streaming", "codec"],
-        "rans_tables_path",
-        RANS_TARGET,
-    )?;
+    if captured_rans_source.is_some() {
+        set_toml_string(
+            &mut table,
+            &["streaming", "codec"],
+            "rans_tables_path",
+            RANS_TARGET,
+        )?;
+    }
     let captured_onboarding_private_key = source
         .torii
         .account_onboarding
@@ -2331,12 +2338,14 @@ fn project_prepared_runtime_config(
             captured.source.to_string_lossy(),
         )?;
     }
-    set_toml_string(
-        &mut validation_table,
-        &["streaming", "codec"],
-        "rans_tables_path",
-        captured_rans_source.to_string_lossy(),
-    )?;
+    if let Some(captured_rans_source) = &captured_rans_source {
+        set_toml_string(
+            &mut validation_table,
+            &["streaming", "codec"],
+            "rans_tables_path",
+            captured_rans_source.to_string_lossy(),
+        )?;
+    }
     if let Some(manifest_directory) = captured_manifest_directory.as_deref() {
         set_toml_string(
             &mut validation_table,

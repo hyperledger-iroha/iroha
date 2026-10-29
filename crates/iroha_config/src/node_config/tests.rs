@@ -299,7 +299,7 @@ fn checked_in_node_example_parses_with_real_public_bindings() {
         ("SEED_PEER", format!("{VALIDATOR_PUBLIC}@127.0.0.1:1337")),
         ("SEED_PUBLIC_KEY", VALIDATOR_PUBLIC.to_owned()),
         ("SEED_POP", VALIDATOR_POP.to_owned()),
-        ("PUBLIC_ADDRESS", "addr:127.0.0.1:1337#8F78".to_owned()),
+        ("PUBLIC_ADDRESS", "127.0.0.1:1337".to_owned()),
         ("GENESIS_PUBLIC_KEY", GENESIS_PUBLIC.to_owned()),
         ("GENESIS_HASH", EXPECTED_HASH.to_owned()),
         (
@@ -332,6 +332,12 @@ fn checked_in_node_example_parses_with_real_public_bindings() {
     assert_eq!(binding.unwrap().role, ProfileRole::Validator);
     assert_eq!(*config.common.chain_discriminant.value(), 369);
     assert!(config.soracloud_runtime.production_mode);
+    // The template's plain `host:port` addresses parse like their checked literals.
+    assert_eq!(
+        config.network.public_address.value().to_string(),
+        "127.0.0.1:1337"
+    );
+    assert_eq!(config.torii.address.value().to_string(), "127.0.0.1:8080");
 }
 
 #[test]

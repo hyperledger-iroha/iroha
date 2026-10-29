@@ -22,7 +22,7 @@ use norito::{
     json::{self, Value},
     streaming::{
         codec::{BundleContextId, ContextFrequency},
-        load_bundle_tables_from_toml,
+        load_bundle_tables_from_toml, parse_bundle_tables_from_toml,
     },
     to_bytes,
 };
@@ -867,24 +867,33 @@ fn build_streaming_bundle_summary(
 ) -> Result<Value, Box<dyn Error>> {
     let actual = load_actual_config(config_path)?;
     let codec = &actual.streaming.codec;
-    let tables_path = tables_override.unwrap_or_else(|| codec.rans_tables_path.clone());
-    let tables_path = if tables_path.is_relative() {
-        workspace_root().join(&tables_path)
-    } else {
-        tables_path
+    // Without an override or configured artefact the node uses its compiled-in canonical tables.
+    let (tables, tables_label) = match tables_override.or_else(|| codec.rans_tables_path.clone()) {
+        Some(tables_path) => {
+            let tables_path = if tables_path.is_relative() {
+                workspace_root().join(&tables_path)
+            } else {
+                tables_path
+            };
+            let tables = load_bundle_tables_from_toml(&tables_path).map_err(|err| {
+                format!(
+                    "failed to load bundled rANS tables `{}`: {err}",
+                    tables_path.display()
+                )
+            })?;
+            (tables, tables_path.display().to_string())
+        }
+        None => (
+            parse_bundle_tables_from_toml(
+                iroha_config::parameters::defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML,
+            )
+            .map_err(|err| format!("compiled-in canonical rANS tables are invalid: {err}"))?,
+            "<compiled-in canonical tables>".to_owned(),
+        ),
     };
-    let tables = load_bundle_tables_from_toml(&tables_path).map_err(|err| {
-        format!(
-            "failed to load bundled rANS tables `{}`: {err}",
-            tables_path.display()
-        )
-    })?;
     let checksum_hex = hex::encode(tables.checksum());
     let mut tables_json = json::Map::new();
-    tables_json.insert(
-        "path".into(),
-        json::Value::from(tables_path.display().to_string()),
-    );
+    tables_json.insert("path".into(), json::Value::from(tables_label));
     tables_json.insert(
         "precision_bits".into(),
         json::Value::from(tables.precision_bits()),

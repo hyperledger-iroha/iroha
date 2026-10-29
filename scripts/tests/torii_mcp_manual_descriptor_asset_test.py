@@ -14,17 +14,17 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
 # Manual asset formatting owner: one-space JSON indentation, enforced below.
-EXPECTED_ASSET_LENGTH = 130_574
-EXPECTED_ASSET_SHA256 = "045ef7e0eae4cd3c6896a3dc5d0e9b27dab0ddf0a5048d3fc8c623902b43d275"
-EXPECTED_SEMANTIC_SHA256 = "d997c6d2d24bbf9d2783e887cae04e761e4721fe82a80d41c65b574d3fa703d5"
+EXPECTED_ASSET_LENGTH = 129_866
+EXPECTED_ASSET_SHA256 = "c951b933093e7054cb69bca377b17a3a0ae94fecbc3a20f5f604c076a6f35f51"
+EXPECTED_SEMANTIC_SHA256 = "361933913e7e4977780c1bfd2100317a413f3ee0f023ca0361f8740e70d8e536"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
 EXPECTED_RETAINED_DIRECT_SHA256 = (
-    "82bd748c1058777b8bfd8dda6947c3dd556d4c383bed07ea9830664f78170f6e"
+    "b622e1954eefa86e664057e20f2f8852507a4a3d2ca4c6289a1611e94a8def3d"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "891244ad6592675d9bf1eb8bba0163ac631c54a2b46d5ef9fe269c8e6faabecd"
+    "46754060d889aac8ea8d8bc43dd6c4d49f85c87940a0c43d0208a77b4461561f"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -162,6 +162,12 @@ EXPECTED_COLLECTION_SHAPES = {
     "iroha.explorer.transactions.latest.query": ("history_post", None),
     "iroha.explorer.instructions.query": ("history_post", None),
     "iroha.explorer.instructions.latest.query": ("history_post", None),
+    "iroha.assets.list": ("history_get", None),
+    "iroha.nfts.list": ("history_get", None),
+    "iroha.rwas.list": ("history_get", None),
+    "iroha.blocks.list": ("history_get", None),
+    "iroha.transactions.list": ("history_get", None),
+    "iroha.instructions.list": ("history_get", None),
 }
 # A history shape restricts controls; Explorer index feeds use it too. Ordering
 # comes from the row owner, independently of the shared input-schema shape.
@@ -172,6 +178,17 @@ EXPECTED_NEWEST_FIRST_COLLECTIONS = {
     "iroha.explorer.blocks.query",
     "iroha.explorer.transactions.query", "iroha.explorer.transactions.latest.query",
     "iroha.explorer.instructions.query", "iroha.explorer.instructions.latest.query",
+    "iroha.blocks.list", "iroha.transactions.list", "iroha.instructions.list",
+}
+# `GET` Explorer feeds: like their `POST …/query` twins they read only filter,
+# select, limit and cursor, so resource selectors live in `filter`.
+EXPLORER_LIST_ROUTES = {
+    "iroha.assets.list": "/v1/explorer/assets",
+    "iroha.nfts.list": "/v1/explorer/nfts",
+    "iroha.rwas.list": "/v1/explorer/rwas",
+    "iroha.blocks.list": "/v1/explorer/blocks",
+    "iroha.transactions.list": "/v1/explorer/transactions",
+    "iroha.instructions.list": "/v1/explorer/instructions",
 }
 EXPECTED_RECORD_KEYS = (
     "function",
@@ -588,50 +605,25 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
             ):
                 self.assertIn("null", {branch.get("type") for branch in nullable["oneOf"]})
 
-    def test_explorer_history_descriptors_use_snapshot_cursor_contract(self) -> None:
-        asset = json.loads(self.asset)
+    def test_explorer_list_descriptors_read_the_shared_feed_query(self) -> None:
         descriptors = {
-            descriptor["name"]: descriptor for descriptor in asset["descriptors"]
+            record["name"]: record for record in _parse_asset(self.asset)["descriptors"]
         }
-        expected_query_fields = {
-            "iroha.transactions.list": {
-                "cursor", "limit", "authority", "block", "status", "asset_id",
-            },
-            "iroha.instructions.list": {
-                "cursor", "limit", "authority", "account", "transaction_hash",
-                "transaction_status", "block", "kind", "asset_id",
-            },
-            "iroha.blocks.list": {"cursor", "limit"},
-        }
-        for name, query_fields in expected_query_fields.items():
-            schema = descriptors[name]["input_schema"]
-            self.assertIs(schema.get("additionalProperties"), False, name)
-            properties = schema.get("properties")
-            self.assertIsInstance(properties, dict, name)
-            assert isinstance(properties, dict)
-            self.assertEqual(
-                set(properties),
-                query_fields | {"query", "headers", "accept"},
-                name,
-            )
-            query = properties["query"]
-            self.assertIs(query.get("additionalProperties"), False, name)
-            self.assertEqual(set(query.get("properties", {})), query_fields, name)
-            for owner in (properties, query["properties"]):
-                self.assertFalse(
-                    {"page", "per_page", "offset"} & set(owner),
-                    f"{name} retains offset pagination",
-                )
-                cursor = owner["cursor"]
-                self.assertEqual(cursor.get("pattern"), "^[A-Za-z0-9_-]+$")
-                self.assertEqual(cursor.get("minLength"), 1)
-                self.assertEqual(cursor.get("maxLength"), 1424)
-                limit = owner["limit"]
+        for name, path in EXPLORER_LIST_ROUTES.items():
+            with self.subTest(name=name):
+                record = descriptors[name]
+                self.assertEqual((record["method"], record["path_template"]), ("GET", path))
                 self.assertEqual(
-                    (limit.get("minimum"), limit.get("maximum"), limit.get("default")),
-                    (1, 100, 25),
+                    EXPECTED_COLLECTION_SHAPES.get(name), ("history_get", None)
                 )
-            self.assertIn("Optional canonical target authentication", descriptors[name]["description"])
+                description = record["description"]
+                for needle in (
+                    f"`GET {path}`",
+                    "Use filter, select, limit, cursor",
+                    "Optional canonical target authentication",
+                ):
+                    self.assertIn(needle, description)
+                self.assertNotIn("flat filters", description)
 
     def test_collection_descriptors_declare_only_their_query_shape(self) -> None:
         descriptors = {
@@ -665,12 +657,13 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 if name in (
                     "iroha.explorer.instructions.query",
                     "iroha.explorer.instructions.latest.query",
+                    "iroha.instructions.list",
                 ):
                     for field in ("box.wire_id", "box.framed_sha256", "box.instruction"):
                         self.assertIn(field, record["description"])
                     for retired in ("box.encoded", "box.json"):
                         self.assertNotIn(retired, record["description"])
-                if name.startswith("iroha.explorer."):
+                if name.startswith("iroha.explorer.") or name in EXPLORER_LIST_ROUTES:
                     for needle in ("Fixed bounded order:", "default limit 25, maximum 100"):
                         self.assertIn(needle, record["description"])
         for name, record in descriptors.items():

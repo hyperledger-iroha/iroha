@@ -64,6 +64,8 @@ mod sccp;
 pub use sccp::{
     SccpKeeper, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
 };
+mod socket_addr;
+pub use socket_addr::{ConfigSocketAddr, ConfigSocketAddrError};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -143,6 +145,23 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
 }
 fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
     AccountId::parse_encoded(raw).unwrap_or_else(|err| panic!("{context}: {err}"))
+}
+/// Parse an account setting whose omitted value is a fixed code-default account.
+///
+/// The default literal is rendered for the default chain discriminant, but it names the same
+/// account on every chain, so an omitted setting stays valid when a node selects another
+/// `chain_discriminant`. An explicitly configured literal must still use the node's prefix.
+fn parse_account_or_default(
+    raw: &str,
+    default_literal: fn() -> String,
+    default_account: fn() -> AccountId,
+    context: &str,
+) -> AccountId {
+    if raw == default_literal() {
+        default_account()
+    } else {
+        parse_account_id_literal(raw, context)
+    }
 }
 fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
     let trimmed = value.trim();
@@ -2748,12 +2767,16 @@ impl Governance {
             "governance.parliament_timed_ovn.max_corpus_entries must cover the largest hidden-ballot body (max(policy_jury_size, confirmation_jury_size)={maximum_hidden_body_size})"
         );
         let viral_incentives = actual::ViralIncentives {
-            incentive_pool_account: parse_account_id_literal(
+            incentive_pool_account: parse_account_or_default(
                 &self.viral_incentive_pool_account,
+                defaults::governance::viral_incentive_pool_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid viral incentive pool account id",
             ),
-            escrow_account: parse_account_id_literal(
+            escrow_account: parse_account_or_default(
                 &self.viral_escrow_account,
+                defaults::governance::viral_escrow_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid viral escrow account id",
             ),
             reward_asset_definition_id: self
@@ -2804,17 +2827,23 @@ impl Governance {
                 .parse()
                 .expect("invalid citizenship asset id"),
             citizenship_bond_amount: self.citizenship_bond_amount,
-            citizenship_escrow_account: parse_account_id_literal(
+            citizenship_escrow_account: parse_account_or_default(
                 &self.citizenship_escrow_account,
+                defaults::governance::citizenship_escrow_account,
+                defaults::governance::citizenship_escrow_account_id,
                 "invalid citizenship escrow account id",
             ),
             min_bond_amount: self.min_bond_amount,
-            bond_escrow_account: parse_account_id_literal(
+            bond_escrow_account: parse_account_or_default(
                 &self.bond_escrow_account,
+                defaults::governance::bond_escrow_account,
+                defaults::governance::bond_escrow_account_id,
                 "invalid governance bond escrow account id",
             ),
-            slash_receiver_account: parse_account_id_literal(
+            slash_receiver_account: parse_account_or_default(
                 &self.slash_receiver_account,
+                defaults::governance::slash_receiver_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid governance slash receiver account id",
             ),
             slash_double_vote_bps: self.slash_double_vote_bps,
@@ -2831,8 +2860,10 @@ impl Governance {
                 .sorafs_pin_fee_asset_id
                 .parse()
                 .expect("invalid SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account: parse_account_id_literal(
+            sorafs_pin_fee_treasury_account: parse_account_or_default(
                 &self.sorafs_pin_fee_treasury_account,
+                defaults::governance::sorafs_pin_fee::treasury_account,
+                defaults::governance::sorafs_pin_fee::treasury_account_id,
                 "invalid SoraFS pin fee treasury account id",
             ),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
@@ -5364,8 +5395,9 @@ pub struct StreamingCodec {
     pub cabac_mode: WithOrigin<CabacMode>,
     /// Block sizes that may use trellis scans (empty until claim-avoidance ships).
     pub trellis_blocks: WithOrigin<Vec<u16>>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact shared across encoders/decoders.
-    pub rans_tables_path: WithOrigin<PathBuf>,
+    /// Optional `SignedRansTablesV1` artefact shared across encoders/decoders. Omit it to use the
+    /// canonical tables compiled into the binary.
+    pub rans_tables_path: Option<WithOrigin<PathBuf>>,
     /// Entropy coder advertised in manifests/headers.
     pub entropy_mode: WithOrigin<String>,
     /// Bundle width for the bundled rANS path.
@@ -5388,7 +5420,7 @@ impl ReadConfigTrait for StreamingCodec {
             .finish_with_origin();
         let rans_tables_path = reader
             .read_parameter::<PathBuf>(["rans_tables_path"])
-            .value_or_else(defaults::streaming::codec::rans_tables_path)
+            .value_optional()
             .finish_with_origin();
         let entropy_mode = reader
             .read_parameter::<String>(["entropy_mode"])
@@ -5424,11 +5456,15 @@ impl StreamingCodec {
     ) -> Option<actual::StreamingCodec> {
         let cabac_mode = Self::resolve_cabac_mode(self.cabac_mode, emitter)?;
         let trellis_blocks = Self::validate_trellis_blocks(self.trellis_blocks, emitter)?;
-        let (rans_tables_path, rans_tables_origin) =
-            Self::validate_rans_tables_path(self.rans_tables_path, emitter, files)?;
         let entropy_mode = Self::parse_entropy_mode(self.entropy_mode, emitter)?;
-        let tables_max_width =
-            Self::bundle_tables_max_width(&rans_tables_path, rans_tables_origin, emitter, files)?;
+        let (rans_tables_path, tables_max_width) = match self.rans_tables_path {
+            Some(configured) => {
+                let (path, origin) = Self::validate_rans_tables_path(configured, emitter, files)?;
+                let width = Self::bundle_tables_max_width(&path, origin, emitter, files)?;
+                (Some(path), width)
+            }
+            None => (None, Self::canonical_tables_max_width(emitter)?),
+        };
         let bundle_width = Self::validate_bundle_width(
             self.bundle_width,
             entropy_mode,
@@ -5533,6 +5569,21 @@ impl StreamingCodec {
             return None;
         };
         Some((resolved, origin))
+    }
+    fn canonical_tables_max_width(emitter: &mut Emitter<ParseError>) -> Option<u8> {
+        match norito::streaming::parse_bundle_tables_from_toml(
+            defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML,
+        ) {
+            Ok(tables) => Some(tables.max_width()),
+            Err(source) => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidStreamingConfig)
+                        .attach("the compiled-in canonical rANS tables are invalid")
+                        .attach(source),
+                );
+                None
+            }
+        }
     }
     fn bundle_tables_max_width(
         rans_tables_path: &Path,
@@ -7279,8 +7330,10 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
-        let operator_account_id = parse_account_id_literal(
+        let operator_account_id = parse_account_or_default(
             &operator_account_id,
+            defaults::soranet::vpn::operator_account_id,
+            defaults::governance::bond_escrow_account_id,
             "invalid network.soranet_vpn.operator_account_id",
         );
         let operator_private_key = match (operator_private_key, operator_private_key_file) {
@@ -7610,11 +7663,11 @@ mod soranet_vpn_tests {
 pub struct Network {
     /// Peer-to-peer address (internal, will be used only to bind to it).
     #[config(env = "P2P_ADDRESS")]
-    pub address: WithOrigin<SocketAddr>,
+    pub address: WithOrigin<ConfigSocketAddr>,
     /// Peer-to-peer address (external, as seen by other peers).
     /// Will be gossiped to connected peers so that they can gossip it to other peers.
     #[config(env = "P2P_PUBLIC_ADDRESS")]
-    pub public_address: WithOrigin<SocketAddr>,
+    pub public_address: WithOrigin<ConfigSocketAddr>,
     /// P2P relay role (disabled/hub/spoke/assist) for constrained topologies.
     #[config(default = "RelayMode::Disabled")]
     pub relay_mode: RelayMode,
@@ -7623,7 +7676,7 @@ pub struct Network {
     /// When set, values are attempted in order and the node may fall back to
     /// subsequent entries if the preferred hub is unreachable.
     #[config(default)]
-    pub relay_hub_addresses: Vec<WithOrigin<SocketAddr>>,
+    pub relay_hub_addresses: Vec<WithOrigin<ConfigSocketAddr>>,
     /// Hop limit for relayed frames.
     #[config(default = "defaults::network::RELAY_TTL")]
     pub relay_ttl: u8,
@@ -8097,9 +8150,11 @@ impl Network {
             quic_max_idle_timeout_ms,
             ..
         } = self;
+        let address = address.map(ConfigSocketAddr::into_inner);
+        let public_address = public_address.map(ConfigSocketAddr::into_inner);
         let mut relay_hub_addresses: Vec<SocketAddr> = user_relay_hub_addresses
             .into_iter()
-            .map(WithOrigin::into_value)
+            .map(|address| address.into_value().into_inner())
             .collect();
         // Deduplicate while preserving operator-supplied order.
         if relay_hub_addresses.len() > 1 {
@@ -13738,7 +13793,7 @@ impl core::fmt::Debug for RedactedConfigSecret {
 pub struct Torii {
     /// Listening address for the public Torii API.
     #[config(env = "API_ADDRESS")]
-    pub address: WithOrigin<SocketAddr>,
+    pub address: WithOrigin<ConfigSocketAddr>,
     /// Maximum HTTP payload size accepted by the API.
     #[config(default = "defaults::torii::MAX_CONTENT_LEN")]
     pub max_content_len: Bytes,
@@ -15257,7 +15312,7 @@ impl Torii {
             actual::AttachmentSanitizerMode::Subprocess
         });
         let torii = actual::Torii {
-            address: self.address,
+            address: self.address.map(ConfigSocketAddr::into_inner),
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
             receipt_signer,
@@ -33382,7 +33437,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Forced),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
             bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33396,9 +33451,9 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(PathBuf::from(
+            rans_tables_path: Some(WithOrigin::inline(PathBuf::from(
                 "codec/rans/tables/does_not_exist.toml",
-            )),
+            ))),
             entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
             bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33408,11 +33463,32 @@ mod configuration_regression_tests {
         assert!(emitter.into_result().is_err());
     }
     #[test]
+    fn codec_parse_uses_compiled_in_tables_without_a_path() {
+        let codec = StreamingCodec {
+            cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+            trellis_blocks: WithOrigin::inline(Vec::new()),
+            rans_tables_path: None,
+            entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
+            bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
+            bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
+        };
+        let mut emitter = Emitter::new();
+        let parsed = codec
+            .parse(&mut emitter)
+            .expect("omitted table path selects the compiled-in canonical tables");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.rans_tables_path, None);
+        assert_eq!(
+            defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML.as_bytes(),
+            fs::read(bundled_tables_path()).expect("repository tables")
+        );
+    }
+    #[test]
     fn codec_parse_rejects_unknown_entropy_mode() {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline("invalid".to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33427,7 +33503,7 @@ mod configuration_regression_tests {
             let codec = StreamingCodec {
                 cabac_mode: WithOrigin::inline(CabacMode::Disabled),
                 trellis_blocks: WithOrigin::inline(Vec::new()),
-                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
                 entropy_mode: WithOrigin::inline(entropy_mode.to_owned()),
                 bundle_width: WithOrigin::inline(2),
                 bundle_accel: WithOrigin::inline("cpu_simd".to_owned()),
@@ -33440,7 +33516,7 @@ mod configuration_regression_tests {
             let codec = StreamingCodec {
                 cabac_mode: WithOrigin::inline(CabacMode::Disabled),
                 trellis_blocks: WithOrigin::inline(Vec::new()),
-                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
                 entropy_mode: WithOrigin::inline("rans_bundled".to_owned()),
                 bundle_width: WithOrigin::inline(2),
                 bundle_accel: WithOrigin::inline(bundle_accel.to_owned()),
@@ -33461,7 +33537,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33485,7 +33561,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline("cpu_simd".to_string()),
@@ -33507,7 +33583,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline("gpu".to_string()),
