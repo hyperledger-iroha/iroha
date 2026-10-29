@@ -214,7 +214,19 @@ pub(super) fn preflight(
         })
     };
     check_may_record(applied, latest.as_ref(), times.pause_ms)?;
+    // The source route, committee and control above were read at the selected cut; it must still
+    // be the certified tip, or within a few blocks of it (§7.1 step 2).
+    evidence.push(original.require_current_cut(client)?);
     Ok(evidence)
+}
+
+/// The latest time, in Unix milliseconds, at which a record signed at `now_ms` may execute. The
+/// destination horizon was checked for inclusion within `margin_ms`, so the signed TTL must not
+/// let the record execute later, whatever TTL the client configures (§7.1 step 3).
+fn record_expiry_ms(now_ms: u64, margin_ms: u64) -> Result<u64> {
+    now_ms
+        .checked_add(margin_ms)
+        .ok_or_else(|| eyre!("record expiry overflows"))
 }
 
 pub(super) fn send<C: RunContext>(context: &mut C, args: &SendArgs) -> Result<()> {
@@ -295,6 +307,8 @@ pub(super) fn send<C: RunContext>(context: &mut C, args: &SendArgs) -> Result<()
         destination_word: revision.destination_word,
     };
     let margin = origin::AuthenticatedOrigin::record_margin(args.inclusion_margin_ms)?;
+    // Read before the destination preflight, so the horizon it checks covers the whole lifetime.
+    let expiry_ms = record_expiry_ms(wall_clock_ms(), margin)?;
     let mut evidence = match revision.deployment {
         SccpDeploymentV1::Evm(deployment) => {
             let constructor = iroha_sccp::v1::evm_abi::ConstructorArgsV1 {
@@ -369,7 +383,7 @@ pub(super) fn send<C: RunContext>(context: &mut C, args: &SendArgs) -> Result<()
         "taira.original_capabilities",
         &capabilities,
     )?);
-    let outcome = flows::taira(
+    let outcome = flows::taira_expiring(
         context,
         &original,
         &flow,
@@ -381,6 +395,7 @@ pub(super) fn send<C: RunContext>(context: &mut C, args: &SendArgs) -> Result<()
             recipient: recipient.clone(),
         })],
         evidence,
+        expiry_ms,
     )?;
     if !flows::confirmed(outcome.as_ref()) {
         return Ok(());
@@ -747,6 +762,84 @@ mod tests {
             value.get("revision").is_none(),
             "`send` and `send --revision N` must share one idempotency key"
         );
+    }
+
+    /// Torii's fee quote, accepting whatever payload the wallet asks about.
+    #[derive(Debug)]
+    struct AcceptingQuotes;
+    impl iroha::http::HttpTransport for AcceptingQuotes {
+        fn send_blocking(
+            &self,
+            request: iroha::http::TransportRequest,
+        ) -> eyre::Result<iroha::http::Response<Vec<u8>>> {
+            use iroha::data_model::{nexus::FeeDebitSource, transaction::TransactionPayload};
+            use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, FeeQuoteResponse};
+            assert_eq!(request.url.path(), "/v1/fees/quote");
+            let request: norito::json::Value = norito::json::from_slice(&request.body).unwrap();
+            let payload: TransactionPayload =
+                norito::json::from_value(request.get("payload").unwrap().clone()).unwrap();
+            let quote = FeeQuoteResponse {
+                intent: payload.fee_payment_intent().clone(),
+                observation: FeeQuoteObservation {
+                    ledger_time_ms: 1,
+                    next_block_height: 7,
+                    route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                },
+                components: Vec::new(),
+                capacities: Vec::new(),
+                decision: FeeQuoteDecision::Accepted {
+                    debit_source: FeeDebitSource::Account(payload.authority().clone()),
+                    program_revision: None,
+                },
+            };
+            Ok(iroha::http::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(norito::json::to_vec(&quote).unwrap())
+                .unwrap())
+        }
+        fn send(&self, request: iroha::http::TransportRequest) -> iroha::http::TransportFuture<'_> {
+            Box::pin(async move { self.send_blocking(request) })
+        }
+    }
+
+    #[test]
+    fn a_record_cannot_execute_after_the_margin_its_horizon_assumed() {
+        let margin = origin::AuthenticatedOrigin::record_margin(60_000).unwrap();
+        let mut config = crate::fallback_config();
+        // A client TTL far longer than the margin the destination horizon was checked for.
+        config.transaction_ttl = std::time::Duration::from_secs(3_600);
+        let client =
+            BlockingClient::with_http_transport(config, std::sync::Arc::new(AcceptingQuotes))
+                .unwrap();
+        let sign = |expiry_ms| {
+            flows::quote_and_sign(
+                &client,
+                iroha_data_model::transaction::Executable::from(vec![InstructionBox::from(
+                    RecordSccpMessage {
+                        network: SccpNetworkV1::EthereumMainnet,
+                        expected_revision: 1,
+                        amount: "1".parse().unwrap(),
+                        recipient: vec![0x11; 20],
+                    },
+                )]),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                iroha_model_base::metadata::Metadata::default(),
+                expiry_ms,
+            )
+            .unwrap()
+            .0
+        };
+        let expiry = record_expiry_ms(wall_clock_ms(), margin).unwrap();
+        let record = sign(Some(expiry));
+        let payload = record.payload();
+        let ttl = payload.time_to_live_ms.unwrap().get();
+        assert!(ttl <= margin, "TTL {ttl} ms exceeds the margin {margin} ms");
+        assert!(payload.creation_time_ms + ttl <= expiry);
+        record.verify_signature().unwrap();
+        // The client's own TTL would let the record execute long after the checked horizon.
+        assert!(sign(None).payload().time_to_live_ms.unwrap().get() > margin);
+        assert!(record_expiry_ms(u64::MAX, 1).is_err());
     }
 
     #[test]

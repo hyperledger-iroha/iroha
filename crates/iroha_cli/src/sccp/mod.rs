@@ -383,7 +383,8 @@ pub struct SendArgs {
     /// XOR amount, for example `1.5`.
     #[arg(long)]
     pub amount: String,
-    /// Recipient on the target: `0x`-hex (EVM, 20 bytes) or `0:<64 hex>` (TON raw address).
+    /// Recipient on the target: `0x`-hex (EVM, 20 bytes; mixed case must pass EIP-55), or a TON
+    /// raw `0:<64 hex>` or user-friendly address (checksum, mainnet flags and workchain 0 checked).
     #[arg(long)]
     pub recipient: String,
     /// Route revision to record on; defaults to the route's `Bidirectional` revision.
@@ -485,10 +486,8 @@ pub fn parse_proof_height(text: &str) -> Result<SccpProofHeightV1> {
 /// Encode `text` as the target network's recipient bytes (§3.1).
 pub fn parse_recipient(network: SccpNetworkV1, text: &str) -> Result<Vec<u8>> {
     let bytes = if network == SccpNetworkV1::TonMainnet {
-        let account = text
-            .strip_prefix("0:")
-            .ok_or_else(|| eyre!("a TON recipient is a raw `0:<64 hex>` address"))?;
-        let id = hex::decode(account).wrap_err("TON account id is not hex")?;
+        // A user-friendly address must carry a valid checksum, mainnet flags and workchain 0.
+        let id = iroha_sccp_wallet::pure::ton_address::parse_ton_account(text)?;
         let mut bytes = vec![0_u8; 4];
         bytes.extend(id);
         bytes
@@ -1600,6 +1599,30 @@ mod tests {
         assert_eq!(&ton[..4], &[0; 4]);
         assert_eq!(ton.len(), 36);
         assert!(parse_recipient(SccpNetworkV1::TonMainnet, &"33".repeat(32)).is_err());
+        // The raw and user-friendly spellings of one account name the same recipient; one
+        // flipped character of the user-friendly form fails its checksum.
+        let raw = "0:83dfd552e63729b472fcbcc8c45ebcc6691702558b68ec7527e1ba403a0f31a8";
+        let friendly = "EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N";
+        let expected = parse_recipient(SccpNetworkV1::TonMainnet, raw).expect("raw");
+        assert_eq!(
+            parse_recipient(SccpNetworkV1::TonMainnet, friendly).expect("user-friendly"),
+            expected
+        );
+        let flipped = friendly.replacen('D', "E", 1);
+        let error = parse_recipient(SccpNetworkV1::TonMainnet, &flipped)
+            .expect_err("one flipped character fails the checksum");
+        assert!(error.to_string().contains("checksum"), "{error}");
+        assert!(
+            parse_recipient(
+                SccpNetworkV1::TonMainnet,
+                "kQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqKYH"
+            )
+            .is_err(),
+            "a testnet-only address is no mainnet recipient"
+        );
+        assert!(
+            parse_recipient(SccpNetworkV1::TonMainnet, &format!("0:{}", "00".repeat(32))).is_err()
+        );
     }
 
     #[test]

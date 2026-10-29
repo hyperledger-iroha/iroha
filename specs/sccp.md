@@ -5210,13 +5210,29 @@ deadline.
      at the later of the head time and the wallet's clock, and a fast pause at
      the earlier.
    - an EVM recipient is spelled in mixed case and fails its EIP-55 checksum. A
-     minted message cannot be voided, so a mistyped recipient loses the value.
+     minted message cannot be voided, so a mistyped recipient loses the value;
+   - a TON recipient in user-friendly form (48 base64 or base64url characters
+     of `flags ‖ workchain ‖ account id ‖ CRC-16/XMODEM`) fails its checksum,
+     is marked testnet-only, has flags other than bounceable `0x11` or
+     non-bounceable `0x51`, or names a workchain other than 0. The raw form
+     `0:<64 hex>` has no checksum and stays accepted;
+   - the selected World cut (`--at-height`, `--world-snapshot`) is neither the
+     certified Taira tip nor within four blocks of it. The wallet authenticates
+     every block from the cut to the endpoint's tip claim with the cut's own
+     native verifier before it accepts the claim. An idle chain produces no
+     blocks, so the bound counts blocks, not time. An endpoint can still
+     understate its tip; the bound stops a stale or reused cut, not an endpoint
+     that hides newer blocks.
 3. `POST /v1/fees/quote`, then sign and `POST /v1/pipeline/transactions` with
-   `RecordSccpMessage{network, expected_revision: r, amount, recipient}`. Poll
-   the status. Read `message_id` and `deadline_ms` from the
-   `SccpMessageRecorded` event, or find the record (sender, amount, recipient)
-   in `GET /v1/sccp/outbound/{network}/{r}?from_nonce=<next_outbound_nonce read
-   before submitting>` as `iroha sccp send` does, and show the deadline. Discovery
+   `RecordSccpMessage{network, expected_revision: r, amount, recipient}`. The
+   signed lifetime ends at most the step 2 margin (`--inclusion-margin-ms` plus
+   `2·MAX_CLOCK_DRIFT_BOUND_MS`) after the wallet read its clock before step 2,
+   whatever TTL the client configures, so the record cannot execute after the
+   horizon that step checked. Poll the status. Read `message_id` and
+   `deadline_ms` from the `SccpMessageRecorded` event, or find the record
+   (sender, amount, recipient) in `GET
+   /v1/sccp/outbound/{network}/{r}?from_nonce=<next_outbound_nonce read before
+   submitting>` as `iroha sccp send` does, and show the deadline. Discovery
    scans at most sixteen pages per poll and retains its next-page cursor under
    the original signed step, so competing records cannot force every restart
    back to the first page. The retained route and original nonce floor are
@@ -5241,7 +5257,13 @@ deadline.
    of `finalizeFromCheckpoint` when a usable covering checkpoint is stored
    (a stored checkpoint of a retired generation answers
    `CommitteeNotAccepted`), else `finalizeFromTaira`; TON `liteServer.sendMessage` of a wallet-v5 external
-   message carrying `sccp_finalize_checkpoint` or `sccp_finalize`. With
+   message carrying `sccp_finalize_checkpoint` or `sccp_finalize`. The nonce,
+   gas estimate, tip and base fee of an EIP-1559 transaction come from one
+   endpoint, so before it signs, exports or journals one the wallet refuses a
+   quote whose `maxFeePerGas` or `gasLimit × maxFeePerGas` exceeds the
+   network's `[sccp.fee_caps]` cap (defaults: Ethereum 200 gwei and 0.25 ETH,
+   BSC 20 gwei and 0.05 BNB). This holds for every wallet EVM transaction:
+   finalize, burn, void, control, committee sync and deployment. With
    `--emit`, the wallet instead exports the next required unsigned request:
    an EIP-1559 transaction with `--payer`, or a wallet-v5r1 signing-request BoC
    with `--ton-wallet`, including its signing hash. Export requires no key file
@@ -5264,14 +5286,24 @@ the control step of step 5.
    and is not within 7 days of `supported_until` (`GET
    /v1/sccp/light-clients/{network}`). The recipient literal decodes (checksum
    verified) to `AccountAddress` bytes of at most 1024 bytes whose controller
-   account admission allows. The account need not exist. Refuse otherwise.
-   Retain the original route, light-client and controller-admission observations
-   with the signed burn before dispatch. Recovery reuses that original envelope
-   and its evidence; it does not replace a still-unknown burn after rechecking
-   newer state.
+   account admission allows. Admission is the `crypto_admission_policy_v1`
+   parameter of the cut's own `world.parameters` cell: the wallet reads
+   `FindParameters` and authenticates the complete value against the cut,
+   never a node's capability report, and a cut without the parameter admits no
+   recipient. The account need not exist. The selected World cut is the
+   certified tip or within four blocks of it (§7.1 step 2). Refuse otherwise.
+   Retain the original route, light-client, controller-admission and cut
+   observations with the signed burn before dispatch. Recovery reuses that
+   original envelope and its evidence; it does not replace a still-unknown burn
+   after rechecking newer state. Before a journaled burn is first dispatched,
+   and before every `--rebroadcast`, the wallet runs this guard again, refusal
+   only: a refusal sends nothing, writes no dispatch marker and leaves the
+   retained evidence unchanged. An outcome that is already observable is still
+   recorded.
 2. **Burn.** EVM: read `transferNonces(sender)`, then call
    `transferToTaira(recipient, amount, expectedNonce)` with canonical ABI
-   encoding. TON: jetton `burn` with `sccp_burn_to_taira`.
+   encoding, refused above the `[sccp.fee_caps]` caps (§7.1 step 7). TON:
+   jetton `burn` with `sccp_burn_to_taira`.
 3. **Collect and journal evidence** from public RPC as soon as the source block
    is final:
    - **ETH:** `eth_getTransactionReceipt`, `eth_getBlockReceipts(B)` (rebuild
@@ -5510,7 +5542,8 @@ the control step of step 5.
     identities within its record bound. This component qualification does not
     replace live route and external-chain qualification;
   - `config.rs`: the client-config `[sccp]` table (file-only): endpoint lists,
-    timeouts and pinned deployments per `NetworkId`.
+    timeouts, EIP-1559 fee caps per EVM network (`[sccp.fee_caps]`, §7.1 step
+    7) and pinned deployments per `NetworkId`.
 - **`crates/irohad`** has the SCCP keeper `sccp_keeper.rs` (§4.13.4:
   keepalives, light-client advances and the watch), a supervised task with one
   schedule per network and short-lived state views, configured through
