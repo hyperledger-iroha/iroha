@@ -98,12 +98,29 @@ async fn mcp_jsonrpc_tools_call_agent_alias_subscriptions_create_accepts_body() 
     enable_writer_mcp(&mut cfg);
     let authority_key_pair = cfg.common.key_pair.clone();
     let app = build_router(cfg);
+    // The draft body is the exact `SubscriptionCreateRequest`; the plan is not registered.
+    let domain =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
+    let subscription_id = iroha_data_model::nft::NftId::of(
+        domain.clone(),
+        "subscription".parse().expect("subscription name"),
+    );
+    let plan_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+        domain,
+        "subscription_plan".parse().expect("plan name"),
+    );
     let arguments = authenticated_mcp_target_arguments(
         &app,
         &authority_key_pair,
         "POST",
         "/v1/subscriptions",
-        norito::json!({ "body": {} }),
+        norito::json!({
+            "body": {
+                "authority": (AccountId::new(authority_key_pair.public_key().clone()).to_string()),
+                "subscription_id": (subscription_id.to_string()),
+                "plan_id": (plan_id.to_string())
+            }
+        }),
         McpTargetAuthentication::CanonicalAccount,
     );
     let (status, call) = post_mcp(

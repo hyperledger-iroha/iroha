@@ -107,8 +107,13 @@ use std::{
 use zeroize::{Zeroize as _, Zeroizing};
 
 mod managed_puzzle;
+mod network;
 mod private_root;
 pub(crate) use custody::sync_private_tree;
+pub use network::{
+    DEFAULT_NETWORK_TORII_URL, NETWORK_CONFIG_FILE, NetworkOptions, NetworkValidator,
+    SIGNED_GENESIS_FILE, generate_network,
+};
 pub(crate) use private_root::private_fee_asset;
 pub use private_root::{PrivateRootSpec, prepare_private_root};
 pub(crate) use private_root::{
@@ -1011,6 +1016,29 @@ impl Peer {
         AccountId::new(public_key.clone())
     }
 }
+/// The public identity genesis registers for one validator.
+///
+/// Localnet peers and externally held network validators share every genesis
+/// roster, staking and permissioned-support helper through this view.
+trait GenesisValidator {
+    /// BLS-normal consensus key, which is also the validator's peer identity.
+    fn consensus_key(&self) -> &iroha_crypto::PublicKey;
+    /// Proof of possession of [`Self::consensus_key`].
+    fn pop(&self) -> &[u8];
+    /// Account the validator controls; Taira binds it to the peer's runtime signer.
+    fn account_id(&self, taira: bool) -> AccountId;
+}
+impl GenesisValidator for Peer {
+    fn consensus_key(&self) -> &iroha_crypto::PublicKey {
+        &self.public_key
+    }
+    fn pop(&self) -> &[u8] {
+        &self.bls_pop
+    }
+    fn account_id(&self, taira: bool) -> AccountId {
+        self.validator_account_id(taira)
+    }
+}
 struct LocalnetPeerStoragePaths {
     kura: PathBuf,
     state: PathBuf,
@@ -1685,7 +1713,10 @@ fn generate_localnet_runtime<T: Write>(
         let rendered = if managed {
             rendered
         } else {
-            Zeroizing::new(format!("{LOCALNET_PEER_CONFIG_HEADER}{}", rendered.as_str()))
+            Zeroizing::new(format!(
+                "{LOCALNET_PEER_CONFIG_HEADER}{}",
+                rendered.as_str()
+            ))
         };
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
@@ -2476,6 +2507,72 @@ enum LocalnetGenesisIdentitySource {
     BootstrapInline(HashOf<BlockHeader>),
     PublishedFile,
 }
+/// Insert the `[nexus]` settings that the signed genesis binds: the fusion capacity, the lane
+/// and dataspace catalogs, routing, and the lane manifest registry with its governance modules.
+///
+/// Every node of the network must carry exactly these values; node-local `[nexus]` settings
+/// such as `storage` are not part of them.
+fn insert_localnet_signed_nexus_settings(
+    nexus: &mut toml::Table,
+    sora_profile: Option<SoraProfile>,
+    taira: bool,
+    dataspace_fault_tolerance: Option<u32>,
+    lane_manifest_directory: Option<&Path>,
+) {
+    use toml::{Table, Value};
+    let mut fusion = Table::new();
+    fusion.insert(
+        "exit_teu".into(),
+        Value::Integer(i64::from(LOCALNET_LANE_TEU_CAPACITY)),
+    );
+    nexus.insert("fusion".into(), Value::Table(fusion));
+    if let Some((lane_count, lane_catalog)) = localnet_lane_catalog(sora_profile, taira) {
+        nexus.insert("lane_count".into(), Value::Integer(lane_count));
+        nexus.insert("lane_catalog".into(), Value::Array(lane_catalog));
+    }
+    if let Some(fault_tolerance) = dataspace_fault_tolerance {
+        let catalog = localnet_dataspace_catalog(sora_profile, fault_tolerance, taira);
+        nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
+    }
+    if let Some(policy) = localnet_routing_policy(sora_profile, taira) {
+        nexus.insert("routing_policy".into(), Value::Table(policy));
+    }
+    if let Some(manifest_directory) = lane_manifest_directory {
+        assert!(
+            taira || private_dataspace_spec(sora_profile).is_some(),
+            "lane manifests require a generated restricted dataspace"
+        );
+        let mut registry = Table::new();
+        registry.insert(
+            "manifest_directory".into(),
+            Value::String(manifest_directory.to_string_lossy().into_owned()),
+        );
+        nexus.insert("registry".into(), Value::Table(registry));
+        let mut parliament = Table::new();
+        parliament.insert(
+            "module_type".into(),
+            Value::String("parliament_sortition_jit".to_owned()),
+        );
+        let mut parliament_params = Table::new();
+        parliament_params.insert(
+            "selection".into(),
+            Value::String("multibody_sortition".to_owned()),
+        );
+        parliament_params.insert("approval_flow".into(), Value::String("jit".to_owned()));
+        parliament.insert("params".into(), Value::Table(parliament_params));
+        let mut modules = Table::new();
+        modules.insert("parliament".into(), Value::Table(parliament));
+        let mut governance = Table::new();
+        if !taira {
+            governance.insert(
+                "default_module".into(),
+                Value::String("parliament".to_owned()),
+            );
+        }
+        governance.insert("modules".into(), Value::Table(modules));
+        nexus.insert("governance".into(), Value::Table(governance));
+    }
+}
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -2702,58 +2799,13 @@ fn render_peer_config(
         }
         nexus.insert("storage".into(), Value::Table(storage));
     }
-    let mut fusion = Table::new();
-    fusion.insert(
-        "exit_teu".into(),
-        Value::Integer(i64::from(LOCALNET_LANE_TEU_CAPACITY)),
+    insert_localnet_signed_nexus_settings(
+        &mut nexus,
+        sora_profile,
+        taira,
+        dataspace_fault_tolerance,
+        lane_manifest_directory,
     );
-    nexus.insert("fusion".into(), Value::Table(fusion));
-    if let Some((lane_count, lane_catalog)) = localnet_lane_catalog(sora_profile, taira) {
-        nexus.insert("lane_count".into(), Value::Integer(lane_count));
-        nexus.insert("lane_catalog".into(), Value::Array(lane_catalog));
-    }
-    if let Some(fault_tolerance) = dataspace_fault_tolerance {
-        let catalog = localnet_dataspace_catalog(sora_profile, fault_tolerance, taira);
-        nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
-    }
-    if let Some(policy) = localnet_routing_policy(sora_profile, taira) {
-        nexus.insert("routing_policy".into(), Value::Table(policy));
-    }
-    if let Some(manifest_directory) = lane_manifest_directory {
-        assert!(
-            taira || private_dataspace_spec(sora_profile).is_some(),
-            "lane manifests require a generated restricted dataspace"
-        );
-        let mut registry = Table::new();
-        registry.insert(
-            "manifest_directory".into(),
-            Value::String(manifest_directory.to_string_lossy().into_owned()),
-        );
-        nexus.insert("registry".into(), Value::Table(registry));
-        let mut parliament = Table::new();
-        parliament.insert(
-            "module_type".into(),
-            Value::String("parliament_sortition_jit".to_owned()),
-        );
-        let mut parliament_params = Table::new();
-        parliament_params.insert(
-            "selection".into(),
-            Value::String("multibody_sortition".to_owned()),
-        );
-        parliament_params.insert("approval_flow".into(), Value::String("jit".to_owned()));
-        parliament.insert("params".into(), Value::Table(parliament_params));
-        let mut modules = Table::new();
-        modules.insert("parliament".into(), Value::Table(parliament));
-        let mut governance = Table::new();
-        if !taira {
-            governance.insert(
-                "default_module".into(),
-                Value::String("parliament".to_owned()),
-            );
-        }
-        governance.insert("modules".into(), Value::Table(modules));
-        nexus.insert("governance".into(), Value::Table(governance));
-    }
     root.insert("nexus".into(), Value::Table(nexus));
     // Safety records and the key installation log live beside the peer's state, outside Kura:
     // the start script asserts fresh keys exactly when the records directory does not exist.
@@ -3720,12 +3772,15 @@ fn validate_localnet_crypto_policy(
 }
 fn append_peer_pop(
     genesis: RawGenesisTransaction,
-    peers: &[Peer],
+    peers: &[impl GenesisValidator],
 ) -> Result<RawGenesisTransaction> {
     let mut topology = peers
         .iter()
         .map(|peer| {
-            GenesisTopologyEntry::new(PeerId::new(peer.public_key.clone()), peer.bls_pop.clone())
+            GenesisTopologyEntry::new(
+                PeerId::new(peer.consensus_key().clone()),
+                peer.pop().to_vec(),
+            )
         })
         .collect::<Vec<_>>();
     topology.sort_by(|left, right| left.peer.cmp(&right.peer));
@@ -4204,8 +4259,8 @@ fn localnet_bootstrap_staking_policy(
     Ok(policy)
 }
 
-struct LocalnetNposBootstrapContext<'a> {
-    peers: &'a [Peer],
+struct LocalnetNposBootstrapContext<'a, V> {
+    peers: &'a [V],
     gas_account_id: &'a AccountId,
     stake_amount: &'a Quantity,
     sora_profile: Option<SoraProfile>,
@@ -4216,7 +4271,7 @@ struct LocalnetNposBootstrapContext<'a> {
 }
 fn append_localnet_npos_bootstrap(
     genesis: RawGenesisTransaction,
-    context: &LocalnetNposBootstrapContext<'_>,
+    context: &LocalnetNposBootstrapContext<'_, impl GenesisValidator>,
 ) -> Result<RawGenesisTransaction> {
     let policy = localnet_bootstrap_staking_policy(&genesis)?;
     let peers = context.peers;
@@ -4301,7 +4356,7 @@ fn append_localnet_npos_bootstrap(
         registrations.zk_assets.insert(fee_asset_id.clone());
     }
     for peer in peers {
-        let validator_id = peer.validator_account_id(taira);
+        let validator_id = peer.account_id(taira);
         if !registrations.accounts.contains(&validator_id) {
             builder =
                 builder.append_instruction(Register::account(Account::new(validator_id.clone())));
@@ -4387,13 +4442,13 @@ fn append_localnet_npos_bootstrap(
             genesis_account_id.clone(),
         ));
         for peer in peers {
-            let id = derive_committee_key_id(&peer.public_key);
+            let id = derive_committee_key_id(peer.consensus_key());
             builder = builder.append_instruction(RegisterConsensusKey {
                 id: id.clone(),
                 record: ConsensusKeyRecord {
                     id,
-                    public_key: peer.public_key.clone(),
-                    pop: Some(peer.bls_pop.clone()),
+                    public_key: peer.consensus_key().clone(),
+                    pop: Some(peer.pop().to_vec()),
                     activation_height: 1,
                     expiry_height: None,
                     replaces: None,
@@ -4422,7 +4477,7 @@ fn append_localnet_npos_bootstrap(
 /// parameters), and the committee is the genesis roster (`RegisterPeerWithPop`).
 fn append_localnet_permissioned_support_accounts(
     genesis: RawGenesisTransaction,
-    peers: &[Peer],
+    peers: &[impl GenesisValidator],
     gas_account_id: &AccountId,
     taira: bool,
 ) -> Result<RawGenesisTransaction> {
@@ -4443,7 +4498,7 @@ fn append_localnet_permissioned_support_accounts(
         }
     }
     for peer in peers {
-        let validator_id = peer.validator_account_id(taira);
+        let validator_id = peer.account_id(taira);
         if registrations.accounts.insert(validator_id.clone()) {
             builder = builder.append_instruction(Register::account(Account::new(validator_id)));
         }
@@ -4452,7 +4507,7 @@ fn append_localnet_permissioned_support_accounts(
 }
 fn append_public_lane_validator_registrations(
     mut builder: GenesisBuilder,
-    peers: &[Peer],
+    peers: &[impl GenesisValidator],
     lanes: &[LaneId],
     stake_asset_id: &AssetDefinitionId,
     escrow_account_id: &AccountId,
@@ -4466,11 +4521,11 @@ fn append_public_lane_validator_registrations(
             builder = builder.next_transaction();
         }
         for peer in peers {
-            let validator_id = peer.validator_account_id(taira);
+            let validator_id = peer.account_id(taira);
             builder = builder.append_instruction(RegisterPublicLaneValidator {
                 lane_id,
                 validator: validator_id.clone(),
-                peer_id: PeerId::from(peer.public_key.clone()),
+                peer_id: PeerId::from(peer.consensus_key().clone()),
                 stake_account: validator_id.clone(),
                 initial_stake: stake_amount.clone(),
                 metadata: Metadata::default(),

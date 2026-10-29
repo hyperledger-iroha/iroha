@@ -12,6 +12,8 @@ pub mod authenticated_genesis;
 pub mod beacon_bootstrap;
 /// Read-only `--check-config --json` and `--check-storage` compatibility probes.
 mod compatibility_probe;
+/// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
+mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Deployment-injected factory for the supervised private Musubi publication service.
@@ -8808,9 +8810,14 @@ fn validate_genesis_execution_offline(
         None,
     )
     .map_err(|error| {
-        Report::new(error)
+        let explanation = genesis_policy_diagnostics::explain_genesis_startup_error(config, &error);
+        let report = Report::new(error)
             .change_context(MainError::Config)
-            .attach("native genesis execution failed")
+            .attach("native genesis execution failed");
+        match explanation {
+            Some(explanation) => report.attach(explanation),
+            None => report,
+        }
     })?;
     let executed = state.world_view();
     let initial_configs = executed
@@ -11324,11 +11331,11 @@ mod tests {
                 )
                 .expect("sign genesis fixture with configured DA and confidential policies")
         }
-        fn staged_context_hashes_for_test(
+        fn staged_context_for_test(
             raw: &RawGenesisTransaction,
             signer: &KeyPair,
             config: &Config,
-        ) -> (Hash, Hash) {
+        ) -> (iroha_data_model::nexus::NexusAmxContextPreimageV1, Hash) {
             // Derive only an unpublished signing draft's policy commitments.
             // The final signed block must pass the unchanged native validator.
             let provisional = sign_configured_genesis_for_test(raw.clone(), signer, config);
@@ -11390,16 +11397,18 @@ mod tests {
             .unpack(|_| {})
             {
                 Ok((_, staged)) => (
-                    iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
+                    iroha_data_model::nexus::NexusAmxContextPreimageV1::new(
+                        iroha_core::sumeragi::staged_genesis_nexus_amx_context_preimage(&staged),
+                    ),
                     iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
                         .expect("executed genesis policy"),
                 ),
                 Err((_, error)) => match *error {
                     iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
-                        actual_nexus,
+                        actual_nexus_preimage,
                         actual_execution,
                         ..
-                    } => (actual_nexus, actual_execution),
+                    } => (actual_nexus_preimage, actual_execution),
                     error => panic!("genesis signing draft failed native validation: {error}"),
                 },
             }
@@ -11450,6 +11459,8 @@ mod tests {
             mode: iroha_data_model::block::consensus::ConsensusMode,
             parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
             cadence_ms: u64,
+            /// The Nexus/AMX context preimage the genesis commits, as Kagami publishes it.
+            signed_nexus_context: iroha_data_model::nexus::NexusAmxContextPreimageV1,
         }
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
@@ -11493,10 +11504,10 @@ mod tests {
             );
             require_crypto_verification_implementations(base_raw.crypto_admission_policy())
                 .expect("compiled verifiers support the explicitly authored genesis policy");
-            let (context_hash, execution_policy_hash) =
-                staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
+            let (signed_nexus_context, execution_policy_hash) =
+                staged_context_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_context_parameters();
-            parameters.nexus_amx_context_hash = context_hash.into();
+            parameters.nexus_amx_context_hash = signed_nexus_context.hash().into();
             parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
@@ -11525,6 +11536,7 @@ mod tests {
                 mode,
                 parameters,
                 cadence_ms,
+                signed_nexus_context,
             }
         }
         #[test]
@@ -11543,6 +11555,75 @@ mod tests {
             )
             .expect("valid genesis should execute in the disposable overlay");
             assert_eq!(bootstrap.initial_committee_size, 4);
+        }
+        /// A node file that restates a consensus-bound value differently fails `--check-config`
+        /// with the differing field and both values once the network's published Nexus/AMX
+        /// context sits beside the signed genesis file, and with directions while it is absent.
+        #[test]
+        fn check_config_names_the_nexus_field_a_node_file_restates_differently() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let mut fixture = offline_semantic_genesis_fixture([]);
+            let directory = tempfile::tempdir().expect("temporary genesis directory");
+            fixture.config.genesis.file = Some(WithOrigin::inline(
+                directory.path().join("genesis.signed.nrt"),
+            ));
+            let signed_exit_teu = fixture.config.nexus.fusion.exit_teu;
+            let node_exit_teu = signed_exit_teu.checked_add(1).expect("fixture exit TEU");
+            fixture.config.nexus.fusion.exit_teu = node_exit_teu;
+            let check = |fixture: &LocalSemanticGenesisFixture| {
+                let report = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    None,
+                )
+                .expect_err("a restated consensus-bound value must refuse the signed genesis");
+                format!("{report:?}")
+            };
+            let without = check(&fixture);
+            assert!(
+                without.contains("Signed genesis policy mismatch"),
+                "{without}"
+            );
+            assert!(
+                without.contains(&format!(
+                    "copy the network's `nexus-amx-context.v1.bin` (written by `kagami network create`, \
+                     `kagami localnet` and `kagami genesis sign --nexus-context-output`) to {}",
+                    directory.path().join("nexus-amx-context.v1.bin").display()
+                )),
+                "{without}"
+            );
+            std::fs::write(
+                directory.path().join("nexus-amx-context.v1.bin"),
+                fixture.signed_nexus_context.as_bytes(),
+            )
+            .expect("publish the signed Nexus/AMX context");
+            let with = check(&fixture);
+            // The report renders each line of the explanation under its own tree prefix.
+            for line in [
+                "this node's Nexus/AMX context differs from the signed one".to_owned(),
+                "in 1 field:".to_owned(),
+                format!(
+                    "nexus.fusion.exit_teu: signed genesis {signed_exit_teu}, this node {node_exit_teu}"
+                ),
+            ] {
+                assert!(with.contains(&line), "missing {line:?} in {with}");
+            }
+            fixture.config.nexus.fusion.exit_teu = signed_exit_teu;
+            validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("copying the signed value accepts the signed genesis");
         }
         /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
         /// genesis-bound values the running network attests: the signed context hashes, the

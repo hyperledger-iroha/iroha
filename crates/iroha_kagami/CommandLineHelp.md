@@ -16,6 +16,8 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet validate-beacon-launch`↴](#kagami-localnet-validate-beacon-launch)
 * [`kagami node`↴](#kagami-node)
 * [`kagami node init`↴](#kagami-node-init)
+* [`kagami network`↴](#kagami-network)
+* [`kagami network create`↴](#kagami-network-create)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
 * [`kagami dataspace register-amx`↴](#kagami-dataspace-register-amx)
@@ -80,6 +82,7 @@ Common tasks:
   kagami wizard
   kagami localnet generate --out-dir ./localnet
   kagami node init --dir ./node --public-address 203.0.113.7:1337
+  kagami network create --validator PUBLIC_KEY@HOST:PORT=POP_HEX ... --out-dir ./network
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
@@ -91,6 +94,7 @@ Common tasks:
 * `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet` — Start and manage a persistent localnet without supplying configuration
 * `node` — Prepare one node directory (keys and starter config) for an existing or new network
+* `network` — Sign genesis for validators that hold their own keys and write the files nodes share
 * `dataspace` — Run an owner-private local dataspace attached to an installed remote network
 * `context` — Select and inspect managed developer environments
 * `contract` — Build and deploy native IVM contracts in one invocation
@@ -366,12 +370,52 @@ Create a node's validator, SoraNet transport and streaming keys plus a starter c
 * `--dir <DIR>` — Node directory: keys go to `<DIR>/secrets/`, state to `<DIR>/state/`.
 
    It is created owner-only when missing; an existing `secrets/` or `config.toml` is never replaced.
-* `--public-address <HOST:PORT>` — P2P address other peers dial (`host:port`); the node binds the same port on all interfaces
+* `--public-address <HOST:PORT>` — P2P address other peers dial (`host:port`); the node binds the same port on all interfaces in the address's IP family (IPv4 for a DNS name)
 
   Default value: `127.0.0.1:1337`
 * `--api-address <HOST:PORT>` — Torii API listener (`host:port`)
 
   Default value: `127.0.0.1:8080`
+
+
+
+## `kagami network`
+
+Sign genesis for validators that hold their own keys and write the files nodes share
+
+**Usage:** `kagami network <COMMAND>`
+
+###### **Subcommands:**
+
+* `create` — Sign genesis for `kagami node init` validators and write the files every node shares
+
+
+
+## `kagami network create`
+
+Sign genesis for `kagami node init` validators and write the files every node shares
+
+**Usage:** `kagami network create [OPTIONS] --validator <PUBLIC_KEY@HOST:PORT=POP_HEX> --out-dir <DIR>`
+
+###### **Options:**
+
+* `--validator <PUBLIC_KEY@HOST:PORT=POP_HEX>` — One genesis validator, exactly as `kagami node init` prints it on the validator's host.
+
+   Repeat once per validator. The roster must be an exact Sumeragi `3f + 1` committee (4, 7, 10, ...) of distinct BLS-normal keys, each with a valid proof of possession and a distinct `HOST:PORT` that the other validators dial.
+* `--out-dir <DIR>` — Output directory, created owner-only; an existing directory must be empty
+* `--chain-id <CHAIN_ID>` — Canonical chain identifier; a fresh random UUID when omitted
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and the shared configuration.
+
+   Omit it to use the node default.
+* `--consensus-mode <MODE>` — Consensus mode committed in genesis
+
+  Default value: `permissioned`
+
+  Possible values: `permissioned`, `npos`
+
+* `--torii-url <URL>` — Torii API that the operator's `client.toml` dials; any validator's Torii works
+
+  Default value: `http://127.0.0.1:8080/`
 
 
 

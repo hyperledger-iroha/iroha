@@ -128,21 +128,37 @@ view after local `Applied`; the separate parent observation remains historical.
 The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
 remaining native-platform, private-dataspace, and end-to-end qualification.
 
-One node of another network, from keys to a validated config:
+A network of separate machines, with every validator key created on its own host:
 
 ```bash
+# on each validator host
 kagami node init --dir ./node --public-address 203.0.113.7:1337
-iroha3d --config node/config.toml --check-config
+# once, with the `validator:` line every host printed
+kagami network create --out-dir ./network \
+  --validator "$VALIDATOR_A" --validator "$VALIDATOR_B" \
+  --validator "$VALIDATOR_C" --validator "$VALIDATOR_D"
+# on each validator host, after copying network.toml, genesis.signed.nrt and
+# genesis.expected_hash and nexus-amx-context.v1.bin into ./node
+iroha3d --config node/config.toml --sumeragi-assert-fresh-key
 ```
 
 `node init` writes the validator (BLS), SoraNet transport and streaming keys to
 `node/secrets/` in the layout `iroha3d` reads through `data_dir`, and a starter
-`node/config.toml` with this node's roster entry filled in. Add the network's
-`chain`, other validators, `[genesis]` and any consensus-bound sections its reference
-config sets (for a Kagami localnet, `[nexus.fusion] exit_teu`); every other setting has
-a default. It
-prints the `public_key@host:port` entry and proof of possession to send to the
-network operator, and never replaces existing keys or config.
+`node/config.toml` that names only this node's key and listeners and includes
+`network.toml` with `extends`. It prints `validator: PUBLIC_KEY@HOST:PORT=POP_HEX` for
+`network create`, and never replaces existing keys or config.
+
+`network create` checks that the roster is an exact `3f + 1` committee of BLS-normal keys
+with valid proofs of possession at distinct addresses, then signs genesis with a fresh
+genesis key. `network.toml` holds the chain, roster, `[genesis]` and every
+consensus-bound section the genesis was signed with; with `genesis.signed.nrt` and
+`genesis.expected_hash` it is all a node needs to start. Copy the generated
+`nexus-amx-context.v1.bin` alongside them so `--check-config` can name exact fields
+if the node's settings differ from signed genesis. `client.toml` signs as an operator
+account holding the network's XOR and administrative permissions; its key and the genesis
+key stay in the owner-only `secrets/` directory, which is never distributed. Pass
+`--sumeragi-assert-fresh-key` only on a brand-new network's first boot; see the
+[daemon guide](../irohad/README.md#configuration).
 
 Existing Sora network / observer peer config, guided:
 
@@ -231,9 +247,24 @@ into the output directory.
 `kagami node init`
 - Creates `<dir>/secrets/{validator,transport,streaming}.key` (owner-only, published
   atomically) and `<dir>/config.toml` with `data_dir = "."`
-- The config names only per-network values; state paths, transport and streaming
-  public keys, and the streaming codec tables are derived defaults
+- The config names only this node's key and listeners and includes `network.toml` with
+  `extends`; state paths, transport and streaming public keys, and the streaming codec
+  tables are derived defaults
+- Prints the node's `validator: PUBLIC_KEY@HOST:PORT=POP_HEX` roster entry
 - Refuses an existing `secrets/` or `config.toml`
+
+`kagami network create`
+- Takes one `--validator` per genesis validator and refuses anything but an exact
+  `3f + 1` committee of distinct BLS-normal keys with valid proofs of possession at
+  distinct, dialable addresses, before creating any output
+- Composes genesis with the localnet genesis helpers, signs it with a fresh genesis key,
+  and binds it to the shared `network.toml` (chain, `trusted_peers`, `trusted_peers_pop`,
+  `[genesis]`, `[nexus]`), which it validates as a node reads it
+- Writes `genesis.signed.nrt`, `genesis.expected_hash`, `genesis.public_key`,
+  `nexus-amx-context.v1.bin`,
+  `genesis.json` and an operator `client.toml` into a fresh owner-only directory; the
+  genesis and operator keys stay in its `secrets/`
+- `--chain-id` defaults to a fresh UUID; public SORA chain identities are refused
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use
