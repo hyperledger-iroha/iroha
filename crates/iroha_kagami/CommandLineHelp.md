@@ -14,6 +14,8 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet reset`↴](#kagami-localnet-reset)
 * [`kagami localnet generate`↴](#kagami-localnet-generate)
 * [`kagami localnet validate-beacon-launch`↴](#kagami-localnet-validate-beacon-launch)
+* [`kagami node`↴](#kagami-node)
+* [`kagami node init`↴](#kagami-node-init)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
 * [`kagami dataspace register-amx`↴](#kagami-dataspace-register-amx)
@@ -58,6 +60,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
 * [`kagami advanced kura finality`↴](#kagami-advanced-kura-finality)
+* [`kagami advanced kura pack-native-contexts`↴](#kagami-advanced-kura-pack-native-contexts)
 * [`kagami advanced kura sidecar`↴](#kagami-advanced-kura-sidecar)
 * [`kagami advanced markdown-help`↴](#kagami-advanced-markdown-help)
 * [`kagami advanced schema`↴](#kagami-advanced-schema)
@@ -76,6 +79,7 @@ Common tasks:
   kagami context list
   kagami wizard
   kagami localnet generate --out-dir ./localnet
+  kagami node init --dir ./node --public-address 203.0.113.7:1337
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
@@ -86,6 +90,7 @@ Common tasks:
 
 * `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet` — Start and manage a persistent localnet without supplying configuration
+* `node` — Prepare one node directory (keys and starter config) for an existing or new network
 * `dataspace` — Run an owner-private local dataspace attached to an installed remote network
 * `context` — Select and inspect managed developer environments
 * `contract` — Build and deploy native IVM contracts in one invocation
@@ -169,9 +174,11 @@ Generate, start, verify, and select a localnet without supplying configuration
 * `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--with-storage` — Provision local storage and package-registry services when creating this network
-* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds
+* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds.
 
-  Default value: `30`
+   A ready localnet returns as soon as all four validators are verified; the budget only bounds slow first starts, such as debug builds on a loaded machine.
+
+  Default value: `120`
 
 
 
@@ -333,6 +340,38 @@ Validate an isolated native beacon configuration and opaque descriptor handoff
 * `--peer-index <PEER_INDEX>` — Zero-based generated peer index
 * `--beacon-config <BEACON_CONFIG>` — Separate native configuration in the private run's beacon/seat-N directory
 * `--beacon-credential <BEACON_CREDENTIAL>` — Owner-only native beacon credential beside the separate configuration
+
+
+
+## `kagami node`
+
+Prepare one node directory (keys and starter config) for an existing or new network
+
+**Usage:** `kagami node <COMMAND>`
+
+###### **Subcommands:**
+
+* `init` — Create a node's validator, SoraNet transport and streaming keys plus a starter config
+
+
+
+## `kagami node init`
+
+Create a node's validator, SoraNet transport and streaming keys plus a starter config
+
+**Usage:** `kagami node init [OPTIONS] --dir <DIR>`
+
+###### **Options:**
+
+* `--dir <DIR>` — Node directory: keys go to `<DIR>/secrets/`, state to `<DIR>/state/`.
+
+   It is created owner-only when missing; an existing `secrets/` or `config.toml` is never replaced.
+* `--public-address <HOST:PORT>` — P2P address other peers dial (`host:port`); the node binds the same port on all interfaces
+
+  Default value: `127.0.0.1:1337`
+* `--api-address <HOST:PORT>` — Torii API listener (`host:port`)
+
+  Default value: `127.0.0.1:8080`
 
 
 
@@ -535,7 +574,7 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 * `--max-fee <MAX_FEE>` — Bound the aggregate quoted fees in their single fee asset before dispatch
 * `--timeout <TIMEOUT>` — Startup budget in seconds when the deployment has to start its localnet first
 
-  Default value: `30`
+  Default value: `120`
 
 
 
@@ -1108,6 +1147,7 @@ Commands related to block inspection
 * `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
 * `finality` — Verify a locally anchored retained prefix and export its exact finality proof
+* `pack-native-contexts` — Rewrite a stopped node's canonical native context records in packed form
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
 
 
@@ -1165,6 +1205,23 @@ Verify a locally anchored retained prefix and export its exact finality proof
 * `--chain-id <CHAIN_ID>` — Exact chain label used to derive the native consensus instance
 * `-H`, `--height <HEIGHT>` — Verify all heights from genesis through this height (1..=4096)
 * `-o`, `--output <OUTPUT>` — Write the public JSON outside the inspected store (default: stdout)
+
+
+
+## `kagami advanced kura pack-native-contexts`
+
+Rewrite a stopped node's canonical native context records in packed form
+
+**Usage:** `kagami advanced kura pack-native-contexts [OPTIONS] <STORE_ROOT>`
+
+###### **Arguments:**
+
+* `<STORE_ROOT>` — Kura store root of the stopped node (its configured `kura.store_dir`)
+
+###### **Options:**
+
+* `--dry-run` — Report the space packing would recover without writing anything
+* `--unpack` — Restore packed records to canonical form for a release that cannot read them
 
 
 

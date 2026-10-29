@@ -2047,7 +2047,7 @@ Root {
         codec: StreamingCodec {
             cabac_mode: Disabled,
             trellis_block_sizes: [],
-            rans_tables_path: "codec/rans/tables/rans_seed0.toml",
+            rans_tables_path: None,
             entropy_mode: RansBundled,
             bundle_width: 2,
             bundle_accel: None,
