@@ -293,6 +293,26 @@ Classify by effect on the stored history, not by intent. When unsure, run the
 pinned-history test and the read-only probes against a store written by the
 previous build.
 
+## Live-upgrade foundation
+
+[`live_runtime_upgrades.md`](live_runtime_upgrades.md) replaces this
+classification on a network that runs it. Until that network's foundation
+genesis, every rule above applies unchanged. After it:
+
+- adding an instruction, event, permission, parameter or storage definition is a
+  governed change set, an ordinary change for the history rather than a
+  `fresh_genesis` cutover;
+- a change to anything a live selection contains ships as a new definition.
+  Dispatch through the root's authenticated selection is the upgrade mechanism,
+  not the version dispatch that rule 1 above prohibits;
+- nodes start from authenticated checkpoints, and a retired definition's code is
+  deleted once the checkpoint startup floor is above its last use. Blocks below
+  the floor stay verifiable by their certificates and are re-executed only with
+  the archived release, as "Obsolete histories" requires.
+
+The foundation genesis itself is a declared `fresh_genesis` cutover of every
+surface. No bridge carries a predecessor history into it.
+
 ## Obsolete histories
 
 Keep evidence, not decoders. For a history that the current binary no longer

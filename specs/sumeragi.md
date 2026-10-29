@@ -4915,9 +4915,11 @@ codec        = "norito:<nominal name>@<major>.<minor>.<flags>"      declared Nor
 key codec    = "" for a cell
 ```
 
-The schema is part of the protocol: adding, removing, renaming or re-typing a canonical field
-changes the descriptor and therefore every root. Under the first-release rules that is a coherent
-replacement with a fresh genesis.
+The schema is part of the protocol, and it is selected by history: the descriptor lists the
+storage installed in the root's selection at that height (`live_runtime_upgrades.md` §5.1), not
+every field compiled into the binary. Installing, retiring or re-typing storage changes the roots
+from the height of its certified transition on; storage that no selection has installed leaves
+every root unchanged, and earlier roots keep the schema they were computed under.
 
 ### 16.2 Key and value encodings
 
@@ -5122,10 +5124,13 @@ G.3 freezes the table identity and codec; G.4 defines ages, caps and the admissi
 - The cutover replaces the two LtHash16 fields; it does not add fields beside them. The same
   change deletes `WorldStateAccumulator`, the `world.state_accumulator` cell, the World-element
   snapshot format and their `world_state_*_v1` helpers.
-- No binary computes both roots for consensus, and none selects a layout by height,
-  configuration, feature or environment. A chain built on the LtHash16 layout is not replayed by
-  the keyed binary: the cutover is a fresh genesis. A second calculation is permitted only under
-  `#[cfg(test)]` as a differential.
+- No binary computes both roots for consensus, and none selects a layout by configuration,
+  feature or environment. A chain built on the LtHash16 layout is not replayed by the keyed
+  binary: the cutover is the fresh foundation genesis of `live_runtime_upgrades.md`. After it, the
+  commitment profile is a definition in the root's selection, so a later change of profile is a
+  certified transition: the parent root uses the predecessor profile and the successor root the
+  successor profile. A second calculation is permitted only under `#[cfg(test)]` as a
+  differential.
 - No per-table root is added to the result. Per-table and per-key proofs are witnesses against
   the one keyed root; contract-state value proofs use `world.smart_contract_state` in it.
 - Every existing commitment over State content is enumerated under `roots` or, where the

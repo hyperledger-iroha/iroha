@@ -1,5 +1,12 @@
 # Runtime Upgrades (IVM + Host) — No-Downtime, No-Hardfork
 
+Status: as built. [`live_runtime_upgrades.md`](live_runtime_upgrades.md) is the permanent design
+that replaces it. There, `RuntimeUpgradeManifest` becomes the change set that moves an execution
+root from one definition selection to the next, its ABI fields become a host profile, explicit
+`ActivateRuntimeUpgrade` remains only for genesis, the activation panic becomes a structured stop of
+the unsupported node, and provenance policy moves from node configuration to committed State. This
+document describes the current ABI-v1 records until that lands.
+
 This document specifies a deterministic, governance-controlled mechanism to roll out runtime upgrades without stopping the network or hard-forking nodes. Nodes roll out binaries in advance; activation is coordinated on-chain within a bounded height window. Old contracts continue to run unchanged; the host ABI surface stays fixed at v1.
 
 Note (first release): ABI v1 is fixed and no ABI version bumps are planned. Runtime upgrade manifests must set `abi_version = 1`, and `added_syscalls`/`added_pointer_types` must be empty.

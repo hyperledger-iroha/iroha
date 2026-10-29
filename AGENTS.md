@@ -25,7 +25,22 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 ## Overview
 - Hyperledger Iroha 3 is a blockchain platform in its first release.
 - The first release prohibits backward compatibility: remove retired layouts,
-  aliases, shims, fallback decoders, and parallel legacy implementations.
+  aliases, shims, fallback decoders and parallel legacy implementations, and
+  delete old code. The live-upgrade foundation (`specs/live_runtime_upgrades.md`)
+  carries no compatibility path forward: an interim bridge that keeps a running
+  network on a newer release before the foundation lands (for example a one-time
+  checkpoint import) is deleted when the foundation lands.
+- A network running the live-upgrade foundation changes only through governed
+  definitions: a change publishes new immutable definitions and moves an
+  execution root to a new selection, and a definition's encoding and semantics
+  never change while any selection contains it. Governance (SORA Parliament for
+  the universal root, a permissioned data space's admins for that data space)
+  restricts and retires definitions without stranding obligations, and a
+  retired definition's code is deleted once no obligation needs it and the
+  checkpoint startup floor is above its last use. Selection-based dispatch is
+  that mechanism, not backward compatibility; heuristic fallback decoders,
+  ambiguous aliases and node-local protocol toggles stay prohibited. A genesis
+  reset is not an upgrade mechanism.
 - SoraFS and ordinary server/release signing support authenticated software
   custody without an HSM prerequisite. Enforce signatures, permissions, finality,
   revocation, and replay protection from verifiable protocol state. Do not relabel
@@ -104,7 +119,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Cross-library wire-format and fixture tests use the Kotlin implementation against the shared fixtures, including Java-source consumers. Preserve every assertion when retiring a Java implementation suite.
 - Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
   - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
-- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
+- Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes. This forbids build-dependent omission; which host profile a contract may use is decided by the root's committed selection (`specs/live_runtime_upgrades.md`).
 - Serialization: Use Norito everywhere instead of serde. For binary codecs use `norito::{Encode, Decode}`; for JSON use the `norito::json` helpers/macros (`norito::json::from_*`, `to_*`, `json!`, `Value`) and never fall back to `serde_json`. Do not add direct `serde`/`serde_json` dependencies to crates; if serde is required internally, rely on Norito’s wrappers.
 - CI guard: `scripts/check_no_legacy_codec.sh` ensures retired non-Norito codec dependencies do not re-enter the workspace. Run it locally if you touch serialization code.
 - Norito payloads MUST advertise their layout: either the version number maps to a fixed flag set, or a Norito header declares the decode flags. Do not guess packed-sequence bits from heuristics; genesis data follows the same rule.
@@ -159,7 +174,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 
 ## ABI Evolution (What Agents Must Do)
 Note: First release policy
-- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship; prefer clarity and correctness over premature stability.
+- This is the first release and we have a single ABI version (V1). There is no V2 yet. Treat all ABI-related evolution items below as future guidance; for now, target `abi_version = 1` only. The data model and APIs are also first‑release and may change freely as needed to ship, as long as no live selection contains the definition being changed; prefer clarity and correctness over premature stability.
 
 - General:
   - ABI policy is enforced unconditionally in v1 (both syscall surface and pointer‑ABI types). Do not add runtime toggles.

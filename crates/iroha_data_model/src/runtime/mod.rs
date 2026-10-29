@@ -3,6 +3,10 @@
 //!
 //! Types here are used by instructions (ISIs) and events to coordinate
 //! deterministic activation of the fixed ABI v1 runtime without downtime.
+//! [`definition`] holds the definitions and root selections of the live-upgrade
+//! design (`specs/live_runtime_upgrades.md`).
+pub mod definition;
+
 use crate::smart_contract::manifest::ManifestProvenance;
 use iroha_crypto::{Error as CryptoError, Hash, KeyPair, Signature};
 use norito::codec::{Decode, Encode};
