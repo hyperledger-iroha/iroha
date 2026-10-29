@@ -289,6 +289,19 @@ that still encodes the former list produces transactions every node refuses at
 decode. No live network was changed. The inventory has no key for this
 declaration yet; the guard checks only the `abi` one.
 
+Declared cutover, 2026-10-30 (live-upgrade foundation, `live_runtime_upgrades.md`
+§14 step 2): surfaces `state_layout` and `execution_root`, cutover
+`fresh_genesis`. A World of this build is founded on the baseline catalog: it
+holds the tables `runtime_definitions` and the cell `runtime_selection`, and `S`
+of the World root binds the selection's commitment profile and installed storage
+instead of every compiled field. Every World root therefore differs, and a stored
+history from an earlier build does not replay in this binary. The pinned history
+is regenerated and its digest recorded; it now proves the founded baseline. A
+running network does not take a fresh genesis for this cutover: it adopts the
+foundation at a governed checkpoint (`live_runtime_upgrades.md` §13), and until
+then the upgrade checkpoint import founds the two runtime fields on the
+predecessor's World. No live network was changed.
+
 Classify by effect on the stored history, not by intent. When unsure, run the
 pinned-history test and the read-only probes against a store written by the
 previous build.

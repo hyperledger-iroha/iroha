@@ -151,6 +151,9 @@ pub mod retail_fee;
 /// Retained P2P ownership through final gossip processing.
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod retained_gossip;
+/// Live runtime upgrades: the definitions this release executes and each root's selection.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
+pub mod runtime;
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod secure_file_metadata;
 /// Unified XOR settlement engine.

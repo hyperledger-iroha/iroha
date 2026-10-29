@@ -397,7 +397,7 @@ impl JournalCapture {
         // Credits precede the existing accumulator pass's fixed heap lanes and
         // exhaustive visited-field scratch; none of those buffers escapes here.
         let (_, post) = world.state_transition(genesis)?;
-        let root = post.root()?;
+        let root = post.root(world.runtime_selection.get())?;
         let entries = post.entries();
         drop(post);
         drop(scratch);
@@ -493,7 +493,10 @@ impl JournalCapture {
                     reconstructed.add(&element(path, row.key.as_ref(), &before));
                 }
             }
-            if reconstructed.entries() != self.entries || reconstructed.root()? != self.root {
+            let selection = world.runtime_selection.get();
+            if reconstructed.entries() != self.entries
+                || reconstructed.root(selection)? != self.root
+            {
                 return Err(
                     "World cut exact frozen tail does not reconstruct original R/count"
                         .to_owned()
@@ -505,7 +508,7 @@ impl JournalCapture {
                 generation,
                 root: self.root,
                 entries: self.entries,
-                applied_root: applied.root()?,
+                applied_root: applied.root(selection)?,
                 applied_entries: applied.entries(),
                 rows,
             };

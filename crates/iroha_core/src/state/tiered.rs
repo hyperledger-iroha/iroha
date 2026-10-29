@@ -5223,8 +5223,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            expected.root().expect("prior root"),
-            changed_root.root().expect("changed root")
+            expected.baseline_root().expect("prior root"),
+            changed_root.baseline_root().expect("changed root")
         );
         drop(block);
         let missing_history = tiered_x509_root_world();
@@ -5404,8 +5404,8 @@ mod tests {
                 cold
             );
             assert_ne!(
-                predecessor.root().expect("prior root"),
-                cold.root().expect("pool root")
+                predecessor.baseline_root().expect("prior root"),
+                cold.baseline_root().expect("pool root")
             );
             block.commit();
             cold
@@ -5470,8 +5470,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            changed_root.root().expect("changed root"),
-            expected.root().expect("original root")
+            changed_root.baseline_root().expect("changed root"),
+            expected.baseline_root().expect("original root")
         );
     }
 

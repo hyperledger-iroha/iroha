@@ -504,7 +504,7 @@ const ROOTS: &[Root] = &[
         class: RootClass::CertifiedStateRoot,
         carrier: "ExecutionCommitment.parent_world_state_root, ExecutionCommitment.world_state_root",
         keyed: false,
-        scope: "every canonical World table and cell, trigger stores included",
+        scope: "every canonical World table and cell the root's selection installs, trigger stores included",
         construction: "LtHash16 multiset hash over field, key and value hashes",
         witnesses: "none: a multiset hash has no inclusion, absence or range witness",
         owner: "G.3",
@@ -515,9 +515,11 @@ const ROOTS: &[Root] = &[
             r"iroha.sumeragi.world-state-snapshot.v1",
             r"iroha:world-net-delta:value:bare-v1\0",
             r"iroha:world-state:path:v1\0",
+            r"iroha:world-state:profile:lthash16:v1\0",
             r"iroha:world-state:root:v1\0",
             r"iroha:world-state:schema:field:v1\0",
             r"iroha:world-state:schema:no-key:v1\0",
+            r"iroha:world-state:schema:selection:v1\0",
             r"iroha:world-state:schema:start:v1\0",
             r"iroha:world-state:schema:value:v1\0",
         ],
@@ -6446,11 +6448,11 @@ const PREMISES: &[Premise] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "parent_world_state_root: parent.root()?,",
+                ".root(self.world.runtime_selection.get_before_block())?,",
             ),
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "world_state_root: post.root()?,",
+                "world_state_root: post.root(self.world.runtime_selection.get())?,",
             ),
             (
                 "crates/iroha_core/src/sumeragi/commitment.rs",
@@ -7688,6 +7690,7 @@ fn builder(
         accumulator,
         direction,
         visited: vec![false; index.canonical],
+        installation: vec![Installation::Installed; index.canonical],
         snapshot: None,
         snapshot_field: None,
     }
@@ -7711,9 +7714,9 @@ fn table_slot(
     let mut cold = builder(index, WorldStateAccumulator::empty(), Direction::Capture);
     cold.append_storage_with(name, &block, hash_value)?;
     Ok([
-        base.root()?,
-        incremental.accumulator.root()?,
-        cold.accumulator.root()?,
+        base.baseline_root()?,
+        incremental.accumulator.baseline_root()?,
+        cold.accumulator.baseline_root()?,
     ])
 }
 
@@ -7731,9 +7734,9 @@ fn cell_slot(name: &'static str) -> Result<[Hash; 3], crate::state::WorldStateSn
     let mut cold = builder(index, WorldStateAccumulator::empty(), Direction::Capture);
     cold.append_cell_with(name, &block, hash_value)?;
     Ok([
-        base.root()?,
-        incremental.accumulator.root()?,
-        cold.accumulator.root()?,
+        base.baseline_root()?,
+        incremental.accumulator.baseline_root()?,
+        cold.accumulator.baseline_root()?,
     ])
 }
 
@@ -7743,7 +7746,7 @@ fn cell_slot(name: &'static str) -> Result<[Hash; 3], crate::state::WorldStateSn
 #[test]
 fn every_inventoried_field_mutation_reaches_exactly_its_declared_root() {
     let index = field_index().as_ref().unwrap();
-    let empty = WorldStateAccumulator::empty().root().unwrap();
+    let empty = WorldStateAccumulator::empty().baseline_root().unwrap();
     let mut certified_inserts = BTreeSet::new();
     let mut checked = BTreeMap::new();
     for row in rows() {
@@ -7945,14 +7948,16 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             put_typed!(block, $field, $key, $value);
             let inserted = parent.apply_block(&block).unwrap();
             assert_ne!(
-                inserted.root(),
-                parent.root(),
+                inserted.baseline_root(),
+                parent.baseline_root(),
                 "{}: insert",
                 stringify!($field)
             );
             assert_eq!(
-                inserted.root(),
-                WorldStateAccumulator::capture(&block).unwrap().root(),
+                inserted.baseline_root(),
+                WorldStateAccumulator::capture(&block)
+                    .unwrap()
+                    .baseline_root(),
                 "{}: incremental == cold",
                 stringify!($field)
             );
@@ -7960,21 +7965,21 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             put_typed!(block, $field, $key, $changed);
             let replaced = parent.apply_block(&block).unwrap();
             assert_ne!(
-                replaced.root(),
-                inserted.root(),
+                replaced.baseline_root(),
+                inserted.baseline_root(),
                 "{}: replace",
                 stringify!($field)
             );
             assert_ne!(
-                replaced.root(),
-                parent.root(),
+                replaced.baseline_root(),
+                parent.baseline_root(),
                 "{}: replace",
                 stringify!($field)
             );
             remove_typed!(block, $field, $key);
             assert_eq!(
-                parent.apply_block(&block).unwrap().root(),
-                parent.root(),
+                parent.apply_block(&block).unwrap().baseline_root(),
+                parent.baseline_root(),
                 "{}: remove",
                 stringify!($field)
             );
@@ -8021,22 +8026,30 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             .try_insert_admitted(key.clone(), [1; 32])
             .unwrap();
         let inserted = parent.apply_block(&block).unwrap();
-        assert_ne!(inserted.root(), parent.root());
+        assert_ne!(inserted.baseline_root(), parent.baseline_root());
         assert_eq!(inserted.entries(), parent.entries() + 1);
         assert_eq!(
-            inserted.root(),
-            WorldStateAccumulator::capture(&block).unwrap().root()
+            inserted.baseline_root(),
+            WorldStateAccumulator::capture(&block)
+                .unwrap()
+                .baseline_root()
         );
         block
             .sccp_forgery_offences
             .try_insert_admitted(key.clone(), [2; 32])
             .unwrap();
-        assert_ne!(parent.apply_block(&block).unwrap().root(), inserted.root());
+        assert_ne!(
+            parent.apply_block(&block).unwrap().baseline_root(),
+            inserted.baseline_root()
+        );
         block
             .sccp_forgery_offences
             .try_remove_admitted(key)
             .unwrap();
-        assert_eq!(parent.apply_block(&block).unwrap().root(), parent.root());
+        assert_eq!(
+            parent.apply_block(&block).unwrap().baseline_root(),
+            parent.baseline_root()
+        );
         covered.push(("world.sccp_forgery_offences", Commitment::Certified));
     }
 
@@ -8077,10 +8090,17 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             let parent = WorldStateAccumulator::capture(&block).unwrap();
             *block.$field.get_mut() = $value;
             let changed = parent.apply_block(&block).unwrap();
-            assert_ne!(changed.root(), parent.root(), "{}", stringify!($field));
+            assert_ne!(
+                changed.baseline_root(),
+                parent.baseline_root(),
+                "{}",
+                stringify!($field)
+            );
             assert_eq!(
-                changed.root(),
-                WorldStateAccumulator::capture(&block).unwrap().root(),
+                changed.baseline_root(),
+                WorldStateAccumulator::capture(&block)
+                    .unwrap()
+                    .baseline_root(),
                 "{}: incremental == cold",
                 stringify!($field)
             );
@@ -8166,14 +8186,16 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             let parent = WorldStateAccumulator::capture(&block).unwrap();
             put_typed!(block, $field, $key, $value);
             assert_eq!(
-                parent.apply_block(&block).unwrap().root(),
-                parent.root(),
+                parent.apply_block(&block).unwrap().baseline_root(),
+                parent.baseline_root(),
                 "{}: a derived index is not independent authority",
                 stringify!($field)
             );
             assert_eq!(
-                WorldStateAccumulator::capture(&block).unwrap().root(),
-                parent.root(),
+                WorldStateAccumulator::capture(&block)
+                    .unwrap()
+                    .baseline_root(),
+                parent.baseline_root(),
                 "{}",
                 stringify!($field)
             );
@@ -8283,7 +8305,7 @@ fn state_level_canonical_fields_have_no_accumulator_slot_and_no_witness_family()
     let root = |state: &State| {
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root()
+            .baseline_root()
             .unwrap()
     };
     let before = root(&state);

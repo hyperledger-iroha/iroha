@@ -1401,8 +1401,13 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3). Each hashes one canonical descriptor or selection record; neither commits to State content, and the State commitment remains the World root",
+        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed label of the baseline's reference closures and statements, and the names of baseline definitions, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline subject; none commits to State content, and the State commitment remains the World root",
         literals: &[
+            r"iroha.events.data.v1",
+            r"iroha.kernel.v1",
+            r"iroha.parameters.v1",
+            r"iroha.world.lthash16.v1",
+            r"iroha:runtime:baseline:v1\0",
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:selection:v1\0",
         ],

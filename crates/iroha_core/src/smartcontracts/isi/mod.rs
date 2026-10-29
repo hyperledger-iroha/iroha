@@ -874,6 +874,11 @@ pub(crate) fn execute_borrowed_instruction(
 ) -> Result<(), Error> {
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;
+    crate::runtime::resolve(
+        instruction,
+        state_transaction.world.runtime_selection.get(),
+        state_transaction._curr_block.height().get(),
+    )?;
     iroha_logger::debug!(isi=%instruction, "Executing");
     if let Some(result) = NATIVE_INSTRUCTIONS
         .get(instruction)

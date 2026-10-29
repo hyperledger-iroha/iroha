@@ -284,7 +284,7 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
     );
     assert_eq!(
         restored.world_root,
-        Some(view.world.state_accumulator.get().root().unwrap())
+        Some(view.world.state_accumulator.get().baseline_root().unwrap())
     );
     let mut wrong_result = claim();
     wrong_result.blocks.as_mut().unwrap().result[0] ^= 1;

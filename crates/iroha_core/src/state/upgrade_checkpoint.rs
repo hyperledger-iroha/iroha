@@ -12,6 +12,10 @@
 //! this release retired, and it lacked the table `privacy_protocol_policies`. An import accepts a
 //! predecessor World only when both retired fields hold their empty value, so nothing is dropped,
 //! and starts the new table empty.
+//!
+//! The predecessor also predates the live-upgrade foundation (`specs/live_runtime_upgrades.md`
+//! §13): it has no runtime definitions or selection. The import founds them on this release's
+//! baseline, exactly as a new World of this release is founded.
 
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::BlockHeader;
@@ -83,11 +87,28 @@ pub(super) const ADDED_WORLD_FIELD: (&str, &str) = (
     "privacy_protocol_policies",
 );
 
+/// The fields the predecessor lacked that an import founds on this release's baseline:
+/// registry identity and snapshot JSON name.
+pub(super) const FOUNDED_WORLD_FIELDS: [(&str, &str); 2] = [
+    ("world.runtime_definitions", "runtime_definitions"),
+    ("world.runtime_selection", "runtime_selection"),
+];
+
+/// Whether the import founds the snapshot field `name`.
+pub(super) fn is_founded_world_field(name: &str) -> bool {
+    FOUNDED_WORLD_FIELDS
+        .iter()
+        .any(|(_, founded)| *founded == name)
+}
+
 /// The predecessor release's World snapshot field order: `current` with the retired fields in
-/// place of the added one.
+/// place of the added one and without the founded ones.
 pub(super) fn predecessor_world_field_order(current: &[&'static str]) -> Vec<&'static str> {
     let mut order = Vec::with_capacity(current.len() + 1);
     for field in current {
+        if is_founded_world_field(field) {
+            continue;
+        }
         if *field == ADDED_WORLD_FIELD.1 {
             order.extend(RETIRED_WORLD_FIELDS.iter().map(|retired| retired.name));
         } else {
@@ -104,6 +125,8 @@ mod tests {
     #[test]
     fn predecessor_order_puts_the_retired_fields_where_the_added_field_is() {
         let current: &'static [&'static str] = &[
+            "runtime_definitions",
+            "runtime_selection",
             "privacy_consensus_policy",
             "privacy_protocol_policies",
             "kagemusha_wallet_ledger",
@@ -139,6 +162,10 @@ mod tests {
             ADDED_WORLD_FIELD.0,
             format!("world.{}", ADDED_WORLD_FIELD.1)
         );
+        for (id, name) in FOUNDED_WORLD_FIELDS {
+            assert_eq!(id, format!("world.{name}"));
+            assert!(is_founded_world_field(name));
+        }
     }
 
     #[test]

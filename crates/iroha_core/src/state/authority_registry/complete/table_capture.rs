@@ -481,6 +481,11 @@ capture_world_table_once!(
     "world.runtime_upgrades"
 );
 capture_world_table_once!(
+    capture_runtime_definitions_once,
+    runtime_definitions,
+    "world.runtime_definitions"
+);
+capture_world_table_once!(
     capture_privacy_protocol_policies_once,
     privacy_protocol_policies,
     "world.privacy_protocol_policies"
@@ -889,6 +894,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_pedersen_params_once::MATERIALIZER,
     capture_poseidon_params_once::MATERIALIZER,
     capture_runtime_upgrades_once::MATERIALIZER,
+    capture_runtime_definitions_once::MATERIALIZER,
     capture_privacy_protocol_policies_once::MATERIALIZER,
     capture_kagemusha_wallet_ledger_once::MATERIALIZER,
     capture_private_settlement_governance_once::MATERIALIZER,
@@ -1150,6 +1156,21 @@ mod tests {
         ONE_TABLE[0],
     ];
 
+    /// Bounds of `id` in a fresh State: the definitions table holds the founded catalog.
+    fn limits_for(id: &str) -> LeafLimits {
+        if id == "world.runtime_definitions" {
+            LeafLimits {
+                max_tables: 3,
+                max_rows: 4096,
+                max_payload_bytes: 1 << 20,
+                max_ordered_table_bytes: 16 << 20,
+                max_streamed_value_bytes: 16 << 20,
+            }
+        } else {
+            limits()
+        }
+    }
+
     fn limits() -> LeafLimits {
         LeafLimits {
             max_tables: 3,
@@ -1307,6 +1328,7 @@ mod tests {
             "world.pedersen_params",
             "world.poseidon_params",
             "world.runtime_upgrades",
+            "world.runtime_definitions",
             "world.privacy_protocol_policies",
             "world.kagemusha_wallet_ledger",
             "world.private_settlement_governance",
@@ -1520,7 +1542,7 @@ mod tests {
             else {
                 continue;
             };
-            let node = capture(&state, limits())
+            let node = capture(&state, limits_for(id))
                 .expect("bounded declared table")
                 .expect("stable generation");
             assert_eq!(node.table_id(), *id);
@@ -1530,6 +1552,12 @@ mod tests {
                 let rows = state.world.smart_contract_state.view();
                 assert_eq!(rows.iter().count(), 3);
                 3
+            } else if *id == "world.runtime_definitions" {
+                // A fresh World is founded on the baseline catalog.
+                crate::runtime::release_catalog()
+                    .expect("catalog")
+                    .baseline_definitions
+                    .len()
             } else {
                 0
             };
@@ -1538,13 +1566,13 @@ mod tests {
         let mut publication = state.state_view_publication();
         let guard = publication.begin();
         for owner in TABLE_MATERIALIZERS {
-            let (TableMaterializer::Single { capture, .. }
-            | TableMaterializer::Native { capture, .. }) = owner
+            let (TableMaterializer::Single { id, capture }
+            | TableMaterializer::Native { id, capture, .. }) = owner
             else {
                 continue;
             };
             assert!(
-                capture(&state, limits())
+                capture(&state, limits_for(id))
                     .expect("busy generation is a retry")
                     .is_none()
             );

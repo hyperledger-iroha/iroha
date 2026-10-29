@@ -3116,7 +3116,9 @@ fn normalize_role_permission_for_initial_executor(
 fn instruction_has_concrete_type<T: 'static>(instruction: &InstructionBox) -> bool {
     instruction.id() == core::any::type_name::<T>()
 }
-const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
+/// Permission names the Initial executor recognizes; the live-upgrade baseline publishes one
+/// permission definition for each (`crate::runtime::catalog`).
+pub(crate) const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManagePeers",
     "CanRegisterDomain",
     "CanUnregisterDomain",

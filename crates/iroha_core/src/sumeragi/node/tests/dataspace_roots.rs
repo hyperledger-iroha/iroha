@@ -769,7 +769,7 @@ fn preaccepted_foreign_input_reaches_private_executor_but_cannot_publish_or_spen
         &selected,
     )
     .unwrap();
-    let before = state.world.state_accumulator.view().get().root();
+    let before = state.world.state_accumulator.view().get().baseline_root();
     let error = local
         .begin_proposal(proposal, iroha_sumeragi::types::ControlWitness::empty())
         .err()
@@ -780,7 +780,10 @@ fn preaccepted_foreign_input_reaches_private_executor_but_cannot_publish_or_spen
     );
     assert_eq!(state.view().height(), 1);
     assert_eq!(kura.blocks_count(), 1);
-    assert_eq!(state.world.state_accumulator.view().get().root(), before);
+    assert_eq!(
+        state.world.state_accumulator.view().get().baseline_root(),
+        before
+    );
     assert!(!state.has_committed_entrypoint(foreign_hash));
     // Neither queue rejection nor direct native execution retains the foreign input.
     // Same-domain State/Queue identity affinity remains a separate startup concern.

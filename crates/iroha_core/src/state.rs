@@ -1271,6 +1271,8 @@ macro_rules! with_world_overlay_fields {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            runtime_definitions,
+            runtime_selection,
             privacy_consensus_policy,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
@@ -1613,6 +1615,12 @@ macro_rules! initial_world_field {
     };
     (musubi_replication_shortfall_releases, $execution:ident) => {
         scalar_cell_custody::initialize(0, $execution)?
+    };
+    (runtime_definitions, $execution:ident) => {
+        crate::runtime::founded_definitions().map_err(|error| error.to_string())?
+    };
+    (runtime_selection, $execution:ident) => {
+        Cell::new(crate::runtime::founded_selection().map_err(|error| error.to_string())?)
     };
     ($field:ident, $execution:ident) => {
         Default::default()
@@ -4339,6 +4347,13 @@ pub struct WorldData {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Published live-upgrade definitions by identity (`specs/live_runtime_upgrades.md` §3).
+    pub(crate) runtime_definitions: Storage<
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The one selection the universal root executes.
+    pub(crate) runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy and pending update.
     pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
@@ -5321,6 +5336,15 @@ pub struct WorldBlockFields<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Published live-upgrade definitions.
+    pub(crate) runtime_definitions: StorageField<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The root's selection for this block scope.
+    pub(crate) runtime_selection:
+        CellField<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy for this block scope.
     pub(crate) privacy_consensus_policy:
         CellField<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -6331,6 +6355,7 @@ impl WorldBlock<'_> {
             governance_unlock_stats,
             parliament_attempt_counts,
             privacy_consensus_policy,
+            runtime_selection,
             musubi_registry_policy,
             musubi_resolver_index_revision,
             musubi_replication_shortfall_releases,
@@ -6448,6 +6473,7 @@ impl WorldBlock<'_> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            runtime_definitions,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
             private_settlement_governance,
@@ -7049,6 +7075,15 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Published live-upgrade definitions.
+    pub(crate) runtime_definitions: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The root's selection for this transaction.
+    pub(crate) runtime_selection:
+        CellTransaction<'block, 'world, iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy for this transaction.
     pub(crate) privacy_consensus_policy:
         CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -9307,6 +9342,15 @@ pub struct WorldView<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Published live-upgrade definitions.
+    pub(crate) runtime_definitions: StorageView<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::definition::DefinitionDescriptorV1,
+    >,
+    /// The root's selection.
+    pub(crate) runtime_selection:
+        CellView<'world, iroha_data_model::runtime::definition::RootSelectionV1>,
     /// Singleton chain-wide privacy admission policy view.
     pub(crate) privacy_consensus_policy:
         CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
@@ -21284,6 +21328,12 @@ macro_rules! world_ro_accessors {
             storage runtime_upgrades:
                 iroha_data_model::runtime::RuntimeUpgradeId =>
                 iroha_data_model::runtime::RuntimeUpgradeRecord;
+            /// Published live-upgrade definitions (read-only).
+            storage runtime_definitions:
+                iroha_data_model::runtime::definition::DefinitionId =>
+                iroha_data_model::runtime::definition::DefinitionDescriptorV1;
+            /// The selection the universal root executes.
+            cell_ref runtime_selection: iroha_data_model::runtime::definition::RootSelectionV1;
             /// Retained canonical merge-hint values.
             cell_ref merge_hint_roots: Vec<Hash>;
             /// Retained canonical reduced merge-root value; not the World state root.
@@ -25010,6 +25060,8 @@ impl WorldTransaction<'_, '_> {
             pedersen_params: _,
             poseidon_params: _,
             runtime_upgrades: _,
+            runtime_definitions: _,
+            runtime_selection: _,
             privacy_consensus_policy: _,
             privacy_protocol_policies: _,
             kagemusha_wallet_ledger: _,
@@ -25237,6 +25289,8 @@ impl WorldTransaction<'_, '_> {
         self.pedersen_params.apply();
         self.poseidon_params.apply();
         self.runtime_upgrades.apply();
+        self.runtime_definitions.apply();
+        self.runtime_selection.apply();
         self.privacy_consensus_policy.apply();
         self.privacy_protocol_policies.apply();
         self.kagemusha_wallet_ledger.apply();

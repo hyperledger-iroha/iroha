@@ -8633,6 +8633,9 @@ fn decode_world_fields(
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
     let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
+    let runtime_definitions = take_required(&mut map, "runtime_definitions")?;
+    let runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> =
+        take_required(&mut map, "runtime_selection")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_protocol_policies: Storage<
@@ -9088,6 +9091,8 @@ fn decode_world_fields(
         pedersen_params,
         poseidon_params,
         runtime_upgrades,
+        runtime_definitions,
+        runtime_selection,
         privacy_consensus_policy,
         privacy_protocol_policies,
         kagemusha_wallet_ledger,
@@ -10542,10 +10547,10 @@ mod decode_tests {
         assert_eq!(
             WorldStateAccumulator::capture(&restored.block())
                 .unwrap()
-                .root(),
+                .baseline_root(),
             WorldStateAccumulator::capture(&world.block())
                 .unwrap()
-                .root()
+                .baseline_root()
         );
         {
             let reverted = restored.block_and_revert();

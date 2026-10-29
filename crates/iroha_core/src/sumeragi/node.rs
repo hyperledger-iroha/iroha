@@ -2123,7 +2123,15 @@ mod tests {
     fn world_state_roots(validators: &[Validator]) -> Vec<Result<Hash, String>> {
         validators
             .iter()
-            .map(|validator| validator.state.world.state_accumulator.view().get().root())
+            .map(|validator| {
+                validator
+                    .state
+                    .world
+                    .state_accumulator
+                    .view()
+                    .get()
+                    .baseline_root()
+            })
             .collect()
     }
 

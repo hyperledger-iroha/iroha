@@ -572,14 +572,16 @@ impl<'a> SnapshotJsonMap<'a> {
     ///
     /// `Ok(None)`: `input` does not have the predecessor's World fields, so it is this release's
     /// World. The predecessor's retired fields must hold exactly their empty values, the field
-    /// this release added starts empty, and every value whose shape this release changed is
-    /// rewritten in this release's canonical serialization; every other value passes unchanged.
+    /// this release added starts empty, the runtime fields are founded on this release's
+    /// baseline, and every value whose shape this release changed is rewritten in this
+    /// release's canonical serialization; every other value passes unchanged.
     fn predecessor_world_json(
         input: &str,
         budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Option<String>, StateRestoreError> {
         use crate::state::upgrade_checkpoint::{
-            ADDED_WORLD_FIELD, RETIRED_WORLD_FIELDS, predecessor_world_field_order,
+            ADDED_WORLD_FIELD, RETIRED_WORLD_FIELDS, is_founded_world_field,
+            predecessor_world_field_order,
         };
         let current = canonical_world_field_order();
         let predecessor = predecessor_world_field_order(current);
@@ -617,6 +619,10 @@ impl<'a> SnapshotJsonMap<'a> {
             world.push_str("\":");
             if *key == ADDED_WORLD_FIELD.1 {
                 world.push_str(empty_added_world_field_json()?);
+                continue;
+            }
+            if is_founded_world_field(key) {
+                world.push_str(&founded_world_field_json(key)?);
                 continue;
             }
             let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(key) else {
@@ -866,6 +872,25 @@ fn canonical_world_field_order() -> &'static [&'static str] {
 }
 /// This release's canonical snapshot JSON of the empty table an upgrade checkpoint adds
 /// (`state::upgrade_checkpoint::ADDED_WORLD_FIELD`).
+/// The founded value of a runtime World field, in snapshot JSON.
+fn founded_world_field_json(name: &str) -> Result<String, json::Error> {
+    let field = format!("world.{name}");
+    let invalid = |message: String| json::Error::InvalidField {
+        field: field.clone(),
+        message,
+    };
+    match name {
+        "runtime_definitions" => json::to_json(
+            &crate::runtime::founded_definitions().map_err(|error| invalid(error.to_string()))?,
+        ),
+        "runtime_selection" => json::to_json(&Cell::new(
+            crate::runtime::founded_selection().map_err(|error| invalid(error.to_string()))?,
+        )),
+        _ => return Err(invalid("not a founded World field".to_owned())),
+    }
+    .map_err(|error| invalid(error.to_string()))
+}
+
 fn empty_added_world_field_json() -> Result<&'static str, json::Error> {
     static EMPTY: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
     EMPTY
