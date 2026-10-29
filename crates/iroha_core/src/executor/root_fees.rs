@@ -121,6 +121,10 @@ pub(super) fn execution_parameters<'a>(
 pub(super) fn execution_policy<'a>(
     transaction: &'a StateTransaction<'_, '_>,
 ) -> Result<&'a RootFeePolicy, &'static str> {
+    // SPEC: §13.4 HC396 substitutes process-local terms for the committed projection.
+    if cfg!(all(test, sumeragi_core_mutation = "HC396")) {
+        return Ok(&transaction.nexus.fees);
+    }
     execution_parameters(transaction)
         .root_fees()
         .ok_or("original committed root fee policy is absent")
@@ -410,9 +414,9 @@ mod tests {
             InstructionExecutionError::InvariantViolation(_)
         ));
         assert!(
-            error
-                .to_string()
-                .contains("initial genesis execution custody requires its authored root fee policy")
+            error.to_string().contains(
+                "initial genesis execution custody requires its authored root fee policy"
+            )
         );
         assert!(sponsor_vault_custody(&tx).is_err());
         assert_eq!(*execution_policy(&tx).unwrap(), frozen);

@@ -60,7 +60,7 @@ fn canonical_state_is_stable_and_recovers_with_measured_allocation_in_every_call
             "caller flags {flags:#04x}"
         );
         assert_eq!(
-            decode_state_with_current::<PersistedState>(&expected, "canonical test", None)
+            decode_state_with_current::<PersistedState>(&expected, "canonical test", None, None)
                 .expect("recover state without current allocation"),
             value
         );
@@ -104,8 +104,13 @@ fn canonical_state_rejects_well_formed_alternate_layouts_in_every_caller_layout(
         for caller_flags in valid_caller_layouts() {
             let _caller = norito::core::DecodeFlagsGuard::enter(caller_flags);
             assert_noncanonical(
-                &(decode_state_with_current::<PersistedState>(&alternate, "canonical test", None)
-                    .expect_err("alternate state is forbidden")),
+                &(decode_state_with_current::<PersistedState>(
+                    &alternate,
+                    "canonical test",
+                    None,
+                    None,
+                )
+                .expect_err("alternate state is forbidden")),
             );
             let mut current = SingularQueryCurrentAllocation::new(17).expect("retained accounting");
             assert_noncanonical(
@@ -184,7 +189,7 @@ fn canonical_state_rejects_compression_and_invalid_layout_headers_before_allocat
 fn canonical_state_preserves_frame_ceiling_and_stricter_nested_allocation_limits() {
     let oversized = vec![0; STATE_MAX_BYTES + 1];
     let (result, usage) = norito::core::with_decode_limits_measured(STATE_LIMITS, || {
-        decode_state_with_current::<PersistedState>(&oversized, "canonical test", None)
+        decode_state_with_current::<PersistedState>(&oversized, "canonical test", None, None)
     });
     let error = result.expect_err("oversized persisted state");
     assert!(

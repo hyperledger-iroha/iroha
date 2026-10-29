@@ -202,6 +202,69 @@ fn reserve_asset_balance(state: &State, owner: &AccountId) -> XorQuantity {
                 .expect("stored reserve asset is canonical")
         })
 }
+
+#[test]
+fn sccp_reserve_guard_preserves_terminal_and_predecessor_decode_owners() {
+    for refuse_predecessor in [false, true] {
+        let governance = account(&keypair(0xD1));
+        let provider = account(&keypair(0xD2));
+        let custody = account(&keypair(0xD3));
+        let treasury = account(&keypair(0xD4));
+        let state = state_fixture(&governance, &provider, &custody, &treasury);
+        let mut block = state.block(block_header_at(1, NOW));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-reserve-journal-decode"));
+        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
+        let digest = first.digest().unwrap();
+        SetSorafsReservePolicy::new(first)
+            .execute(&governance, &mut tx)
+            .unwrap();
+        SetSorafsReservePolicy::new(policy(2, Some(digest), custody, treasury, &governance))
+            .execute(&governance, &mut tx)
+            .unwrap();
+        let world = tx.world();
+        let head = read_reserve_state(world).unwrap().unwrap().journal_head;
+        assert_eq!(head.last_sequence, 2);
+        validate_event_journal_head(world, head, Some(world)).unwrap();
+        let unconstrained =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+        let (terminal, usage) = norito::core::with_decode_limits_measured(unconstrained, || {
+            read_persisted_event(world, head.last_sequence)
+        });
+        assert!(terminal.unwrap().is_some());
+        let allowance = if refuse_predecessor {
+            usage.total_allocated_bytes()
+        } else {
+            0
+        };
+        let limits =
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allowance, usize::MAX);
+        if refuse_predecessor {
+            norito::with_decode_limits_scope(limits, || {
+                read_persisted_event_with_owner(world, head.last_sequence, Some(world))
+            })
+            .expect("the terminal event fits; only its predecessor exhausts the shared scope");
+            assert!(!tx.is_execution_deferred());
+        }
+        norito::with_decode_limits_scope(limits, || {
+            validate_event_journal_head(world, head, Some(world))
+        })
+        .unwrap_err();
+        assert!(tx.is_execution_deferred());
+        assert!(matches!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .decode_refusal()
+                .unwrap()
+                .resource_error(),
+            norito::core::DecodeResourceError::TotalAllocationExceeded { .. }
+        ));
+        assert_eq!(
+            read_reserve_state(world).unwrap().unwrap().journal_head,
+            head
+        );
+    }
+}
+
 #[test]
 fn reserve_component_funding_refuses_an_unretained_original_invocation() {
     let governance = account(&keypair(0xE1));

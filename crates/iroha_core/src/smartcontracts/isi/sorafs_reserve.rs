@@ -3,7 +3,7 @@ use super::*;
 use crate::smartcontracts::ValidSingularQuery;
 use crate::smartcontracts::isi::helpers::instruction_error_as_query_failure as query_failure;
 use crate::smartcontracts::isi::helpers::transaction_account_has_permission as has_permission;
-use crate::state::{StateTransaction, WorldReadOnly};
+use crate::state::{StateTransaction, WorldReadOnly, WorldTransaction};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetId,
@@ -247,7 +247,7 @@ fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionE
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    decode_state_with_current(bytes, label, None)
+    decode_state_with_current(bytes, label, None, None)
 }
 fn decode_state_for_current<T>(
     bytes: &[u8],
@@ -257,12 +257,13 @@ fn decode_state_for_current<T>(
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    decode_state_with_current(bytes, label, Some(current))
+    decode_state_with_current(bytes, label, Some(current), None)
 }
 fn decode_state_with_current<T>(
     bytes: &[u8],
     label: &str,
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<T, InstructionExecutionError>
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
@@ -284,23 +285,45 @@ where
             |current| current.decode_limits(bytes.len(), STATE_LIMITS),
         )
         .map_err(InstructionExecutionError::Query)?;
-    let (value, allocation_bytes) = if current.is_some() {
-        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_canonical_with_limits::<T>(bytes, limits)
-        });
-        (value, Some(usage.total_allocated_bytes()))
+    let decoded = if owner.is_some() {
+        crate::execution_attempt::canonical_policy_decode(owner, bytes, limits)
+            .map(|value| (value, None))
     } else {
-        (decode_canonical_with_limits::<T>(bytes, limits), None)
+        norito::core::classify_decode_attempt(|| {
+            // Fixed reserve and query limits are inner policy limits. Only a refusal
+            // from the caller's enclosing scope belongs to its execution attempt.
+            if current.is_some() {
+                let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+                    decode_canonical_with_limits::<T>(bytes, limits)
+                });
+                value.map(|value| (value, Some(usage.total_allocated_bytes())))
+            } else {
+                decode_canonical_with_limits::<T>(bytes, limits).map(|value| (value, None))
+            }
+        })
+        .map_err(norito::CanonicalDecodeControlError::Decode)
     };
-    let value = value.map_err(|error| {
-        if crate::smartcontracts::isi::query::singular_query_limits_active()
-            && error.is_decode_resource_limit()
-        {
-            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
-            corrupt_state(format!("{label} state is not exact canonical Norito"))
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
+    let (value, allocation_bytes) = decoded.map_err(|error| {
+        let rejected = |error: norito::CanonicalDecodeControlError| {
+            let error = match error {
+                norito::CanonicalDecodeControlError::Decode(error) => error.into_error(),
+                error => return corrupt_state(format!("failed to decode {label}: {error}")),
+            };
+            if crate::smartcontracts::isi::query::singular_query_limits_active()
+                && error.is_decode_resource_limit()
+            {
+                InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+            } else if matches!(error, norito::Error::NonCanonicalEncoding) {
+                corrupt_state(format!("{label} state is not exact canonical Norito"))
+            } else {
+                corrupt_state(format!("failed to decode {label}: {error}"))
+            }
+        };
+        match owner {
+            Some(owner) => owner.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_control_attempt_error(error, rejected),
+            ),
+            None => rejected(error),
         }
     })?;
     if let (Some(current), Some(allocation_bytes)) = (current, allocation_bytes) {
@@ -413,49 +436,57 @@ fn read_persisted_event(
     world: &impl WorldReadOnly,
     sequence: u64,
 ) -> Result<Option<ReservePersistedEventV1>, InstructionExecutionError> {
+    read_persisted_event_with_owner(world, sequence, None)
+}
+fn read_persisted_event_with_owner(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<ReservePersistedEventV1>, InstructionExecutionError> {
     if sequence == 0 {
         return Err(corrupt_state("reserve event sequence zero cannot be read"));
     }
     let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
         return Ok(None);
     };
-    decode_persisted_event(bytes, sequence).map(Some)
+    decode_persisted_event_with_current(bytes, sequence, None, owner).map(Some)
 }
+#[cfg(test)]
 fn decode_persisted_event(
     bytes: &[u8],
     sequence: u64,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
-    decode_persisted_event_with_current(bytes, sequence, None)
+    decode_persisted_event_with_current(bytes, sequence, None, None)
 }
 fn decode_persisted_event_for_current(
     bytes: &[u8],
     sequence: u64,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
-    decode_persisted_event_with_current(bytes, sequence, Some(current))
+    decode_persisted_event_with_current(bytes, sequence, Some(current), None)
 }
 fn decode_persisted_event_with_current(
     bytes: &[u8],
     sequence: u64,
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<ReservePersistedEventV1, InstructionExecutionError> {
     if bytes.len() > RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 {
         return Err(corrupt_state(format!(
             "reserve committed event exceeds {RESERVE_COMMITTED_EVENT_MAX_BYTES_V1} bytes"
         )));
     }
-    let record: ReservePersistedEventV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reserve committed event", current)?,
-        None => decode_state(bytes, "reserve committed event")?,
-    };
+    let record: ReservePersistedEventV1 =
+        decode_state_with_current(bytes, "reserve committed event", current, owner)?;
     validate_persisted_event(&record, sequence)?;
     Ok(record)
 }
 fn validate_event_journal_head(
     world: &impl WorldReadOnly,
     head: ReserveEventJournalHeadV1,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<(), InstructionExecutionError> {
-    let record = read_persisted_event(world, head.last_sequence)?
+    let record = read_persisted_event_with_owner(world, head.last_sequence, owner)?
         .ok_or_else(|| corrupt_state("reserve event journal head references a missing event"))?;
     if record.target_block_height != head.last_target_block_height
         || record.event_index != head.last_event_index
@@ -469,7 +500,7 @@ fn validate_event_journal_head(
     } else {
         let predecessor_sequence = head.last_sequence - 1;
         Some(
-            read_persisted_event(world, predecessor_sequence)?.ok_or_else(|| {
+            read_persisted_event_with_owner(world, predecessor_sequence, owner)?.ok_or_else(|| {
                 corrupt_state(format!(
                     "reserve event journal is missing terminal predecessor sequence {predecessor_sequence}"
                 ))
@@ -684,10 +715,20 @@ pub(super) fn is_reserve_custody_asset(
     world: &impl WorldReadOnly,
     asset_id: &AssetId,
 ) -> Result<bool, InstructionExecutionError> {
-    Ok(read_policy(world)?.is_some_and(|record| {
-        record.policy.asset_definition == *asset_id.definition()
-            && record.policy.custody_account == *asset_id.account()
-    }))
+    is_reserve_custody_asset_with_owner(world, asset_id, None)
+}
+/// Check custody while preserving local refusals from the policy and journal decoders.
+pub(super) fn is_reserve_custody_asset_with_owner(
+    world: &impl WorldReadOnly,
+    asset_id: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(
+        read_reserve_state_with_owner(world, owner)?.is_some_and(|state| {
+            state.policy.policy.asset_definition == *asset_id.definition()
+                && state.policy.policy.custody_account == *asset_id.account()
+        }),
+    )
 }
 /// Return whether `account_id` is the active `SoraFS` reserve custody account.
 pub(super) fn is_reserve_custody_account(
@@ -756,30 +797,35 @@ pub(super) fn validate_verified_reserve_withdrawal(
 fn read_reserve_state(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
+    read_reserve_state_with_owner(world, None)
+}
+fn read_reserve_state_with_owner(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
     let Some(bytes) = world.smart_contract_state().get(reserve_state_key()) else {
         return Ok(None);
     };
-    let state = decode_reserve_state(bytes)?;
-    validate_event_journal_head(world, state.journal_head)?;
+    let state = decode_reserve_state_with_current(bytes, None, owner)?;
+    validate_event_journal_head(world, state.journal_head, owner)?;
     Ok(Some(state))
 }
+#[cfg(test)]
 fn decode_reserve_state(bytes: &[u8]) -> Result<ReserveStateV1, InstructionExecutionError> {
-    decode_reserve_state_with_current(bytes, None)
+    decode_reserve_state_with_current(bytes, None, None)
 }
 fn decode_reserve_state_for_current(
     bytes: &[u8],
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
 ) -> Result<ReserveStateV1, InstructionExecutionError> {
-    decode_reserve_state_with_current(bytes, Some(current))
+    decode_reserve_state_with_current(bytes, Some(current), None)
 }
 fn decode_reserve_state_with_current(
     bytes: &[u8],
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<ReserveStateV1, InstructionExecutionError> {
-    let state: ReserveStateV1 = match current {
-        Some(current) => decode_state_for_current(bytes, "reserve state", current)?,
-        None => decode_state(bytes, "reserve state")?,
-    };
+    let state: ReserveStateV1 = decode_state_with_current(bytes, "reserve state", current, owner)?;
     state
         .validate()
         .map_err(|error| corrupt_state(error.to_string()))?;
