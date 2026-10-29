@@ -543,6 +543,53 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
     }
 }
 
+#[test]
+fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
+    assert_eq!(
+        2176,
+        QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1)
+    );
+    for native in [5, 8] {
+        let maximum = (1usize << native) + MASK_DEGREE + 1;
+        for coefficients in [1, maximum - 1, maximum] {
+            for selected in [1, 127, 128, 2176] {
+                assert!(prefer_horner_v1(native, 22, coefficients, selected));
+            }
+        }
+        for (coefficients, selected) in [(0, 1), (maximum + 1, 1), (1, 0), (1, 2177)] {
+            assert!(!prefer_horner_v1(native, 22, coefficients, selected));
+        }
+        for common in [0, 14, 21, 23, u8::MAX] {
+            assert!(!prefer_horner_v1(native, common, maximum, 2176));
+        }
+    }
+    for native in [0, 4, 6, 15, 16, 18, 19, u8::MAX] {
+        assert!(!prefer_horner_v1(native, 22, 1, 1));
+    }
+}
+
+#[test]
+fn selected_horner_common22_erases_populated_output_on_unwind() {
+    let mut coefficients = vec![F::ZERO; (1 << 8) + MASK_DEGREE + 1];
+    *coefficients.last_mut().unwrap() = F(GOLDILOCKS_MODULUS_V1 - 1);
+    let selected = (0..2176).collect::<Vec<_>>();
+    assert!(prefer_horner_v1(8, 22, coefficients.len(), selected.len()));
+    let (result, erased) = inspection::observe_v1(|| {
+        std::panic::catch_unwind(|| {
+            let _output = evaluate_horner_with_v1(&coefficients, 8, 22, &selected, |output| {
+                assert_eq!(output.len(), selected.len());
+                assert!(output.iter().all(|&value| value != F::ZERO));
+                panic!("after selected common22 Horner evaluation");
+            });
+        })
+    });
+    assert!(result.is_err());
+    assert_eq!(erased.len(), 1);
+    assert_eq!(erased[0].cells, selected.len());
+    assert_eq!(erased[0].nonzero_before, selected.len());
+    assert_eq!(erased[0].nonzero_after, 0);
+}
+
 /// Count only public butterfly positions; this is a cost model, not timing.
 fn selected_public_pruned_positions_v1(common: u8, selected: &[usize]) -> usize {
     fn count(rows: usize, offset: usize, indices: &[usize]) -> usize {
@@ -682,6 +729,110 @@ fn selected_cpu_horner_pruned_full_cost_uses_public_geometry() {
                             columns[0].len()
                         );
                     }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "isolated common22 low-degree selected-row Metal/CPU comparison; component evidence only"]
+fn selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows() {
+    use std::time::Instant;
+
+    assert_eq!(
+        fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+        "this comparison requires the actual admitted Metal backend"
+    );
+    let common = 22;
+    let rows = 1usize << common;
+    let selected = (0..136)
+        .flat_map(|query| {
+            let block = (query * 1_729 + 17) % (rows / 16);
+            block * 16..block * 16 + 16
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2176);
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    for native in [5, 8] {
+        for width in [1, 8] {
+            let columns = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|row| F((17 * row + 13 * column + 1) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..MASK_DEGREE + 1)
+                        .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = columns
+                .iter()
+                .map(|column| {
+                    full_compact_reference_v1(column, native, common, &selected, |_| {}).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut metal = MainTraceCosetEvaluatorV1::new_v1(&layout, 0).unwrap();
+            assert!(metal.device_columns > 0);
+            for round in 0..3 {
+                for offset in 0..3 {
+                    let path = (round + offset) % 3;
+                    let started = Instant::now();
+                    let actual = if path == 2 {
+                        let before = metal.receipt.metal_columns;
+                        assert!(!fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1());
+                        let output = metal
+                            .evaluate_selected_policy_with_v1::<false>(
+                                &columns,
+                                native,
+                                common,
+                                Some(&selected),
+                                |batch, root| {
+                                    transform_goldilocks_columns_v1(
+                                        batch,
+                                        root,
+                                        Direction::Forward,
+                                        fastpq_prover::ExecutionMode::Auto,
+                                    )
+                                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(metal.receipt.metal_columns - before, width);
+                        output
+                    } else {
+                        columns
+                            .par_iter()
+                            .map(|column| {
+                                if path == 0 {
+                                    evaluate_horner_v1(column, native, common, &selected)
+                                } else {
+                                    evaluate_v1(column, native, common, &selected)
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .unwrap()
+                    };
+                    let transform_ns = started.elapsed().as_nanos();
+                    for (actual, expected) in actual.iter().zip(&expected) {
+                        assert_eq!(actual.as_ref(), expected.as_ref());
+                    }
+                    let clear_started = Instant::now();
+                    drop(actual);
+                    let compact_clear_ns = clear_started.elapsed().as_nanos();
+                    let path_name = ["horner", "pruned", "metal"][path];
+                    println!(
+                        "x509_selected_low_degree native_log={native} common_log={common} width={width} workers={} selected_rows={} coefficient_count={} round={round} path={path_name} transform_gather_scratch_clear_ns={transform_ns} compact_clear_ns={compact_clear_ns} parity=exact",
+                        rayon::current_num_threads(),
+                        selected.len(),
+                        columns[0].len(),
+                    );
                 }
             }
         }

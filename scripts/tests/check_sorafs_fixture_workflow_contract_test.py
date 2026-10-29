@@ -861,7 +861,7 @@ def test_swift_native_bridge_contract_requires_universal_macos_slice() -> None:
         assert "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" in workflow
         assert (
             'rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which '
-            '--toolchain 1.93.1 rustc)"'
+            '--toolchain 1.99.1 rustc)"'
             in workflow
         )
 

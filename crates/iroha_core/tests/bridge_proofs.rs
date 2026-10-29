@@ -4,8 +4,8 @@ use iroha_core::{
     executor::Executor,
     kura::Kura,
     query::{insert_proof_record_for_test, store::LiveQueryStore},
-    smartcontracts::Execute,
-    state::{State, WorldReadOnly},
+    state::{State, World, WorldReadOnly},
+    sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig},
 };
 use iroha_data_model::{
     bridge::BridgeProofRecord,
@@ -217,12 +217,105 @@ fn manual_prune_has_no_caller_controlled_retention_bypass() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    // TODO: applied directly because the Initial executor admits no transaction that
-    // carries `zk::PruneProofs` (see the note in zk_proof_retention.rs; owner F.1 and the
-    // roadmap). Submit it through the executor once it has an admission class.
-    iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("manual bridge prune");
+    let prune = iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned()));
+    Executor::default()
+        .execute_instruction(&mut stx, &ALICE_ID, prune.into())
+        .expect("manual bridge prune through the Initial executor");
     assert!(stx.world.proofs().get(&older_id).is_none());
     assert!(stx.world.proofs().get(&newer_id).is_some());
+}
+
+#[test]
+fn signed_pruning_uses_committed_policy_without_a_key_management_grant() {
+    let (authority, key) = iroha_test_samples::gen_account_in("wonderland");
+    let account = Account::new(authority.clone()).build(&authority);
+    let world = World::with([], [account], []);
+    let target_backend = "bridge/ics23";
+    let other_backend = "pipa-r/pasta";
+    // Retained fixture records are initial World input, not a claim that their
+    // proofs were verified by this chain. The signed transaction exercises only pruning.
+    {
+        let mut block = world.block();
+        let mut transaction = block.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        for (backend, hash) in [
+            (target_backend, 1),
+            (target_backend, 2),
+            (other_backend, 3),
+            (other_backend, 4),
+        ] {
+            let id = ProofId {
+                backend: backend.into(),
+                proof_hash: [hash; 32],
+            };
+            transaction.proofs_mut_for_testing().insert(
+                id.clone(),
+                ProofRecord {
+                    id,
+                    vk_ref: None,
+                    vk_commitment: None,
+                    status: ProofStatus::Rejected,
+                    verified_at_height: Some(1),
+                    bridge: None,
+                },
+            );
+        }
+        transaction.apply();
+        block.commit();
+    }
+    let mut config = TestChainConfig::new(world, 0);
+    let mut policy = iroha_data_model::zk_validity_policy::ZkValidityPolicyV1::protocol_default();
+    policy.proofs.proof_history_cap = 1;
+    policy.proofs.proof_retention_grace_blocks = 0;
+    policy.proofs.proof_prune_batch = 0;
+    policy.validate().expect("valid committed retention policy");
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(policy.into_custom_parameter()));
+    let mut chain =
+        Box::new(CertifiedTestChain::start(config).expect("authenticated pruning genesis"));
+    // No CanManageVerifyingKeys or other administrative permission is granted.
+    for (backend, expected_other_count) in [(Some(target_backend.to_owned()), 2), (None, 1)] {
+        let transaction = TransactionBuilder::new(
+            chain.network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([iroha_data_model::isi::zk::PruneProofs::new(backend)])
+        .sign(key.private_key());
+        let proposal = chain.proposal(None, vec![transaction]);
+        let committed = chain.commit_proposal(
+            proposal,
+            Signers::Quorum,
+            iroha_sumeragi::types::ControlWitness::default(),
+        );
+        let result = &committed
+            .block()
+            .network_output_at(0)
+            .expect("signed pruning output")
+            .1
+            .result;
+        assert!(
+            result.is_ok(),
+            "ordinary signed account can apply retention: {result:?}"
+        );
+        let view = chain.state().view();
+        let records = view.world().proofs();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|(id, _)| id.backend == target_backend)
+                .count(),
+            1
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|(id, _)| id.backend == other_backend)
+                .count(),
+            expected_other_count
+        );
+    }
 }

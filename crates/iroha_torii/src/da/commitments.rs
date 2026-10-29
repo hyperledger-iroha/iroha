@@ -1189,6 +1189,9 @@ mod tests {
     }
     #[tokio::test]
     async fn original_commitment_history_capacity_is_retryable_for_prove_and_verify() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use axum::response::IntoResponse as _;
         let record = sample_record(1, 1, 1);
         let request = DaCommitmentProofRequest {

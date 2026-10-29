@@ -305,7 +305,6 @@ fn new_enrollment_policy_shared_vectors_file_matches_the_generated_vectors() {
         return;
     }
     let existing = std::fs::read_to_string(&path).expect("policy vectors");
-    // TODO(blacklist-local G5): regenerate wallet_enrollment_policy_v1_vectors.json.
     assert!(
         existing == text,
         "{} differs; regenerate with `{UPDATE_VARIABLE}=1 cargo test -p iroha_data_model \

@@ -3677,18 +3677,6 @@ mod tests {
             [source_asset],
             [],
         );
-        // Component custody registration owns its policy before the first snapshot.
-        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
-            .expect("funded component parameter fixture");
-        crate::state::set_parameter_cell_for_testing(
-            &mut parameters,
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical fixture crypto policy"),
-            world.sccp_committee_generations.allocation_budget(),
-        )
-        .expect("install original fixture crypto policy");
-        parameters.commit();
         let alias: iroha_data_model::asset::AssetDefinitionAlias =
             "xor#paynet".parse().expect("asset alias");
         world

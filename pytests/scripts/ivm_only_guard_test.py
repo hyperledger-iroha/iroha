@@ -1,6 +1,8 @@
 """Exercise the actual current-tree IVM-only guard against isolated Git repos."""
 
 from pathlib import Path
+import hashlib
+import json
 import os
 import subprocess
 
@@ -27,6 +29,9 @@ def run_guard(root):
     ("crates/codec/Cargo.toml", '[dependencies]\nwasm-bindgen = "0.2"\n'),
     ("crates/codec/src/lib.rs", '#![cfg_attr(feature = "compact", no_std)]\n'),
     ("crates/codec/src/lib.rs", '#[cfg(target_arch = "wasm32")]\nfn alternate() {}\n'),
+    ("crates/codec/src/lib.rs", '#[cfg(target_family = "wasm")]\nfn alternate() {}\n'),
+    ("crates/codec/src/lib.rs", '#[cfg(target_family\n =\n "wasm")]\nfn alternate() {}\n'),
+    ("crates/codec/Cargo.toml", '[target.\'cfg(target_family = "wasm")\'.dependencies]\ncodec = "1"\n'),
     ("crates/codec/src/lib.rs", 'pub struct Budget { pub allow_wasi: bool }\n'),
     (".cargo/config.toml", '[build]\ntarget = "wasm64-unknown-unknown"\n'),
     ("javascript/codec.mjs", 'await WebAssembly.instantiate(bytes);\n'),
@@ -136,3 +141,97 @@ def test_go_target_files_and_build_comments_are_checked(repository, relative, co
     assert run_guard(repository).returncode == 1
     subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
     assert run_guard(repository).returncode == 1
+
+
+def write_evidence_registry(repository, records):
+    """Install a reviewed registry in the isolated source boundary."""
+    path = repository / "scripts/ivm_policy_evidence.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "records": records}))
+
+
+@pytest.mark.parametrize("mutation", ["unchanged", "changed", "appended", "renamed", "sibling"])
+def test_reviewed_evidence_requires_exact_path_and_bytes(repository, mutation):
+    name = "docs/validation/prior/report.json"
+    body = '{"source_sha256": {"registry/wasm32/mod.rs": "' + "a" * 64 + '"}}\n'
+    path = repository / name
+    path.parent.mkdir(parents=True)
+    path.write_text(body)
+    write_evidence_registry(repository, [{
+        "path": name, "sha256": hashlib.sha256(body.encode()).hexdigest(), "kind": "source-digests",
+    }])
+    if mutation == "changed":
+        path.write_text(body + "\n")
+    elif mutation == "appended":
+        data = json.loads(body)
+        data["scripts"] = {"build": "cargo build --target wasm32-unknown-unknown"}
+        path.write_text(json.dumps(data))
+    elif mutation == "renamed":
+        path.rename(path.with_name("renamed.json"))
+    elif mutation == "sibling":
+        path.with_name("sibling.json").write_text(body)
+    result = run_guard(repository)
+    assert result.returncode == (0 if mutation == "unchanged" else 1), result.stderr
+
+
+@pytest.mark.parametrize("record", [
+    {"path": "docs/validation/report.json", "sha256": "a" * 64, "kind": "source-digests", "extra": 1},
+    {"path": "docs/validation/report.json", "sha256": "a" * 63, "kind": "source-digests"},
+    {"path": "docs/validation/report.json", "sha256": "g" * 64, "kind": "source-digests"},
+    {"path": "docs/validation/report.json", "sha256": "a" * 64, "kind": "executable"},
+    {"path": "docs/validation/../report.json", "sha256": "a" * 64, "kind": "source-digests"},
+    {"path": "docs/validation/./report.json", "sha256": "a" * 64, "kind": "source-digests"},
+    {"path": "docs/validation//report.json", "sha256": "a" * 64, "kind": "source-digests"},
+    {"path": "docs/validation/report.sh", "sha256": "a" * 64, "kind": "source-digests"},
+    {"path": "/docs/validation/report.json", "sha256": "a" * 64, "kind": "source-digests"},
+    {"path": "javascript/package.json", "sha256": "a" * 64, "kind": "source-digests"},
+])
+def test_evidence_registry_rejects_invalid_or_executable_entries(repository, record):
+    write_evidence_registry(repository, [record])
+    result = run_guard(repository)
+    assert result.returncode == 1
+    assert "evidence" in result.stderr
+
+
+@pytest.mark.parametrize("contents", ["{", "[]", '{"version":true,"records":[]}',
+                                       '{"version":2,"records":[]}', '{"version":1,"records":{}}'])
+def test_evidence_registry_rejects_malformed_schema(repository, contents):
+    write_evidence_registry(repository, [])
+    (repository / "scripts/ivm_policy_evidence.json").write_text(contents)
+    assert run_guard(repository).returncode == 1
+
+
+def test_evidence_registry_rejects_duplicate_paths(repository):
+    record = {"path": "docs/validation/report.json", "sha256": "a" * 64, "kind": "source-digests"}
+    write_evidence_registry(repository, [record, record])
+    assert run_guard(repository).returncode == 1
+
+
+def test_reviewed_evidence_cannot_exempt_binary_magic(repository):
+    name = "docs/validation/report.json"
+    body = b"\0asm\x01\0\0\0"
+    path = repository / name
+    path.parent.mkdir(parents=True)
+    path.write_bytes(body)
+    write_evidence_registry(repository, [{
+        "path": name, "sha256": hashlib.sha256(body).hexdigest(), "kind": "source-digests",
+    }])
+    result = run_guard(repository)
+    assert result.returncode == 1
+    assert "binary magic" in result.stderr
+
+
+@pytest.mark.parametrize("name,statement,allowed", [
+    ("crates/iroha_plonk/tests/source_identity.rs", 'assert!(!supported_target("wasm32", "unknown", "32", "little"));', True),
+    ("crates/iroha_plonk/tests/source_identity.rs", 'assert!(supported_target("wasm32", "unknown", "32", "little"));', False),
+    ("crates/iroha_plonk/tests/source_identity.rs", 'assert!(!supported_target("wasm32", "unknown", "32", "little")); run_wasm();', False),
+    ("crates/iroha_plonk/tests/source_identity.rs", 'assert!(!supported_target("wasm32", "unknown", "32", "little"));\nuse wasmtime::Engine;', False),
+    ("crates/another/tests/source_identity.rs", 'assert!(!supported_target("wasm32", "unknown", "32", "little"));', False),
+])
+def test_only_the_known_negative_target_assertion_is_allowed(repository, name, statement, allowed):
+    path = repository / name
+    path.parent.mkdir(parents=True)
+    path.write_text(statement + "\n")
+    assert run_guard(repository).returncode == (0 if allowed else 1)
+    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+    assert run_guard(repository).returncode == (0 if allowed else 1)

@@ -913,6 +913,12 @@ pub struct StartupArgs {
     /// after a data loss.
     #[arg(long)]
     pub sumeragi_assert_fresh_key: bool,
+    /// Private managed-worker endpoint supplying the already-bound runtime listeners.
+    #[arg(long, hide = true, requires = "managed_listener_deadline_ns", conflicts_with_all = ["check_config", "check_storage"])]
+    pub managed_listeners: Option<PathBuf>,
+    /// Original managed startup deadline for the listener handoff.
+    #[arg(long, hide = true, requires = "managed_listeners")]
+    pub managed_listener_deadline_ns: Option<u128>,
 }
 
 #[cfg(feature = "test-network-parliament-signers")]
@@ -2323,7 +2329,15 @@ impl Iroha {
         ),
         StartError,
     > {
-        let PreparedStartup { native, lifetime } = prepared;
+        let PreparedStartup {
+            native,
+            lifetime,
+            listeners,
+        } = prepared;
+        let (p2p_listener, torii_listener) = match listeners {
+            Some(listeners) => (Some(listeners.p2p), Some(listeners.torii)),
+            None => (None, None),
+        };
         let PreparedNative {
             mut config,
             mut supervisor,
@@ -2914,6 +2928,7 @@ impl Iroha {
             iroha_p2p::network::HandshakeCapabilities { consensus: Some(consensus_caps), confidential: Some(confidential_caps), crypto: Some(crypto_caps) },
             initial_trusted_sources,
             configured_validator_dial_roster.iter().cloned().collect(),
+            p2p_listener,
             supervisor.shutdown_signal(),
         )
         .await
@@ -4757,7 +4772,7 @@ impl Iroha {
             torii.with_p2p(network.clone())
         };
         let torii = torii.with_local_peer_id(config.common.peer.id.clone());
-        let torii_run = torii.start(supervisor.shutdown_signal());
+        let torii_run = torii.start(supervisor.shutdown_signal(), torii_listener);
         let shutdown_on_failure = supervisor.shutdown_signal();
         supervisor.monitor(Child::new(
             tokio::spawn(async move {
@@ -8271,6 +8286,9 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach("failed to project deployment runtime-provider bindings")?;
     }
+    // Keep the original sockets bound through native preparation and provider admission.
+    // Ordinary daemon launches continue to bind their configured addresses at activation.
+    let managed_listeners = adopt_managed_listeners(&args.startup, &config)?;
     let musubi_publication_factory = if emergency_fast {
         None
     } else {
@@ -8405,17 +8423,55 @@ fn run_main_with_config_guard(
         };
         Ok(runtime_deps.with_sumeragi_fresh_key_assertion(args.startup.sumeragi_assert_fresh_key))
     }) {
-        Ok((prepared, runtime_deps)) => rt.block_on(run_node(
-            build,
-            prepared,
-            logger,
-            runtime_deps,
-            musubi_publication_factory,
-        )),
+        Ok((mut prepared, runtime_deps)) => {
+            prepared.listeners = managed_listeners;
+            rt.block_on(run_node(
+                build,
+                prepared,
+                logger,
+                runtime_deps,
+                musubi_publication_factory,
+            ))
+        }
         Err(error) => Err(error),
     };
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
+}
+
+/// Adopt only the exact configured numeric endpoints from the managed worker.
+fn adopt_managed_listeners(
+    startup: &StartupArgs,
+    config: &Config,
+) -> ReportResult<Option<iroha_deploy::managed::RuntimeListeners>, MainError> {
+    match (
+        &startup.managed_listeners,
+        startup.managed_listener_deadline_ns,
+    ) {
+        (None, None) => Ok(None),
+        (Some(directory), Some(deadline)) => {
+            let numeric = |address: &iroha_primitives::addr::SocketAddr| match address {
+                iroha_primitives::addr::SocketAddr::Ipv4(address) => {
+                    Ok(std::net::SocketAddr::V4((*address).into()))
+                }
+                iroha_primitives::addr::SocketAddr::Ipv6(address) => {
+                    Ok(std::net::SocketAddr::V6((*address).into()))
+                }
+                iroha_primitives::addr::SocketAddr::Host(_) => Err(Report::new(MainError::Config)
+                    .attach("managed listeners require exact numeric socket addresses")),
+            };
+            iroha_deploy::managed::adopt_runtime_listeners(
+                directory,
+                numeric(config.network.address.value())?,
+                numeric(config.torii.address.value())?,
+                deadline,
+            )
+            .map(Some)
+            .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))
+        }
+        _ => Err(Report::new(MainError::Config)
+            .attach("managed listener endpoint and deadline must be supplied together")),
+    }
 }
 
 /// Spawn the logger on the node's runtime without entering the later provider boundary.
@@ -10993,6 +11049,59 @@ mod tests {
         #[allow(unused_imports)]
         use super::*;
         #[test]
+        fn managed_listener_arguments_require_the_original_pair() {
+            for args in [
+                vec!["iroha3d", "--managed-listeners", "/private/listeners"],
+                vec!["iroha3d", "--managed-listener-deadline-ns", "42"],
+            ] {
+                assert_eq!(
+                    Args::try_parse_from(args).unwrap_err().kind(),
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                );
+            }
+            let args = Args::try_parse_from([
+                "iroha3d",
+                "--managed-listeners",
+                "/private/listeners",
+                "--managed-listener-deadline-ns",
+                "42",
+            ])
+            .unwrap();
+            assert_eq!(
+                args.startup.managed_listeners,
+                Some(PathBuf::from("/private/listeners"))
+            );
+            assert_eq!(args.startup.managed_listener_deadline_ns, Some(42));
+            assert!(
+                Args::try_parse_from([
+                    "iroha3d",
+                    "--managed-listeners",
+                    "/private/listeners",
+                    "--managed-listener-deadline-ns",
+                    "42",
+                    "--check-config",
+                ])
+                .is_err()
+            );
+        }
+
+        #[test]
+        fn managed_listener_adoption_preserves_manual_launch_and_rejects_unpaired_inputs() {
+            let config = Config::from_toml_source(TomlSource::inline(
+                crate::config_tests::minimal_config_table(),
+            ))
+            .unwrap();
+            let mut args = Args::try_parse_from(["iroha3d"]).unwrap();
+            assert!(
+                adopt_managed_listeners(&args.startup, &config)
+                    .unwrap()
+                    .is_none()
+            );
+            args.startup.managed_listeners = Some(PathBuf::from("/private/listeners"));
+            assert!(adopt_managed_listeners(&args.startup, &config).is_err());
+        }
+
+        #[test]
         fn inrou_deployment_authority_requires_offline_check_config() {
             let flag = "--require-genesis-inrou-deployment-authority";
             let error = Args::try_parse_from(["iroha3d", flag, "public-account"])
@@ -12295,6 +12404,8 @@ mod tests {
                     trace_config: false,
                     config_blake3: None,
                     sumeragi_assert_fresh_key: false,
+                    managed_listeners: None,
+                    managed_listener_deadline_ns: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -12331,8 +12442,6 @@ mod tests {
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
-                #[cfg(feature = "telemetry")]
-                StateTelemetry::default(),
             );
             assert!(
                 state
@@ -12364,6 +12473,8 @@ mod tests {
                     trace_config: false,
                     config_blake3: None,
                     sumeragi_assert_fresh_key: false,
+                    managed_listeners: None,
+                    managed_listener_deadline_ns: None,
                 },
                 terminal_colors: false,
                 language: None,

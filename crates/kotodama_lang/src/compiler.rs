@@ -54,10 +54,13 @@ use crate::{
         encode_literal_descriptor,
     },
     pointer_abi::PointerType,
+    pointer_literals::{self, decode_hex_or_raw_bytes},
+    semantic::trigger_literals::{
+        DECODE_FAILURE_REASON as HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE,
+        id_from_json as trigger_id_from_json,
+    },
     syscalls,
 };
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexSet;
 use iroha_crypto as _; // for Hash types in new APIs
 use iroha_data_model::{
@@ -79,7 +82,7 @@ use iroha_data_model::{
         AccessSetHints, DynamicAccessHint, EntryPointKind, EntrypointParamDescriptor,
         StateDescriptor, TriggerCallback, TriggerDescriptor,
     },
-    trigger::{Trigger, TriggerId},
+    trigger::TriggerId,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{name::Name, state_path::StatePath};
@@ -129,8 +132,6 @@ fn multiply_defined_temps(program: &ir::Program) -> HashSet<(usize, ir::Temp)> {
     }
     multiple
 }
-const HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE: &str =
-    "literal create_trigger spec could not be decoded for access metadata";
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
@@ -1502,25 +1503,6 @@ fn quantity_literal_data_key(
         )),
     }
 }
-fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
-    if let Some(trimmed) = raw.strip_prefix("0x") {
-        if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-            let mut out = Vec::with_capacity(trimmed.len() / 2);
-            for chunk in trimmed.as_bytes().chunks(2) {
-                let byte_str = std::str::from_utf8(chunk)
-                    .map_err(|e| format!("invalid hex literal `{raw}`: {e}"))?;
-                let byte = u8::from_str_radix(byte_str, 16)
-                    .map_err(|e| format!("invalid hex literal `{raw}`: {e}"))?;
-                out.push(byte);
-            }
-            return Ok(out);
-        }
-        return Err(format!(
-            "invalid hex literal `{raw}`: expected even-length hex digits"
-        ));
-    }
-    Ok(raw.as_bytes().to_vec())
-}
 fn state_path_literal_data_key(
     func_idx: usize,
     path: ir::Temp,
@@ -1655,20 +1637,14 @@ fn encode_pointer_tlv_bytes(
             }
         }
         DRK::AxtDescriptor => {
-            let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let value: crate::axt::AxtDescriptor =
-                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
-            crate::axt::validate_descriptor(&value).ok()?;
+            let value = pointer_literals::axt_descriptor(raw).ok()?;
             (
                 PointerType::AxtDescriptor,
                 ivm_abi::codec::encode_canonical_norito(&value).ok()?,
             )
         }
         DRK::AxtAnchoredSpendV1 => {
-            let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let value: iroha_data_model::nexus::AxtAnchoredSpendV1 =
-                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
-            value.issuer_payload_v1().ok()?;
+            let value = pointer_literals::axt_anchored_spend(raw).ok()?;
             (
                 PointerType::AxtAnchoredSpendV1,
                 ivm_abi::codec::encode_canonical_norito(&value).ok()?,
@@ -5496,15 +5472,14 @@ impl Compiler {
                                     Err(i18n::translate(self.lang, Message::SemanticError(&err)))
                                 };
                             let eid = require_literal("election_id", election_id)?;
-                            if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid)
-                            {
-                                let err = "build_submit_ballot_inline election_id must be 1-128 RFC 3986 unreserved ASCII characters and must not start with a dot"
-                                    .to_owned();
-                                return Err(i18n::translate(
-                                    self.lang,
-                                    Message::SemanticError(&err),
-                                ));
-                            }
+                            crate::semantic::ballot_literals::election_id(&eid).map_err(
+                                |error| {
+                                    i18n::translate(
+                                        self.lang,
+                                        Message::SemanticError(&error.message),
+                                    )
+                                },
+                            )?;
                             let backend_str = require_literal("backend", backend)?;
                             let ct_literal = require_literal("ciphertext", ciphertext)?;
                             let ct_bytes = decode_hex_or_raw_bytes(&ct_literal).map_err(|e| {
@@ -5518,16 +5493,13 @@ impl Compiler {
                                     format!("build_submit_ballot_inline nullifier literal {e}");
                                 i18n::translate(self.lang, Message::SemanticError(&err))
                             })?;
-                            if nf_bytes.len() != 32 {
-                                let err = "build_submit_ballot_inline nullifier must be 32 bytes"
-                                    .to_string();
-                                return Err(i18n::translate(
-                                    self.lang,
-                                    Message::SemanticError(&err),
-                                ));
-                            }
-                            let mut null32 = [0u8; 32];
-                            null32.copy_from_slice(&nf_bytes);
+                            let null32 = crate::semantic::ballot_literals::nullifier(&nf_bytes)
+                                .map_err(|error| {
+                                    i18n::translate(
+                                        self.lang,
+                                        Message::SemanticError(&error.message),
+                                    )
+                                })?;
                             let proof_literal = require_literal("proof", proof)?;
                             let proof_bytes =
                                 decode_hex_or_raw_bytes(&proof_literal).map_err(|e| {
@@ -8678,21 +8650,8 @@ impl Compiler {
                     }
                 }
                 DataKey(DataKind::AxtDescriptor, s) => {
-                    let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
-                        let err = format!("invalid AxtDescriptor literal `{s}`: {e}");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
-                    let value: crate::axt::AxtDescriptor =
-                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
-                            let err =
-                                format!("invalid AxtDescriptor literal `{s}`: cannot decode ({e})");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?;
-                    crate::axt::validate_descriptor(&value).map_err(|e| {
-                        let err = format!(
-                            "invalid AxtDescriptor literal `{s}`: invalid descriptor ({e})"
-                        );
-                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    let value = pointer_literals::axt_descriptor(s).map_err(|error| {
+                        i18n::translate(self.lang, Message::SemanticError(&error))
                     })?;
                     (
                         PointerType::AxtDescriptor as u16,
@@ -8705,22 +8664,8 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::AxtAnchoredSpendV1, s) => {
-                    let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
-                        let err = format!("invalid AxtAnchoredSpendV1 literal `{s}`: {e}");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
-                    let value: iroha_data_model::nexus::AxtAnchoredSpendV1 =
-                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
-                            let err = format!(
-                                "invalid AxtAnchoredSpendV1 literal `{s}`: cannot decode ({e})"
-                            );
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?;
-                    value.issuer_payload_v1().map_err(|e| {
-                        let err = format!(
-                            "invalid AxtAnchoredSpendV1 literal `{s}`: inconsistent signed binding ({e})"
-                        );
-                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    let value = pointer_literals::axt_anchored_spend(s).map_err(|error| {
+                        i18n::translate(self.lang, Message::SemanticError(&error))
                     })?;
                     (
                         PointerType::AxtAnchoredSpendV1 as u16,
@@ -9020,12 +8965,13 @@ impl Compiler {
         let ssa = self.construct_ssa_program(lowered)?;
         let optimized = self.optimize_ssa_program(ssa)?;
         let codegen = self.destroy_ssa_program(optimized)?;
-        // Typed-identifier literals are rejected during semantic analysis, so
-        // codegen failures carry no fabricated source position.
-        // TODO: move the source-level checks that still run in `compile_codegen`
-        // (literal-only arguments such as `build_submit_ballot_inline` and
-        // pointer constructors, `E_ACCESS_INCOMPLETE`) into semantic analysis;
-        // K3099 can then be worded as a compiler defect only.
+        // Direct and declared-constant identifier, ballot, and AXT payload literals are
+        // validated during semantic analysis, as are direct trigger-registration JSON literals
+        // and pointer constructors and inline ballots fed directly by external parameters.
+        // Remaining codegen failures carry no fabricated span.
+        // TODO: move remaining literal-only requirements and validation after local/private-call
+        // specialization (including trigger specifications), and other access-completeness checks
+        // into the shared frontend; K3099 can then describe compiler defects only.
         let artifacts = self.compile_codegen(codegen).map_err(|message| {
             let unit = source_name.map_or_else(String::new, |name| format!(" for `{name}`"));
             DiagnosticBundle::single(Diagnostic::error(
@@ -10761,13 +10707,11 @@ fn submit_ballot_inline_instruction_literal(
     };
     let literal = |temp| string_map.get(&(func_idx, temp)).cloned();
     let eid = literal(election_id)?;
-    if !iroha_data_model::governance::is_valid_governance_selector_v1(&eid) {
-        return None;
-    }
+    crate::semantic::ballot_literals::election_id(&eid).ok()?;
     let backend_str = literal(backend)?;
     let ct_bytes = decode_hex_or_raw_bytes(&literal(ciphertext)?).ok()?;
     let nf_bytes = decode_hex_or_raw_bytes(&literal(nullifier)?).ok()?;
-    let null32: [u8; 32] = nf_bytes.try_into().ok()?;
+    let null32 = crate::semantic::ballot_literals::nullifier(&nf_bytes).ok()?;
     let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
     let vk_ref = literal(vk)?;
     let ballot_proof = ProofAttachment::new_ref(
@@ -11347,21 +11291,6 @@ fn permission_name_from_json(raw: &str) -> Option<String> {
     let map = value.as_object()?;
     let kind = map.get("type").and_then(norito::json::Value::as_str)?;
     Some(permission_name_from_literal(kind))
-}
-fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
-    let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
-    match value {
-        json::Value::String(encoded) => {
-            let bytes = STANDARD.decode(encoded.as_bytes()).ok()?;
-            let trigger: Trigger = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
-            Some(trigger.id().clone())
-        }
-        json::Value::Object(map) => {
-            let id = map.get("id")?.as_str()?;
-            id.parse().ok()
-        }
-        _ => None,
-    }
 }
 fn key_account(id: &AccountId) -> String {
     format!("account:{id}")

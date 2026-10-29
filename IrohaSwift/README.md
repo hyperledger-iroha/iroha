@@ -2622,6 +2622,12 @@ closed `GovernanceZkBallotPublicInputs` model as REST, including typed `UInt64`
 durations and exact ballot directions. Arbitrary `NoritoJSON` public-input
 objects are intentionally not accepted.
 
+SCCP governance reads and `ToriiParliamentProposalV1` draft inputs validate all
+18 action bodies, their exact ordered base subjects, deployment destinations,
+amounts, light-client settings and parameter bounds. The public draft parser also
+rejects duplicate JSON keys and noncanonical integer tokens. Live network identity,
+authorization, bootstrap authentication and committed state remain node checks.
+
 The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 `sdk.submitGovernancePlainBallot(...)`, `sdk.getGovernanceProposal(idHex:)`). Unlock statistics (`/v1/gov/locks/stats`) accept optional `height` and `referendum_id` filters.
 

@@ -117,6 +117,10 @@ fn borrowed_numeric_physical_refusal_is_exact_typed_and_same_source_retries() {
 
 #[test]
 fn borrowed_numeric_moves_original_mantissa_once_and_refunds_after_physical_retirement() {
+    struct Closed {
+        value: Numeric,
+        charge: iroha_allocation::AllocationCharge,
+    }
     let source = "-123456789012345678901234567890.125";
     let expected: Numeric = source.parse().unwrap();
     let bytes = expected.admission_clone_layout().unwrap().size();
@@ -126,10 +130,6 @@ fn borrowed_numeric_moves_original_mantissa_once_and_refunds_after_physical_reti
     assert_eq!(REQUESTS.with(Cell::get), 1);
     assert_ne!(ORIGINAL.with(Cell::get), 0);
     assert_eq!(RETIREMENTS.with(Cell::get), 0);
-    struct Closed {
-        value: Numeric,
-        charge: iroha_allocation::AllocationCharge,
-    }
     // SAFETY: immediate transfer into an immutable value-first closed owner.
     let (value, charge) = unsafe { owner.into_allocation_parts() };
     let moved = Closed { value, charge };

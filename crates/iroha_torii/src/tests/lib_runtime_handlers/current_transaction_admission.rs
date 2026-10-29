@@ -121,8 +121,10 @@ async fn current_http_admission_rejects_actual_multiroute_before_local_custody()
         [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
         [],
     );
-    let app =
-        mk_app_state_for_tests_with_world_and_nexus(world, multiple_dataspace_nexus_for_test());
+    let app = native_ingress_app_with_world_and_nexus_for_test(
+        world,
+        multiple_dataspace_nexus_for_test(),
+    );
     for domain in &domains {
         bind_domain_name_for_test(&app, &domain.to_string());
     }

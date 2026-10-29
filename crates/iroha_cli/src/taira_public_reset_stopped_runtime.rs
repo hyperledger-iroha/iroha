@@ -937,12 +937,15 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     #[test]
-    fn stopped_cgroup_custody_rejects_an_ordinary_root_owned_filesystem() {
-        let error = stopped_cgroup_custody(Path::new("/usr")).unwrap_err();
+    fn stopped_cgroup_custody_rejects_an_ordinary_root_owned_filesystem() -> Result<()> {
+        let directory = Path::new("/usr");
+        require_root_directory(directory, false, "ordinary root-owned directory")?;
+        let error = stopped_cgroup_custody(directory).unwrap_err();
         assert_eq!(
             error.to_string(),
             "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
         );
+        Ok(())
     }
 
     fn custody(path: &Path) -> Result<()> {

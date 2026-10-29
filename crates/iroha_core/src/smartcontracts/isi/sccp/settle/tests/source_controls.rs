@@ -46,6 +46,7 @@ fn source_control_prefix_refusal_keeps_proof_and_both_credits_then_retries() {
         (3 * ONE_XOR / 2, SccpPendingReasonV1::FeeSinkUnavailable),
     ] {
         let state = state();
+        set_original_fee_sink(&state, &authority(72));
         let mut block = state.block(header(5));
         let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-source-control-prefix"));
         install(&mut tx);

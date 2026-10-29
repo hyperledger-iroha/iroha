@@ -118,7 +118,7 @@ def fixture(harness, temporary):
         root = WORK / "snapshot" / prefix
         source_deps.append({"module": name, "root": str(root), "loaded_modules": [{"name": name, "path": str(root / suffix), **a.identity(sources[prefix + "/" + suffix]), "loader": "SourceFileLoader"}]})
     report = {"schema": "sorafs.python.reference_child_report.v1", "input_sha256": a.identity(input_raw)["sha256"], "source_files": source_rows,
-        "python": {**child_input["python"], "version": "3.12.14"}, "pytest": {"path": str(ENV / a.SITE / "pytest/__init__.py"), **a.identity(environment[a.SITE + "pytest/__init__.py"]), "version": "9.0.3"},
+        "python": {**child_input["python"], "version": "3.12.14"}, "pytest": {"path": str(ENV / a.SITE / "pytest/__init__.py"), **a.identity(environment[a.SITE + "pytest/__init__.py"]), "version": "9.2.0"},
         "wheels": observations, "dependencies": source_deps, "cases": [{"nodeid": name, "phases": [{"phase": phase, "outcome": "passed"} for phase in ("setup", "call", "teardown")]} for name in expected_node_ids(sources[TEST_PATH])], "captured_output": {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest()}}
     native_body = a.native_member(originals["iroha_native.whl"], parsed_wheels[0])
     native_raw = a.native.canonical_manifest_bytes({"schema": a.native.SCHEMA, "sdk": "python", "target": "aarch64-apple-darwin", "artifact_sha256": a.identity(native_body)["sha256"], "artifact_size": len(native_body), "bridge_abi_version": 33,

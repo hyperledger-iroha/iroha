@@ -217,7 +217,6 @@ concread = { path = "vendor/concread" }
 num-bigint = { path = "vendor/num-bigint-0.5.1" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
 cust_raw = { path = "vendor/cust_raw" }
-wayland-scanner = { path = "vendor/wayland-scanner-0.31.10" }
 # Hardware AES is a positive `hardware` feature; `aes::soft` always names the portable backend.
 aes = { path = "vendor/aes" }
 # Maintained macro implementation for upstream stacks still requesting paste.
@@ -226,8 +225,8 @@ ark-bls12-381 = { path = "vendor/ark-bls12-381-0.5.0" }
 halo2curves = { path = "vendor/halo2curves-0.10.0" }
 metal = { path = "vendor/metal-0.33.0" }
 # Native accessibility uses the maintained zbus 6 wire stack.
-accesskit_unix = { path = "vendor/accesskit_unix-0.24.0" }
-accesskit_atspi_common = { path = "vendor/accesskit_atspi_common-0.21.0" }
+accesskit_unix = { path = "vendor/accesskit_unix-0.24.1" }
+accesskit_atspi_common = { path = "vendor/accesskit_atspi_common-0.21.1" }
 atspi-common = { path = "vendor/atspi-common-0.14.0" }
 atspi-proxies = { path = "vendor/atspi-proxies-0.14.0" }
 zbus-lockstep = { path = "vendor/zbus-lockstep-0.7.0" }

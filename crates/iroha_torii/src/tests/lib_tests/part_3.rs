@@ -3084,7 +3084,7 @@ async fn proof_record_fanout_requests_the_binary_format_required_by_its_decoder(
 #[tokio::test]
 async fn proof_record_get_advertises_cache_and_304() {
     let app = mk_native_app_state_for_tests();
-    let id = seed_proof_record(&app, "debug-proof", [0xAB; 32]);
+    let id = seed_proof_record_after_native_genesis_for_test(&app, "debug-proof", [0xAB; 32]);
     let first = handler_proof_record_get(
         State(app.clone()),
         HeaderMap::new(),
@@ -3399,7 +3399,7 @@ async fn proof_retention_status_reports_the_committed_retention_policy() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn axt_proof_cache_debug_reports_snapshot() {
-    let mut app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let dsid = DataSpaceId::new(9);
     let manifest_root = [0xAA; 32];
     let policy_entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
@@ -3414,8 +3414,7 @@ async fn axt_proof_cache_debug_reports_snapshot() {
     }];
     let policy_version = AxtPolicySnapshot::compute_version(&policy_entries);
     {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
+        let state = &app.state;
         state
             .telemetry
             .set_axt_proof_cache_state(dsid, "miss", manifest_root, 5, Some(10));
@@ -3542,7 +3541,7 @@ fn axt_reject_query_response_carries_headers() {
 #[tokio::test]
 async fn proof_get_egress_throttled_returns_retry_after() {
     let mut app = mk_native_app_state_for_tests();
-    let _ = seed_proof_record(&app, "debug-proof", [0xBB; 32]);
+    let _ = seed_proof_record_after_native_genesis_for_test(&app, "debug-proof", [0xBB; 32]);
     {
         let state = Arc::get_mut(&mut app).expect("unique app");
         state.proof_limits.retry_after = std::time::Duration::from_secs(2);

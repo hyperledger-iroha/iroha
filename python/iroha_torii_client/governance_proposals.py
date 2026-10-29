@@ -20,6 +20,54 @@ _BECH32M_CONST = 0x2BC830A3
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _KEBAB = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
 _SCCP_GOVERNANCE_MAX_ACTIONS = 16
+# Rust enum declaration order fixes the canonical subject-revision list.
+_SCCP_SUBJECTS = (
+    "route",
+    "route_control",
+    "light_client",
+    "parameters",
+    "forgery_hold",
+    "fast_hold",
+    "fast_pause_control",
+)
+_SCCP_NETWORKS = ("ethereum_mainnet", "bsc_mainnet", "ton_mainnet")
+_SCCP_ACTIONS = {
+    "register_route": (
+        "route",
+        ("revision", "deployment", "initial_committee", "max_wrapped_supply"),
+    ),
+    "activate_revision": ("route", ("revision",)),
+    "switch_revision": ("route", ("from", "to")),
+    "deactivate_outbound": ("route", ("revision",)),
+    "retire_revision": ("route", ("revision",)),
+    "remove_staged": ("route", ("revision",)),
+    "release_stranded": ("route", ("amount", "recipient", "memo")),
+    "set_taira_paused": ("route", ("paused",)),
+    "set_destination_paused": ("route_control", ("revision", "paused")),
+    "initialize_light_client": ("light_client", ("expected", "params", "bootstrap")),
+    "install_trusted_checkpoint": ("light_client", ("checkpoint",)),
+    "freeze_light_client": ("light_client", ()),
+    "set_parameters": ("parameters", ("next",)),
+    "activate_light_client_profile": ("light_client", ("version", "profile_hash")),
+    "attest_deployment_progress": ("forgery_hold", ("revision", "at")),
+    "quarantine_revision": ("forgery_hold", ("revision",)),
+    "open_reconciliation": ("forgery_hold", ("revision", "window_ms")),
+    "set_fast_pause_suspended": ("fast_pause_control", ("duration_ms",)),
+}
+_SCCP_PARAMETER_BOUNDS = {
+    "committee_validity_ms": (0, 2_592_000_000),
+    "committee_heartbeat_ms": (3_600_000, _JSON_SAFE_UINT_MAX),
+    "forgery_evidence_grace_ms": (86_400_000, 2_592_000_000),
+    "destination_progress_cap_ms": (0, 2_592_000_000),
+    "outbound_ttl_ms": (86_400_000, 7_776_000_000),
+    "max_exempt_transactions_per_block": (8, 1024),
+    "fast_pause_panel_seats": (5, 9),
+    "fast_pause_panel_term_ms": (3_600_000, _JSON_SAFE_UINT_MAX),
+    "fast_pause_seat_accept_window_ms": (600_000, _JSON_SAFE_UINT_MAX),
+    "fast_pause_endorse_window_ms": (300_000, 21_600_000),
+    "fast_pause_renew_lead_ms": (0, _JSON_SAFE_UINT_MAX),
+    "fast_pause_hold_ms": (0, 2_505_600_000),
+}
 
 
 def _exact(value: Any, fields: frozenset[str], context: str) -> Mapping[str, Any]:
@@ -345,20 +393,302 @@ class GovernanceProposalRuntimeUpgrade:
         return cls(GovernanceRuntimeUpgradeManifest.from_payload(record["manifest"]))
 
 
+def _sccp_network(value: Any, context: str) -> str:
+    record = _exact(value, frozenset({"network", "profile"}), context)
+    if record["network"] not in _SCCP_NETWORKS or record["profile"] is not None:
+        raise TypeError(f"{context} must name an external SCCP network with null profile")
+    return cast(str, record["network"])
+
+
+def _sccp_subject(value: Any, context: str) -> tuple[int, int]:
+    record = _exact(value, frozenset({"subject", "key"}), context)
+    tag = record["subject"]
+    if tag not in _SCCP_SUBJECTS:
+        raise TypeError(f"{context}.subject is unknown")
+    if tag == "parameters":
+        if record["key"] is not None:
+            raise TypeError(f"{context}.key must be null")
+        return (_SCCP_SUBJECTS.index(tag), 0)
+    name = _sccp_network(record["key"], f"{context}.key")
+    return (_SCCP_SUBJECTS.index(tag), _SCCP_NETWORKS.index(name) + 1)
+
+
+def _sccp_amount(value: Any, context: str, minimum: int, maximum: int) -> None:
+    # Bound the decimal before conversion, including Python's unbounded integers.
+    if (
+        not isinstance(value, str)
+        or len(value) > len(str(maximum))
+        or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None
+        or not minimum <= int(value) <= maximum
+    ):
+        raise TypeError(f"{context} must be a canonical decimal string in {minimum}..{maximum}")
+
+
+def _sccp_parameters(value: Any, context: str) -> None:
+    record = _exact(
+        value,
+        frozenset(
+            {
+                "enabled",
+                *_SCCP_PARAMETER_BOUNDS,
+                "min_outbound_amount",
+                "inbound_self_claim_fee",
+            }
+        ),
+        context,
+    )
+    if not isinstance(record["enabled"], bool):
+        raise TypeError(f"{context}.enabled must be a boolean")
+    for field, (minimum, maximum) in _SCCP_PARAMETER_BOUNDS.items():
+        integer = _uint(record[field], f"{context}.{field}", maximum)
+        if integer < minimum:
+            raise TypeError(f"{context}.{field} must be at least {minimum}")
+    _sccp_amount(record["min_outbound_amount"], f"{context}.min_outbound_amount", 1, 10**15)
+    _sccp_amount(record["inbound_self_claim_fee"], f"{context}.inbound_self_claim_fee", 0, 10**10)
+    if record["fast_pause_panel_seats"] not in (5, 7, 9):
+        raise TypeError(f"{context}.fast_pause_panel_seats must be 5, 7 or 9")
+    # Python integer arithmetic preserves every joint bound exactly.
+    floor = record["fast_pause_hold_ms"] + 2 * record["committee_heartbeat_ms"] + 86_400_000
+    if record["committee_validity_ms"] < floor:
+        raise TypeError(
+            f"{context}.committee_validity_ms is below the hold, heartbeat and pin margin"
+        )
+    if 2 * record["fast_pause_seat_accept_window_ms"] > record["fast_pause_panel_term_ms"]:
+        raise TypeError(f"{context}.fast_pause_seat_accept_window_ms exceeds half the panel term")
+    lead = record["fast_pause_renew_lead_ms"]
+    if lead < 2 * record["fast_pause_endorse_window_ms"] or 2 * lead > record["fast_pause_hold_ms"]:
+        raise TypeError(
+            f"{context}.fast_pause_renew_lead_ms must span two endorsement windows and fit half the hold"
+        )
+    # Committed staking delay and Parliament attempt latency are checked at enactment.
+
+
+def _sccp_deployment(value: Any, name: str, context: str) -> tuple[int, ...]:
+    """Validate a deployment and return its canonical 32-byte destination word."""
+    record = _exact(value, frozenset({"family", "deployment"}), context)
+    label = f"{context}.deployment"
+    if record["family"] == "evm" and name != "ton_mainnet":
+        deployed = _exact(record["deployment"], frozenset({"address", "runtime_code_hash"}), label)
+        address = deployed["address"]
+        if not isinstance(address, list) or len(address) != 20:
+            raise TypeError(f"{label}.address must be an exact 20-byte JSON array")
+        word = _bytes32([0] * 12 + address, f"{label}.address", nonzero=True)
+        _bytes32(deployed["runtime_code_hash"], f"{label}.runtime_code_hash")
+        return word
+    if record["family"] == "ton" and name == "ton_mainnet":
+        deployed = _exact(
+            record["deployment"],
+            frozenset(
+                {
+                    "master_account",
+                    "minter_code",
+                    "wallet_code",
+                    "bucket_code",
+                }
+            ),
+            label,
+        )
+        word = _bytes32(deployed["master_account"], f"{label}.master_account", nonzero=True)
+        for field in ("minter_code", "wallet_code", "bucket_code"):
+            code = _exact(deployed[field], frozenset({"hash", "depth"}), f"{label}.{field}")
+            _bytes32(code["hash"], f"{label}.{field}.hash")
+            _uint(code["depth"], f"{label}.{field}.depth", 0xFFFF)
+        return word
+    raise TypeError(f"{context}.family must match the external network")
+
+
+def _sccp_committee_pin(value: Any, context: str) -> None:
+    pin = _exact(
+        value, frozenset({"generation", "committee_root", "start_height", "until_ms"}), context
+    )
+    for field in ("generation", "start_height", "until_ms"):
+        _proposal_exact_json_uint(pin[field], f"{context}.{field}", positive=True)
+    _bytes32(pin["committee_root"], f"{context}.committee_root", nonzero=True)
+
+
+def _sccp_light_client(value: Any, name: str, context: str) -> None:
+    json_fields = (
+        "ws_bound_ms",
+        "set_retention_ms",
+        "checkpoint_stride",
+        "checkpoint_prune_after_ms",
+    )
+    u32_fields = (
+        "max_updates_per_advance",
+        "max_segment_headers",
+        "max_ancestry_headers",
+        "max_backfill_headers",
+        "max_advance_bytes",
+        "max_proof_bytes",
+    )
+    params = _exact(value, frozenset({"network", *json_fields, *u32_fields}), context)
+    if _sccp_network(params["network"], f"{context}.network") != name:
+        raise TypeError(f"{context}.network must match the action network")
+    for field in json_fields:
+        derived = name == "ton_mainnet" and field in ("ws_bound_ms", "checkpoint_stride")
+        integer = _proposal_exact_json_uint(
+            params[field], f"{context}.{field}", positive=not derived
+        )
+        if derived and integer != 0:
+            raise TypeError(f"{context}.{field} must be zero for TON")
+    for field in u32_fields:
+        _uint(params[field], f"{context}.{field}", 0xFFFF_FFFF, positive=True)
+
+
+def _sccp_bootstrap(value: Any, name: str, context: str) -> None:
+    record = _exact(value, frozenset({"network", "bytes"}), context)
+    if _sccp_network(record["network"], f"{context}.network") != name:
+        raise TypeError(f"{context}.network must match the action network")
+    maximum = 1_048_576
+    encoded = record["bytes"]
+    if not isinstance(encoded, str) or not 1 <= len(encoded) <= 4 * ((maximum + 2) // 3):
+        raise TypeError(f"{context}.bytes must encode 1..{maximum} bytes")
+    _canonical_base64(encoded, f"{context}.bytes")
+    length = len(encoded) // 4 * 3 - (
+        2 if encoded.endswith("==") else 1 if encoded.endswith("=") else 0
+    )
+    if length > maximum:
+        raise TypeError(f"{context}.bytes exceeds {maximum} bytes")
+    # Per-chain native decoding and authentication remain node-owned.
+
+
+def _sccp_checkpoint(value: Any, context: str) -> None:
+    checkpoint = _exact(
+        value,
+        frozenset(
+            {
+                "source_height",
+                "block_hash",
+                "state_root",
+                "receipts_or_tx_root",
+                "source_time_ms",
+            }
+        ),
+        context,
+    )
+    for field in ("source_height", "source_time_ms"):
+        _proposal_exact_json_uint(checkpoint[field], f"{context}.{field}")
+    for field in ("block_hash", "receipts_or_tx_root"):
+        _bytes32(checkpoint[field], f"{context}.{field}")
+    if checkpoint["state_root"] is not None:
+        _bytes32(checkpoint["state_root"], f"{context}.state_root")
+
+
+def _sccp_progress(value: Any, context: str) -> None:
+    progress = _exact(value, frozenset({"at", "detail"}), context)
+    if progress["at"] == "frozen":
+        if progress["detail"] is not None:
+            raise TypeError(f"{context}.detail must be null")
+    elif progress["at"] == "generation":
+        detail = _exact(
+            progress["detail"], frozenset({"generation", "committee_root"}), f"{context}.detail"
+        )
+        _proposal_exact_json_uint(
+            detail["generation"], f"{context}.detail.generation", positive=True
+        )
+        _bytes32(detail["committee_root"], f"{context}.detail.committee_root", nonzero=True)
+    else:
+        raise TypeError(f"{context}.at must be frozen or generation")
+
+
+def _sccp_action(
+    value: Any,
+    context: str,
+    destinations: set[tuple[int, ...]],
+) -> tuple[int, int]:
+    """Validate an exact action body and return its ordered subject key."""
+    entry = _exact(value, frozenset({"action", "payload"}), context)
+    action = entry["action"]
+    if not isinstance(action, str) or action not in _SCCP_ACTIONS:
+        raise TypeError(f"{context}.action is unknown")
+    tag, fields = _SCCP_ACTIONS[action]
+    context = f"{context}.payload"
+    record = _exact(
+        entry["payload"],
+        frozenset(fields if tag == "parameters" else ("network", *fields)),
+        context,
+    )
+    name = None if tag == "parameters" else _sccp_network(record["network"], f"{context}.network")
+    if "revision" in record:
+        _uint(record["revision"], f"{context}.revision", 0xFFFF_FFFF, positive=True)
+    if action == "register_route":
+        word = _sccp_deployment(record["deployment"], cast(str, name), f"{context}.deployment")
+        _sccp_committee_pin(record["initial_committee"], f"{context}.initial_committee")
+        _sccp_amount(
+            record["max_wrapped_supply"],
+            f"{context}.max_wrapped_supply",
+            1,
+            (1 << (96 if name == "ton_mainnet" else 128)) - 1,
+        )
+        if word in destinations:
+            raise TypeError(f"{context}.deployment repeats a registered destination word")
+        destinations.add(word)
+    elif action == "release_stranded":
+        _sccp_amount(record["amount"], f"{context}.amount", 1, (1 << 128) - 1)
+        memo = record["memo"]
+        if not isinstance(memo, str) or len(memo) > 256:
+            raise TypeError(f"{context}.memo must be a string of at most 256 UTF-8 bytes")
+        try:
+            encoded = memo.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise TypeError(f"{context}.memo must contain valid Unicode scalar values") from exc
+        if len(encoded) > 256:
+            raise TypeError(f"{context}.memo exceeds 256 UTF-8 bytes")
+        _account_id(record["recipient"], f"{context}.recipient")
+    elif action == "initialize_light_client":
+        expected = _exact(
+            record["expected"], frozenset({"expected", "detail"}), f"{context}.expected"
+        )
+        if expected["expected"] not in ("absent", "unusable") or expected["detail"] is not None:
+            raise TypeError(f"{context}.expected must name absent or unusable with null detail")
+        _sccp_light_client(record["params"], cast(str, name), f"{context}.params")
+        _sccp_bootstrap(record["bootstrap"], cast(str, name), f"{context}.bootstrap")
+    elif action == "set_parameters":
+        _sccp_parameters(record["next"], f"{context}.next")
+    elif action == "switch_revision":
+        for field in ("from", "to"):
+            _uint(record[field], f"{context}.{field}", 0xFFFF_FFFF, positive=True)
+        if record["from"] == record["to"]:
+            raise TypeError(f"{context}.from and .to must name distinct revisions")
+    elif action in ("set_taira_paused", "set_destination_paused"):
+        if not isinstance(record["paused"], bool):
+            raise TypeError(f"{context}.paused must be a boolean")
+    elif action == "activate_light_client_profile":
+        version = _uint(record["version"], f"{context}.version", 0xFFFF_FFFF, positive=True)
+        if version < 2:
+            raise TypeError(
+                f"{context}.version must be at least 2; version 1 is active from genesis"
+            )
+        _bytes32(record["profile_hash"], f"{context}.profile_hash", nonzero=True)
+    elif action == "install_trusted_checkpoint":
+        if name == "ton_mainnet":
+            raise TypeError(
+                f"{context}.network cannot be TON; its light client reads no checkpoints"
+            )
+        _sccp_checkpoint(record["checkpoint"], f"{context}.checkpoint")
+    elif action == "attest_deployment_progress":
+        _sccp_progress(record["at"], f"{context}.at")
+    elif action == "open_reconciliation":
+        _proposal_exact_json_uint(record["window_ms"], f"{context}.window_ms", positive=True)
+    elif action == "set_fast_pause_suspended":
+        _uint(record["duration_ms"], f"{context}.duration_ms", 7_776_000_000)
+    return (_SCCP_SUBJECTS.index(tag), 0 if name is None else _SCCP_NETWORKS.index(name) + 1)
+
+
 @dataclass(frozen=True)
 class GovernanceProposalSccpRouteGovernance:
     """Canonical `SccpRouteGovernanceProposal` payload.
 
     `proposal` is the exact `SccpGovernanceProposalV1` object (`network_id`,
-    `base_revisions`, `actions`), frozen after its top-level shape is checked.
+    `base_revisions`, `actions`), frozen after every action's static rules and
+    exact ordered subject-revision set are checked. Live network identity,
+    authorization, bootstrap authentication and committed state remain node checks.
     """
 
     proposal: GovernanceCanonicalObject
 
     @classmethod
     def from_payload(cls, value: Any) -> "GovernanceProposalSccpRouteGovernance":
-        # TODO: decode SccpGovernanceProposalV1 base revisions and actions into typed
-        # records (specs/sccp.md §4.14.3); they are kept as canonical objects for now.
         context = "SccpRouteGovernance payload"
         payload = _exact(value, frozenset({"proposal"}), context)
         proposal = _exact(
@@ -367,13 +697,30 @@ class GovernanceProposalSccpRouteGovernance:
             f"{context}.proposal",
         )
         _network_id(proposal["network_id"], f"{context}.proposal.network_id")
-        if not isinstance(proposal["base_revisions"], list):
-            raise TypeError(f"{context}.proposal.base_revisions must be an array")
+        bases = proposal["base_revisions"]
+        bases_context = f"{context}.proposal.base_revisions"
+        if not isinstance(bases, list) or not 1 <= len(bases) <= _SCCP_GOVERNANCE_MAX_ACTIONS:
+            raise TypeError(f"{bases_context} must be an array of 1..16 entries")
+        actual_subjects = []
+        for index, base in enumerate(bases):
+            label = f"{bases_context}[{index}]"
+            entry = _exact(base, frozenset({"subject", "revision"}), label)
+            actual_subjects.append(_sccp_subject(entry["subject"], f"{label}.subject"))
+            _proposal_exact_json_uint(entry["revision"], f"{label}.revision")
         actions = proposal["actions"]
         if not isinstance(actions, list) or not 1 <= len(actions) <= _SCCP_GOVERNANCE_MAX_ACTIONS:
             raise TypeError(
                 f"{context}.proposal.actions must be an array of "
                 f"1..{_SCCP_GOVERNANCE_MAX_ACTIONS} actions"
+            )
+        destinations: set[tuple[int, ...]] = set()
+        subjects = {
+            _sccp_action(action, f"{context}.proposal.actions[{index}]", destinations)
+            for index, action in enumerate(actions)
+        }
+        if actual_subjects != sorted(subjects):
+            raise TypeError(
+                f"{bases_context} must list exactly the action subjects in canonical order, without duplicates"
             )
         return cls(cast(GovernanceCanonicalObject, _freeze(proposal)))
 

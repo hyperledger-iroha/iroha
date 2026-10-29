@@ -8,7 +8,7 @@ import XCTest
 final class PrivacyX509TransactionV1Tests: XCTestCase {
     private typealias Wire = PrivacyX509WireV1
 
-    func testDirectPlanAndActualSignatureMatchRegeneratedNativeFixture() throws {
+    func testDirectPlanAndSignedWireMatchRegeneratedNativeFixture() throws {
         let row = try nativeRow()
         let (plan, proof) = try planAndProof(row)
         XCTAssertEqual(plan.materializedStatement, row.statementNorito)
@@ -20,9 +20,48 @@ final class PrivacyX509TransactionV1Tests: XCTestCase {
         let key = try SigningKey.ed25519(privateKey: Data(repeating: 0xe7, count: 32))
         let authority = try Keypair(privateKeyBytes: Data(repeating: 0xe7, count: 32)).accountId()
         let signed = try plan.sign(rawProof: proof, limits: limits(), authority: authority, signingKey: key)
-        XCTAssertEqual(signed.norito, row.signedTransactionVersionedNorito)
+        XCTAssertEqual(signed.norito.first, 1)
+        let signedFields = try Wire.split(Data(signed.norito.dropFirst()), count: 3, maximum: 16 * 1024 * 1024)
+        let fixtureFields = try Wire.split(Data(row.signedTransactionVersionedNorito.dropFirst()),
+                                          count: 3, maximum: 16 * 1024 * 1024)
+        XCTAssertEqual(signedFields[1], row.unsignedTransactionPayloadNorito)
+        XCTAssertEqual(signedFields[2], fixtureFields[2])
+
+        // CryptoKit may randomize Ed25519 signatures. Pin serialization with the
+        // model's signature, then verify the actual platform signature independently.
+        let fixtureSignature = try signatureBytes(fixtureFields[0])
+        let fixtureEnvelope = SingleInstructionSwiftNoritoEncoder.signedEnvelope(
+            transactionPayload: signedFields[1], signature: fixtureSignature
+        )
+        XCTAssertEqual(fixtureEnvelope.norito, row.signedTransactionVersionedNorito)
+        let signature = try signatureBytes(signedFields[0])
+        let publicKey = try key.publicKey()
+        let message = IrohaHash.hash(signedFields[1])
+        for candidate in [fixtureSignature, signature] {
+            XCTAssertEqual(NoritoNativeBridge.shared.verifyDetached(
+                algorithm: .ed25519, publicKey: publicKey, message: message, signature: candidate
+            ), true)
+        }
+        var changedSignature = signature
+        changedSignature[changedSignature.startIndex] ^= 1
+        XCTAssertEqual(NoritoNativeBridge.shared.verifyDetached(
+            algorithm: .ed25519, publicKey: publicKey, message: message, signature: changedSignature
+        ), false)
+        var changedPayload = signedFields[1]
+        changedPayload[changedPayload.startIndex] ^= 1
+        XCTAssertEqual(NoritoNativeBridge.shared.verifyDetached(
+            algorithm: .ed25519, publicKey: publicKey,
+            message: IrohaHash.hash(changedPayload), signature: signature
+        ), false)
         XCTAssertEqual(signed.transactionHash, row.signedTransactionHash)
         try Wire.validateFixture(row)
+    }
+
+    private func signatureBytes(_ transactionSignature: Data) throws -> Data {
+        let vector = try Wire.split(transactionSignature, count: 1, maximum: 136)[0]
+        XCTAssertEqual(vector.prefix(8), Wire.u64(64))
+        let bytes = try Wire.split(Data(vector.dropFirst(8)), count: 64, maximum: 1)
+        return Data(try bytes.map { try XCTUnwrap($0.first) })
     }
 
     func testGeneratedProofChangesSignedOccurrenceButNeverPreparedStatement() throws {

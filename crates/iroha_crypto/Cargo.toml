@@ -78,7 +78,7 @@ hkdf = { version = "0.13.0", default-features = false, features = [] }
 arrayvec = { version = "0.7.6", optional = true }
 # Preserve the actual typed point-decoder diagnostic without formatting in the fixed core.
 ark-serialize = { version = "0.5.0", default-features = false, optional = true, features = ["std"] }
-w3f-bls = { version = "0.2.0", default-features = false, optional = true, features = ["std"] }
+w3f-bls = { version = "0.3.0", default-features = false, optional = true, features = ["std"] }
 rayon = { version = "1.11.0", optional = true }
 blst = { version = "=0.3.17", default-features = false, optional = true }
 blstrs = { version = "0.7.1", default-features = false, optional = true }
@@ -95,14 +95,14 @@ x25519-dalek = { version = "3.0.0", default-features = false, features = ["stati
 rand = { workspace = true, default-features = false, features = ["std_rng", "alloc", "std"] }
 rand_core = { version = "0.10.1", default-features = false, features = [] }
 rand_chacha = { version = "0.10.0", default-features = false, features = ["std"] }
-# w3f-bls 0.2 uses this upstream RNG trait family for its canonical field sampler.
+# w3f-bls 0.3 uses this upstream RNG trait family for its canonical field sampler.
 rand_chacha_03 = { package = "rand_chacha", version = "0.3.1", optional = true, default-features = false, features = ["std"] }
 once_cell = { version = "1.21.3", default-features = false, features = ["std"], optional = true }
 tempfile = { workspace = true }
 num-bigint = { version = "0.5.1", default-features = false, features = ["std"], optional = true }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"], optional = true }
 streebog = { version = "0.11.0", default-features = false, optional = true }
-crypto-bigint = { version = "0.7.6", default-features = false, features = ["alloc", "rand_core", "subtle"], optional = true }
+crypto-bigint = { version = "0.7.10", default-features = false, features = ["alloc", "rand_core", "subtle"], optional = true }
 sm2 = { version = "0.14.0", optional = true, default-features = false, features = ["std", "dsa", "pkcs8", "pem"] }
 sm3 = { version = "0.5.0", optional = true }
 sm4 = { version = "0.6.0", optional = true }

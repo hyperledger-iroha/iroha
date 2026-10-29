@@ -1,4 +1,4 @@
-//! Exact native-lane ownership of restricted transaction dissemination.
+//! Exact signed-root or native-lane ownership of restricted transaction dissemination.
 
 use std::{collections::BTreeMap, num::NonZeroUsize};
 
@@ -6,8 +6,12 @@ use super::{DROP_REASON_NO_RESTRICTED_TARGETS, GossipRoute, TransactionGossiper}
 use crate::{
     queue::GossipBatchEntry,
     state::{WorldReadOnly, live_consensus_key_pop_for_peer_on_lane},
-    sumeragi::lanes::lane_height_config,
+    sumeragi::{
+        lanes::{lane_height_config, routing::committed_root_scope},
+        schedule::scheduled_committee,
+    },
 };
+use iroha_data_model::block::consensus::SumeragiRootScope;
 use iroha_model_base::{
     peer::PeerId,
     topology::{DataSpaceId, LaneId},
@@ -27,13 +31,28 @@ pub(super) fn group_by_route(
     grouped
 }
 
-/// Read the current incarnation and its live pinned keys from one committed view.
-/// Physical lane catalogs and the global topology are not native-lane authority.
+/// Read the exact owner from one committed view. An independent private root owns
+/// lane zero through its authenticated next-height schedule; global-root lanes
+/// retain their current incarnation and live pinned keys. Physical catalogs and
+/// connected peers never supply dissemination authority.
 pub(super) fn committee(
     world: &impl WorldReadOnly,
     applied_height: u64,
     route: GossipRoute,
 ) -> Result<Vec<PeerId>, &'static str> {
+    match committed_root_scope(world).ok_or("missing_root_scope")? {
+        SumeragiRootScope::Dataspace { dataspace_id, .. } => {
+            if route.lane_id != LaneId::SINGLE || route.dataspace_id != dataspace_id {
+                return Err("private_root_route_mismatch");
+            }
+            let height = applied_height
+                .checked_add(1)
+                .ok_or("private_root_height_overflow")?;
+            return scheduled_committee(world, height)
+                .map_err(|_| "unavailable_private_root_committee");
+        }
+        SumeragiRootScope::Global => {}
+    }
     let record = world
         .sumeragi_lanes()
         .lane(route.lane_id)

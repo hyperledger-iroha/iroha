@@ -482,41 +482,16 @@ public struct ToriiGovernanceRuntimeUpgradeManifest: Decodable, Sendable, Equata
 
 /// Stored payload for one network-bound SCCP governance proposal.
 ///
-/// The wrapper is exact: `proposal` is its only field and holds the closed
-/// `SccpGovernanceProposalV1` envelope (specs/sccp.md §4.14.3), which is checked
-/// before the body is kept as the validated JSON value:
-/// - the body has exactly `network_id`, `base_revisions` and `actions`;
-/// - `network_id` is a canonical `NetworkId` literal;
-/// - `base_revisions` holds 1...16 exact `{subject, revision}` entries, where
-///   `revision` is an exact unsigned JSON integer and `subject` is `route`,
-///   `route_control`, `light_client`, `forgery_hold`, `fast_hold` or
-///   `fast_pause_control` keyed by an external network with a null profile, or
-///   `parameters` with a null key;
-/// - `actions` holds 1...16 exact `{action, payload}` entries with a known action
-///   tag and a JSON object payload.
-// TODO: decode each action `payload` into its typed `SccpGovernanceActionV1` body and
-// run the remaining `SccpGovernanceProposalV1::validate_static` checks (for example
-// that `base_revisions` lists exactly the subjects the actions touch) once SDK SCCP
-// support is exported through `connect_norito_bridge` (specs/sccp.md §8). Torii and
-// the node remain authoritative for those checks.
+/// The closed envelope and every action body are checked against the static rules
+/// in `SccpGovernanceProposalV1::validate_static`, including exact ordered base
+/// subjects, numeric bounds and distinct deployment destinations. The validated
+/// JSON value preserves action order. Live network identity, authorization,
+/// bootstrap authentication and committed state remain node checks.
 public struct ToriiGovernanceSccpRouteProposal: Decodable, Sendable, Equatable {
     /// Complete network-bound SCCP proposal: base revisions and ordered actions.
     public let proposal: ToriiJSONValue
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case proposal }
-
-    private static let maximumEntries = 16
-    private static let externalNetworks: Set<String> = [
-        "ethereum_mainnet", "bsc_mainnet", "ton_mainnet",
-    ]
-    private static let actionTags: Set<String> = [
-        "register_route", "activate_revision", "switch_revision", "deactivate_outbound",
-        "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
-        "set_destination_paused", "initialize_light_client", "install_trusted_checkpoint",
-        "freeze_light_client", "set_parameters", "activate_light_client_profile",
-        "attest_deployment_progress", "quarantine_revision", "open_reconciliation",
-        "set_fast_pause_suspended",
-    ]
 
     public init(from decoder: Decoder) throws {
         try governanceRejectUnknownFields(
@@ -534,136 +509,8 @@ public struct ToriiGovernanceSccpRouteProposal: Decodable, Sendable, Equatable {
             exactIntegerLexemes: decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
                 as? [String: String]
         )
-        try Self.validateEnvelope(proposal, codingPath: codingPath)
+        try SccpGovernanceProposalValidator(codingPath: codingPath).validate(proposal)
         self.proposal = proposal
-    }
-
-    private static func validateEnvelope(
-        _ proposal: ToriiJSONValue,
-        codingPath: [CodingKey]
-    ) throws {
-        let body = try exactObject(
-            proposal,
-            fields: ["network_id", "base_revisions", "actions"],
-            label: "proposal",
-            codingPath: codingPath
-        )
-        guard case let .string(networkId)? = body["network_id"],
-              (try? NetworkId(literal: networkId)) != nil else {
-            throw invalid("network_id must be a canonical NetworkId literal", codingPath)
-        }
-        let baseRevisions = try boundedEntries(
-            body["base_revisions"],
-            label: "base_revisions",
-            codingPath: codingPath
-        )
-        for (index, item) in baseRevisions.enumerated() {
-            let label = "base_revisions[\(index)]"
-            let entry = try exactObject(
-                item,
-                fields: ["subject", "revision"],
-                label: label,
-                codingPath: codingPath
-            )
-            try validateSubject(entry["subject"], label: "\(label).subject", codingPath: codingPath)
-            guard case let .number(revision)? = entry["revision"],
-                  revision.isFinite,
-                  revision >= 0,
-                  revision.rounded(.towardZero) == revision,
-                  revision <= governanceFirstReleaseMaxExactJSONInteger else {
-                throw invalid("\(label).revision must be an exact unsigned JSON integer", codingPath)
-            }
-        }
-        let actions = try boundedEntries(body["actions"], label: "actions", codingPath: codingPath)
-        for (index, item) in actions.enumerated() {
-            let label = "actions[\(index)]"
-            let entry = try exactObject(
-                item,
-                fields: ["action", "payload"],
-                label: label,
-                codingPath: codingPath
-            )
-            guard case let .string(action)? = entry["action"], actionTags.contains(action) else {
-                throw invalid("\(label).action is unknown", codingPath)
-            }
-            guard case .object? = entry["payload"] else {
-                throw invalid("\(label).payload must be a JSON object", codingPath)
-            }
-        }
-    }
-
-    private static func validateSubject(
-        _ value: ToriiJSONValue?,
-        label: String,
-        codingPath: [CodingKey]
-    ) throws {
-        let subject = try exactObject(
-            value,
-            fields: ["subject", "key"],
-            label: label,
-            codingPath: codingPath
-        )
-        guard case let .string(tag)? = subject["subject"] else {
-            throw invalid("\(label).subject is unknown", codingPath)
-        }
-        switch tag {
-        case "route", "route_control", "light_client", "forgery_hold", "fast_hold", "fast_pause_control":
-            let key = try exactObject(
-                subject["key"],
-                fields: ["network", "profile"],
-                label: "\(label).key",
-                codingPath: codingPath
-            )
-            guard case let .string(network)? = key["network"],
-                  externalNetworks.contains(network) else {
-                throw invalid("\(label).key.network is not an external SCCP network", codingPath)
-            }
-            guard case .null? = key["profile"] else {
-                throw invalid("\(label).key.profile must be null", codingPath)
-            }
-        case "parameters":
-            guard case .null? = subject["key"] else {
-                throw invalid("\(label).key must be null", codingPath)
-            }
-        default:
-            throw invalid("\(label).subject is unknown", codingPath)
-        }
-    }
-
-    private static func exactObject(
-        _ value: ToriiJSONValue?,
-        fields: Set<String>,
-        label: String,
-        codingPath: [CodingKey]
-    ) throws -> [String: ToriiJSONValue] {
-        guard case let .object(object)? = value, Set(object.keys) == fields else {
-            throw invalid(
-                "\(label) must be an object with exactly the fields \(fields.sorted().joined(separator: ", "))",
-                codingPath
-            )
-        }
-        return object
-    }
-
-    private static func boundedEntries(
-        _ value: ToriiJSONValue?,
-        label: String,
-        codingPath: [CodingKey]
-    ) throws -> [ToriiJSONValue] {
-        guard case let .array(entries)? = value,
-              (1...maximumEntries).contains(entries.count) else {
-            throw invalid("\(label) must hold 1 to \(maximumEntries) entries", codingPath)
-        }
-        return entries
-    }
-
-    private static func invalid(_ message: String, _ codingPath: [CodingKey]) -> DecodingError {
-        .dataCorrupted(
-            .init(
-                codingPath: codingPath,
-                debugDescription: "SCCP route-governance proposal \(message)"
-            )
-        )
     }
 }
 

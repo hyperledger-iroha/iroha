@@ -676,6 +676,11 @@ CORE_MUTATIONS = [
       ["sumeragi::executor::decoded_custody_tests::same_wire_parent_qc_substitution_preserving_actions_and_signatures_is_refused_at_both_boundaries"],
       causes=(ExpectedFailure("same-wire parent-QC substitution must fail original lend", "crates/iroha_core/src/sumeragi/executor_decoded_custody_tests.rs"),)),
 
+    m("HC488", "SCCP value guard: accept a transition whose escrow and recorded backing changed differently",
+      ["smartcontracts::isi::sccp::conservation::tests::unbalanced_transitions_are_refused"],
+      causes=(ExpectedFailure("the value guard must refuse an escrow release that debits no liability",
+          "crates/iroha_core/src/smartcontracts/isi/sccp/conservation.rs"),)),
+
     m("HC461", "Parent-QC decode drops original typed refusal provenance",
       ["execution_attempt::prepared_parent_service_attempt_preserves_original_capacity_and_allocator_fields"],
       causes=(ExpectedFailure("parent-QC decode must retain its original capacity cause", "crates/iroha_core/src/execution_attempt.rs"),)),

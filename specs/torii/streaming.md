@@ -42,6 +42,16 @@ establishment policy; account and dataspace authorization is the live,
 re-evaluated boundary. Each stream caches its decision at the exact committed
 height that supplied it. A changed height, the periodic authorization tick or
 an expired authorization interval forces a fresh read before another payload.
+Event, contract-event and account-history streams may observe additional data
+space grants while open. Every refresh must retain all scopes observed by the
+previous decision, including those added after admission; losing one ends the
+connection and discards buffered output. Regranting permission cannot revive the
+same connection. Event SSE also reapplies canonical per-item visibility when
+removing an item from its pending queue, before client filters or serialization.
+The event WebSocket splits batches before sending, rechecking authority and
+canonical scope before each individual frame. A revocation observed after an
+awaited send prevents the next frame; bytes already handed to an in-progress
+transport send cannot be retracted.
 Explorer retains its fixed route scope under the original control owner;
 failed refreshes discard the cached decision and preserve authorization versus
 canonical-history failure classification.

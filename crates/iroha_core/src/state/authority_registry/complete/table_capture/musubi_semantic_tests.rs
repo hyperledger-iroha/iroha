@@ -77,6 +77,9 @@ fn capture(state: &State) -> CapturedCanonicalTables {
 
 #[test]
 fn actual_semantic_readers_bind_authority_and_retain_all_three_nodes_from_one_cut() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before_bytes = budget.reserved_bytes();
@@ -118,6 +121,9 @@ fn actual_semantic_readers_bind_authority_and_retain_all_three_nodes_from_one_cu
 
 #[test]
 fn changed_derived_projection_refuses_all_semantic_readers_without_retaining_nodes() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -141,6 +147,9 @@ fn changed_derived_projection_refuses_all_semantic_readers_without_retaining_nod
 
 #[test]
 fn semantic_source_work_is_explicit_and_failure_releases_aggregate_backing() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -165,6 +174,9 @@ fn semantic_source_work_is_explicit_and_failure_releases_aggregate_backing() {
 
 #[test]
 fn semantic_memory_refusal_preserves_original_pool_release_owner() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&budget);

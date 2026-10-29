@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the exact reviewed Nearby SwiftPM source closure without network access."""
+"""Check reviewed Nearby upstream files and explicit local patches offline."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 
-METADATA_SHA256 = "dc7f2b7ba15178ee72e5cfe672d6aa22264746d601108752a2e6370d18bd2c5f"
+METADATA_SHA256 = "d3b6bff01d5c363ae9c4bacfaa1faadbe886eb67283bf03a42f822301a3d252c"
 MANIFEST_SHA256 = "4cc45752bfac4984b1a1adf1cb198a5a66af409247eee51bdc20a64857db7985"
 OWNED_FILES = {"Package.swift", "UPSTREAM.json", "IROHA-PATCH.md", "verify_source.py"}
 LOCAL_BUILD_DIRECTORIES = {".build", ".swiftpm", "__pycache__"}
@@ -47,7 +47,8 @@ def validate(root: Path) -> int:
             name = (PurePosixPath(target["path"]) / relative_path(source)).as_posix()
             if name not in expected_files:
                 raise ValueError(f"compile source missing from upstream census: {name}")
-    for name, expected in expected_files.items():
+    for name, upstream in expected_files.items():
+        expected = upstream.get("local_patch", upstream)
         file = root / relative_path(name)
         if file.is_symlink():
             raise ValueError(f"linked source file: {name}")
@@ -57,7 +58,7 @@ def validate(root: Path) -> int:
             hashlib.sha256(data).hexdigest() != expected["sha256"]
             or hashlib.sha1(blob).hexdigest() != expected["git_blob"]
         ):
-            raise ValueError(f"upstream file changed: {name}")
+            raise ValueError(f"reviewed source file changed: {name}")
     actual_files: set[str] = set()
     for directory, children, filenames in os.walk(root, followlinks=False):
         directory = Path(directory)
@@ -85,7 +86,7 @@ def main() -> int:
         count = validate(args.root)
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f"Nearby source verification failed: {error}\n")
-    print(f"Nearby source verification passed: {count} exact upstream files")
+    print(f"Nearby source verification passed: {count} reviewed files")
     return 0
 
 

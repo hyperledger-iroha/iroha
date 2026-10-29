@@ -456,6 +456,9 @@ fn actual_gossip_reader_refusal_retains_frame_credit_and_original_until_retry() 
 
 #[test]
 fn actual_queue_deferred_retains_gossip_source_and_original_pool_until_retry() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let mut gossiper =
         crate::gossiper::tests::closed_test_gossiper(std::num::NonZeroU32::new(1).unwrap());
     let (message, credit) = actual_message(false, false);

@@ -4579,6 +4579,49 @@ const CARRIERS: &[Carrier] = &[
             (OUTPUT_MODEL, "pub struct NetworkExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct PipelineExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct TimeExecutionOutputV1 {"),
+            (OUTPUT_MODEL, "pub struct NetworkExecutionOutputV2 {"),
+            (OUTPUT_MODEL, "pub struct PipelineExecutionOutputV2 {"),
+            (OUTPUT_MODEL, "pub struct TimeExecutionOutputV2 {"),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleStateKindV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleActionCodecV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleActionFrameV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleRetryStateV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleStateV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecyclePolicyV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleOriginV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleChangeV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleEffectV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleEffectsV1 {",
+            ),
             // The name ends in `Root`: the root cause of a trigger failure, not a hash.
             (OUTPUT_MODEL, "pub enum TriggerFailureRootV1 {"),
         ],
@@ -4587,6 +4630,12 @@ const CARRIERS: &[Carrier] = &[
                 "BlockResult.output_merkle",
                 HashUse::Block(
                     "checked Merkle tree over the hashes of the block's typed outputs; its root and count are transaction_output_commitment of R",
+                ),
+            ),
+            (
+                "TriggerLifecycleStateV1.action_hash",
+                HashUse::Block(
+                    "canonical content hash of one persistent trigger Action retained in this lifecycle effect, checked against its complete action frame; no aggregate State root",
                 ),
             ),
             (
@@ -4834,6 +4883,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "TransactionResult",
                 "result of one executed input or invocation: its data trigger sequence or its rejection reason",
+            ),
+            (
+                "TriggerId",
+                "identifier of the trigger whose lifecycle effect is recorded",
             ),
             (
                 "InvocationCompletionV1",

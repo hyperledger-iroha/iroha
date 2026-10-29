@@ -1,9 +1,11 @@
+//! HTTP listener custody, admission, and shutdown regressions.
+
 use super::{
     Error, PipelineStatusCache, ShutdownOnDrop, SocketAdmission, ToriiCriticalWorker,
     ToriiCriticalWorkerExit, ToriiCriticalWorkerFailure, ValidatedToriiHttpTransport,
-    WriteTimeoutIo, bind_torii_tcp_listener, observe_torii_connection_completion,
-    rollback_torii_startup_workers, serve_torii_public, start_pipeline_status_projection_worker,
-    supervise_torii_critical_workers,
+    WriteTimeoutIo, adopt_torii_tcp_listener, bind_torii_tcp_listener,
+    observe_torii_connection_completion, rollback_torii_startup_workers, serve_torii_public,
+    start_pipeline_status_projection_worker, supervise_torii_critical_workers,
 };
 use axum::{Router, body::Body, routing::get};
 use iroha_config::parameters::actual::ToriiHttpTransport;
@@ -259,6 +261,36 @@ async fn torii_reusable_tcp_listener_rejects_active_listener() {
     let err = bind_torii_tcp_listener(SocketAddr::Ipv4(addr.into()))
         .expect_err("active listener must not be shadowed by reusable bind");
     assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn torii_prebound_listener_preserves_bound_endpoint_and_pending_connection() {
+    let original = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = original.local_addr().unwrap();
+    let client = TcpStream::connect(address).await.unwrap();
+    let listener = adopt_torii_tcp_listener(&address.into(), original).unwrap();
+    assert_eq!(listener.local_addr().unwrap(), address);
+    assert_eq!(
+        std::net::TcpListener::bind(address).unwrap_err().kind(),
+        std::io::ErrorKind::AddrInUse,
+    );
+    let (_, remote) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(remote, client.local_addr().unwrap());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn torii_prebound_listener_rejects_different_endpoint_and_hostname() {
+    for address in [
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        "localhost:1".parse().unwrap(),
+    ] {
+        let original = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let error = adopt_torii_tcp_listener(&address, original).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }
 #[test]
 fn socket_admission_enforces_global_and_canonical_source_limits() {

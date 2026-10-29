@@ -260,6 +260,9 @@ fn executed_history_denial_precedes_cold_body_decode_and_projection() {
 
 #[test]
 fn startup_history_retains_original_cold_kura_refusal_and_exact_retry() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _epoch = crossbeam_epoch::pin();
     use crate::{
         execution_attempt::ExecutionAttemptError as Attempt,
         state::WorldReadOnly as _,
@@ -326,7 +329,6 @@ fn startup_history_retains_original_cold_kura_refusal_and_exact_retry() {
             19,
         )
     };
-    let _epoch = crossbeam_epoch::pin();
     kura.block_data.lock()[1].1 = None;
     assert!(kura.block_data.lock().cached_body(1).is_none());
     let bytes_read = kura.canonical_body_bytes_read_for_test();

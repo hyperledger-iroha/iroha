@@ -14,6 +14,13 @@ use super::*;
 /// reserve, not an estimate or a portable bound on the process allocator or RSS.
 pub(super) const MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1: usize = 1 << 30;
 
+// Independent current-profile payload pin: masks, cuts, maximum registration,
+// replay batch, CA coefficients/metadata, and two complete cache batches.
+#[cfg(test)]
+pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_696_297_592
+    + core::mem::size_of::<super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1>(
+    );
+
 /// Dimensions inspected before any additional private source matrix is built.
 /// All other source dimensions come from the exact registered MAIN layout.
 #[derive(Clone, Copy)]
@@ -141,6 +148,7 @@ pub(super) struct MainProverBufferPlanV1 {
     pub(super) replay_batch: usize,
     pub(super) composition: usize,
     pub(super) quotient_stage: usize,
+    pub(super) quotient_cache_reserve: usize,
     pub(super) fri_stage: usize,
     pub(super) openings: usize,
     pub(super) maximum_live_buffers: usize,
@@ -582,6 +590,21 @@ impl MainProverBufferPlanV1 {
             let candidate = registration_quotient_payload_v1(layout, *registration, degree_cap)?;
             quotient_stage = quotient_stage.max(candidate);
         }
+        // Keep two bounded batches of original masked columns available across
+        // quotient stripes, including both clearing headers and the cache owner.
+        // This explicit reuse policy is charged inside the same process ceiling;
+        // a hash dependency's inline size must not silently remove the cache.
+        let quotient_cache_reserve = sum(&[
+            core::mem::size_of::<main_quotient_cache::MainQuotientReplayCacheV1>(),
+            product(&[
+                2,
+                aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
+                sum(&[
+                    product(&[maximum_native + MASK_DEGREE + 1, field])?,
+                    core::mem::size_of::<super::super::super::private_table::PrivateTableV1<F>>(),
+                ])?,
+            ])?,
+        ])?;
         // Mask coefficients/evaluations and all binary digest-tree levels, plus
         // retained original plus outgoing/current/successor FRI layers and a
         // DEEP coefficient accumulator. The retained-copy admission checks
@@ -613,24 +636,16 @@ impl MainProverBufferPlanV1 {
             replay_batch,
             composition,
             quotient_stage,
+            quotient_cache_reserve,
             fri_stage,
             openings,
             maximum_live_buffers: 0,
             remaining_source_and_runtime_envelope: 0,
         };
-        plan.maximum_live_buffers = sum(&[
-            plan.masks,
-            sum(&[plan.quotient_stage, plan.replay_batch])?.max(sum(&[
-                plan.joined_streams,
-                plan.replay_batch,
-                plan.composition,
-                plan.fri_stage,
-                plan.openings,
-            ])?),
-        ])?;
-        // Preserve the previous arithmetic envelope. Cut roots coexist with
-        // sampling, every registration/cache, DEEP, FRI and final row assembly.
-        // Query replay now owns only its selected hash states, not all LDE rows.
+        // Derive the peak from complete simultaneous owners. In particular,
+        // registration retains both cuts even if a smaller hash-state owner
+        // makes the quotient phase larger than commitment/finalization work.
+        // Query replay owns only its selected hash states, not all LDE rows.
         for stage in [
             sum(&[
                 plan.masks,
@@ -643,6 +658,7 @@ impl MainProverBufferPlanV1 {
                 plan.retained_cuts,
                 plan.quotient_stage,
                 plan.replay_batch,
+                plan.quotient_cache_reserve,
             ])?,
             sum(&[
                 plan.masks,
@@ -654,9 +670,27 @@ impl MainProverBufferPlanV1 {
                 plan.openings,
             ])?,
         ] {
-            if stage > plan.maximum_live_buffers {
-                return Err(ZkX509StarkErrorV1::ProofTooLarge);
-            }
+            plan.maximum_live_buffers = plan.maximum_live_buffers.max(stage);
+        }
+        // The complete credential also retains CA originals and phase-local
+        // joint owners. Count them explicitly rather than borrowing incidental
+        // headroom from the size of a different phase's hash implementation.
+        let joint = main_ca_resources::MainCaJointBufferPlanV1::from_common_v1(plan)?;
+        for phase in [
+            main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
+            main_ca_resources::MainCaBufferPhaseV1::Registration,
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            main_ca_resources::MainCaBufferPhaseV1::Finalization,
+        ] {
+            let payload = sum(&[
+                joint.phase_payload_v1(phase)?,
+                if phase == main_ca_resources::MainCaBufferPhaseV1::Registration {
+                    plan.quotient_cache_reserve
+                } else {
+                    0
+                },
+            ])?;
+            plan.maximum_live_buffers = plan.maximum_live_buffers.max(payload);
         }
         // Joined finalization runs after its coefficient/FFT batch has dropped.
         // Its bounded digest tile, exact-level prefixes and named worker

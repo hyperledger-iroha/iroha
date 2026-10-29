@@ -115,6 +115,8 @@ fn x509_host_tag2_queues_original_owner_but_raw_drain_refuses() {
 
 #[test]
 fn x509_host_artifacts_reject_substituted_transaction_before_effects() {
+    use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+
     let authority = fixture_account("alice");
     let state = contract_test_state(&authority);
     let root = install_contract(
@@ -159,16 +161,22 @@ fn x509_host_artifacts_reject_substituted_transaction_before_effects() {
     ));
     let mut transaction = block.transaction();
     let before = transaction.privacy_budget_for_testing();
-    transaction.current_tx_hash = Some(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
-        b"foreign source",
-    )));
-    transaction.tx_call_hash = Some(Hash::from(source.hash_as_entrypoint()));
+    // Give the substituted transaction its own genuine signed-root budget so the
+    // attachment's original-source check, not missing execution ownership, refuses it.
+    let substituted_source = artifact_test_signed_root(*state.network_id_ref(), &authority);
+    assert_ne!(substituted_source.hash(), source.hash());
+    bind_artifact_test_source_root(&mut transaction, &substituted_source);
     let error = artifacts
         .apply_to_transaction(&mut transaction, &authority)
         .unwrap_err();
     assert!(
-        error.to_string().contains("original signed source"),
-        "{error}"
+        matches!(
+            &error,
+            ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(reason)
+            )) if reason == "X.509 attachment lost its original signed source or authority"
+        ),
+        "{error:?}"
     );
     assert_eq!(transaction.privacy_budget_for_testing(), before);
     assert!(transaction.world.privacy_nullifiers.iter().next().is_none());
@@ -350,23 +358,20 @@ fn x509_source_limit_uses_complete_transaction_limit_independent_of_attachment_e
         [build_fixture_account(&authority, &authority)],
         [],
     );
-    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
-    for parameter in [
-        TransactionParameter::MaxTxBytes(nonzero!(2_000_000_u64)),
-        TransactionParameter::MaxDecompressedBytes(nonzero!(512_u64)),
-    ] {
-        crate::state::set_parameter_cell_for_testing(
-            &mut parameters,
-            Parameter::Transaction(parameter),
-            world.sccp_committee_generations.allocation_budget(),
-        )
-        .unwrap();
-    }
-    parameters.commit();
-    let state = contract_test_state_with_world(&authority, world);
+    // Limits belong to the original signed genesis; preloaded World parameters
+    // are replaced when that genesis executes. The non-default source cap still
+    // admits a maximal privacy action and its required signature context.
+    let mut config = crate::sumeragi::test_chain::TestChainConfig::new(world, 0);
+    config.genesis_parameters.extend([
+        Parameter::Transaction(TransactionParameter::MaxTxBytes(nonzero!(10_000_000_u64))),
+        Parameter::Transaction(TransactionParameter::MaxDecompressedBytes(nonzero!(
+            512_u64
+        ))),
+    ]);
+    let state = signed_contract_host_state(config);
     let view = state.view();
     let reference = QueryStateRef::View(&view);
-    assert_eq!(reference.transaction_source_byte_limit(), 2_000_000);
+    assert_eq!(reference.transaction_source_byte_limit(), 10_000_000);
     assert_eq!(
         view.world()
             .parameters()

@@ -4,9 +4,9 @@
   "assets": [
     {
       "path": "diagnostic_explanations_v1.tsv",
-      "byte_length": 60530,
-      "sha256": "abd3074c8cb5011062d5b39e148c6debfad66daecc92859427c619978cf7578e",
-      "layout": "header and schema followed by 306 tab-separated code, phase, summary, help, bad-example, and fixed-example rows with backslash escapes; `-` marks an absent example",
+      "byte_length": 61995,
+      "sha256": "c18de12b0bff254eb8852637233030de312892111b56469b5b7056b6011fd095",
+      "layout": "header and schema followed by 311 tab-separated code, phase, summary, help, bad-example, and fixed-example rows with backslash escapes; `-` marks an absent example",
       "source_preimages": [
         {
           "path": "../../../build.rs"

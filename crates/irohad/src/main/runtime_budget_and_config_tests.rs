@@ -33,6 +33,8 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             trace_config: false,
             config_blake3: None,
             sumeragi_assert_fresh_key: false,
+            managed_listeners: None,
+            managed_listener_deadline_ns: None,
         },
         terminal_colors: false,
         language: None,

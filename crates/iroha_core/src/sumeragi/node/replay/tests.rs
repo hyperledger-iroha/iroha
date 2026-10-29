@@ -531,6 +531,9 @@ fn assert_genesis_capacity(
 // after the real nonempty genesis has executed into its witness/result. No pool
 // ceiling, global cache, prover setting, current World or source file is changed.
 fn genesis_original_capacity_retries(phase: super::super::super::startup::test_hooks::Phase) {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use super::super::super::startup::test_hooks;
     use std::{
         cell::{Cell, RefCell},

@@ -33,24 +33,24 @@ pub(super) fn state_fixture_with_repetitions(
     repetitions: u32,
     periodic: bool,
 ) -> (State, TriggerId) {
-    let world = World::default();
-    {
-        let mut parameters = world.parameters.block();
-        parameters
-            .set_parameter(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .unwrap(),
-            )
-            .unwrap();
-        parameters.commit();
-    }
+    let mut world = World::default();
+    world
+        .set_parameter_for_testing(
+            crate::sumeragi::test_chain::crypto_fixture_policy()
+                .into_parameter()
+                .unwrap(),
+        )
+        .unwrap();
     let id: TriggerId = "journal_retry".parse().unwrap();
     {
         let mut block = world.triggers.block();
         let mut tx = block.transaction();
         let schedule = Schedule::starting_at(Duration::from_millis(10));
-        let schedule = if periodic { schedule.with_period(Duration::from_millis(10)) } else { schedule };
+        let schedule = if periodic {
+            schedule.with_period(Duration::from_millis(10))
+        } else {
+            schedule
+        };
         let mut action = SpecializedAction::new(
             Executable::Instructions(Vec::<InstructionBox>::new().into()),
             Repeats::Exactly(repetitions),

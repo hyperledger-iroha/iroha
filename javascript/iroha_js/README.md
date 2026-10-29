@@ -3739,17 +3739,6 @@ and encodes code bytes as base64 strings before signing:
 > `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` when the node is locked down.
 
 ```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({
-  publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
-```
-
-```js
 import {
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
@@ -3989,12 +3978,25 @@ The governance ISI builders mirror the first-release Torii DTOs. Proposal
 builders contain immutable proposal content only; Parliament derives lifecycle
 timing and execution automatically. Hash inputs are normalized into the typed
 32-byte governance hash wrappers, while ballot builders retain their standalone
-referendum/election encoding:
+referendum/election encoding.
+
+SCCP proposal normalization and typed Torii reads share validation of the closed
+action tags, external network keys, safe-integer base revisions, and the exact
+sorted, deduplicated subject set derived from the ordered actions. All action
+bodies enforce exact fields and static value bounds, including deployment/network
+matching, committee-pin shape, distinct destination words, bounded light-client
+bootstrap bytes, and canonical stranded-release recipients. Parameter updates
+check both individual and joint bounds using exact arithmetic. Account validation
+uses the mandatory native codec. The node authenticates committee pins and opaque
+bootstraps; committed state determines authorization, current revisions, staking
+and Parliament parameter bounds, and enactment.
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
+import { Buffer } from "node:buffer";
 
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({
+  publicKey: Buffer.from("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "hex"),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -4625,16 +4627,6 @@ change at the Sumeragi default timings; pass a deployment-specific threshold to
 timers are known.
 
 ```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
-```
-
-```js
 import { extractToriiFeatureConfig } from "@iroha/iroha-js";
 
 const config = JSON.parse(fs.readFileSync("iroha_config.json", "utf8"));
@@ -5036,16 +5028,6 @@ const browserTorii = new ToriiBrowserClient("https://torii.example", {
 
 const visibleNfts = await browserTorii.explorerNfts.list({ limit: 25 });
 const visibleDomains = await browserTorii.domains.list({ limit: 25 }); // signed with the read identity
-```
-
-```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
 ```
 
 ```js
@@ -5494,16 +5476,6 @@ rejected.
 - Developer-friendly environment overrides are supported for local workflows: `IROHA_TORII_TIMEOUT_MS`, `IROHA_TORII_MAX_RETRIES`, `IROHA_TORII_BACKOFF_INITIAL_MS`, `IROHA_TORII_BACKOFF_MULTIPLIER`, `IROHA_TORII_MAX_BACKOFF_MS`, `IROHA_TORII_RETRY_STATUSES`, `IROHA_TORII_RETRY_METHODS`, `IROHA_TORII_API_TOKEN`, and `IROHA_TORII_AUTH_TOKEN`.
 - Retryable status codes default to `{429, 502, 503, 504}`; methods default to `GET`, `HEAD`, and `OPTIONS`. Override them when your workflow needs different semantics.
 - See `recipes/configured-client.mjs` for a script that loads an `iroha_config` JSON document, applies environment overrides, and instantiates `ToriiClient` with the merged settings.
-
-```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
-```
 
 ```js
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";

@@ -86,6 +86,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
                 "iroha_privacy_exact12_fixture_bundle_v1",
                 "iroha_privacy_validate_exact12_fixture_bundle_v1",
                 "iroha_privacy_validate_exact12_capability_manifest_v1",
+                "iroha_privacy_validate_exact12_submit_proof_construction_v1",
                 "iroha_privacy_free_buffer",
             ),
         )

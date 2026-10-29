@@ -6,6 +6,7 @@
 //! substitute current State or reconstruct missing historical values from a root.
 
 pub(crate) mod fastpq_source;
+mod packed;
 pub(crate) mod prepared_intents;
 #[cfg(test)]
 pub(crate) mod process_crash;
@@ -643,16 +644,10 @@ struct RecordName {
 }
 impl RecordName {
     fn new(height: u64, hash: HashOf<BlockHeader>, staged: bool) -> Self {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-
-        let mut out = Self {
-            bytes: [0; 90],
-            len: 0,
-        };
-        if staged {
-            out.bytes[0] = b'.';
-            out.len = 1;
-        }
+        Self::with_digest(height, hash.as_ref(), staged)
+    }
+    fn with_digest(height: u64, hash: &[u8; 32], staged: bool) -> Self {
+        let mut out = Self::empty(staged);
         let start = out.len;
         let mut remaining = height;
         for offset in (0..20).rev() {
@@ -660,16 +655,31 @@ impl RecordName {
             remaining /= 10;
         }
         out.len += 20;
-        out.bytes[out.len] = b'-';
-        out.len += 1;
-        for byte in hash.as_ref() {
-            out.bytes[out.len] = HEX[usize::from(byte >> 4)];
-            out.bytes[out.len + 1] = HEX[usize::from(byte & 15)];
-            out.len += 2;
-        }
-        out.bytes[out.len..out.len + 4].copy_from_slice(b".nrt");
-        out.len += 4;
+        out.push(b"-");
+        out.push_hex(hash);
+        out.push(b".nrt");
         out
+    }
+    fn empty(staged: bool) -> Self {
+        let mut out = Self {
+            bytes: [0; 90],
+            len: 0,
+        };
+        if staged {
+            out.push(b".");
+        }
+        out
+    }
+    fn push(&mut self, bytes: &[u8]) {
+        self.bytes[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+    }
+    fn push_hex(&mut self, hash: &[u8; 32]) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+
+        for byte in hash {
+            self.push(&[HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 15)]]);
+        }
     }
     fn intent(height: u64, hash: HashOf<BlockHeader>, staged: bool) -> Self {
         let mut name = Self::new(height, hash, staged);
@@ -682,6 +692,25 @@ impl RecordName {
         let start = name.len - 4;
         name.bytes[start..name.len].copy_from_slice(b".fqs");
         name
+    }
+    /// The offline rewrite's temporary for a context record, which no node release opens.
+    fn rewrite(height: u64, hash: &[u8; 32]) -> Self {
+        let mut name = Self::with_digest(height, hash, true);
+        let start = name.len - 4;
+        name.bytes[start..name.len].copy_from_slice(b".rpk");
+        name
+    }
+    /// A content-addressed piece shared by packed context records.
+    fn shared(hash: &[u8; 32], staged: bool) -> Self {
+        let mut out = Self::empty(staged);
+        out.push(b"piece-");
+        out.push_hex(hash);
+        out.push(b".ncs");
+        out
+    }
+    /// Whether this names a published context record, the only kind stored packed.
+    fn is_context(&self) -> bool {
+        self.bytes[0] != b'.' && self.bytes[..self.len].ends_with(b".nrt")
     }
     fn as_str(&self) -> &str {
         std::str::from_utf8(&self.bytes[..self.len]).expect("fixed ASCII record identity")
@@ -760,12 +789,241 @@ fn publish_record(
     hash: HashOf<BlockHeader>,
     bytes: &[u8],
 ) -> io::Result<()> {
-    publish_named_record(
+    let target = RecordName::new(height, hash, false);
+    let staged = RecordName::new(height, hash, true);
+    let layout = packed::Layout::of(bytes, height, hash.as_ref());
+    if layout.is_inline() {
+        return publish_named_record(directory, &target, &staged, bytes);
+    }
+    // An existing record of either form needs no pieces, unless a piece it references is missing.
+    match open_named_record(directory, &target) {
+        Ok(file) => match accept_existing(directory, file, &staged, bytes, true) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            result => return result,
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    for piece in packed::shared_pieces(bytes, layout) {
+        publish_shared_piece(directory, piece)?;
+    }
+    // Every shared piece is durable before a record can reference it.
+    directory.sync_all()?;
+    publish_stored(
         directory,
-        &RecordName::new(height, hash, false),
-        &RecordName::new(height, hash, true),
+        &target,
+        &staged,
+        &packed::Stored::new(bytes, layout),
         bytes,
     )
+}
+/// Publish a content-addressed piece, or recheck one that an earlier record already published.
+#[cfg(unix)]
+fn publish_shared_piece(directory: &File, bytes: &[u8]) -> io::Result<()> {
+    let target = packed::piece_name(bytes, false);
+    let staged = packed::piece_name(bytes, true);
+    match open_named_record(directory, &target) {
+        Ok(file) => {
+            verify_bytes(file, bytes)?;
+            remove_matching_stage(directory, &staged, bytes, false)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            publish_named_record(directory, &target, &staged, bytes)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// What [`pack_existing_records`] does to the context records of a store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackMode {
+    /// Only measure what packing would recover.
+    Measure,
+    /// Rewrite canonical records in packed form.
+    Pack,
+    /// Rewrite packed records in canonical form, for a release that cannot read packed records.
+    Unpack,
+}
+
+/// Records rewritten by [`pack_existing_records`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PackReport {
+    /// Context records found.
+    pub records: u64,
+    /// Records stored packed after this run, or that would be after a measuring run.
+    pub packed: u64,
+    /// Canonical bytes of the records this run rewrote, or would rewrite.
+    pub canonical_bytes: u64,
+    /// Their packed bytes, excluding shared pieces.
+    pub stored_bytes: u64,
+}
+
+/// Rewrite the context records of a stopped node's Kura store in packed or canonical form.
+///
+/// Releases before packed records existed wrote every record in canonical form, and those
+/// records stay canonical until packed here. Shared pieces are durable before any record
+/// references them, and each replacement is staged under a temporary name no node opens and
+/// checked to rebuild the exact original before it is atomically renamed over that record. A
+/// node's leftover stage of a record is removed once it is checked to rebuild the same original,
+/// so a release without packed records never meets a packed stage. Unpacking removes the shared
+/// pieces only after confirming no record is still packed. The Kura store lock is held
+/// throughout, so a running node makes this fail instead of racing it.
+///
+/// # Errors
+/// The store is locked or missing, or a record or stage cannot be read, verified, staged or
+/// renamed.
+#[cfg(unix)]
+pub fn pack_existing_records(store_root: &Path, mode: PackMode) -> io::Result<PackReport> {
+    let _lock = Kura::acquire_store_root_lock(store_root, false).map_err(io::Error::other)?;
+    let (_root, directory) = open_directory(store_root, false)?;
+    let mut report = PackReport::default();
+    // List before rewriting: a renamed entry may otherwise be listed twice.
+    let mut records = Vec::new();
+    for entry in std::fs::read_dir(store_root.join("native-contexts"))? {
+        if let Some(record) = entry?.file_name().to_str().and_then(parse_record_name) {
+            records.push(record);
+        }
+    }
+    for &(height, digest) in &records {
+        report.records += 1;
+        let staged = RecordName::with_digest(height, &digest, true);
+        if mode != PackMode::Measure {
+            remove_rewrite_temporary(&directory, height, &digest)?;
+        }
+        let mut file =
+            open_named_record(&directory, &RecordName::with_digest(height, &digest, false))?;
+        let length = file.metadata()?.len();
+        // An offline rewrite owns no node allocation pool.
+        let mut bytes = Vec::with_capacity(usize::try_from(length).map_err(io::Error::other)?);
+        file.read_to_end(&mut bytes)?;
+        if bytes.starts_with(&packed::MAGIC) {
+            if mode != PackMode::Unpack {
+                report.packed += 1;
+                continue;
+            }
+            let canonical = packed::rebuild(&directory, &mut file)?;
+            remove_matching_stage(&directory, &staged, &canonical, true)?;
+            report.canonical_bytes += u64::try_from(canonical.len()).map_err(io::Error::other)?;
+            report.stored_bytes += length;
+            replace_record(&directory, height, &digest, &canonical[..], &canonical)?;
+            continue;
+        }
+        if mode == PackMode::Unpack {
+            remove_matching_stage(&directory, &staged, &bytes, true)?;
+            continue;
+        }
+        let layout = packed::Layout::of(&bytes, height, &digest);
+        if layout.is_inline() {
+            continue;
+        }
+        let stored = packed::Stored::new(&bytes, layout);
+        report.packed += 1;
+        report.canonical_bytes += length;
+        report.stored_bytes += u64::try_from(stored.len()).map_err(io::Error::other)?;
+        if mode == PackMode::Measure {
+            continue;
+        }
+        for piece in packed::shared_pieces(&bytes, layout) {
+            publish_shared_piece(&directory, piece)?;
+        }
+        directory.sync_all()?;
+        remove_matching_stage(&directory, &staged, &bytes, true)?;
+        replace_record(&directory, height, &digest, &stored, &bytes)?;
+    }
+    if mode == PackMode::Unpack {
+        for &(height, digest) in &records {
+            let file =
+                open_named_record(&directory, &RecordName::with_digest(height, &digest, false))?;
+            let mut head = Vec::with_capacity(packed::MAGIC.len());
+            file.take(packed::MAGIC.len() as u64)
+                .read_to_end(&mut head)?;
+            if head == packed::MAGIC {
+                return Err(io::Error::other(
+                    "a packed native context record remains; shared pieces are kept",
+                ));
+            }
+        }
+        for entry in std::fs::read_dir(store_root.join("native-contexts"))? {
+            let name = entry?.file_name();
+            if let Some(name) = name.to_str()
+                && name
+                    .trim_start_matches('.')
+                    .strip_prefix("piece-")
+                    .and_then(|piece| piece.strip_suffix(".ncs"))
+                    .is_some_and(|hash| hash.len() == 64)
+            {
+                rustix::fs::unlinkat(&directory, name, rustix::fs::AtFlags::empty())?;
+            }
+        }
+        directory.sync_all()?;
+    }
+    Ok(report)
+}
+/// Rewrite the context records of a stopped node's Kura store in packed or canonical form.
+///
+/// # Errors
+/// Always: descriptor-relative archive access is required.
+#[cfg(not(unix))]
+pub fn pack_existing_records(_store_root: &Path, _mode: PackMode) -> io::Result<PackReport> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative native context archive is required",
+    ))
+}
+/// Atomically replace a published context record with another stored form of `original`.
+/// The temporary has a name no node release opens, so an interrupted rewrite leaves nothing a
+/// node would take for its own stage.
+#[cfg(unix)]
+fn replace_record(
+    directory: &File,
+    height: u64,
+    digest: &[u8; 32],
+    stored: &(impl packed::StoredContent + ?Sized),
+    original: &[u8],
+) -> io::Result<()> {
+    use rustix::fs::{Mode, OFlags};
+    let target = RecordName::with_digest(height, digest, false);
+    let temporary = RecordName::rewrite(height, digest);
+    let mut file = File::from(rustix::fs::openat(
+        directory,
+        temporary.as_str(),
+        OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )?);
+    let mut replace = || {
+        stored.write_to(&mut file)?;
+        file.sync_all()?;
+        file.rewind()?;
+        packed::verify_original(directory, file.try_clone()?, original, true)?;
+        verify_named_file(directory, temporary.as_str(), &file)?;
+        rustix::fs::renameat(directory, temporary.as_str(), directory, target.as_str())?;
+        directory.sync_all()
+    };
+    let replaced = replace();
+    if replaced.is_err() {
+        // A later run removes the temporary if this removal fails too.
+        let _ = remove_rewrite_temporary(directory, height, digest);
+    }
+    replaced
+}
+/// Remove an interrupted rewrite's temporary; only the offline rewrite creates it.
+#[cfg(unix)]
+fn remove_rewrite_temporary(directory: &File, height: u64, digest: &[u8; 32]) -> io::Result<()> {
+    let temporary = RecordName::rewrite(height, digest);
+    match rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty()) {
+        Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+/// Height and carrier digest named by a published context record.
+#[cfg(unix)]
+fn parse_record_name(name: &str) -> Option<(u64, [u8; 32])> {
+    let (height, digest) = name.strip_suffix(".nrt")?.split_once('-')?;
+    let height = height.parse().ok()?;
+    let mut bytes = [0; 32];
+    hex::decode_to_slice(digest, &mut bytes).ok()?;
+    // Only the exact spelling the archive writes names a record.
+    (RecordName::with_digest(height, &bytes, false).as_str() == name).then_some((height, bytes))
 }
 #[cfg(unix)]
 fn open_named_record(directory: &File, name: &RecordName) -> io::Result<File> {
@@ -788,15 +1046,37 @@ fn publish_named_record(
     staged: &RecordName,
     bytes: &[u8],
 ) -> io::Result<()> {
+    publish_stored(directory, target, staged, bytes, bytes)
+}
+/// Recheck a record already published under its name, and drop its matching leftover stage.
+/// A context record may exist in either stored form, written by an earlier release or before an
+/// interruption; either form must rebuild the exact original.
+#[cfg(unix)]
+fn accept_existing(
+    directory: &File,
+    file: File,
+    staged: &RecordName,
+    original: &[u8],
+    context: bool,
+) -> io::Result<()> {
+    packed::verify_original(directory, file, original, context)?;
+    directory.sync_all()?;
+    remove_matching_stage(directory, staged, original, context)
+}
+/// Publish `stored`, the stored form of `original`, under `target`.
+#[cfg(unix)]
+fn publish_stored(
+    directory: &File,
+    target: &RecordName,
+    staged: &RecordName,
+    stored: &(impl packed::StoredContent + ?Sized),
+    original: &[u8],
+) -> io::Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags};
     use std::os::unix::fs::MetadataExt as _;
+    let context = target.is_context();
     match open_named_record(directory, target) {
-        Ok(file) => {
-            verify_bytes(file, bytes)?;
-            directory.sync_all()?;
-            remove_matching_stage(directory, staged.as_str(), bytes)?;
-            return Ok(());
-        }
+        Ok(file) => return accept_existing(directory, file, staged, original, context),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
@@ -814,7 +1094,7 @@ fn publish_named_record(
     // original bytes remain held by PendingCommit or exact certified execution replay.
     file.set_len(0)?;
     file.rewind()?;
-    file.write_all(bytes)?;
+    stored.write_to(&mut file)?;
     file.sync_all()?;
     #[cfg(test)]
     process_crash::observe(target, process_crash::Boundary::StageSynced);
@@ -827,17 +1107,19 @@ fn publish_named_record(
         target.as_str(),
         AtFlags::empty(),
     ) {
-        Ok(()) => {}
-        Err(rustix::io::Errno::EXIST) => {
-            verify_bytes(open_named_record(directory, target)?, bytes)?
-        }
+        Ok(()) => stored.verify(open_named_record(directory, target)?)?,
+        Err(rustix::io::Errno::EXIST) => packed::verify_original(
+            directory,
+            open_named_record(directory, target)?,
+            original,
+            context,
+        )?,
         Err(error) => return Err(error.into()),
     }
-    verify_bytes(open_named_record(directory, target)?, bytes)?;
     directory.sync_all()?;
     #[cfg(test)]
     process_crash::observe(target, process_crash::Boundary::CanonicalSynced);
-    remove_matching_stage(directory, staged.as_str(), bytes)?;
+    remove_matching_stage(directory, staged, original, context)?;
     #[cfg(test)]
     process_crash::observe(target, process_crash::Boundary::Complete);
     Ok(())
@@ -855,8 +1137,14 @@ fn verify_named_file(directory: &File, name: &str, file: &File) -> io::Result<()
     Ok(())
 }
 #[cfg(unix)]
-fn remove_matching_stage(directory: &File, name: &str, bytes: &[u8]) -> io::Result<()> {
+fn remove_matching_stage(
+    directory: &File,
+    staged: &RecordName,
+    original: &[u8],
+    context: bool,
+) -> io::Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags};
+    let name = staged.as_str();
     let file = match rustix::fs::openat(
         directory,
         name,
@@ -867,7 +1155,7 @@ fn remove_matching_stage(directory: &File, name: &str, bytes: &[u8]) -> io::Resu
         Err(rustix::io::Errno::NOENT) => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    verify_bytes(file.try_clone()?, bytes)?;
+    packed::verify_original(directory, file.try_clone()?, original, context)?;
     verify_named_file(directory, name, &file)?;
     rustix::fs::unlinkat(directory, name, AtFlags::empty())?;
     directory.sync_all()

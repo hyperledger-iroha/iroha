@@ -301,6 +301,9 @@ fn pruning_missing_original_evidence_refuses_before_any_deletion() {
 
 #[test]
 fn pruning_original_map_refusal_rolls_back_and_retries() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = seeded(
         &[ended(1, 1), sample_generation_at(20, 10_000)],
         20,

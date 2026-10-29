@@ -10,5 +10,8 @@ and checked canonical decoding. General scalar multiplication keeps upstream
 GLV acceleration. Tests compare the check against multiplication by the subgroup
 order for both subgroup and arbitrary on-curve points.
 
+The crate always links Rust `std`; its retired no-std crate attribute is removed.
+This does not change curve arithmetic or subgroup admission.
+
 The normalized Cargo.toml is active; Cargo.toml.orig retains the upstream
 manifest. Remove this patch when upstream provides a fixed-space subgroup check.

@@ -2633,7 +2633,10 @@ fn register_validation_fee_fixture_asset(
 
 #[test]
 fn enacted_policy_reward_custody_references_are_pinned_without_conversion_lifecycle() {
-    component_test_state_transaction!(state, block, stx);
+    // Retirement needs explicit original monetary policies before this block cut.
+    let state = monetary_retirement_state();
+    let mut block = state.block(first_test_block_header());
+    let mut stx = block.transaction();
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfcustody", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2783,7 +2786,10 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
         crate::state::GovernanceProposalStatus::Superseded,
         crate::state::GovernanceProposalStatus::ExecutionFailed,
     ] {
-        component_test_state_transaction!(state, block, stx);
+        // Retirement needs explicit original monetary policies before this block cut.
+        let state = monetary_retirement_state();
+        let mut block = state.block(first_test_block_header());
+        let mut stx = block.transaction();
         bootstrap_alice_account(&mut stx);
         let fixture_domain = DomainId::try_new("vfunpinned", "universal").expect("fixture domain");
         let policy_ds = AssetDefinitionId::derive_from_components(
@@ -2842,7 +2848,10 @@ fn non_enacted_validation_fee_proposal_statuses_do_not_pin_payout_references() {
 
 #[test]
 fn enacted_validation_fee_account_references_reject_unregister_atomically() {
-    component_test_state_transaction!(state, block, stx);
+    // Retirement needs explicit original monetary policies before this block cut.
+    let state = monetary_retirement_state();
+    let mut block = state.block(first_test_block_header());
+    let mut stx = block.transaction();
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfaccount", "universal").expect("fixture domain");
     let fixture = install_retained_validation_fee_unregister_fixture(
@@ -2927,7 +2936,10 @@ fn enacted_validation_fee_account_references_reject_unregister_atomically() {
 
 #[test]
 fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
-    component_test_state_transaction!(state, block, stx);
+    // Retirement needs explicit original monetary policies before this block cut.
+    let state = monetary_retirement_state();
+    let mut block = state.block(first_test_block_header());
+    let mut stx = block.transaction();
     bootstrap_alice_account(&mut stx);
     let fixture_domain = DomainId::try_new("vfasset", "universal").expect("fixture domain");
     let policy_ds = AssetDefinitionId::derive_from_components(
@@ -3007,7 +3019,10 @@ fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
 
 #[test]
 fn enacted_validation_fee_asset_references_reject_containing_domain_unregister_atomically() {
-    component_test_state_transaction!(state, block, stx);
+    // Retirement needs explicit original monetary policies before this block cut.
+    let state = monetary_retirement_state();
+    let mut block = state.block(first_test_block_header());
+    let mut stx = block.transaction();
     bootstrap_alice_account(&mut stx);
     let policy_domain = DomainId::try_new("vfpolicy", "universal").expect("policy domain");
     let payout_ds_domain = DomainId::try_new("vfpayoutds", "universal").expect("payout DS domain");

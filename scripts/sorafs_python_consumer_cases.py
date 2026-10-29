@@ -1,6 +1,6 @@
 """Fixed source-derived SoraFS Python case inventory; no SDK import or execution.
 
-The current canonical test source owns 37 test functions and 77 pytest 9.0.3
+The current canonical test source owns 37 test functions and 77 pytest 9.2.0
 cases. Changes to names, parameter decorators or profile inputs require review;
 this module grants no success or native execution authority. Call
 expected_node_ids with the captured, independently authenticated test bytes.
@@ -11,8 +11,8 @@ import ast
 import hashlib
 
 TEST_PATH = "python/iroha_python/tests/sorafs_reference_validation_test.py"
-PYTEST_VERSION = "9.0.3"
-CASE_LAYOUT_SHA256 = 'c6506081dcf4b08802f92fc0e782bac371bc4c1231178ce14ce6cb7d48221289'
+PYTEST_VERSION = "9.2.0"
+CASE_LAYOUT_SHA256 = 'e0cb8b584e336a88ff35bfa7c93708589ea615edcfac08dc302f0c52065633ae'
 FUNCTIONS = ('test_validate_orderbook_payload_accepts_canonical_order_request',
  'test_orderbook_signature_and_noncanonical_outcomes_match_exactly',
  'test_validate_orderbook_payload_reports_malformed_norito',

@@ -45,6 +45,11 @@ What exists so far:
   Startup transfers the original runtime lock through inherited stdin, preserving ownership
   through worker loading and into its validator children. Unix retains the shared native file
   lock; Windows relies on the trusted inherited handle's writer exclusion.
+  The frontend retains all eight bound loopback sockets until authenticated native handoff
+  to its worker. The worker keeps them through validator startup and internal restarts,
+  transferring each pair only to its owned child after kernel process-identity checks.
+  Receivers verify the exact configured addresses before acknowledging adoption. Starting
+  a stopped generation reacquires its original endpoints and fails if they are occupied.
   Binary verification, worker loading, activation and Ready publication share the original
   startup budget. A same-boot continuous deadline includes suspend across the handoff;
   clock failures refuse startup. Selection preparation, including fresh generation validation,
@@ -134,7 +139,9 @@ What exists so far:
   an existing parent attachment. After namespace completion, a certified parent
   World projection authenticates the exact active owner and lease generation.
   Only `attachment` receipts confirm anchoring. Native supervisor scheduling and CLI/GUI
-  wiring share this owner; combined real-network qualification remains outstanding.
+  wiring share this owner. The installed CLI passes the disposable four-parent/four-private
+  attachment, deployment, execution, recovery and parent-anchoring fixture on macOS.
+  Live Taira, native desktop and other-platform qualification remain outstanding.
   Initial custody directories publish their complete records and locks atomically;
   interrupted staging cannot leave an empty operation journal at its final path.
 - `definition`: parsers and validation for network definitions

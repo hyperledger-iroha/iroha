@@ -103,10 +103,20 @@ state_test! { sync snapshot_global_lane_state_preserves_opening_and_closure_pred
         if closed { assert!(previous.lanes[0].closing.is_none()); }
         let snapshot = norito::json::to_value(&**state).unwrap();
         assert!(!snapshot.as_object().unwrap().contains_key("lane_consensus_contexts"));
-        assert!(matches!(
-            deserialize_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(chain.kura())),
-            Err(super::deserialize::StateRestoreError::SuccessorRequired { .. })
-        ));
+        let projected = deserialize_state_snapshot_value_with_kura(
+            snapshot.clone(), Arc::clone(chain.kura()),
+        );
+        if closed {
+            assert_eq!(chain.height(), 4, "closure follows the original three certified carriers");
+            assert!(matches!(projected.as_ref(),
+                Err(super::deserialize::StateRestoreError::SuccessorRequired { height: 4 })),
+                "the closure tip requires its certified successor: {:?}", projected.as_ref().err());
+        } else {
+            assert_eq!(chain.height(), 1, "opening is the original signed genesis result");
+            assert!(matches!(projected.as_ref(),
+                Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)),
+                "the genesis opening must be independently replayed: {:?}", projected.as_ref().err());
+        }
         let decoded = validated_lane_snapshot_projection(&snapshot, state)
             .expect("decode both complete actual lane component cuts");
         assert_eq!(decoded.view().get(), &current);

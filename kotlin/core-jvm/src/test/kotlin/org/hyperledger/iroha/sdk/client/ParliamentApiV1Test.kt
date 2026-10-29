@@ -238,11 +238,12 @@ class ParliamentApiV1Test {
             subject("light_client", bscMainnet()),
             subject("forgery_hold", bscMainnet()),
         ).forEach { replacement ->
-            ParliamentApiV1.Proposal.fromJson(sccpProposal { it.putAll(replacement) })
+            assertFailsWith<IllegalArgumentException>("accepted a subject unrelated to remove_staged") {
+                ParliamentApiV1.Proposal.fromJson(sccpProposal { it.putAll(replacement) })
+            }
         }
 
-        // Native typed bodies and exact action-to-subject coverage remain separate.
-        // Every current tag must survive the canonical SDK's closed envelope decoder.
+        // A recognized action tag still requires its complete typed payload.
         for (action in listOf(
             "register_route", "activate_revision", "switch_revision", "deactivate_outbound",
             "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
@@ -251,9 +252,11 @@ class ParliamentApiV1Test {
             "attest_deployment_progress", "quarantine_revision", "open_reconciliation",
             "set_fast_pause_suspended",
         )) {
-            ParliamentApiV1.Proposal.fromJson(sccpProposal {
-                it["actions"] = listOf(linkedMapOf("action" to action, "payload" to linkedMapOf<String, Any?>()))
-            })
+            assertFailsWith<IllegalArgumentException>("accepted $action with an empty payload") {
+                ParliamentApiV1.Proposal.fromJson(sccpProposal {
+                    it["actions"] = listOf(linkedMapOf("action" to action, "payload" to linkedMapOf<String, Any?>()))
+                })
+            }
             for (payload in listOf(null, emptyList<Any?>(), "object", true, 0)) {
                 assertFailsWith<IllegalArgumentException>("accepted $action with payload $payload") {
                     ParliamentApiV1.Proposal.fromJson(sccpProposal {
@@ -272,9 +275,16 @@ class ParliamentApiV1Test {
         }
         for (kind in listOf("route", "route_control", "light_client", "forgery_hold", "fast_hold", "fast_pause_control")) {
             for (network in listOf("ethereum_mainnet", "bsc_mainnet", "ton_mainnet")) {
-                ParliamentApiV1.Proposal.fromJson(sccpProposal {
+                val encoded = sccpProposal {
                     it.putAll(subject(kind, linkedMapOf("network" to network, "profile" to null)))
-                })
+                }
+                if (kind == "route" && network == "bsc_mainnet") {
+                    ParliamentApiV1.Proposal.fromJson(encoded)
+                } else {
+                    assertFailsWith<IllegalArgumentException>("accepted a mismatched $kind/$network subject") {
+                        ParliamentApiV1.Proposal.fromJson(encoded)
+                    }
+                }
             }
             for (key in listOf(
                 null, "ea0130", emptyMap<String, Any?>(),

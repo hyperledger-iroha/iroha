@@ -233,19 +233,18 @@ mod tests {
     /// charges, refund everything on codec rejection, and match the reference codeword.
     #[test]
     fn funded_jobs_charge_exact_backing_and_match_reference() {
-        for (k, m, row, len) in [
-            (4, 2, 256 * 1024, 1_048_579),
-            (3, 3, 64, 1000),
-            (1, 1, 2, 1),
+        for (k, m, row, len, scratch_bytes) in [
+            (4, 2, 256 * 1024, 1_048_579, 88),
+            (3, 3, 64, 1000, 60),
+            (1, 1, 2, 1, 8),
         ] {
             let payload = reference::bytes(0xF00D ^ len as u64, len);
             let shape = CompactShape::new(len, k, m, row).unwrap();
             let expected = reference::compact_encode(&payload, k, m, row);
             let encode_bytes = required_backing_bytes(shape, false).unwrap();
-            assert_eq!(
-                encode_bytes,
-                shape.encoded_bytes() + 2 * shape.workspace_words()
-            );
+            // The budget is derived independently of `workspace_words`: no retired
+            // row staging may inflate either encoding or reconstruction admission.
+            assert_eq!(encode_bytes, shape.encoded_bytes() + scratch_bytes);
             let budget = AllocationBudget::new(encode_bytes);
             let encoded = encode_funded(shape, &payload, &budget).unwrap();
             assert!(encoded.codeword() == expected.as_slice());

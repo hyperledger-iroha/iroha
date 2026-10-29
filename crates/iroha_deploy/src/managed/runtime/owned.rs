@@ -222,6 +222,7 @@ impl PeerProcesses {
         ownership: &File,
         daemon: &super::super::program::NativeProgram,
         launch: Option<Arc<GeneratedLaunch>>,
+        listeners: Option<&super::super::listeners::WorkerListeners>,
         budget: &activation::Budget,
     ) -> Result<()> {
         if !self.children.is_empty() || self.launch.is_some() {
@@ -258,6 +259,22 @@ impl PeerProcesses {
                 .stdin(Stdio::from(ownership.try_clone()?))
                 .stdout(log.try_clone()?)
                 .stderr(log);
+            if let Some(listeners) = listeners {
+                // The timestamp precedes the remaining-budget read, so argument construction
+                // cannot grant the daemon time beyond this owner's original deadline.
+                let now = iroha_primitives::time::native_continuous_clock_nanos()?;
+                let remaining = budget
+                    .check()
+                    .map_err(|failure| Error::Invalid(failure.message()))?;
+                let deadline = now
+                    .checked_add(remaining.as_nanos())
+                    .ok_or_else(|| invalid("listener handoff deadline overflow"))?;
+                command
+                    .arg("--managed-listeners")
+                    .arg(listeners.directory())
+                    .arg("--managed-listener-deadline-ns")
+                    .arg(deadline.to_string());
+            }
             daemon.validate()?;
             self.children
                 .push(Arc::new(Mutex::new(spawn_with_launch_fence(
@@ -267,6 +284,18 @@ impl PeerProcesses {
                     daemon,
                     budget,
                 )?)));
+            if let Some(listeners) = listeners {
+                let mut child = self.children[index]
+                    .lock()
+                    .map_err(|_| invalid("owned child lock failed"))?;
+                listeners.send_to_child(
+                    index,
+                    &mut child,
+                    budget
+                        .deadline()
+                        .map_err(|failure| Error::Invalid(failure.message()))?,
+                )?;
+            }
         }
         if let Some(launch) = &self.launch {
             launch.validate()?;
