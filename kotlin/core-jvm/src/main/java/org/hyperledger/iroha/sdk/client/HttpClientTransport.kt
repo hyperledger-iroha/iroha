@@ -86,6 +86,7 @@ import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
 import org.hyperledger.iroha.sdk.alias.AccountAliasName
 import org.hyperledger.iroha.sdk.client.collections.AccountAssetRow
 import org.hyperledger.iroha.sdk.client.collections.AccountHistoryRow
+import org.hyperledger.iroha.sdk.client.collections.AssetMovementRow
 import org.hyperledger.iroha.sdk.client.collections.AccountRow
 import org.hyperledger.iroha.sdk.client.collections.AccountPermissionRow
 import org.hyperledger.iroha.sdk.client.collections.SubscriptionPlanRow
@@ -421,6 +422,21 @@ class HttpClientTransport private constructor(
     /** Account movements, newest first, with cursor-bounded history controls. */
     fun accountHistory(accountId: String): ToriiCollection<AccountHistoryRow> =
         collection("/v1/accounts/${collectionPathSegment(accountId, "accountId")}/history", ::AccountHistoryRow, history = true)
+
+    /**
+     * Every committed movement of [assetDefinitionId] (`/v1/assets/{definition_id}/movements`), a
+     * history collection read newest first from the node's movement index: one [AssetMovementRow]
+     * per movement, KAGEMUSHA Loads, Unloads, fee claims and charges included. Filter on
+     * `from_account_id` and `to_account_id` for one account's movements; a page examines a bounded
+     * number of rows, so it may hold fewer than `limit` and still continue. While the node catches
+     * up with the committed tip it answers `503 asset_movements_indexing` with `Retry-After`.
+     */
+    fun assetMovements(assetDefinitionId: String): ToriiCollection<AssetMovementRow> =
+        collection(
+            "/v1/assets/${collectionPathSegment(assetDefinitionId, "assetDefinitionId")}/movements",
+            ::AssetMovementRow,
+            history = true,
+        )
 
     /** Explorer accounts rows, with bounded cursor pagination. */
     @get:JvmName("explorerAccounts")
