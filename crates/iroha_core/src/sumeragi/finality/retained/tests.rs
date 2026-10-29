@@ -120,6 +120,59 @@ fn expire_coverage(holder: &RetainedAttestation) {
 }
 
 #[test]
+fn early_attestations_with_attached_producer_keep_complete_native_proofs() {
+    for height in [1, 2] {
+        let chain = chain_at(height);
+        let original = attest_tip(&chain, [81; 32]).unwrap();
+        let mut producer = RetainedAttestationProducer::attach(Arc::clone(chain.state())).unwrap();
+        assert!(!producer.step());
+        assert!(chain.kura().retained_attestation().current().is_none());
+        let (actual, checked) = relation_counts::measure(|| attest_tip(&chain, [81; 32]));
+        let actual = actual.expect("H1/H2 complete proofs do not require a retained authority");
+        same_body_except_fresh_clock(&actual, &original);
+        assert_eq!(
+            checked.frames,
+            if height == 1 {
+                vec![1, 1]
+            } else {
+                vec![1, 1, 2]
+            }
+        );
+        assert_eq!(checked.qcs, if height == 1 { vec![] } else { vec![2] });
+        assert!(retained_attestation_releasable(chain.state(), height));
+
+        let tip = NonZeroUsize::new(height as usize).unwrap();
+        chain.kura().corrupt_native_frame_for_test(tip);
+        assert!(
+            attest_tip(&chain, [82; 32]).is_err(),
+            "early proofs still read the original native frame"
+        );
+        chain.kura().corrupt_native_frame_for_test(tip);
+        attest_tip(&chain, [83; 32]).unwrap();
+    }
+}
+
+#[test]
+fn early_attestations_preserve_poison_and_later_unminted_refusal() {
+    for height in [1, 2, 3] {
+        let chain = chain_at(height);
+        let _producer = RetainedAttestationProducer::attach(Arc::clone(chain.state())).unwrap();
+        if height > 2 {
+            let error = attest_tip(&chain, [84; 32]).unwrap_err();
+            assert!(error.to_string().contains("not minted"));
+            assert!(!retained_attestation_releasable(chain.state(), height));
+        }
+        chain
+            .kura()
+            .retained_attestation()
+            .poison("test historical contradiction");
+        let error = attest_tip(&chain, [85; 32]).unwrap_err();
+        assert!(error.to_string().contains("poisoned"));
+        assert!(!retained_attestation_releasable(chain.state(), height));
+    }
+}
+
+#[test]
 fn retained_attestation_reads_only_the_target_pair_and_signs_the_same_body() {
     let chain = chain_at(12);
     let original = attest_tip(&chain, [71; 32]).unwrap();

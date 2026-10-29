@@ -1,9 +1,11 @@
-//! Joint CA/MAIN ownership inside the unchanged MAIN arithmetic envelope.
+//! Joint CA/MAIN ownership inside the complete prover arithmetic envelope.
 //!
 //! This module requires the retained-cut MAIN replay candidate. Both original
 //! cut owners are already charged by its ordinary plan. Every registration's
 //! coefficient cache loses the complete additional CA/metadata reservation.
 //! The24 MAIN originals are constructed only after registration scratch drops.
+//! The shared plan derives its envelope from these complete phase lifetimes,
+//! including the original CA owners when registration work dominates.
 //! These are allocation admissions, never measured process RSS/address-space
 //! guarantees. The staged caller still owns the fixed source/runtime reserve.
 
@@ -67,7 +69,23 @@ impl MainCaJointBufferPlanV1 {
     }
 
     pub(super) fn new_v1(layout: &AggregateProofLayoutV1) -> Result<Self, ZkX509StarkErrorV1> {
-        let common = MainProverBufferPlanV1::new_v1(layout)?;
+        let plan = Self::from_common_v1(MainProverBufferPlanV1::new_v1(layout)?)?;
+        for phase in [
+            MainCaBufferPhaseV1::OriginalCommitments,
+            MainCaBufferPhaseV1::Registration,
+            MainCaBufferPhaseV1::PrivateLinks,
+            MainCaBufferPhaseV1::Finalization,
+        ] {
+            plan.required_v1(phase)?;
+        }
+        Ok(plan)
+    }
+
+    /// Derive concrete joint owners before the common plan selects its peak.
+    /// This does not admit any allocation or recurse into common-plan construction.
+    pub(super) fn from_common_v1(
+        common: MainProverBufferPlanV1,
+    ) -> Result<Self, ZkX509StarkErrorV1> {
         let request = ca::ca_accumulator_resource_request_v1(
             ca::ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1,
             1,
@@ -103,28 +121,31 @@ impl MainCaJointBufferPlanV1 {
         {
             return Err(ZkX509StarkErrorV1::ProofTooLarge);
         }
-        let plan = Self {
+        Ok(Self {
             common,
             ca_originals: CaAwaitingMainAuxiliaryV1::payload_bound_v1()
                 .map_err(|_| ZkX509StarkErrorV1::ProofTooLarge)?,
             main_originals: MainCaOriginalAuxiliaryV1::payload_bound_v1(),
             metadata: Self::METADATA_CAP_V1,
             ca_work: Self::CA_WORK_CAP_V1,
-        };
-        for phase in [
-            MainCaBufferPhaseV1::OriginalCommitments,
-            MainCaBufferPhaseV1::Registration,
-            MainCaBufferPhaseV1::PrivateLinks,
-            MainCaBufferPhaseV1::Finalization,
-        ] {
-            plan.required_v1(phase)?;
-        }
-        Ok(plan)
+        })
     }
 
     /// The MAIN24 cache is absent during every ordinary registration. Charging
     /// it there would exceed the largest registration's remaining headroom.
     pub(super) fn required_v1(
+        &self,
+        phase: MainCaBufferPhaseV1,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let total = self.phase_payload_v1(phase)?;
+        if total > self.common.maximum_live_buffers {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(total)
+    }
+
+    /// Complete simultaneous ownership before applying the common admission cap.
+    pub(super) fn phase_payload_v1(
         &self,
         phase: MainCaBufferPhaseV1,
     ) -> Result<usize, ZkX509StarkErrorV1> {
@@ -153,11 +174,7 @@ impl MainCaJointBufferPlanV1 {
                 common.openings,
             ])?,
         };
-        let total = sum_v1(&[common.masks, common.retained_cuts, extra, transient])?;
-        if total > common.maximum_live_buffers {
-            return Err(ZkX509StarkErrorV1::ProofTooLarge);
-        }
-        Ok(total)
+        sum_v1(&[common.masks, common.retained_cuts, extra, transient])
     }
 
     /// Narrow the canonical registration cache instead of spending the same

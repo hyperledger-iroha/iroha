@@ -126,12 +126,13 @@ impl RetainedAttestation {
         Ok(true)
     }
 
-    /// Recheck before signing: the authority must still cover this exact view.
+    /// Recheck before signing: H1/H2 have complete proofs; later captures require
+    /// retained coverage. Poisoned history refuses at every height.
     pub(super) fn recheck(&self, view: &impl StateReadOnly, height: u64) -> Result<(), ProofError> {
         if self.poisoned.load(Ordering::Acquire) {
             return Err(refused("is poisoned"));
         }
-        if self.attached.load(Ordering::Acquire) {
+        if !matches!(height, 1 | 2) && self.attached.load(Ordering::Acquire) {
             self.usable(view, height)?;
         }
         Ok(())
@@ -617,8 +618,9 @@ impl Drop for RetainedAttestationProducer {
 }
 
 /// Whether a current attestation signed at `height` may still be released: an
-/// attached retained authority must still cover it on a fresh view. Routes call
-/// this after encoding, immediately before the response leaves the node.
+/// attached retained authority must still cover later heights on a fresh view;
+/// H1/H2 retain their complete proof capture. Poison refuses every height. Routes
+/// call this after encoding, immediately before the response leaves the node.
 pub fn retained_attestation_releasable(state: &State, height: u64) -> bool {
     let view = state.view();
     view.kura()

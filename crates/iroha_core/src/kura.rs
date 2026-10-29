@@ -1141,7 +1141,7 @@ impl Kura {
         kura_inner.temp_store_dir = Some(temp_store_dir);
         Ok(kura)
     }
-    fn acquire_store_root_lock(
+    pub(crate) fn acquire_store_root_lock(
         store_root: &Path,
         create_if_missing: bool,
     ) -> Result<std::fs::File> {

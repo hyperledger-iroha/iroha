@@ -403,6 +403,26 @@ fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> 
         }
     }
 }
+/// Adopt an exact managed endpoint without releasing its bound socket.
+fn adopt_torii_tcp_listener(
+    address: &SocketAddr,
+    listener: std::net::TcpListener,
+) -> std::io::Result<TcpListener> {
+    let actual = listener.local_addr()?;
+    let matches = match address {
+        SocketAddr::Ipv4(expected) => actual == std::net::SocketAddr::V4((*expected).into()),
+        SocketAddr::Ipv6(expected) => actual == std::net::SocketAddr::V6((*expected).into()),
+        SocketAddr::Host(_) => false,
+    };
+    if !matches {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "prebound Torii listener does not match the configured numeric address",
+        ));
+    }
+    listener.set_nonblocking(true)?;
+    TcpListener::from_std(listener)
+}
 #[derive(Debug)]
 struct SocketAdmissionState {
     active: usize,
@@ -42042,6 +42062,7 @@ ingress,
         self.push.clone()
     }
     /// To handle incoming requests `Torii` should be started first.
+    /// An owned prebound listener retains a managed launcher's exact endpoint reservation.
     ///
     /// # Errors
     /// Can fail due to listening to network or if http server fails
@@ -42049,6 +42070,7 @@ ingress,
     pub async fn start(
         self,
         shutdown_signal: ShutdownSignal,
+        prebound_listener: Option<std::net::TcpListener>,
     ) -> core::result::Result<(), Report<Error>> {
         let _shutdown_on_drop = ShutdownOnDrop::new(shutdown_signal.clone());
         if shutdown_signal.is_sent() {
@@ -42091,10 +42113,13 @@ ingress,
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
         // Bind before launching any background service. A bind failure must leave no detached
         // Torii workers behind in the caller's runtime.
-        let listener = bind_torii_tcp_listener(torii_address.clone())
-            .change_context(Error::StartServer)
-            .attach("failed to bind to the specified address")
-            .attach_with(|| self.address.clone().into_attachment())?;
+        let listener = match prebound_listener {
+            Some(listener) => adopt_torii_tcp_listener(&torii_address, listener),
+            None => bind_torii_tcp_listener(torii_address.clone()),
+        }
+        .change_context(Error::StartServer)
+        .attach("failed to bind to the specified address")
+        .attach_with(|| self.address.clone().into_attachment())?;
         let https = match https {
             Some(prepared) => Some(
                 prepared

@@ -71,28 +71,39 @@ fn outer_assembly_limit_and_source_reserves_remain_unchanged() {
     assert_eq!(link_owner, 3 * 192 * 64 + 64 + 24 + 192 * 32);
     assert_eq!(
         source_limit,
-        596_974_144 - mask_scratch - SHARED_POWERS_ALLOWANCE_V1
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - SHARED_POWERS_ALLOWANCE_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
     );
     let key_owner = super::super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1();
     assert_eq!(key_owner, 8 * 1024 * 1024);
     let union_owner = super::super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1();
-    assert_eq!(union_owner, 6_416);
+    // Three plans each retain 116 (group, column) coordinates and six
+    // points, plus the 24 quotient weights and the original framing reserve.
+    assert_eq!(union_owner, 3 * (116 * 16 + 6 * 8) + 24 + 24 * 32 + 1024);
     let limit = source_limit - link_owner - key_owner - union_owner;
     assert_eq!(
         limit,
-        596_974_144
-            - mask_scratch
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
             - link_owner
             - key_owner
             - union_owner
             - SHARED_POWERS_ALLOWANCE_V1
     );
-    assert_eq!(plan.maximum_live_buffers, 3_697_993_152 + mask_scratch);
+    assert_eq!(
+        plan.maximum_live_buffers,
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
     let policy = MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 288_345_698).unwrap();
     assert_eq!(
         policy.available,
-        308_628_446
-            - mask_scratch
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
+            - 288_345_698
             - link_owner
             - key_owner
             - union_owner
@@ -612,8 +623,10 @@ fn native_replay_metadata_respects_every_phase_residual_without_source_discharge
     }
     assert_eq!(
         original.available,
-        308_628_446
-            - core::mem::size_of::<E>()
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
+            - 288_345_698
             - super::super::main_terminal_links::MainTerminalLinkPlanV1::public_owner_charge_v1()
             - super::super::main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1()
             - super::super::main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1()

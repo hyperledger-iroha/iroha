@@ -14,8 +14,8 @@ use std::{
 
 /// Held loopback reservations for the four Torii and four P2P listeners.
 ///
-/// Keep this value alive until preparation finishes. The reservations are released before
-/// spawning the native worker; another process can still acquire a port before its peer binds.
+/// Keep this value alive through native worker adoption. The worker retains these same
+/// sockets and transfers them to its validators without releasing their bound endpoints.
 pub struct LocalnetPorts {
     /// First of four consecutive Torii ports.
     pub base_api: u16,
@@ -36,6 +36,20 @@ impl LocalnetPorts {
         Ok(Self {
             base_api,
             base_p2p,
+            reservations,
+        })
+    }
+
+    /// Reopen the exact stopped generation's listeners without choosing new endpoints.
+    pub(super) fn reserve_prepared(prepared: &PreparedLocalnet) -> Result<Self> {
+        let addresses = listeners::expected_addresses(prepared)?;
+        let reservations = addresses
+            .iter()
+            .map(|address| bind_reserved_listener(*address))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        Ok(Self {
+            base_api: addresses[0].port(),
+            base_p2p: addresses[4].port(),
             reservations,
         })
     }
@@ -72,7 +86,7 @@ fn reserve_block() -> Result<(u16, Vec<TcpListener>)> {
         // Fresh generations must not all reclaim the same well-known ports while another
         // retained generation is stopped. Keep the OS-selected first socket throughout
         // allocation so concurrent preparations cannot take it between probe and bind.
-        let first = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let first = bind_reserved_listener((Ipv4Addr::LOCALHOST, 0).into())?;
         let base = first.local_addr()?.port();
         if base > u16::MAX - 3 {
             continue;
@@ -80,7 +94,7 @@ fn reserve_block() -> Result<(u16, Vec<TcpListener>)> {
         let mut listeners = Vec::with_capacity(4);
         listeners.push(first);
         for offset in 1..4 {
-            match TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)) {
+            match bind_reserved_listener((Ipv4Addr::LOCALHOST, base + offset).into()) {
                 Ok(listener) => listeners.push(listener),
                 Err(_) => break,
             }
@@ -92,6 +106,20 @@ fn reserve_block() -> Result<(u16, Vec<TcpListener>)> {
     Err(Error::Invalid(
         "cannot reserve four consecutive loopback ports".into(),
     ))
+}
+
+fn bind_reserved_listener(address: std::net::SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV4,
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    // Match the native listeners' restart semantics without sharing a live listener.
+    #[cfg(unix)]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
 }
 
 /// Owner-private managed contexts and their retained localnet generations.
@@ -482,6 +510,10 @@ impl ManagedStore {
             // processes merely because their integer PID appears in a previous record.
             let available = acquire(&directory, "runtime.lock", &request.name)?;
             clear_worker_session(&directory)?;
+            if reservations.is_none() {
+                reservations = Some(LocalnetPorts::reserve_prepared(&retained.prepared)?);
+            }
+            let listener_handoff = listeners::FrontendListeners::bind(&directory)?;
             let launcher = super::program::NativeProgram::matching(&retained.launcher)?;
             let output = directory.open_append("supervisor.log")?;
             let errors = output.try_clone()?;
@@ -520,7 +552,6 @@ impl ManagedStore {
                 .arg(milliseconds.to_string())
                 .arg("--startup-deadline-ns")
                 .arg(startup_deadline_ns.to_string());
-            drop(reservations.take());
             programs.validate()?;
             launcher.validate()?;
             // These original native owners remain alive across spawn. This is a source fence,
@@ -530,13 +561,43 @@ impl ManagedStore {
                 request.startup_timeout,
                 startup_deadline_ns,
             )?;
+            let handoff_deadline = Instant::now()
+                .checked_add(runtime::startup_remaining_until(
+                    started,
+                    request.startup_timeout,
+                    startup_deadline_ns,
+                )?)
+                .ok_or_else(|| Error::Invalid("listener handoff deadline overflow".into()))?;
             let mut worker = command.spawn()?;
+            let handoff = listener_handoff.send_to_worker(
+                &mut worker,
+                &reservations
+                    .as_ref()
+                    .expect("reserved startup listeners")
+                    .reservations,
+                handoff_deadline,
+            );
             // The inherited original remains held across process loading and admission.
             drop(available);
             // Reap this exact child eventually without blocking the CLI after successful startup.
             thread::spawn(move || {
                 let _ = worker.wait();
             });
+            if let Err(error) = handoff {
+                let cleanup = expire_startup(
+                    &directory,
+                    &retained.prepared.context,
+                    request.startup_timeout,
+                );
+                return match cleanup {
+                    Ok(_) => Err(error),
+                    Err(cleanup) => Err(Error::Invalid(format!(
+                        "listener handoff failed: {error}; startup cleanup is unconfirmed: {cleanup}"
+                    ))),
+                };
+            }
+            // The worker now owns the same bound sockets; there is no release-and-rebind gap.
+            drop(reservations.take());
         }
         loop {
             match runtime::startup_remaining_until(

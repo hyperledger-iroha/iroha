@@ -4964,6 +4964,7 @@ dependencies = [
  "rcgen",
  "rustix 1.1.6",
  "rustls",
+ "socket2",
  "sorafs_manifest",
  "sorafs_node",
  "tempfile",

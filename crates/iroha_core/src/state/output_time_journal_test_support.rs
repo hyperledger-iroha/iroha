@@ -46,7 +46,11 @@ pub(super) fn state_fixture_with_repetitions(
         let mut block = world.triggers.block();
         let mut tx = block.transaction();
         let schedule = Schedule::starting_at(Duration::from_millis(10));
-        let schedule = if periodic { schedule.with_period(Duration::from_millis(10)) } else { schedule };
+        let schedule = if periodic {
+            schedule.with_period(Duration::from_millis(10))
+        } else {
+            schedule
+        };
         let mut action = SpecializedAction::new(
             Executable::Instructions(Vec::<InstructionBox>::new().into()),
             Repeats::Exactly(repetitions),

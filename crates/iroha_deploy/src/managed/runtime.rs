@@ -114,9 +114,14 @@ pub fn run_worker(
         budget
             .check()
             .map_err(|failure| Error::Invalid(failure.message()))?;
-        Ok((daemon_program, listener, worker))
+        let listeners = listeners::WorkerListeners::receive(
+            &directory,
+            &retained.prepared,
+            startup_deadline_ns,
+        )?;
+        Ok((daemon_program, listener, worker, listeners))
     })();
-    let (daemon_program, listener, worker) = match admission {
+    let (daemon_program, listener, worker, bound_listeners) = match admission {
         Ok(admitted) => admitted,
         Err(error) => return fail_before_session(&directory, &mut status, &budget, error),
     };
@@ -139,6 +144,7 @@ pub fn run_worker(
             &ownership,
             &daemon_program,
             launch,
+            Some(&bound_listeners),
             &budget,
         )
         .is_err()
@@ -232,6 +238,9 @@ pub fn run_worker(
             && same_token(&request.token, &worker.token)
         {
             match request.action {
+                ControlAction::ListenerAdoption => {
+                    // Socket adoption is admitted only on its separate process-bound endpoint.
+                }
                 ControlAction::Status => {
                     let _ = connection.reply(&status);
                 }
@@ -325,6 +334,7 @@ pub fn run_worker(
                                 &ownership,
                                 &daemon_program,
                                 Some(launch),
+                                Some(&bound_listeners),
                                 &budget,
                             )
                             .map_err(|_| {
@@ -582,7 +592,7 @@ fn observe_readiness<T>(
     }
 }
 
-fn same_token(left: &str, right: &str) -> bool {
+pub(super) fn same_token(left: &str, right: &str) -> bool {
     left.len() == 64
         && right.len() == 64
         && left

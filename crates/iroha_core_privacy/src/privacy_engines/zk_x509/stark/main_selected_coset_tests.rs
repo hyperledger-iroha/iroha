@@ -543,6 +543,53 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
     }
 }
 
+#[test]
+fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
+    assert_eq!(
+        2176,
+        QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1)
+    );
+    for native in [5, 8] {
+        let maximum = (1usize << native) + MASK_DEGREE + 1;
+        for coefficients in [1, maximum - 1, maximum] {
+            for selected in [1, 127, 128, 2176] {
+                assert!(prefer_horner_v1(native, 22, coefficients, selected));
+            }
+        }
+        for (coefficients, selected) in [(0, 1), (maximum + 1, 1), (1, 0), (1, 2177)] {
+            assert!(!prefer_horner_v1(native, 22, coefficients, selected));
+        }
+        for common in [0, 14, 21, 23, u8::MAX] {
+            assert!(!prefer_horner_v1(native, common, maximum, 2176));
+        }
+    }
+    for native in [0, 4, 6, 15, 16, 18, 19, u8::MAX] {
+        assert!(!prefer_horner_v1(native, 22, 1, 1));
+    }
+}
+
+#[test]
+fn selected_horner_common22_erases_populated_output_on_unwind() {
+    let mut coefficients = vec![F::ZERO; (1 << 8) + MASK_DEGREE + 1];
+    *coefficients.last_mut().unwrap() = F(GOLDILOCKS_MODULUS_V1 - 1);
+    let selected = (0..2176).collect::<Vec<_>>();
+    assert!(prefer_horner_v1(8, 22, coefficients.len(), selected.len()));
+    let (result, erased) = inspection::observe_v1(|| {
+        std::panic::catch_unwind(|| {
+            let _output = evaluate_horner_with_v1(&coefficients, 8, 22, &selected, |output| {
+                assert_eq!(output.len(), selected.len());
+                assert!(output.iter().all(|&value| value != F::ZERO));
+                panic!("after selected common22 Horner evaluation");
+            });
+        })
+    });
+    assert!(result.is_err());
+    assert_eq!(erased.len(), 1);
+    assert_eq!(erased[0].cells, selected.len());
+    assert_eq!(erased[0].nonzero_before, selected.len());
+    assert_eq!(erased[0].nonzero_after, 0);
+}
+
 /// Count only public butterfly positions; this is a cost model, not timing.
 fn selected_public_pruned_positions_v1(common: u8, selected: &[usize]) -> usize {
     fn count(rows: usize, offset: usize, indices: &[usize]) -> usize {
@@ -739,8 +786,23 @@ fn selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows() {
                     let started = Instant::now();
                     let actual = if path == 2 {
                         let before = metal.receipt.metal_columns;
+                        assert!(!fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1());
                         let output = metal
-                            .evaluate_selected_v1(&columns, native, common, &selected)
+                            .evaluate_selected_policy_with_v1::<false>(
+                                &columns,
+                                native,
+                                common,
+                                Some(&selected),
+                                |batch, root| {
+                                    transform_goldilocks_columns_v1(
+                                        batch,
+                                        root,
+                                        Direction::Forward,
+                                        fastpq_prover::ExecutionMode::Auto,
+                                    )
+                                    .map_err(|_| AggregateStarkErrorV1::InvalidLayout)
+                                },
+                            )
                             .unwrap();
                         assert_eq!(metal.receipt.metal_columns - before, width);
                         output

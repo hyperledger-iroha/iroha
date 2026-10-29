@@ -1048,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn private_asset_batches_preserve_requested_query_in_unsupported_response() {
+    fn private_asset_batches_are_rejected_by_each_query_transport() {
         for (batch, expected_label) in [
             (
                 QueryOutputBatchBox::AssetUidPolicyViewV1(Vec::new()),
@@ -1078,13 +1078,22 @@ mod tests {
             for requested in StateQueryKind::all() {
                 let output =
                     QueryOutput::new(QueryOutputBatchBoxTuple::from_batch(batch.clone()), 0, None);
-                let error = parse_iterable_output(requested, output).expect_err(
-                    "a private asset batch cannot become an empty page of another query kind",
-                );
-                assert!(
-                    matches!(error, StateQueryError::UnexpectedBatch { kind, actual }
-                    if kind == requested && actual == expected_label)
-                );
+                if requested.collection().is_some() {
+                    // Collection reads decode the canonical Page envelope in the SDK.
+                    // A signed-query batch must not be accepted as an empty collection page.
+                    let bytes = json::to_vec(&output).unwrap();
+                    assert!(
+                        json::from_slice::<Page<json::Value>>(&bytes).is_err(),
+                        "{requested:?} must reject the {expected_label} query envelope",
+                    );
+                } else {
+                    let error = parse_peer_output(output)
+                        .expect_err("a private asset batch cannot become an empty peers page");
+                    assert!(
+                        matches!(error, StateQueryError::UnexpectedBatch { kind, actual }
+                        if kind == requested && actual == expected_label)
+                    );
+                }
             }
         }
     }

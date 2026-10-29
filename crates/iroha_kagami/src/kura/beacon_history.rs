@@ -974,6 +974,94 @@ mod tests {
                 projection.records[4]["occurrence"]["stored_outcome"].as_str(),
                 Some("recorded_rejection_unverified")
             );
+
+            let lifecycle_outputs = block
+                .execution_outputs()
+                .iter()
+                .cloned()
+                .map(|output| {
+                    use iroha_data_model::block::execution_output::TriggerLifecycleEffectsV1;
+                    let trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
+                        effects: Vec::new(),
+                    };
+                    match output {
+                        ExecutionOutputV1::Network(execution) => {
+                            ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                                execution,
+                                trigger_lifecycle,
+                            })
+                        }
+                        ExecutionOutputV1::Pipeline(execution) => {
+                            ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                                execution,
+                                trigger_lifecycle,
+                            })
+                        }
+                        ExecutionOutputV1::Time(execution) => {
+                            ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                                execution,
+                                trigger_lifecycle,
+                            })
+                        }
+                        ExecutionOutputV1::NetworkWithLifecycle(_)
+                        | ExecutionOutputV1::PipelineWithLifecycle(_)
+                        | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                            panic!("fixture starts with non-lifecycle rows")
+                        }
+                    }
+                })
+                .collect::<Vec<_>>();
+            // This comparison exercises the formatter only, not lifecycle
+            // completeness or block admission. It publishes no fixture carrier.
+            let mut original_projection = Projection::default();
+            let mut lifecycle_projection = Projection::default();
+            for (index, (original, lifecycle)) in block
+                .execution_outputs()
+                .iter()
+                .zip(&lifecycle_outputs)
+                .enumerate()
+            {
+                original_projection
+                    .output(&block, index, original)
+                    .expect("original output projection");
+                lifecycle_projection
+                    .output(&block, index, lifecycle)
+                    .expect("lifecycle output projection");
+            }
+            assert_eq!(lifecycle_projection.counts, original_projection.counts);
+            assert_eq!(lifecycle_projection.gaps, original_projection.gaps);
+            assert_eq!(
+                lifecycle_projection.records.len(),
+                original_projection.records.len()
+            );
+            for (actual, expected) in lifecycle_projection
+                .records
+                .iter_mut()
+                .zip(original_projection.records.iter_mut())
+            {
+                if let Some(index) = actual["occurrence"]["output_index"].as_u64() {
+                    let expected_hash = HashOf::new(&lifecycle_outputs[index as usize]).to_string();
+                    assert_eq!(
+                        actual["occurrence"]["output_hash"].as_str(),
+                        Some(expected_hash.as_str())
+                    );
+                    assert_ne!(
+                        actual["occurrence"]["output_hash"],
+                        expected["occurrence"]["output_hash"]
+                    );
+                    for record in [&mut *actual, &mut *expected] {
+                        record
+                            .as_object_mut()
+                            .unwrap()
+                            .get_mut("occurrence")
+                            .unwrap()
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("output_hash");
+                    }
+                }
+                assert_eq!(actual, expected, "retain every projected execution fact");
+            }
         }
         let mut omitted = (*original).clone();
         let terminal = ExecutionOutputV1::time_output_limit_rejection(time_invocation(&omitted));

@@ -212,16 +212,14 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
                 crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
             >()
     );
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(plan.quotient_cache_reserve, 67_341_864);
     assert_eq!(
         plan.maximum_live_buffers,
-        plan.masks
-            + (plan.quotient_stage + plan.replay_batch).max(
-                plan.joined_streams
-                    + plan.replay_batch
-                    + plan.composition
-                    + plan.fri_stage
-                    + plan.openings
-            )
+        joint
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::Registration)
+            .unwrap()
+            + plan.quotient_cache_reserve
     );
     assert_eq!(
         (plan.maximum_live_buffers + plan.remaining_source_and_runtime_envelope) as u64,
@@ -230,7 +228,8 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
     // The current RFC stripe is the largest registration phase. It retains
     // the full 147-column fixed stripe, all quotient originals and the outer
     // chunks; interpolation and incoming chunks are charged in their own phase.
-    // The unchanged FRI envelope still dominates the global arithmetic bound.
+    // The complete joint registration and two cache batches now dominate the
+    // global arithmetic bound independently of the SHA3 owner's inline size.
     assert_eq!(core::mem::size_of::<E>(), 32);
     assert_eq!(
         super::super::super::composition_masking::QuotientChunkGeometryV1::mask_scratch_bytes_v1(),
@@ -239,18 +238,18 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
     assert_eq!(plan.quotient_stage, 3_166_719_464);
     assert_eq!(
         plan.maximum_live_buffers,
-        3_698_327_232 + core::mem::size_of::<E>()
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope,
-        9_186_574_656 - core::mem::size_of::<E>()
+        (12_usize << 30) - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope
             - main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1
             - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
-        596_640_064 - core::mem::size_of::<E>(),
+        (4_usize << 30) - main_resources::CURRENT_FULL_PROFILE_PEAK_V1,
     );
     assert_eq!(
         plan.remaining_source_and_runtime_envelope
@@ -259,7 +258,10 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
             - main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
             - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
             - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1,
-        592_445_680 - core::mem::size_of::<E>() - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+            - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+            - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
     );
     // This remainder must also cover borrowed sources and process overhead;
     // passing this buffer check is not whole-prover or RSS qualification.
@@ -349,8 +351,8 @@ fn maximum_profile_assembly_payload_fits_source_admission_before_masks() {
     );
     assert_eq!(
         allowance,
-        596_640_064
-            - core::mem::size_of::<E>()
+        (4_usize << 30)
+            - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
             - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
             - main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1
     );
@@ -719,18 +721,18 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
-        3_698_327_232 + core::mem::size_of::<E>()
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         buffers.remaining_source_and_runtime_envelope,
-        9_186_574_656 - core::mem::size_of::<E>()
+        (12_usize << 30) - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     // Both cut owners remain live. Phase-specific accounting admits all 283
     // P-256 arithmetic columns in each of five registrations, while the RFC
-    // registration retains only its first 26 base columns across four stripes.
-    assert_eq!(cached_columns, 3_444);
-    assert_eq!(quotient_native_iffts, 7_448);
-    assert_eq!(quotient_native_butterflies, 28_151_820_800);
+    // registration retains only its first 25 base columns across four stripes.
+    assert_eq!(cached_columns, 3_443);
+    assert_eq!(quotient_native_iffts, 7_451);
+    assert_eq!(quotient_native_butterflies, 28_166_763_008);
     assert_eq!(quotient_forward_butterflies, 143_013_781_504);
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
     assert_eq!(other_native_butterflies, 80_391_882_752);
@@ -793,7 +795,7 @@ fn projection_sha_binding_geometry_keeps_the_existing_resource_ceilings() {
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     assert_eq!(
         plan.maximum_live_buffers,
-        3_697_993_184 + extra_masks + extra_openings
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
     assert_eq!(
         super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
@@ -957,5 +959,8 @@ fn current_registration_resource_owner_plan_diagnostic() {
     }
     // This is source-derived allocation arithmetic only. Original numeric pins,
     // complete native proof/RSS and all external limits remain separate gates.
-    assert_eq!(plan.maximum_live_buffers, 3_698_327_264);
+    assert_eq!(
+        plan.maximum_live_buffers,
+        main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
 }
