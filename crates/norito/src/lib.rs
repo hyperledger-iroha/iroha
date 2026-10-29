@@ -9824,7 +9824,9 @@ where
 }
 
 mod prepared_canonical;
-pub use prepared_canonical::PreparedCanonicalDecode;
+pub use prepared_canonical::{
+    CanonicalDecodeControlError, PreparedCanonicalDecode, decode_canonical_with_owned_controls,
+};
 
 enum CanonicalDecodeScope<'a> {
     Ordinary(DecodeLimits),

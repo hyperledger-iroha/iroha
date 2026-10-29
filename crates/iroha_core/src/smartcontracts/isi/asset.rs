@@ -102,8 +102,7 @@ pub mod isi {
             }
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
-            if fx_registry_references_escrow_asset(self.parameters.get(), network_id, &resolved_id)?
-            {
+            if fx_registry_references_escrow_asset(self, network_id, &resolved_id)? {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "FX corridor escrow can only be debited by the sealed native FX settlement or owner-refund path"
                         .into(),
@@ -136,7 +135,7 @@ pub mod isi {
                 &candidate,
             )
             .map_err(|error| self.attempt_error_to_instruction_error(error))?;
-            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit_in_transaction(
                 self,
                 &resolved_id,
                 &candidate,
@@ -587,8 +586,11 @@ pub mod isi {
             candidate: &Quantity,
         ) -> Result<(), Error> {
             let account = self.account(asset_id.account())?;
-            let store =
-                load_asset_transfer_control_store_from_account(account.id(), account.metadata())?;
+            let store = load_asset_transfer_control_store_with_world(
+                account.id(),
+                account.metadata(),
+                Some(self),
+            )?;
             let Some(limit) = store
                 .find(asset_id.definition())
                 .and_then(|record| record.holding_limit.as_ref())
@@ -621,8 +623,11 @@ pub mod isi {
                 return Ok(());
             }
             let account = self.account(asset_id.account())?;
-            let store =
-                load_asset_transfer_control_store_from_account(account.id(), account.metadata())?;
+            let store = load_asset_transfer_control_store_with_world(
+                account.id(),
+                account.metadata(),
+                Some(self),
+            )?;
             let Some(record) = store.find(asset_id.definition()) else {
                 return Ok(());
             };
@@ -848,19 +853,24 @@ pub mod isi {
         account_id: &AccountId,
         metadata: &Metadata,
     ) -> Result<AssetTransferControlStoreV1, Error> {
+        load_asset_transfer_control_store_with_world(account_id, metadata, None)
+    }
+    fn load_asset_transfer_control_store_with_world(
+        account_id: &AccountId,
+        metadata: &Metadata,
+        world: Option<&WorldTransaction<'_, '_>>,
+    ) -> Result<AssetTransferControlStoreV1, Error> {
         let Some(raw) = metadata.get(&*ASSET_TRANSFER_CONTROL_KEY) else {
             return Ok(AssetTransferControlStoreV1::default());
         };
-        let store = raw
-            .try_into_any_norito::<AssetTransferControlStoreV1>()
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
+        let store = decode_asset_policy::<AssetTransferControlStoreV1>(world, raw, |err| {
+            InstructionExecutionError::InvariantViolation(
                     format!(
                         "invalid account metadata `{ASSET_TRANSFER_CONTROL_METADATA_KEY}` on {account_id}: {err}"
                     )
                     .into(),
                 )
-            })?;
+        })?;
         if store.controls.is_empty() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
@@ -1014,7 +1024,11 @@ pub mod isi {
         account_id: &AccountId,
     ) -> Result<AssetTransferControlStoreV1, Error> {
         let account = state_transaction.world.account(account_id)?;
-        load_asset_transfer_control_store_from_account(account.id(), account.metadata())
+        load_asset_transfer_control_store_with_world(
+            account.id(),
+            account.metadata(),
+            Some(&state_transaction.world),
+        )
     }
     fn persist_asset_transfer_control_store(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -1250,9 +1264,10 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         source: &AssetId,
     ) -> Result<Option<RetailDailyLimitPolicyV1>, Error> {
-        let governed_definition =
-            retail_state::has_policy_for_definition(state_transaction.world(), source.definition())
-                .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+        let governed_definition = retail_state::has_policy_for_definition_in_transaction(
+            &state_transaction.world,
+            source.definition(),
+        )?;
         if !governed_definition {
             return Ok(None);
         }
@@ -1261,12 +1276,11 @@ pub mod isi {
                 "retail-governed asset debit requires its exact physical dataspace balance".into(),
             ));
         };
-        let policy = retail_state::policy_for_exact(
-            state_transaction.world(),
+        let policy = retail_state::policy_for_exact_in_transaction(
+            &state_transaction.world,
             source.definition(),
             *dataspace,
-        )
-        .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?
+        )?
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "retail-governed asset debit has no policy for its balance dataspace".into(),
@@ -1288,8 +1302,8 @@ pub mod isi {
         policy
             .validate_shape()
             .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
-        let activation = retail_state::activation_for_exact(state_transaction.world(), &policy)
-            .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+        let activation =
+            retail_state::activation_for_exact_in_transaction(&state_transaction.world, &policy)?;
         if state_transaction.block_unix_timestamp_ms() < activation.enforce_from_day_start_ms {
             return Err(InstructionExecutionError::InvariantViolation(
                 "retail DAY governed debits remain closed until the next UTC day after activation"
@@ -1324,13 +1338,12 @@ pub mod isi {
         policy: &RetailDailyLimitPolicyV1,
         account: &AccountId,
     ) -> Result<RetailIdentityCommitmentV1, Error> {
-        let attestation = retail_state::identity_for_exact(
-            state_transaction.world(),
+        let attestation = retail_state::identity_for_exact_in_transaction(
+            &state_transaction.world,
             &policy.asset_definition_id,
             policy.physical_dataspace,
             account,
-        )
-        .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?
+        )?
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 format!("retail-governed account {account} has no issuer-signed identity binding")
@@ -1395,8 +1408,7 @@ pub mod isi {
                 state_transaction.block_unix_timestamp_ms(),
             )?,
         };
-        let before = retail_state::usage_for_exact(state_transaction.world(), &key)
-            .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+        let before = retail_state::usage_for_exact_in_transaction(&state_transaction.world, &key)?;
         let after = before
             .clone()
             .unwrap_or_else(Quantity::zero)
@@ -1517,39 +1529,116 @@ pub mod isi {
         record.updated_at_ms = Some(now_ms);
         Ok(Some(record))
     }
+    /// Check source calendar caps without constructing an unused updated record.
+    /// Canonical stores have unique windows, so borrowed lookup preserves the
+    /// movement's ordered checks with inline arithmetic and no map or output Vec.
+    fn precheck_outbound_asset_transfer_controls(
+        tx: &StateTransaction<'_, '_>,
+        source: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), Error> {
+        use iroha_primitives::numeric::QuantityAccumulator;
+        let store = load_asset_transfer_control_store(tx, source.account())?;
+        let Some(record) = store.find(source.definition()) else {
+            return Ok(());
+        };
+        if record.blacklisted {
+            return Err(InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::Blacklisted(
+                    format!(
+                        "account {} on asset definition {}",
+                        source.account(),
+                        source.definition()
+                    )
+                    .into(),
+                ),
+            ));
+        }
+        let zero = Quantity::zero();
+        for limit in &record.limits {
+            let Some(cap) = limit.cap_amount.as_ref() else {
+                continue;
+            };
+            let bucket_start = bucket_start_ms(limit.window, tx.block_unix_timestamp_ms())?;
+            let before = record
+                .usages
+                .iter()
+                .find(|usage| usage.window == limit.window && usage.bucket_start_ms == bucket_start)
+                .map_or(&zero, |usage| &usage.spent_amount);
+            let mut after = QuantityAccumulator::from_quantity(before);
+            after.try_add(amount).map_err(|_| MathError::Overflow)?;
+            if after.cmp_quantity(cap).is_gt() {
+                return Err(InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::PolicyRejected(
+                        format!(
+                            "outbound transfer cap exceeded for {} on {} {} bucket: {} + {} > {}",
+                            source.account(),
+                            source.definition(),
+                            limit.window.as_str(),
+                            before,
+                            amount,
+                            cap,
+                        )
+                        .into(),
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+    /// Preserve a canonical decoder's local owner before constructing a diagnostic.
+    /// Read-only metadata consumers without a transaction retain their existing errors.
+    fn decode_asset_policy<T: norito::json::JsonDeserializeOwned>(
+        world: Option<&WorldTransaction<'_, '_>>,
+        raw: &Json,
+        rejected: impl FnOnce(norito::Error) -> Error,
+    ) -> Result<T, Error> {
+        norito::core::classify_decode_attempt(|| raw.try_into_any_norito::<T>()).map_err(|error| {
+            match world {
+                Some(world) => world.attempt_error_to_instruction_error(
+                    crate::execution_attempt::canonical_decode_attempt_error(error, |original| {
+                        rejected(original.into_error())
+                    }),
+                ),
+                None => rejected(error.into_error()),
+            }
+        })
+    }
     fn load_issuer_usage_policy(
+        world: &WorldTransaction<'_, '_>,
         definition: &AssetDefinition,
     ) -> Result<AssetIssuerUsagePolicyV1, Error> {
         let Some(raw) = definition.metadata().get(&*ASSET_ISSUER_POLICY_KEY) else {
             return Ok(AssetIssuerUsagePolicyV1::default());
         };
-        raw.try_into_any_norito::<AssetIssuerUsagePolicyV1>()
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "invalid metadata `{}` on asset definition {}: {err}",
-                        ASSET_ISSUER_USAGE_POLICY_METADATA_KEY,
-                        definition.id()
-                    )
-                    .into(),
+        decode_asset_policy::<AssetIssuerUsagePolicyV1>(Some(world), raw, |err| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "invalid metadata `{}` on asset definition {}: {err}",
+                    ASSET_ISSUER_USAGE_POLICY_METADATA_KEY,
+                    definition.id()
                 )
-            })
+                .into(),
+            )
+        })
     }
-    fn load_domain_usage_policy(domain: &Domain) -> Result<DomainAssetUsagePolicyV1, Error> {
+    fn load_domain_usage_policy(
+        world: &WorldTransaction<'_, '_>,
+        domain: &Domain,
+    ) -> Result<DomainAssetUsagePolicyV1, Error> {
         let Some(raw) = domain.metadata().get(&*DOMAIN_ASSET_POLICY_KEY) else {
             return Ok(DomainAssetUsagePolicyV1::default());
         };
-        raw.try_into_any_norito::<DomainAssetUsagePolicyV1>()
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "invalid metadata `{}` on domain {}: {err}",
-                        DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
-                        domain.id()
-                    )
-                    .into(),
+        decode_asset_policy::<DomainAssetUsagePolicyV1>(Some(world), raw, |err| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "invalid metadata `{}` on domain {}: {err}",
+                    DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
+                    domain.id()
                 )
-            })
+                .into(),
+            )
+        })
     }
     fn ensure_domain_binding_allows_asset(
         state_transaction: &StateTransaction<'_, '_>,
@@ -1569,7 +1658,11 @@ pub mod isi {
                 state_transaction.block_unix_timestamp_ms(),
             )
             .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
+                state_transaction.world.attempt_error_to_instruction_error(
+                    error.into_attempt_error(|error| {
+                        InstructionExecutionError::InvariantViolation(error.to_string().into())
+                    }),
+                )
             })?;
             if resolved.as_ref() == Some(subject)
                 && let Some(domain_id) = alias
@@ -1593,7 +1686,7 @@ pub mod isi {
                 .world
                 .domain(domain_id)
                 .map_err(Error::from)?;
-            let domain_policy = load_domain_usage_policy(domain)?;
+            let domain_policy = load_domain_usage_policy(&state_transaction.world, domain)?;
             if domain_policy.allows(definition_id) {
                 return Ok(());
             }
@@ -1743,7 +1836,7 @@ pub mod isi {
             .world
             .asset_definition(definition_id)
             .map_err(Error::from)?;
-        let policy = load_issuer_usage_policy(&definition)?;
+        let policy = load_issuer_usage_policy(&state_transaction.world, &definition)?;
         for (subject, dataspace) in participants {
             ensure_subject_usage_policy(
                 state_transaction,
@@ -1767,38 +1860,68 @@ pub mod isi {
                 .or(state_transaction.world.current_dataspace_id),
         }
     }
+    /// Retain the same two smallest distinct values a sorted set would expose.
+    /// Scope discovery needs no owned set, but must finish scanning every alias
+    /// so a later malformed lease still fails in the original order.
+    fn retain_smallest_dataspaces(pair: &mut [Option<DataSpaceId>; 2], value: DataSpaceId) {
+        match pair[0] {
+            None => pair[0] = Some(value),
+            Some(first) if value == first => (),
+            Some(first) if value < first => {
+                pair[1] = pair[0];
+                pair[0] = Some(value);
+            }
+            Some(_) if pair[1].is_none_or(|second| value < second) => pair[1] = Some(value),
+            Some(_) => (),
+        }
+    }
     pub(crate) fn unique_account_dataspace_hint(
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) -> Result<Option<DataSpaceId>, Error> {
-        state_transaction.world.account(account_id)?;
-        let mut linked_dataspaces = BTreeSet::new();
-        for alias in state_transaction.world.bound_account_aliases(account_id) {
+        let account = state_transaction.world.account(account_id)?;
+        let indexed_aliases = state_transaction
+            .world
+            .account_aliases_by_account
+            .get(account_id);
+        let primary_alias = account
+            .as_ref()
+            .label()
+            .filter(|alias| !indexed_aliases.is_some_and(|aliases| aliases.contains(*alias)));
+        let aliases = indexed_aliases
+            .into_iter()
+            .flat_map(|aliases| aliases.iter())
+            .chain(primary_alias);
+        let mut linked_dataspaces = [None, None];
+        for alias in aliases {
             let resolved = crate::sns::resolve_active_account_alias(
                 &state_transaction.world,
                 &state_transaction.nexus.dataspace_catalog,
-                &alias,
+                alias,
                 state_transaction.block_unix_timestamp_ms(),
             )
             .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(error.to_string().into())
+                state_transaction.world.attempt_error_to_instruction_error(
+                    error.into_attempt_error(|error| {
+                        InstructionExecutionError::InvariantViolation(error.to_string().into())
+                    }),
+                )
             })?;
             if resolved.as_ref() == Some(account_id) && alias.dataspace != DataSpaceId::UNIVERSAL {
-                linked_dataspaces.insert(alias.dataspace);
+                retain_smallest_dataspaces(&mut linked_dataspaces, alias.dataspace);
             }
         }
-        if let Ok(account) = state_transaction.world.account(account_id)
-            && let Some(uaid) = account.as_ref().uaid().copied()
+        if let Some(uaid) = account.as_ref().uaid().copied()
             && let Some(bindings) = state_transaction.world.uaid_dataspaces.get(&uaid)
         {
-            linked_dataspaces.extend(bindings.iter().filter_map(|(dataspace, accounts)| {
-                (*dataspace != DataSpaceId::UNIVERSAL && accounts.contains(account_id))
-                    .then_some(*dataspace)
-            }));
+            for (dataspace, accounts) in bindings.iter() {
+                if *dataspace != DataSpaceId::UNIVERSAL && accounts.contains(account_id) {
+                    retain_smallest_dataspaces(&mut linked_dataspaces, *dataspace);
+                }
+            }
         }
-        let mut dataspaces = linked_dataspaces.into_iter();
-        let first = dataspaces.next();
-        if let (Some(first), Some(second)) = (first, dataspaces.next()) {
+        let [first, second] = linked_dataspaces;
+        if let (Some(first), Some(second)) = (first, second) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
                     "account {account_id} is bound to multiple dataspaces ({} and {}); use an explicit dataspace-scoped asset id for transparent cross-dataspace asset use",
@@ -2018,29 +2141,49 @@ pub mod isi {
             .into(),
         ))
     }
+    fn decode_fx_corridor_registry(
+        world: &WorldTransaction<'_, '_>,
+        custom: &iroha_data_model::parameter::CustomParameter,
+    ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicyRegistry, Error> {
+        norito::core::classify_decode_attempt(|| {
+            iroha_data_model::isi::settlement::FxCorridorPolicyRegistry::from_custom_parameter(
+                custom,
+            )
+        })
+        .map_err(|error| {
+            world.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_attempt_error(error, |error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "invalid retained FX corridor registry: {}",
+                            error.into_error()
+                        )
+                        .into(),
+                    )
+                }),
+            )
+        })?
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "retained FX corridor registry has the wrong parameter identity".into(),
+            )
+        })
+    }
     fn fx_registry_references_escrow_asset(
-        parameters: &Parameters,
+        world: &WorldTransaction<'_, '_>,
         network_id: &iroha_data_model::NetworkId,
         asset_id: &AssetId,
     ) -> Result<bool, Error> {
         use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
-        let Some(custom) = parameters
+        let Some(custom) = world
+            .parameters
+            .get()
             .custom()
             .get(&FxCorridorPolicyRegistry::parameter_id())
         else {
             return Ok(false);
         };
-        let registry = FxCorridorPolicyRegistry::from_custom_parameter(custom)
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid retained FX corridor registry: {error}").into(),
-                )
-            })?
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "retained FX corridor registry has the wrong parameter identity".into(),
-                )
-            })?;
+        let registry = decode_fx_corridor_registry(world, custom)?;
         Ok(registry.policies.values().any(|policy| {
             iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
                 network_id,
@@ -2055,7 +2198,7 @@ pub mod isi {
         asset_id: &AssetId,
     ) -> Result<bool, Error> {
         fx_registry_references_escrow_asset(
-            state_transaction.world.parameters.get(),
+            &state_transaction.world,
             &state_transaction.network_id,
             asset_id,
         )
@@ -2075,17 +2218,7 @@ pub mod isi {
         else {
             return Ok(false);
         };
-        let registry = FxCorridorPolicyRegistry::from_custom_parameter(custom)
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid retained FX corridor registry: {error}").into(),
-                )
-            })?
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "retained FX corridor registry has the wrong parameter identity".into(),
-                )
-            })?;
+        let registry = decode_fx_corridor_registry(&state_transaction.world, custom)?;
         Ok(registry.policies.values().any(|policy| {
             iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
                 &state_transaction.network_id,
@@ -2109,17 +2242,7 @@ pub mod isi {
         else {
             return Ok(false);
         };
-        let registry = FxCorridorPolicyRegistry::from_custom_parameter(custom)
-            .map_err(|error| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid retained FX corridor registry: {error}").into(),
-                )
-            })?
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "retained FX corridor registry has the wrong parameter identity".into(),
-                )
-            })?;
+        let registry = decode_fx_corridor_registry(&state_transaction.world, custom)?;
         Ok(registry.policies.values().any(|policy| {
             policy.source_asset_definition_id == *definition_id
                 || policy.destination_asset_definition_id == *definition_id
@@ -2172,9 +2295,10 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         source_id: &AssetId,
     ) -> Result<(), Error> {
-        if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset(
+        if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_asset_with_owner(
             state_transaction.world(),
             source_id,
+            Some(state_transaction.world()),
         )? {
             return Err(InstructionExecutionError::InvariantViolation(
                 "SoraFS reserve custody can only be debited by a verified native reserve withdrawal"
@@ -5205,106 +5329,106 @@ pub mod isi {
     pub(in crate::smartcontracts::isi) fn precheck_sccp_escrow_releases(
         state_transaction: &StateTransaction<'_, '_>,
         escrow_id: &AssetId,
-        credits: &[Option<(AssetId, Quantity)>; 2],
+        credits: &[Option<(&AssetId, &Quantity, &Quantity)>; 2],
     ) -> Result<(), (usize, Error)> {
-        let mut resolved: [Option<(AssetId, AssetId, &Quantity)>; 2] = [None, None];
-        let mut cumulative_amount = Quantity::zero();
-        for (index, (destination_id, amount)) in credits.iter().flatten().enumerate() {
-            let (source_id, destination_id) = (|| -> Result<(AssetId, AssetId), Error> {
-                if escrow_id.definition() != destination_id.definition() {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "SCCP escrow release must credit the escrowed asset".into(),
-                    ));
-                }
-                if amount.is_zero() {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "asset transfer amount must be non-zero".into(),
-                    ));
-                }
-                // Every leg debits this same route escrow. Source calendar caps
-                // consume the full prefix; recipient guards below still see only
-                // their own leg. The read-only check never installs usage.
-                cumulative_amount = cumulative_amount
-                    .checked_add(amount)
-                    .map_err(|_| MathError::Overflow)?;
-                let source_policy = NumericAssetTransferSourcePolicy::SccpEscrowRelease;
-                ensure_global_asset_write_on_authoritative_route(
-                    state_transaction,
-                    escrow_id.definition(),
-                    "transfer",
-                )?;
-                let source_dataspace = transfer_source_dataspace_hint(state_transaction, escrow_id)?;
-                let resolved_source = state_transaction
-                    .world
-                    .resolve_asset_id_for_scope_hint(escrow_id, source_dataspace)?;
-                ensure_privacy_public_reserve_source_policy(
-                    state_transaction,
-                    &resolved_source,
-                    source_policy,
-                )?;
-                active_control_record(
-                    state_transaction,
-                    escrow_id.account(),
-                    escrow_id.definition(),
-                )?;
-                // SPEC: §13.4 HC971 forgets earlier source usage only in preflight.
-                let source_control_amount = if cfg!(all(test, sumeragi_core_mutation = "HC971")) {
-                    amount
-                } else {
-                    &cumulative_amount
-                };
-                prepare_outbound_asset_transfer_control_update(
-                    state_transaction,
-                    escrow_id,
-                    source_control_amount,
-                )?;
-                state_transaction.world.account(destination_id.account())?;
-                let (source_id, destination_id) = resolve_numeric_asset_transfer_scope(
-                    state_transaction,
-                    escrow_id,
-                    destination_id,
-                    NumericAssetTransferScopePolicy::Ambient,
-                )?;
-                let spec = state_transaction
-                    .world
-                    .asset_definition(source_id.definition())?
-                    .spec();
-                ensure_resolved_numeric_asset_transfer_policies(
-                    state_transaction,
-                    &source_id,
-                    &destination_id,
-                    amount,
-                    spec,
-                    source_policy,
-                )?;
-                prepare_retail_daily_usage_update(
-                    state_transaction,
-                    &source_id,
-                    &destination_id,
-                    amount,
-                    source_policy,
-                )?;
-                let delta = state_transaction
-                    .world
-                    .precheck_numeric_asset_transfer_delta_exact_with_control_policy(
-                        &source_id,
-                        &destination_id,
-                        amount,
-                        NumericAssetTransferControlPolicy::Enforce,
+        use crate::smartcontracts::isi::sccp::escrow::preflight::FundedAssetId;
+        let mut resolved: [Option<(FundedAssetId, FundedAssetId, &Quantity)>; 2] = [None, None];
+        for (index, (destination_id, amount, cumulative_amount)) in
+            credits.iter().flatten().enumerate()
+        {
+            let (source_id, destination_id) =
+                (|| -> Result<(FundedAssetId, FundedAssetId), Error> {
+                    if escrow_id.definition() != destination_id.definition() {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "SCCP escrow release must credit the escrowed asset".into(),
+                        ));
+                    }
+                    if amount.is_zero() {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "asset transfer amount must be non-zero".into(),
+                        ));
+                    }
+                    // Every leg debits this same route escrow. Source calendar caps
+                    // consume the full prefix; recipient guards below still see only
+                    // their own leg. The read-only check never installs usage.
+                    let source_policy = NumericAssetTransferSourcePolicy::SccpEscrowRelease;
+                    ensure_global_asset_write_on_authoritative_route(
+                        state_transaction,
+                        escrow_id.definition(),
+                        "transfer",
                     )?;
-                let source_after = if source_id == destination_id {
-                    &delta.to_balance_after
-                } else {
-                    &delta.from_balance_after
-                };
-                crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
-                    state_transaction.world(),
-                    &source_id,
-                    source_after,
-                )?;
-                Ok((source_id, destination_id))
-            })()
-            .map_err(|error| (index, error))?;
+                    let source_dataspace =
+                        transfer_source_dataspace_hint(state_transaction, escrow_id)?;
+                    let source_scope = state_transaction
+                        .world
+                        .resolve_asset_scope_for_hint(escrow_id, source_dataspace)?;
+                    let resolved_source = FundedAssetId::new(
+                        state_transaction,
+                        escrow_id.definition(),
+                        escrow_id.account(),
+                        source_scope,
+                    )?;
+                    ensure_privacy_public_reserve_source_policy(
+                        state_transaction,
+                        resolved_source.get(),
+                        source_policy,
+                    )?;
+                    // SPEC: §13.4 HC971 forgets earlier source usage only in preflight.
+                    let source_control_amount = if cfg!(all(test, sumeragi_core_mutation = "HC971"))
+                    {
+                        amount
+                    } else {
+                        cumulative_amount
+                    };
+                    precheck_outbound_asset_transfer_controls(
+                        state_transaction,
+                        escrow_id,
+                        source_control_amount,
+                    )?;
+                    state_transaction.world.account(destination_id.account())?;
+                    let destination_dataspace = transfer_destination_dataspace_for_source(
+                        state_transaction,
+                        *resolved_source.get().scope(),
+                        destination_id,
+                    )?;
+                    let destination_scope = state_transaction
+                        .world
+                        .resolve_asset_scope_for_hint(destination_id, destination_dataspace)?;
+                    let source_id = resolved_source;
+                    let destination_id = FundedAssetId::new(
+                        state_transaction,
+                        destination_id.definition(),
+                        destination_id.account(),
+                        destination_scope,
+                    )?;
+                    let spec = state_transaction
+                        .world
+                        .asset_definition(source_id.get().definition())?
+                        .spec();
+                    ensure_resolved_numeric_asset_transfer_policies(
+                        state_transaction,
+                        source_id.get(),
+                        destination_id.get(),
+                        amount,
+                        spec,
+                        source_policy,
+                    )?;
+                    prepare_retail_daily_usage_update(
+                        state_transaction,
+                        source_id.get(),
+                        destination_id.get(),
+                        amount,
+                        source_policy,
+                    )?;
+                    precheck_sccp_balances(
+                        state_transaction,
+                        source_id.get(),
+                        destination_id.get(),
+                        amount,
+                    )?;
+                    Ok((source_id, destination_id))
+                })()
+                .map_err(|error| (index, error))?;
             resolved[index] = Some((source_id, destination_id, amount));
             // Both slots are inline. Only the completed prefix is passed onward;
             // the unused second reference for a one-credit prefix is never checked.
@@ -5316,14 +5440,14 @@ pub mod isi {
                 .expect("the current occupied credit was resolved");
             let movements = [
                 asset_uid::Movement {
-                    source: first_source,
-                    destination: first_destination,
+                    source: first_source.get(),
+                    destination: first_destination.get(),
                     amount: first_amount,
                     activity: NumericAssetTransferSourcePolicy::SccpEscrowRelease.uid_activity(),
                 },
                 asset_uid::Movement {
-                    source,
-                    destination,
+                    source: source.get(),
+                    destination: destination.get(),
                     amount,
                     activity: NumericAssetTransferSourcePolicy::SccpEscrowRelease.uid_activity(),
                 },
@@ -5336,8 +5460,8 @@ pub mod isi {
             };
             // SPEC: §13.4 HC969 omits only the UID preflight, never movement enforcement.
             if !cfg!(all(test, sumeragi_core_mutation = "HC969")) {
-                asset_uid::prepare_movements(
-                    state_transaction.world(),
+                asset_uid::precheck_movements(
+                    state_transaction,
                     checked_movements,
                     state_transaction.block_unix_timestamp_ms(),
                 )
@@ -5345,6 +5469,449 @@ pub mod isi {
             }
         }
         Ok(())
+    }
+    /// Run the exact movement balance guards without building an unused transcript.
+    /// Arithmetic scratch is inline; only the two materialized results allocate,
+    /// each with its original pool charge retained through the last policy check.
+    fn precheck_sccp_balances(
+        tx: &StateTransaction<'_, '_>,
+        source: &AssetId,
+        destination: &AssetId,
+        amount: &Quantity,
+    ) -> Result<(), Error> {
+        use crate::smartcontracts::isi::sccp::escrow::preflight::buffer_error;
+        use iroha_primitives::numeric::{ChargedQuantity, QuantityAccumulator};
+        tx.world.ensure_numeric_asset_transfer_availability(
+            source,
+            amount,
+            AssetTransferDirection::Outgoing,
+        )?;
+        tx.world.ensure_numeric_asset_transfer_availability(
+            destination,
+            amount,
+            AssetTransferDirection::Incoming,
+        )?;
+        let spec = tx.world.asset_definition(source.definition())?.spec();
+        assert_numeric_spec_with(amount.as_numeric(), spec)?;
+        let before = tx
+            .world
+            .assets
+            .get(source)
+            .ok_or_else(|| FindError::Asset(source.clone().into()))?
+            .as_ref();
+        assert_numeric_spec_with(before.as_numeric(), spec)?;
+        let mut debit = QuantityAccumulator::from_quantity(before);
+        debit
+            .try_sub(amount)
+            .map_err(|_| MathError::NotEnoughQuantity)?;
+        let budget = tx.world.sccp_committee_generations.allocation_budget();
+        let debit = ChargedQuantity::try_from_accumulator(debit, budget)
+            .map_err(|error| buffer_error(tx, error))?;
+        tx.world.account(destination.account())?;
+        let zero = Quantity::zero();
+        let before = if source == destination {
+            debit.get()
+        } else {
+            tx.world
+                .assets
+                .get(destination)
+                .map_or(&zero, |value| value.as_ref())
+        };
+        assert_numeric_spec_with(before.as_numeric(), spec)?;
+        let mut credit = QuantityAccumulator::from_quantity(before);
+        credit.try_add(amount).map_err(|_| MathError::Overflow)?;
+        let credit = ChargedQuantity::try_from_accumulator(credit, budget)
+            .map_err(|error| buffer_error(tx, error))?;
+        assert_numeric_spec_with(credit.get().as_numeric(), spec)?;
+        let after = if source == destination {
+            credit.get()
+        } else {
+            debit.get()
+        };
+        crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
+            tx.world(),
+            source,
+            after,
+        )
+        .map_err(|error| tx.world.attempt_error_to_instruction_error(error))?;
+        tx.world
+            .ensure_numeric_asset_holding_limit(destination, credit.get())?;
+        crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit_in_transaction(
+            tx.world(),
+            source,
+            after,
+        )?;
+        Ok(())
+    }
+    #[cfg(test)]
+    mod sccp_balance_tests {
+        use super::*;
+        use crate::smartcontracts::isi::sccp::{
+            escrow,
+            test_support::{authority, funded_xor_state, header},
+        };
+        use iroha_model_base::domain::DomainId;
+
+        #[test]
+        fn sccp_fx_custody_guards_preserve_decoder_refusals() {
+            use iroha_data_model::isi::settlement::FxCorridorPolicyRegistry;
+            for selected in 0..3 {
+                for malformed in [false, true] {
+                    let holder = authority(1);
+                    let state = funded_xor_state(&holder, 10_000_000_000);
+                    let custom = if malformed {
+                        iroha_data_model::parameter::CustomParameter::new(
+                            FxCorridorPolicyRegistry::parameter_id(),
+                            Json::new(17_u64),
+                        )
+                    } else {
+                        FxCorridorPolicyRegistry::default().into_custom_parameter()
+                    };
+                    {
+                        let mut parameters =
+                            crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+                        crate::state::set_parameter_cell_for_testing(
+                            &mut parameters,
+                            iroha_data_model::parameter::Parameter::Custom(custom),
+                            state.world.sccp_committee_generations.allocation_budget(),
+                        )
+                        .unwrap();
+                        parameters.commit();
+                    }
+                    let mut block = state.block(header(1));
+                    let tx = block.transaction();
+                    let definition =
+                        iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id();
+                    let asset = AssetId::new(definition.clone(), holder.clone());
+                    let read = || match selected {
+                        0 => is_fx_corridor_escrow_asset(&tx, &asset),
+                        1 => is_fx_corridor_escrow_account(&tx, &holder),
+                        _ => is_fx_corridor_asset_definition(&tx, &definition),
+                    };
+                    if malformed {
+                        assert!(read().is_err());
+                        assert!(!tx.is_execution_deferred());
+                    } else {
+                        assert!(!read().unwrap());
+                        let result = norito::with_decode_limits_scope(
+                            norito::DecodeLimits::new(
+                                usize::MAX,
+                                usize::MAX,
+                                usize::MAX,
+                                usize::MAX,
+                                0,
+                            ),
+                            read,
+                        );
+                        assert!(result.is_err());
+                        assert!(tx.is_execution_deferred());
+                        assert!(
+                            tx.borrow_execution_deferral()
+                                .unwrap()
+                                .decode_refusal()
+                                .is_some()
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn sccp_scope_and_domain_gates_preserve_original_sns_decode_refusals() {
+            use iroha_data_model::{
+                account::{
+                    AccountAddress,
+                    rekey::{AccountAlias, AccountRekeyRecord},
+                },
+                sns::{NameControllerV1, NameRecordV1},
+            };
+            use norito::codec::Encode as _;
+            for domain_gate in [false, true] {
+                for malformed in [false, true] {
+                    let holder = authority(1);
+                    let state = funded_xor_state(&holder, 10_000_000_000);
+                    let mut block = state.block(header(1));
+                    let mut tx = block.transaction();
+                    let alias = AccountAlias::domainless(
+                        "preflight".parse().unwrap(),
+                        DataSpaceId::UNIVERSAL,
+                    );
+                    let selector =
+                        crate::sns::selector_for_account_alias(&alias, &tx.nexus.dataspace_catalog)
+                            .unwrap();
+                    let record = NameRecordV1::new(
+                        selector.clone(),
+                        holder.clone(),
+                        vec![NameControllerV1::account(
+                            &AccountAddress::from_account_id(&holder).unwrap(),
+                        )],
+                        0,
+                        0,
+                        100_000,
+                        200_000,
+                        300_000,
+                        Metadata::default(),
+                    );
+                    let key = crate::sns::record_storage_key(&selector);
+                    tx.world
+                        .smart_contract_state
+                        .insert(key.clone(), record.encode());
+                    tx.world.insert_account_alias_binding(&alias, &holder);
+                    tx.world.account_rekey_records.insert(
+                        alias.clone(),
+                        AccountRekeyRecord::new(alias, holder.clone()),
+                    );
+                    assert_eq!(unique_account_dataspace_hint(&tx, &holder).unwrap(), None);
+                    let definition =
+                        iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id();
+                    let binding = AssetSubjectBindingV1 {
+                        allowed_domains: BTreeSet::from([
+                            DomainId::try_new("policy", "universal").unwrap()
+                        ]),
+                        allowed_dataspaces: BTreeSet::new(),
+                    };
+                    let read = |tx: &StateTransaction<'_, '_>| {
+                        if domain_gate {
+                            ensure_domain_binding_allows_asset(tx, &definition, &holder, &binding)
+                        } else {
+                            unique_account_dataspace_hint(tx, &holder).map(drop)
+                        }
+                    };
+                    if malformed {
+                        tx.world.smart_contract_state.insert(key, vec![0]);
+                        assert!(read(&tx).is_err());
+                        assert!(!tx.is_execution_deferred());
+                    } else {
+                        let result = norito::with_decode_limits_scope(
+                            norito::DecodeLimits::new(0, 0, 0, 0, 0),
+                            || read(&tx),
+                        );
+                        assert!(result.is_err());
+                        assert!(tx.is_execution_deferred());
+                        assert!(
+                            tx.borrow_execution_deferral()
+                                .unwrap()
+                                .decode_refusal()
+                                .is_some()
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn sccp_scope_scratch_matches_sorted_set_for_every_short_order_and_duplicate() {
+            for length in 0..=5 {
+                for mut encoded in 0_u32..4_u32.pow(length) {
+                    let mut pair = [None, None];
+                    let mut original = BTreeSet::new();
+                    for _ in 0..length {
+                        let value = DataSpaceId::new(u64::from(encoded % 4));
+                        encoded /= 4;
+                        retain_smallest_dataspaces(&mut pair, value);
+                        original.insert(value);
+                    }
+                    let mut expected = original.into_iter();
+                    assert_eq!(pair, [expected.next(), expected.next()]);
+                }
+            }
+        }
+
+        #[test]
+        fn sccp_source_control_precheck_matches_prepared_update() {
+            let holder = authority(1);
+            let state = funded_xor_state(&holder, 10_000_000_000);
+            let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+                std::num::NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                1_700_000_000_000,
+                0,
+            ));
+            let mut tx = block.transaction();
+            let definition = iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id();
+            let source = AssetId::new(definition.clone(), holder.clone());
+            for window in [
+                AssetTransferControlWindow::Day,
+                AssetTransferControlWindow::Week,
+                AssetTransferControlWindow::Month,
+            ] {
+                SetAssetTransferControl::new(
+                    holder.clone(),
+                    definition.clone(),
+                    vec![AssetTransferLimit {
+                        window,
+                        cap_amount: Some(escrow::xor_quantity(1_000_000_000).unwrap()),
+                    }],
+                )
+                .execute(&holder, &mut tx)
+                .unwrap();
+                let mut store = load_asset_transfer_control_store(&tx, &holder).unwrap();
+                let bucket_start = bucket_start_ms(window, tx.block_unix_timestamp_ms()).unwrap();
+                for (spent, current_bucket, blacklisted) in [
+                    (0, true, false),
+                    (700_000_000, true, false),
+                    (700_000_000, false, false),
+                    (0, true, true),
+                ] {
+                    let mut record = store.find(&definition).unwrap().clone();
+                    record.blacklisted = blacklisted;
+                    record.usages = vec![AssetTransferUsageBucket {
+                        window,
+                        bucket_start_ms: if current_bucket {
+                            bucket_start
+                        } else {
+                            bucket_start_ms(window, bucket_start - 1).unwrap()
+                        },
+                        spent_amount: escrow::xor_quantity(spent).unwrap(),
+                    }];
+                    store.upsert(record);
+                    persist_asset_transfer_control_store(&mut tx, &holder, &store).unwrap();
+                    for amount in [1, 300_000_000, 300_000_001, 1_000_000_000, 1_000_000_001] {
+                        let amount = escrow::xor_quantity(amount).unwrap();
+                        let expected =
+                            prepare_outbound_asset_transfer_control_update(&tx, &source, &amount)
+                                .map(|_| ())
+                                .map_err(|error| error.to_string());
+                        let actual =
+                            precheck_outbound_asset_transfer_controls(&tx, &source, &amount)
+                                .map_err(|error| error.to_string());
+                        assert_eq!(
+                            actual, expected,
+                            "window={window}, spent={spent}, current={current_bucket}, blacklisted={blacklisted}"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn asset_policy_decode_distinguishes_invalid_bytes_from_local_resources() {
+            let holder = authority(1);
+            let state = funded_xor_state(&holder, 10_000_000_000);
+            let mut block = state.block(header(1));
+            let tx = block.transaction();
+            let raw = Json::new(vec![17_u64]);
+            let rejected =
+                |error: norito::Error| Error::InvariantViolation(error.to_string().into());
+            assert_eq!(
+                decode_asset_policy::<Vec<u64>>(Some(&tx.world), &raw, rejected).unwrap(),
+                [17]
+            );
+            assert!(decode_asset_policy::<u64>(Some(&tx.world), &raw, rejected).is_err());
+            assert!(
+                !tx.is_execution_deferred(),
+                "bad policy bytes are deterministic"
+            );
+            let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+            let result = norito::core::with_decode_limits_scope(limits, || {
+                decode_asset_policy::<Vec<u64>>(Some(&tx.world), &raw, rejected)
+            });
+            assert!(result.is_err());
+            assert!(
+                tx.borrow_execution_deferral()
+                    .unwrap()
+                    .decode_refusal()
+                    .is_some()
+            );
+        }
+
+        #[test]
+        fn admitted_sccp_balance_checks_match_the_movement_transcript_guards() {
+            let _fixture_retirement_pin = crossbeam_epoch::pin();
+            for same_account in [false, true] {
+                for holding_limit in [None, Some(0), Some(10_000_000_000)] {
+                    let holder = authority(1);
+                    let recipient = if same_account {
+                        holder.clone()
+                    } else {
+                        authority(9)
+                    };
+                    let state = funded_xor_state(&holder, 10_000_000_000);
+                    let mut block = state.block(header(1));
+                    let mut tx = block.transaction();
+                    if !same_account {
+                        Register::account(Account::new(recipient.clone()))
+                            .execute(&holder, &mut tx)
+                            .unwrap();
+                    }
+                    let definition =
+                        iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id();
+                    SetAssetHoldingLimit::new(
+                        recipient.clone(),
+                        definition.clone(),
+                        holding_limit.map(|value| escrow::xor_quantity(value).unwrap()),
+                    )
+                    .execute(&holder, &mut tx)
+                    .unwrap();
+                    let source = AssetId::new(definition.clone(), holder.clone());
+                    let destination = AssetId::new(definition, recipient);
+                    let budget = tx
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget()
+                        .clone();
+                    let baseline = budget.reserved_bytes();
+                    for amount in [0, 1, 1_000_000_000, 10_000_000_000, 10_000_000_001] {
+                        let amount = escrow::xor_quantity(amount).unwrap();
+                        let expected = tx.world.precheck_numeric_asset_transfer_delta_exact_with_control_policy(
+                            &source, &destination, &amount, NumericAssetTransferControlPolicy::Enforce,
+                        ).and_then(|delta| {
+                            let after = if source == destination { &delta.to_balance_after } else { &delta.from_balance_after };
+                            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(tx.world(), &source, after)
+                        }).map_err(|error| error.to_string());
+                        let actual = precheck_sccp_balances(&tx, &source, &destination, &amount)
+                            .map_err(|error| error.to_string());
+                        assert_eq!(
+                            actual, expected,
+                            "same={same_account}, cap={holding_limit:?}, amount={amount}"
+                        );
+                        assert_eq!(budget.reserved_bytes(), baseline);
+                    }
+                    assert!(!tx.is_execution_deferred());
+                }
+            }
+        }
+
+        #[test]
+        fn admitted_sccp_balance_result_physical_refusal_is_local_and_read_only() {
+            let _fixture_retirement_pin = crossbeam_epoch::pin();
+            let holder = authority(1);
+            let state = funded_xor_state(&holder, 10_000_000_000);
+            let mut block = state.block(header(1));
+            let tx = block.transaction();
+            let source = AssetId::new(
+                iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id(),
+                holder,
+            );
+            let amount = escrow::xor_quantity(1_000_000_000).unwrap();
+            let before = tx.world.assets.get(&source).unwrap().as_ref().clone();
+            let layout = before
+                .checked_sub(&amount)
+                .unwrap()
+                .admission_clone_layout()
+                .unwrap();
+            let budget = tx
+                .world
+                .sccp_committee_generations
+                .allocation_budget()
+                .clone();
+            let baseline = budget.reserved_bytes();
+            let (result, refused) =
+                crate::test_allocations::refuse_one_layout_during(layout, || {
+                    precheck_sccp_balances(&tx, &source, &source, &amount)
+                });
+            assert!(refused);
+            assert!(result.is_err());
+            assert!(
+                tx.borrow_execution_deferral()
+                    .unwrap()
+                    .allocator_refusal()
+                    .is_some()
+            );
+            assert_eq!(tx.world.assets.get(&source).unwrap().as_ref(), &before);
+            assert_eq!(budget.reserved_bytes(), baseline);
+        }
     }
     /// Consume one native AMX movement after independently rejoining exact canonical custody.
     /// The producer is the signed-root participant owner; generic escrow has no constructor.
@@ -6570,7 +7137,7 @@ pub mod isi {
                 } else {
                     &prechecked_delta.from_balance_after
                 };
-                crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit_in_transaction(
                     state_transaction.world(),
                     &source_id,
                     source_balance_after,
@@ -6929,7 +7496,7 @@ pub mod isi {
                         .get(&source_id)
                         .cloned()
                         .unwrap_or_else(Quantity::zero);
-                    crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+                    crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit_in_transaction(
                         state_transaction.world(),
                         &source_id,
                         &balance_after,
@@ -7209,7 +7776,7 @@ pub mod isi {
             let after = before
                 .checked_sub(&amount)
                 .map_err(|_| MathError::NotEnoughQuantity)?;
-            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
+            crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit_in_transaction(
                 state_transaction.world(), &source, &after,
             )?;
             crate::smartcontracts::isi::staking::ensure_public_lane_reserves_after_debit(
@@ -7847,6 +8414,29 @@ pub mod isi {
         )?;
         Ok((source_id, destination_id))
     }
+    /// Shared ambient destination routing for execution and read-only preflight.
+    fn transfer_destination_dataspace_for_source(
+        tx: &StateTransaction<'_, '_>,
+        source_scope: AssetBalanceScope,
+        destination: &AssetId,
+    ) -> Result<Option<DataSpaceId>, Error> {
+        Ok(match source_scope {
+            AssetBalanceScope::Dataspace(dataspace) if dataspace == DataSpaceId::UNIVERSAL => {
+                Some(DataSpaceId::UNIVERSAL)
+            }
+            AssetBalanceScope::Dataspace(dataspace) => {
+                let hint = transfer_destination_dataspace_hint(tx, destination)?;
+                if matches!(destination.scope(), AssetBalanceScope::Dataspace(_))
+                    || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
+                {
+                    hint
+                } else {
+                    Some(dataspace)
+                }
+            }
+            _ => transfer_destination_dataspace_hint(tx, destination)?,
+        })
+    }
     /// Resolve the balance scopes of a numeric movement under `scope_policy` without
     /// mutating state.
     fn resolve_numeric_asset_transfer_scope(
@@ -7867,27 +8457,11 @@ pub mod isi {
                 let source_id = state_transaction
                     .world
                     .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
-                let destination_dataspace = match source_id.scope() {
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace)
-                        if *dataspace == DataSpaceId::UNIVERSAL =>
-                    {
-                        Some(DataSpaceId::UNIVERSAL)
-                    }
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
-                        let hint =
-                            transfer_destination_dataspace_hint(state_transaction, destination_id)?;
-                        if matches!(
-                            destination_id.scope(),
-                            iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
-                        ) || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
-                        {
-                            hint
-                        } else {
-                            Some(*dataspace)
-                        }
-                    }
-                    _ => transfer_destination_dataspace_hint(state_transaction, destination_id)?,
-                };
+                let destination_dataspace = transfer_destination_dataspace_for_source(
+                    state_transaction,
+                    *source_id.scope(),
+                    destination_id,
+                )?;
                 let destination_id = state_transaction
                     .world
                     .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;

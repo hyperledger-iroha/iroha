@@ -6,7 +6,9 @@ use crate::{
     smartcontracts::isi::sorafs_pop_registry::{
         read_active_publications, read_pinned_publications,
     },
-    state::{StateBlock, StateStorageAdmissionError, StateTransaction, WorldReadOnly},
+    state::{
+        StateBlock, StateStorageAdmissionError, StateTransaction, WorldReadOnly, WorldTransaction,
+    },
 };
 #[cfg(test)]
 use iroha_data_model::sorafs::moderation_ledger::{
@@ -791,6 +793,17 @@ fn decode_state_with_current<T>(
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
+    decode_state_with_owner(bytes, label, current, None)
+}
+fn decode_state_with_owner<T>(
+    bytes: &[u8],
+    label: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
     if bytes.len() > STATE_MAX_BYTES {
         return Err(corrupt_state(format!(
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
@@ -808,23 +821,45 @@ where
             |current| current.decode_limits(bytes.len(), STATE_LIMITS),
         )
         .map_err(InstructionExecutionError::Query)?;
-    let (value, allocation_bytes) = if current.is_some() {
-        let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_canonical_with_limits::<T>(bytes, limits)
-        });
-        (value, Some(usage.total_allocated_bytes()))
+    let decoded = if owner.is_some() {
+        crate::execution_attempt::canonical_policy_decode(owner, bytes, limits)
+            .map(|value| (value, None))
     } else {
-        (decode_canonical_with_limits::<T>(bytes, limits), None)
+        norito::core::classify_decode_attempt(|| {
+            // Reserve the fixed moderation/query limits for deterministic policy;
+            // the caller's enclosing limit retains its original attempt ownership.
+            if current.is_some() {
+                let (value, usage) = norito::core::with_decode_limits_measured(limits, || {
+                    decode_canonical_with_limits::<T>(bytes, limits)
+                });
+                value.map(|value| (value, Some(usage.total_allocated_bytes())))
+            } else {
+                decode_canonical_with_limits::<T>(bytes, limits).map(|value| (value, None))
+            }
+        })
+        .map_err(norito::CanonicalDecodeControlError::Decode)
     };
-    let value = value.map_err(|error| {
-        if crate::smartcontracts::isi::query::singular_query_limits_active()
-            && error.is_decode_resource_limit()
-        {
-            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
-        } else if matches!(error, norito::Error::NonCanonicalEncoding) {
-            corrupt_state(format!("{label} state is not exact canonical Norito"))
-        } else {
-            corrupt_state(format!("failed to decode {label}: {error}"))
+    let (value, allocation_bytes) = decoded.map_err(|error| {
+        let rejected = |error: norito::CanonicalDecodeControlError| {
+            let error = match error {
+                norito::CanonicalDecodeControlError::Decode(error) => error.into_error(),
+                error => return corrupt_state(format!("failed to decode {label}: {error}")),
+            };
+            if crate::smartcontracts::isi::query::singular_query_limits_active()
+                && error.is_decode_resource_limit()
+            {
+                InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+            } else if matches!(error, norito::Error::NonCanonicalEncoding) {
+                corrupt_state(format!("{label} state is not exact canonical Norito"))
+            } else {
+                corrupt_state(format!("failed to decode {label}: {error}"))
+            }
+        };
+        match owner {
+            Some(owner) => owner.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_control_attempt_error(error, rejected),
+            ),
+            None => rejected(error),
         }
     })?;
     if let (Some(current), Some(allocation_bytes)) = (current, allocation_bytes) {
@@ -1421,6 +1456,13 @@ pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
     world: &impl WorldReadOnly,
     custody_asset: &AssetId,
 ) -> Result<Quantity, InstructionExecutionError> {
+    unsettled_moderation_bond_liability_with_owner(world, custody_asset, None)
+}
+fn unsettled_moderation_bond_liability_with_owner(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Quantity, InstructionExecutionError> {
     let challenge_start = StatePath::from_str(CHALLENGE_STATE_KEY_PREFIX)
         .expect("static moderation challenge prefix is valid");
     let mut liability = Quantity::zero();
@@ -1429,7 +1471,7 @@ pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
             break;
         }
         let candidate: ModerationChallengeRecordV1 =
-            decode_state_with_current(payload, "moderation challenge", None)?;
+            decode_state_with_owner(payload, "moderation challenge", None, owner)?;
         if challenge_key(
             &candidate.case_id,
             &candidate.round_id,
@@ -1440,11 +1482,13 @@ pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
                 "moderation challenge custody key does not match its record",
             ));
         }
-        let record = read_challenge(
+        let record = read_challenge_with_owner(
             world,
             &candidate.case_id,
             &candidate.round_id,
             &candidate.challenge_id,
+            None,
+            owner,
         )?
         .ok_or_else(|| {
             corrupt_state("moderation challenge disappeared during custody validation")
@@ -1472,7 +1516,28 @@ pub(in crate::smartcontracts::isi) fn ensure_moderation_bond_reserve_after_debit
     custody_asset: &AssetId,
     balance_after: &Quantity,
 ) -> Result<(), InstructionExecutionError> {
-    let liability = unsettled_moderation_bond_liability(world, custody_asset)?;
+    ensure_moderation_bond_reserve_after_debit_with_owner(world, custody_asset, balance_after, None)
+}
+/// Preserve the original local decoder refusal across every retained challenge recheck.
+pub(in crate::smartcontracts::isi) fn ensure_moderation_bond_reserve_after_debit_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    custody_asset: &AssetId,
+    balance_after: &Quantity,
+) -> Result<(), InstructionExecutionError> {
+    ensure_moderation_bond_reserve_after_debit_with_owner(
+        world,
+        custody_asset,
+        balance_after,
+        Some(world),
+    )
+}
+fn ensure_moderation_bond_reserve_after_debit_with_owner(
+    world: &impl WorldReadOnly,
+    custody_asset: &AssetId,
+    balance_after: &Quantity,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<(), InstructionExecutionError> {
+    let liability = unsettled_moderation_bond_liability_with_owner(world, custody_asset, owner)?;
     if balance_after < &liability {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -2431,7 +2496,16 @@ fn read_case_with_current(
     world: &impl WorldReadOnly,
     case_id: &str,
     round_id: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
+    read_case_with_owner(world, case_id, round_id, current, None)
+}
+fn read_case_with_owner(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<Option<ModerationCaseRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
@@ -2440,7 +2514,7 @@ fn read_case_with_current(
         return Ok(None);
     };
     let record: ModerationCaseRecordV1 =
-        decode_state_with_current(bytes, "moderation case", current.as_deref_mut())?;
+        decode_state_with_owner(bytes, "moderation case", current.as_deref_mut(), owner)?;
     record
         .spec
         .validate()
@@ -2498,7 +2572,8 @@ fn read_case_with_current(
         }
     }
     let mut transient_current = moderation_transient_current(current.as_deref())?;
-    let outcome = read_outcome_with_current(world, case_id, round_id, transient_current.as_mut())?;
+    let outcome =
+        read_outcome_with_owner(world, case_id, round_id, transient_current.as_mut(), owner)?;
     match (record.status, outcome) {
         (ModerationCaseStatusV1::Finalized, Some(outcome))
             if outcome.quorum == record.spec.quorum
@@ -2716,7 +2791,17 @@ fn read_challenge_with_current(
     case_id: &str,
     round_id: &str,
     challenge_id: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
+    read_challenge_with_owner(world, case_id, round_id, challenge_id, current, None)
+}
+fn read_challenge_with_owner(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    challenge_id: &str,
     mut current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<Option<ModerationChallengeRecordV1>, InstructionExecutionError> {
     let Some(bytes) =
         world
@@ -2726,7 +2811,7 @@ fn read_challenge_with_current(
         return Ok(None);
     };
     let record: ModerationChallengeRecordV1 =
-        decode_state_with_current(bytes, "moderation challenge", current.as_deref_mut())?;
+        decode_state_with_owner(bytes, "moderation challenge", current.as_deref_mut(), owner)?;
     if record.case_id != case_id
         || record.round_id != round_id
         || record.challenge_id != challenge_id
@@ -2744,8 +2829,10 @@ fn read_challenge_with_current(
         ));
     }
     let mut transient_current = moderation_transient_current(current.as_deref())?;
-    let case = read_case_with_current(world, case_id, round_id, transient_current.as_mut())?
-        .ok_or_else(|| corrupt_state("stored moderation challenge has no authoritative case"))?;
+    let case = read_case_with_owner(world, case_id, round_id, transient_current.as_mut(), owner)?
+        .ok_or_else(|| {
+        corrupt_state("stored moderation challenge has no authoritative case")
+    })?;
     if record.raised_at_unix_ms <= case.spec.commit_deadline_unix_ms
         || record.raised_at_unix_ms > case.spec.challenge_submission_deadline_unix_ms
         || record.bond.asset_definition_id != case.policy.challenge_voting_asset_id
@@ -2840,6 +2927,15 @@ fn read_outcome_with_current(
     round_id: &str,
     current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
 ) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
+    read_outcome_with_owner(world, case_id, round_id, current, None)
+}
+fn read_outcome_with_owner(
+    world: &impl WorldReadOnly,
+    case_id: &str,
+    round_id: &str,
+    current: Option<&mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation>,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<ModerationOutcomeRecordV1>, InstructionExecutionError> {
     let Some(bytes) = world
         .smart_contract_state()
         .get(&outcome_key(case_id, round_id))
@@ -2847,7 +2943,7 @@ fn read_outcome_with_current(
         return Ok(None);
     };
     let record: ModerationOutcomeRecordV1 =
-        decode_state_with_current(bytes, "moderation outcome", current)?;
+        decode_state_with_owner(bytes, "moderation outcome", current, owner)?;
     let kind_consistent = match record.kind {
         ModerationOutcomeKindV1::Decided(choice) => {
             record.votes_total >= u32::from(record.quorum)

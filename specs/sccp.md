@@ -6686,7 +6686,7 @@ still missing is named separately from external authority and audit gates.
 | `RecordSccpMessage`, signed-only execution and the ABI closure for contract-originated sends (§4.4) | Implemented. Original-parent degradation, forgery/quarantine and pause checks precede monetary, nonce and leaf writes. Tests cover signed instruction custody, nested/repeated dispatch refusal and rollback. |
 | Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Every value instruction and Parliament enactment runs under the §4.15 balanced-entry guard (HC488). Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
 | Exempt eligibility predicate and charge-on-failure (§4.19) | Implemented. Shared original-parent predicates, class quotas, keeper advances, Keepalive and R-EX have queue/execution and charge-on-failure tests. |
-| Light clients for Ethereum, BSC and TON; profiles, aged-proof builders and RPC hygiene (§4.13, §8) | Implemented verifiers/builders and Parliament-enacted profile activation, with bootstrap, advance, inclusion, equivocation and profile-switch tests. External gates: BSC/TON live-RPC captures and verified real light-client fork dates. Synthetic and transport fixtures do not complete those captures. |
+| Light clients for Ethereum, BSC and TON; profiles, aged-proof builders and RPC hygiene (§4.13, §8) | Implemented verifiers/builders and Parliament-enacted profile activation, with bootstrap, advance, inclusion, equivocation and profile-switch tests. Read-only Ethereum/BSC/TON bootstrap and verified advance captures replay through the native verifiers. Monetary deployment and verified parameters for each future light-client fork remain open; captures do not qualify settlement. |
 | Light-client keeper task | Implemented key generation, independent advances, due Keepalive, bounded destination watches and L5 progress. Tests cover evidence retention, endpoint rotation and unavailable duties. Live deployment and source-network progress qualification remain external. |
 | Parliament SCCP payload, subjects, attempts, `OnlyGenesis` grant and CLI (§4.14.3, §4.14.5) | Implemented actions, subject heads and atomic staged route installation, including destination-word reservation and activation events. Tests cover installation, rollback and both launch gates. Parliament validates its certificate and derives its id; SCCP consumes only that id, the effect hash and casting-open `GovernanceAnchorV1` (`s0`). The genuine ballot/anchor producer is external and its absence refuses enactment. |
 | Torii read routes and Rust SDK (§6) | Implemented native finality, committee, message/control/history, anchor, hold, fast-pause, reconciliation and coalition-floor views with request admission and retained custody. Evidence projection borrows validated records into fallible bounded response encoding; tests cover malformed shapes and restrictive input decode limits without panics. |
@@ -6712,23 +6712,42 @@ still missing is named separately from external authority and audit gates.
 
 **Allocation boundary.** Original-pool custody is implemented for the penalty,
 forgery, certified-prefix, BLS and snapshot paths listed above. Settlement
-preflight retains owned asset identifiers and quantities, including its cumulative
-source-control amount, and uses shared asset/UID policy scratch. Those allocations
-do not yet establish original-pool admission or physical-refusal handling. This
-SCCP settlement boundary is distinct from the generic S8/H3 custody owned by
-the Sumeragi workstream. Any added local resource refusal must remain a local
-Failed outcome and must not become a deterministic pending-credit reason.
+preflight now retains original-pool owners for its asset identifiers, converted
+and cumulative credit quantities, and checked balance results. Preparation precedes
+implicit recipient registration; capacity and allocator refusals from these owners
+propagate without becoming a deterministic pending-credit reason. UID preflight uses the
+same ordered holdings and calendar checks as execution without encoding unused
+usage writes. Scope discovery borrows the original aliases and retains its two
+smallest distinct data space ids inline. Transaction-aware SNS, asset metadata,
+UID/enrollment/FI, retail, FX custody, SoraFS reserve and moderation record reads
+preserve original decoder refusals
+instead of returning a deterministic credit refusal. Canonical transaction reads
+of UID/enrollment/FI, retail and SoraFS policy state fund both decoder controls
+from the original pool after validating the frame header; partial construction
+refuses locally and refunds its admitted controls. This control ownership does
+not fund the decoded graph. Shared decoded policies,
+UID rosters/maps, policy encoding and remaining retail scratch still require
+original-pool custody and complete physical-refusal handling;
+the complete settlement boundary remains open. This work is distinct from the
+generic S8/H3 State custody owned by the Sumeragi workstream.
 
 **Order of work.** Qualify the current combined candidate: workspace compilation/tests/lint,
 registered mutations with named causal kills, native four-peer targets and
 cross-language replay. The reference, native producers/readers, route
 installation, narrow Parliament consumer interface and destination tooling
-already have source and tests. Integrate the Parliament owner's qualified
-post-quantum ballot and authenticated shared pass without opening either gate
-early. External release work comprises EIP-2537 glue, Tolk binding,
+already have source and tests. Parliament's coordinated credential/seal/corpus
+State migration and authenticated shared pass are unfinished internal engineering
+([E2](parliament_ballot_implementation_goals.md)); qualification alone cannot
+replace that implementation. Complete and qualify both without opening either
+gate early. External release work comprises ballot qualification and independent
+review, EIP-2537 glue, Tolk binding,
 consensus-transcript, X-producer/clock-guard, liability and reconciliation audits;
-BSC/TON live-RPC captures and real profile fork dates; and Ethereum/BSC/TON
-mainnet deployments and value canaries. Only genuine ballot-authorized routes
+provider retention and availability, verified parameters for each future profile
+fork, and Ethereum/BSC/TON mainnet deployments and value canaries. The developer
+mainnet tests retain exact bootstrap/advance verifier inputs and clocks for all
+three networks and replay them offline. Ordinary EVM transaction inclusion is
+checked separately from SCCP event binding; positive monetary evidence still
+requires a genuine deployed route. Only genuine ballot-authorized routes
 can qualify the monetary, hold-release and full fast-pause scenarios of §11.4.
 
 **Later.** SDK parity (§8) and MCP `iroha.*` read tools; destination-state

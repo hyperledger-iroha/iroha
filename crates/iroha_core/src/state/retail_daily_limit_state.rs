@@ -13,6 +13,7 @@ use iroha_data_model::asset::{
         retail_activation_state_path_v1, retail_policy_state_path_v1,
     },
 };
+use iroha_data_model::isi::error::InstructionExecutionError;
 use iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1;
 
 pub const POLICY_ROOT: &str = RETAIL_POLICY_STATE_PREFIX_V1;
@@ -131,12 +132,67 @@ pub fn monetary_operation_exists(
         .is_some()
 }
 
-fn decode<T>(bytes: &[u8], kind: &str) -> Result<T, String>
+enum ReadError {
+    Invalid(String),
+    Decode {
+        kind: &'static str,
+        error: norito::CanonicalDecodeControlError,
+    },
+}
+
+impl From<String> for ReadError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+impl ReadError {
+    fn into_string(self) -> String {
+        match self {
+            Self::Invalid(message) => message,
+            Self::Decode { kind, error } => {
+                format!("invalid retail DAY {kind}: {error}")
+            }
+        }
+    }
+
+    fn into_instruction(self, owner: &WorldTransaction<'_, '_>) -> InstructionExecutionError {
+        match self {
+            Self::Invalid(message) => InstructionExecutionError::InvariantViolation(message.into()),
+            Self::Decode { kind, error } => owner.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_control_attempt_error(error, |error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid retail DAY {kind}: {error}").into(),
+                    )
+                }),
+            ),
+        }
+    }
+}
+
+fn decode_attempt<T>(
+    owner: Option<&WorldTransaction<'_, '_>>,
+    bytes: &[u8],
+    kind: &'static str,
+) -> Result<T, ReadError>
 where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
-    norito::decode_canonical(bytes).map_err(|error| format!("invalid retail DAY {kind}: {error}"))
+    crate::execution_attempt::canonical_policy_decode(
+        owner,
+        bytes,
+        norito::canonical_decode_limits(bytes.len()),
+    )
+    .map_err(|error| ReadError::Decode { kind, error })
+}
+
+fn decode<T>(bytes: &[u8], kind: &'static str) -> Result<T, String>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    decode_attempt(None, bytes, kind).map_err(ReadError::into_string)
 }
 
 fn validate_first_release_policy(policy: &RetailDailyLimitPolicyV1) -> Result<(), String> {
@@ -154,13 +210,36 @@ pub fn policy_for_exact(
     definition: &AssetDefinitionId,
     dataspace: DataSpaceId,
 ) -> Result<Option<RetailDailyLimitPolicyV1>, String> {
+    policy_for_exact_attempt(world, None, definition, dataspace).map_err(ReadError::into_string)
+}
+
+/// Read the exact policy without losing the transaction's original decoder refusal.
+pub(crate) fn policy_for_exact_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    definition: &AssetDefinitionId,
+    dataspace: DataSpaceId,
+) -> Result<Option<RetailDailyLimitPolicyV1>, InstructionExecutionError> {
+    policy_for_exact_attempt(world, Some(world), definition, dataspace)
+        .map_err(|error| error.into_instruction(world))
+}
+
+fn policy_for_exact_attempt(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+    definition: &AssetDefinitionId,
+    dataspace: DataSpaceId,
+) -> Result<Option<RetailDailyLimitPolicyV1>, ReadError> {
     let path = policy_key(definition, dataspace);
     let Some(bytes) = world.smart_contract_state().get(&path) else {
         return Ok(None);
     };
-    let policy: RetailDailyLimitPolicyV1 = decode(bytes, "policy")?;
+    let policy: RetailDailyLimitPolicyV1 = decode_attempt(owner, bytes, "policy")?;
     if &policy.asset_definition_id != definition || policy.physical_dataspace != dataspace {
-        return Err("retail DAY policy payload differs from its exact native key".to_owned());
+        return Err(
+            "retail DAY policy payload differs from its exact native key"
+                .to_owned()
+                .into(),
+        );
     }
     validate_first_release_policy(&policy)?;
     Ok(Some(policy))
@@ -170,12 +249,29 @@ pub fn activation_for_exact(
     world: &impl WorldReadOnly,
     policy: &RetailDailyLimitPolicyV1,
 ) -> Result<RetailDailyActivationV1, String> {
+    activation_for_exact_attempt(world, None, policy).map_err(ReadError::into_string)
+}
+
+/// Read the activation marker with local decoder failures retained by its transaction.
+pub(crate) fn activation_for_exact_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    policy: &RetailDailyLimitPolicyV1,
+) -> Result<RetailDailyActivationV1, InstructionExecutionError> {
+    activation_for_exact_attempt(world, Some(world), policy)
+        .map_err(|error| error.into_instruction(world))
+}
+
+fn activation_for_exact_attempt(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+    policy: &RetailDailyLimitPolicyV1,
+) -> Result<RetailDailyActivationV1, ReadError> {
     let path = activation_key(&policy.asset_definition_id);
     let bytes = world
         .smart_contract_state()
         .get(&path)
         .ok_or_else(|| "retail DAY policy has no exact activation marker".to_owned())?;
-    let activation: RetailDailyActivationV1 = decode(bytes, "activation")?;
+    let activation: RetailDailyActivationV1 = decode_attempt(owner, bytes, "activation")?;
     validate_activation(&activation, policy)?;
     Ok(activation)
 }
@@ -184,6 +280,23 @@ pub fn has_policy_for_definition(
     world: &impl WorldReadOnly,
     definition: &AssetDefinitionId,
 ) -> Result<bool, String> {
+    has_policy_for_definition_attempt(world, None, definition).map_err(ReadError::into_string)
+}
+
+/// Discover the governed definition without converting an unfinished decode to absence or rejection.
+pub(crate) fn has_policy_for_definition_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    definition: &AssetDefinitionId,
+) -> Result<bool, InstructionExecutionError> {
+    has_policy_for_definition_attempt(world, Some(world), definition)
+        .map_err(|error| error.into_instruction(world))
+}
+
+fn has_policy_for_definition_attempt(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+    definition: &AssetDefinitionId,
+) -> Result<bool, ReadError> {
     let Some(bytes) = world
         .smart_contract_state()
         .get(&activation_key(definition))
@@ -193,11 +306,15 @@ pub fn has_policy_for_definition(
         // mutate either reserved root.
         return Ok(false);
     };
-    let activation: RetailDailyActivationV1 = decode(bytes, "activation")?;
+    let activation: RetailDailyActivationV1 = decode_attempt(owner, bytes, "activation")?;
     if &activation.asset_definition_id != definition {
-        return Err("retail DAY activation differs from its native definition key".to_owned());
+        return Err(
+            "retail DAY activation differs from its native definition key"
+                .to_owned()
+                .into(),
+        );
     }
-    let policy = policy_for_exact(world, definition, activation.physical_dataspace)?
+    let policy = policy_for_exact_attempt(world, owner, definition, activation.physical_dataspace)?
         .ok_or_else(|| "retail DAY activation has no exact policy".to_owned())?;
     validate_activation(&activation, &policy)?;
     Ok(true)
@@ -209,16 +326,43 @@ pub fn identity_for_exact(
     dataspace: DataSpaceId,
     account: &AccountId,
 ) -> Result<Option<RetailIdentityAttestationV1>, String> {
+    identity_for_exact_attempt(world, None, definition, dataspace, account)
+        .map_err(ReadError::into_string)
+}
+
+/// Read an identity attestation while preserving original transaction-local decode failures.
+pub(crate) fn identity_for_exact_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    definition: &AssetDefinitionId,
+    dataspace: DataSpaceId,
+    account: &AccountId,
+) -> Result<Option<RetailIdentityAttestationV1>, InstructionExecutionError> {
+    identity_for_exact_attempt(world, Some(world), definition, dataspace, account)
+        .map_err(|error| error.into_instruction(world))
+}
+
+fn identity_for_exact_attempt(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+    definition: &AssetDefinitionId,
+    dataspace: DataSpaceId,
+    account: &AccountId,
+) -> Result<Option<RetailIdentityAttestationV1>, ReadError> {
     let path = identity_key(definition, dataspace, account);
     let Some(bytes) = world.smart_contract_state().get(&path) else {
         return Ok(None);
     };
-    let attestation: RetailIdentityAttestationV1 = decode(bytes, "identity attestation")?;
+    let attestation: RetailIdentityAttestationV1 =
+        decode_attempt(owner, bytes, "identity attestation")?;
     if &attestation.body.asset_definition_id != definition
         || attestation.body.physical_dataspace != dataspace
         || &attestation.body.account_id != account
     {
-        return Err("retail DAY identity payload differs from its exact native key".to_owned());
+        return Err(
+            "retail DAY identity payload differs from its exact native key"
+                .to_owned()
+                .into(),
+        );
     }
     Ok(Some(attestation))
 }
@@ -227,13 +371,32 @@ pub fn usage_for_exact(
     world: &impl WorldReadOnly,
     key: &RetailDailyUsageKeyV1,
 ) -> Result<Option<Quantity>, String> {
+    usage_for_exact_attempt(world, None, key).map_err(ReadError::into_string)
+}
+
+/// Read a usage row with decoder refusals bound to the original transaction.
+pub(crate) fn usage_for_exact_in_transaction(
+    world: &WorldTransaction<'_, '_>,
+    key: &RetailDailyUsageKeyV1,
+) -> Result<Option<Quantity>, InstructionExecutionError> {
+    usage_for_exact_attempt(world, Some(world), key).map_err(|error| error.into_instruction(world))
+}
+
+fn usage_for_exact_attempt(
+    world: &impl WorldReadOnly,
+    owner: Option<&WorldTransaction<'_, '_>>,
+    key: &RetailDailyUsageKeyV1,
+) -> Result<Option<Quantity>, ReadError> {
     let path = usage_key(key);
     let Some(bytes) = world.smart_contract_state().get(&path) else {
         return Ok(None);
     };
-    let (stored_key, amount): (RetailDailyUsageKeyV1, Quantity) = decode(bytes, "usage")?;
+    let (stored_key, amount): (RetailDailyUsageKeyV1, Quantity) =
+        decode_attempt(owner, bytes, "usage")?;
     if &stored_key != key || amount.is_zero() {
-        return Err("retail DAY usage payload differs from its exact native key".to_owned());
+        return Err("retail DAY usage payload differs from its exact native key"
+            .to_owned()
+            .into());
     }
     Ok(Some(amount))
 }
@@ -724,6 +887,111 @@ mod tests {
             [definition],
         );
         (world, policy, issuer_key)
+    }
+
+    #[test]
+    fn sccp_retail_reads_preserve_decoder_refusals_and_reject_malformed_rows() {
+        use crate::smartcontracts::isi::sccp::test_support::header;
+        for selected in 0..5 {
+            for malformed in [false, true] {
+                let (mut world, policy, issuer) = snapshot_fixture();
+                let activation = activation_for_policy(&policy, 1_000).unwrap();
+                let body = iroha_data_model::asset::RetailIdentityAttestationBodyV1 {
+                    domain: iroha_data_model::asset::RETAIL_IDENTITY_ATTESTATION_DOMAIN_V1
+                        .to_owned(),
+                    asset_definition_id: policy.asset_definition_id.clone(),
+                    physical_dataspace: policy.physical_dataspace,
+                    policy_revision: policy.revision,
+                    account_id: ALICE_ID.clone(),
+                    identity: iroha_data_model::asset::RetailIdentityCommitmentV1 {
+                        digest: [9; 32],
+                    },
+                    uniqueness_evidence_digest: [10; 32],
+                };
+                let identity = RetailIdentityAttestationV1 {
+                    signature: iroha_crypto::SignatureOf::try_new(issuer.private_key(), &body)
+                        .unwrap(),
+                    body,
+                };
+                let usage = RetailDailyUsageKeyV1 {
+                    asset_definition_id: policy.asset_definition_id.clone(),
+                    physical_dataspace: policy.physical_dataspace,
+                    identity: identity.body.identity,
+                    utc_day_start_ms: activation.enforce_from_day_start_ms,
+                };
+                let paths = [
+                    policy_key(&policy.asset_definition_id, policy.physical_dataspace),
+                    activation_key(&policy.asset_definition_id),
+                    identity_key(
+                        &policy.asset_definition_id,
+                        policy.physical_dataspace,
+                        &ALICE_ID,
+                    ),
+                    usage_key(&usage),
+                ];
+                let bytes = [
+                    norito::encode_canonical(&policy).unwrap(),
+                    norito::encode_canonical(&activation).unwrap(),
+                    norito::encode_canonical(&identity).unwrap(),
+                    encode_usage(&usage, &Quantity::one()).unwrap(),
+                ];
+                for (path, bytes) in paths.iter().cloned().zip(bytes) {
+                    world.smart_contract_state.insert(path, bytes);
+                }
+                let state = State::new_for_testing(
+                    world,
+                    crate::kura::Kura::blank_kura_for_testing(),
+                    crate::query::store::LiveQueryStore::start_test(),
+                );
+                let mut block = state.block(header(2));
+                let mut tx = block.transaction();
+                let read = |world: &WorldTransaction<'_, '_>| match selected {
+                    0 => {
+                        has_policy_for_definition_in_transaction(world, &policy.asset_definition_id)
+                            .map(drop)
+                    }
+                    1 => policy_for_exact_in_transaction(
+                        world,
+                        &policy.asset_definition_id,
+                        policy.physical_dataspace,
+                    )
+                    .map(drop),
+                    2 => activation_for_exact_in_transaction(world, &policy).map(drop),
+                    3 => identity_for_exact_in_transaction(
+                        world,
+                        &policy.asset_definition_id,
+                        policy.physical_dataspace,
+                        &ALICE_ID,
+                    )
+                    .map(drop),
+                    _ => usage_for_exact_in_transaction(world, &usage).map(drop),
+                };
+                read(&tx.world).expect("the exact canonical record passes");
+                if malformed {
+                    tx.world
+                        .smart_contract_state
+                        .insert(paths[[1, 0, 1, 2, 3][selected]].clone(), vec![0]);
+                    assert!(read(&tx.world).is_err());
+                    assert!(
+                        !tx.is_execution_deferred(),
+                        "malformed rows are deterministic"
+                    );
+                } else {
+                    let result = norito::with_decode_limits_scope(
+                        norito::DecodeLimits::new(0, 0, 0, 0, 0),
+                        || read(&tx.world),
+                    );
+                    assert!(result.is_err());
+                    assert!(tx.is_execution_deferred());
+                    assert!(
+                        tx.borrow_execution_deferral()
+                            .unwrap()
+                            .decode_refusal()
+                            .is_some()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

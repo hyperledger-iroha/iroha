@@ -25,6 +25,21 @@ impl Default for QuantityAccumulator {
 }
 
 impl QuantityAccumulator {
+    /// Normalize an unsigned scaled mantissa using only inline arithmetic.
+    ///
+    /// # Errors
+    /// Refuses a canonical scale above the V1 decimal domain.
+    pub fn from_scaled_u128(mantissa: u128, scale: u32) -> Result<Self, NumericOperationError> {
+        let mut limbs = [0; QUANTITY_SUM_RELATION_LIMBS];
+        limbs[0] = mantissa as u64;
+        limbs[1] = (mantissa >> 64) as u64;
+        let value = Self::normalize(limbs, scale, false)?;
+        if value.scale > super::MAX_DECIMAL_SCALE {
+            return Err(NumericOperationError::ScaleOverflow);
+        }
+        Ok(value)
+    }
+
     /// Start with the canonical zero without allocating.
     #[must_use]
     pub const fn zero() -> Self {
@@ -264,6 +279,23 @@ impl QuantityAccumulator {
 mod tests {
     use super::*;
     use std::str::FromStr as _;
+
+    #[test]
+    fn scaled_unsigned_constructor_matches_canonical_numeric() {
+        for amount in [0, 1, 10, 1_000_000_000, u64::MAX as u128, u128::MAX] {
+            for scale in [0, 9, 28, 29, 38, 39] {
+                let expected = Numeric::try_new(amount, scale)
+                    .map(|value| Quantity::try_from_numeric(value).unwrap());
+                let actual = QuantityAccumulator::from_scaled_u128(amount, scale);
+                match expected {
+                    Ok(expected) => {
+                        assert_eq!(actual.unwrap().try_into_quantity().unwrap(), expected)
+                    }
+                    Err(_) => assert_eq!(actual, Err(NumericOperationError::ScaleOverflow)),
+                }
+            }
+        }
+    }
 
     #[test]
     fn inline_subtraction_preserves_canonical_results_and_both_operands_on_refusal() {

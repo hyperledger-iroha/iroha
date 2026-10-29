@@ -543,6 +543,18 @@ payload against the original frame through the existing streaming canonical
 writer. It preserves original codec/resource causes separately from local
 prepared-destination failures; neither is retried through an owning decoder.
 
+`decode_canonical_with_owned_controls` funds the existing
+`PreparedCanonicalDecode` default and schema counter controls from the caller's
+original finite allocation pool. It checks the ordinary canonical header before
+admission, then runs the same canonical decoding kernel. Its
+`CanonicalDecodeControlError` keeps the original `AllocationRefusal`,
+`PrepaidSharedError`, or `DecodeAttemptError` distinct, including release and
+enclosing-scope provenance. Each actual counter retains its charge until its last
+owner retires; partial construction refunds only retired controls and unused
+reservation credit. This entry owns neither decoded graph storage nor custom
+serializer scratch. Those allocations still require separate original-pool
+custody. Canonical bytes and protocol-limit classification are unchanged.
+
 `decode_canonical_value_into` uses that same canonical-field entry for the
 actual enum or validated-record value produced by `DecodeValueFields`. The
 unchanged generated traversal owns discriminants, fields and consuming hooks;

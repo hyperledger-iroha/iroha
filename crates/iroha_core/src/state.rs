@@ -25679,6 +25679,20 @@ impl WorldTransaction<'_, '_> {
         id: &AssetId,
         dataspace_hint: Option<DataSpaceId>,
     ) -> Result<AssetId, Error> {
+        let scope = self.resolve_asset_scope_for_hint(id, dataspace_hint)?;
+        Ok(AssetId::with_scope(
+            id.definition().clone(),
+            id.account().clone(),
+            scope,
+        ))
+    }
+    /// Resolve only the balance scope, allowing admitted callers to retain their
+    /// own fallible account-copy owner rather than creating an unfunded identifier.
+    pub(crate) fn resolve_asset_scope_for_hint(
+        &self,
+        id: &AssetId,
+        dataspace_hint: Option<DataSpaceId>,
+    ) -> Result<AssetBalanceScope, Error> {
         let definition = self
             .asset_definition(id.definition())
             .map_err(Error::from)?;
@@ -25699,11 +25713,7 @@ impl WorldTransaction<'_, '_> {
                 ));
             }
             self.ensure_confined_asset_route(home)?;
-            return Ok(AssetId::with_scope(
-                id.definition().clone(),
-                id.account().clone(),
-                AssetBalanceScope::Dataspace(home),
-            ));
+            return Ok(AssetBalanceScope::Dataspace(home));
         }
         let ambient_dataspace = self.current_dataspace_id;
         let compatible_requested_dataspace = requested_dataspace.filter(|requested| {
@@ -25741,11 +25751,7 @@ impl WorldTransaction<'_, '_> {
                 }
             }
         }
-        Ok(AssetId::with_scope(
-            id.definition().clone(),
-            id.account().clone(),
-            expected_scope,
-        ))
+        Ok(expected_scope)
     }
     /// Canonicalize an [`AssetId`] into the current execution scope.
     ///
