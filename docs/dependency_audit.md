@@ -217,6 +217,8 @@ passes. Nonmember vendor suites use isolated copies with byte-identical Rust
 sources and manifests and the reviewed Ark-ff override. The repository lockfile
 is unchanged by these policy repairs. Two existing Ark-ff `must_use` warnings
 remain in the standalone build; no test failed or was ignored in these runs.
+The final combined policy, Nearby/BoringSSL custody and reviewed-vendor replay
+passes all 480 Python tests; the current-tree policy scan also passes again.
 
 The earlier source-seal suite passed 112 tests and 414 subtests, with two stale
 public-fixture pin tests passing after their reviewed metadata update. No source,
