@@ -2360,7 +2360,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_auto_start_budget_defaults_to_thirty_seconds_and_is_bounded() {
+    fn auto_start_budgets_default_to_two_minutes_and_are_bounded() {
         let parse = |extra: &[&str]| {
             let mut command_line = vec!["kagami", "contract", "deploy", "hello.ko"];
             command_line.extend_from_slice(extra);
@@ -2369,10 +2369,16 @@ mod tests {
                 _ => unreachable!("deploy parses as a deploy command"),
             })
         };
-        assert_eq!(parse(&[]).unwrap(), 30);
+        assert_eq!(parse(&[]).unwrap(), 120);
         assert_eq!(parse(&["--timeout", "180"]).unwrap(), 180);
         assert!(parse(&["--timeout", "0"]).is_err());
         assert!(parse(&["--timeout", "601"]).is_err());
+        // `localnet up` shares the budget: a ready network returns as soon as it is verified.
+        let up = crate::Cli::try_parse_from(["kagami", "localnet", "up"]).unwrap();
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = up.command else {
+            unreachable!("localnet up parses as localnet up");
+        };
+        assert_eq!(args.timeout, 120);
     }
 
     #[test]
