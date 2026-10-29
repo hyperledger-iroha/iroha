@@ -521,56 +521,103 @@ impl<C: PastaCurve> CommitmentTables<C> {
         budget: MemoryBudget,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Vec<C>, MsmError> {
-        if columns.len() != blinds.len() {
-            return Err(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
-                left: columns.len(),
-                right: blinds.len(),
-            }));
-        }
-        if self.g_lagrange.is_some() {
-            return columns
-                .par_iter()
-                .zip(blinds.par_iter())
-                .map(|(values, blind)| {
-                    self.commit_lagrange_cancellable(
-                        params,
-                        values,
-                        blind,
-                        Secrecy::Secret,
-                        budget,
-                        cancellation,
-                    )
-                })
-                .collect();
-        }
-        CancellationToken::checkpoint(cancellation)?;
-        let Some(first) = columns.first() else {
-            return Ok(Vec::new());
-        };
-        let all_bases = params.g_lagrange();
-        let bases = all_bases
-            .get(..first.len())
-            .ok_or(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
-                left: first.len(),
-                right: all_bases.len(),
-            }))?;
-        #[cfg(test)]
-        for _ in columns {
-            test_observation::record();
-        }
-        let shared = SharedMemoryBudget::process_default();
-        let sums =
-            msm_secret_columns_cancellable::<C>(columns, bases, budget, &shared, cancellation)?;
-        // The constant-time multiplication is stack-only, as in commit_with_bases.
-        let w = params.w().to_curve();
-        let commitments = sums
-            .into_iter()
-            .zip(blinds)
-            .map(|(sum, blind)| sum + w * *blind)
-            .collect();
-        CancellationToken::checkpoint(cancellation)?;
-        Ok(commitments)
+        commit_secret_columns(
+            params.g_lagrange(),
+            self.g_lagrange.as_ref(),
+            &params.w(),
+            columns,
+            blinds,
+            budget,
+            cancellation,
+        )
     }
+
+    /// [`Self::commit_lagrange_secret_columns_cancellable`] for coefficient columns:
+    /// each is `sum_i coeffs[i] g[i] + blind * W`, the point
+    /// [`Self::commit_cancellable`] returns for it.
+    ///
+    /// # Errors
+    /// As [`Self::commit_lagrange_secret_columns_cancellable`].
+    pub fn commit_secret_columns_cancellable(
+        &self,
+        params: &ParamsIpa<C>,
+        columns: &[&[C::ScalarExt]],
+        blinds: &[C::ScalarExt],
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Vec<C>, MsmError> {
+        commit_secret_columns(
+            params.g(),
+            self.g.as_ref(),
+            &params.w(),
+            columns,
+            blinds,
+            budget,
+            cancellation,
+        )
+    }
+}
+
+/// Secret `sum_i columns[j][i] * bases[i] + blinds[j] * w` for every column `j`, in
+/// order; see [`CommitmentTables::commit_lagrange_secret_columns_cancellable`].
+fn commit_secret_columns<C: PastaCurve>(
+    all_bases: &[C::AffineExt],
+    table: Option<&FixedBaseTable<C>>,
+    w: &C::AffineExt,
+    columns: &[&[C::ScalarExt]],
+    blinds: &[C::ScalarExt],
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C>, MsmError> {
+    if columns.len() != blinds.len() {
+        return Err(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
+            left: columns.len(),
+            right: blinds.len(),
+        }));
+    }
+    if table.is_some() {
+        return columns
+            .par_iter()
+            .zip(blinds.par_iter())
+            .map(|(values, blind)| {
+                commit_with_bases(
+                    all_bases,
+                    table,
+                    values,
+                    blind,
+                    w,
+                    Secrecy::Secret,
+                    budget,
+                    cancellation,
+                )
+            })
+            .collect();
+    }
+    CancellationToken::checkpoint(cancellation)?;
+    let Some(first) = columns.first() else {
+        return Ok(Vec::new());
+    };
+    let bases = all_bases
+        .get(..first.len())
+        .ok_or(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
+            left: first.len(),
+            right: all_bases.len(),
+        }))?;
+    #[cfg(test)]
+    for _ in columns {
+        test_observation::record();
+    }
+    let shared = SharedMemoryBudget::process_default();
+    let sums = msm_secret_columns_cancellable::<C>(columns, bases, budget, &shared, cancellation)?;
+    // The constant-time multiplication is stack-only, as in commit_with_bases.
+    let w = w.to_curve();
+    let commitments = sums
+        .into_iter()
+        .zip(blinds)
+        .map(|(sum, blind)| sum + w * *blind)
+        .collect();
+    CancellationToken::checkpoint(cancellation)?;
+    Ok(commitments)
 }
 
 /// Bytes of one projective bucket (three 32-byte coordinates).
