@@ -1197,7 +1197,7 @@ mod tests {
         );
         let (state_root, history) = history_state(&ETHEREUM_MAINNET, 123, [9; 32]);
         assert_ne!(state_root, [0; 32]);
-        assert!(!history.account_proof.nodes.is_empty());
+        assert_ne!(history.account_proof.nodes, Vec::<Vec<u8>>::new());
     }
 
     #[test]

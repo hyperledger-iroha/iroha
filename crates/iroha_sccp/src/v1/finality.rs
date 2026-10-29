@@ -1002,7 +1002,7 @@ mod tests {
                 (<[u8; KEY_LEN]>::try_from(raw).unwrap(), private)
             })
             .collect();
-        members.sort_by(|left, right| left.0.cmp(&right.0));
+        members.sort_by_key(|member| member.0);
         members
     }
 
@@ -2392,7 +2392,7 @@ mod tests {
         ];
         for (error, name) in names {
             assert_eq!(error.destination_error().name(), name);
-            assert!(!error.to_string().is_empty());
+            assert_ne!(error.to_string(), "");
             // TON has one verdict for the keys, the aggregate and the signature.
             let ton = error.ton_destination_error();
             if error == CertificateError::AggregateIdentity {

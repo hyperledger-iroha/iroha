@@ -58,7 +58,7 @@ fn decode_hex_bytes(value: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(raw.len() / 2);
-    for chunk in raw.chunks_exact(2) {
+    for chunk in raw.as_chunks::<2>().0 {
         let hi = decode_ascii_lower_hex_nibble(chunk[0])?;
         let lo = decode_ascii_lower_hex_nibble(chunk[1])?;
         out.push((hi << 4) | lo);
@@ -72,7 +72,7 @@ fn decode_canonical_0x_lower_hex_fixed<const N: usize>(value: &str) -> Option<[u
         return None;
     }
     let mut out = [0u8; N];
-    for (index, chunk) in raw.chunks_exact(2).enumerate() {
+    for (index, chunk) in raw.as_chunks::<2>().0.iter().enumerate() {
         let high = decode_ascii_lower_hex_nibble(chunk[0])?;
         let low = decode_ascii_lower_hex_nibble(chunk[1])?;
         out[index] = (high << 4) | low;
