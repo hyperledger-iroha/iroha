@@ -27,9 +27,10 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - The first release prohibits backward compatibility: remove retired layouts,
   aliases, shims, fallback decoders and parallel legacy implementations, and
   delete old code. The live-upgrade foundation (`specs/live_runtime_upgrades.md`)
-  carries no compatibility path forward: an interim bridge that keeps a running
-  network on a newer release before the foundation lands (for example a one-time
-  checkpoint import) is deleted when the foundation lands.
+  carries no compatibility path forward: a running network adopts it once at a
+  governed checkpoint that becomes its trust anchor, and every bridge or import
+  used up to and including that adoption (for example an interim checkpoint
+  import) is deleted afterwards.
 - A network running the live-upgrade foundation changes only through governed
   definitions: a change publishes new immutable definitions and moves an
   execution root to a new selection, and a definition's encoding and semantics

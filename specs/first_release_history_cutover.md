@@ -310,8 +310,11 @@ genesis, every rule above applies unchanged. After it:
   the floor stay verifiable by their certificates and are re-executed only with
   the archived release, as "Obsolete histories" requires.
 
-The foundation genesis itself is a declared `fresh_genesis` cutover of every
-surface. No bridge carries a predecessor history into it.
+A network enters the foundation through a fresh genesis or, when it is already
+running, through a one-time adoption at a governed checkpoint that becomes its
+trust anchor (`live_runtime_upgrades.md` §13). Blocks before the anchor are
+verified only with the archived predecessor release, and no bridge or import
+survives the adoption.
 
 ## Obsolete histories
 

@@ -5126,11 +5126,12 @@ G.3 freezes the table identity and codec; G.4 defines ages, caps and the admissi
   snapshot format and their `world_state_*_v1` helpers.
 - No binary computes both roots for consensus, and none selects a layout by configuration,
   feature or environment. A chain built on the LtHash16 layout is not replayed by the keyed
-  binary: the cutover is the fresh foundation genesis of `live_runtime_upgrades.md`. After it, the
-  commitment profile is a definition in the root's selection, so a later change of profile is a
-  certified transition: the parent root uses the predecessor profile and the successor root the
-  successor profile. A second calculation is permitted only under `#[cfg(test)]` as a
-  differential.
+  binary: the cutover is the network's entry into the foundation of `live_runtime_upgrades.md`, a
+  fresh genesis or the one-time adoption of a running network at a governed checkpoint (§13 there),
+  after which the LtHash code is deleted. From then on the commitment profile is a definition in the
+  root's selection, so a later change of profile is a certified transition: the parent root uses the
+  predecessor profile and the successor root the successor profile. A second calculation is
+  permitted only under `#[cfg(test)]` as a differential.
 - No per-table root is added to the result. Per-table and per-key proofs are witnesses against
   the one keyed root; contract-state value proofs use `world.smart_contract_state` in it.
 - Every existing commitment over State content is enumerated under `roots` or, where the
