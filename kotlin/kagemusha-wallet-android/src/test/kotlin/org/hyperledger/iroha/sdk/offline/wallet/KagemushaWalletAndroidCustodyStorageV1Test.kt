@@ -99,7 +99,7 @@ class KagemushaWalletAndroidCustodyStorageV1Test {
     }
     @Test fun `missing or replaced witnessed root is never recreated or rebound`() {
         for (replacement in listOf<KagemushaWalletAndroidStorageV1.Stat?>(null,
-            Fs().directory.copy(inode = 99), Fs().directory.copy(device = 8, inode = 20))) {
+            Fs().directory.copy(inode = 99), Fs().directory.copy(device = 8, inode = 99))) {
             val fs = Fs(); prepare(fs); fs.events.clear()
             if (replacement == null) fs.nodes.remove(child) else fs.nodes[child] = replacement
             val before = fs.bytes.copyOf()
@@ -107,6 +107,115 @@ class KagemushaWalletAndroidCustodyStorageV1Test {
             assertFalse(fs.events.any { it.startsWith("mkdir") || it.startsWith("write") || it.startsWith("seal") })
             assertTrue(fs.handles.isEmpty())
         }
+    }
+    @Test fun `mount device renumberings reopen the same root without rewriting its original witness`() {
+        val fs = Fs(); prepare(fs)
+        val original = fs.bytes.copyOf()
+        val originalNodes = fs.nodes.toMap()
+        for (device in listOf(8L, 72L, 9L, 7L)) {
+            fs.nodes.entries.forEach { it.setValue(it.value.copy(device = device)) }
+            val before = fs.nodes.toMap()
+            fs.events.clear()
+            assertEquals(child, prepare(fs))
+            assertEquals(before, fs.nodes)
+            for ((path, stat) in fs.nodes) assertEquals(originalNodes[path], stat.copy(device = 7))
+            assertEquals(2, fs.events.count { it == "read:witness" })
+            assertContentEquals(original, fs.bytes)
+            assertContentEquals(byteArrayOf(9, 2, 7), fs.retainedContents)
+            assertFalse(fs.events.any { it.startsWith("mkdir") || it.startsWith("write") || it.startsWith("seal") })
+            assertTrue(fs.handles.isEmpty())
+        }
+    }
+    @Test fun `witness root inode owner magic and exact length remain mandatory across mount changes`() {
+        val corruptions: List<Pair<Int, (ByteArray) -> ByteArray>> = listOf(
+            2 to { bytes -> bytes.also { it[23] = (it[23].toInt() xor 1).toByte() } },
+            4 to { bytes -> bytes.also { it[27] = (it[27].toInt() xor 1).toByte() } },
+            8 to { bytes -> bytes.also { it[31] = (it[31].toInt() xor 1).toByte() } },
+            16 to { bytes -> bytes.also { it[0] = (it[0].toInt() xor 1).toByte() } },
+            16 to { bytes -> bytes.copyOf(31) },
+            16 to { bytes -> bytes.copyOf(33) },
+            6 to { bytes -> bytes.also {
+                it[23] = (it[23].toInt() xor 1).toByte()
+                it[27] = (it[27].toInt() xor 1).toByte()
+            } },
+        )
+        for ((mask, corrupt) in corruptions) {
+            for (device in listOf(7L, 8L)) {
+                val fs = Fs(); prepare(fs)
+                fs.nodes.entries.forEach { it.setValue(it.value.copy(device = device)) }
+                fs.bytes = corrupt(fs.bytes.copyOf())
+                val before = fs.bytes.copyOf()
+                fs.events.clear()
+                val failure = assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(fs) }
+                assertEquals(WalletStoragePreparationFailureV1.WITNESS_BINDING, failure.failure)
+                assertEquals(if (mask == 16 || device == 7L) mask else mask or 1, failure.witnessMismatch)
+                assertEquals("Wallet custody witness is incomplete or names another root", failure.message)
+                assertEquals(1, fs.events.count { it == "read:witness" })
+                assertContentEquals(before, fs.bytes)
+                assertFalse(fs.events.any { it.startsWith("mkdir") || it.startsWith("write") || it.startsWith("seal") })
+                assertTrue(fs.handles.isEmpty())
+            }
+        }
+    }
+    @Test fun `device only named or held identity races refuse parent root and witness during reopening`() {
+        for (path in listOf(parent, child, witness)) {
+            for (changed in listOf("named", "held")) {
+                val fs = Fs(); prepare(fs)
+                fs.nodes.entries.forEach { it.setValue(it.value.copy(device = 8)) }
+                val original = fs.bytes.copyOf()
+                var raced = false
+                fs.events.clear()
+                fs.onEvent = { event ->
+                    if (!raced && event == "fstat:${fs.name(path)}") {
+                        raced = true
+                        if (changed == "named") fs.nodes[path] = checkNotNull(fs.nodes[path]).copy(device = 9)
+                        else fs.handles.entries.filter { it.value.first == path }.forEach {
+                            it.setValue(path to it.value.second.copy(device = 9))
+                        }
+                    }
+                }
+                val failure = assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(fs) }
+                assertTrue(raced)
+                assertEquals(WalletStoragePreparationFailureV1.IDENTITY, failure.failure)
+                assertContentEquals(original, fs.bytes)
+                assertFalse(fs.events.any { it.startsWith("mkdir") || it.startsWith("write") || it.startsWith("seal") })
+                assertTrue(fs.handles.isEmpty())
+            }
+        }
+    }
+    @Test fun `missing root malformed witness and unsafe custody keep their distinct refusals`() {
+        val missing = Fs(); prepare(missing); missing.nodes.remove(child); missing.events.clear()
+        val missingFailure = assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(missing) }
+        assertEquals(WalletStoragePreparationFailureV1.ROOT_MISSING, missingFailure.failure)
+        assertEquals("Previously initialized wallet custody is missing", missingFailure.message)
+        assertFalse(missing.events.any { it == "read:witness" || it.startsWith("mkdir") })
+
+        val shape = Fs(); prepare(shape); shape.nodes[witness] = checkNotNull(shape.nodes[witness]).copy(links = 2)
+        val shapeFailure = assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(shape) }
+        assertEquals(WalletStoragePreparationFailureV1.WITNESS_SHAPE, shapeFailure.failure)
+        assertEquals("Wallet custody witness is not a private single-link file", shapeFailure.message)
+
+        val malformed = Fs(); prepare(malformed); malformed.bytes = byteArrayOf(1)
+        val malformedFailure = assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(malformed) }
+        assertEquals(WalletStoragePreparationFailureV1.WITNESS_BINDING, malformedFailure.failure)
+        assertEquals(16, malformedFailure.witnessMismatch)
+        assertContentEquals(byteArrayOf(1), malformed.bytes)
+
+        val privacy = Fs().apply { nodes[parent] = directory.copy(mode = 0x41f9) }
+        assertEquals(WalletStoragePreparationFailureV1.PRIVACY,
+            assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(privacy) }.failure)
+        for (fs in listOf(missing, shape, malformed, privacy)) assertTrue(fs.handles.isEmpty())
+    }
+    @Test fun `native io unavailability remains the original exception and identity races remain refused`() {
+        val unavailable = IOException("storage unavailable")
+        val io = Fs().apply { onEvent = { if (it == "open:parent") throw unavailable } }
+        assertSame(unavailable, assertFailsWith<IOException> { prepare(io) })
+        assertTrue(io.handles.isEmpty()); assertNull(io.nodes[witness])
+        val raced = Fs().apply { onEvent = { if (it == "probe:child") nodes[parent] = directory.copy(inode = 88) } }
+        val failure = assertFailsWith<WalletStoragePreparationExceptionV1> { prepare(raced) }
+        assertEquals(WalletStoragePreparationFailureV1.IDENTITY, failure.failure)
+        assertEquals("Wallet no-backup parent identity changed", failure.message)
+        assertTrue(raced.handles.isEmpty()); assertNull(raced.nodes[witness])
     }
     @Test fun `unsafe existing child or witness is refused without repair`() {
         val original = Fs().directory
@@ -117,7 +226,8 @@ class KagemushaWalletAndroidCustodyStorageV1Test {
             assertTrue(fs.handles.isEmpty())
         }
         for (bad in listOf(original.copy(mode = 0x8180), original.copy(mode = 0x8100, links = 2),
-            original.copy(mode = 0x8100, uid = 10385), original.copy(mode = 0xa100))) {
+            original.copy(mode = 0x8100, uid = 10385), original.copy(mode = 0x8100, gid = 10385),
+            original.copy(mode = 0xa100))) {
             val fs = Fs(); prepare(fs); fs.nodes[witness] = bad; fs.events.clear()
             assertFails { prepare(fs) }; assertEquals(bad, fs.nodes[witness])
             assertFalse("write:witness" in fs.events); assertTrue(fs.handles.isEmpty())

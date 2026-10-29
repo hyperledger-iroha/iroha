@@ -8,9 +8,13 @@ internal object KagemushaWalletNativeCallsV1 {
 
     fun revision() = KagemushaWalletNativeV1.revision()
     fun openBegin(runtime: Long, credential: ByteArray, certificates: ByteArray, account: ByteArray, asset: ByteArray) =
-        worker.run { KagemushaWalletNativeV1.openBegin(runtime, credential, certificates, account, asset) }
+        WalletCallObservationsV1.shared.call(WalletCallBoundaryV1.OPEN_BEGIN) {
+            worker.run { KagemushaWalletNativeV1.openBegin(runtime, credential, certificates, account, asset) }
+        }
     fun openFinish(runtime: Long, signature: ByteArray) =
-        worker.run { KagemushaWalletNativeV1.openFinish(runtime, signature) }
+        WalletCallObservationsV1.shared.call(WalletCallBoundaryV1.OPEN_FINISH) {
+            worker.run { KagemushaWalletNativeV1.openFinish(runtime, signature) }
+        }
     fun openCancel(runtime: Long) = KagemushaWalletNativeV1.openCancel(runtime)
     // Never queue control behind a fold or payment which it must cancel/join.
     fun close(handle: Long) = KagemushaWalletNativeV1.close(handle)
@@ -21,7 +25,9 @@ internal object KagemushaWalletNativeCallsV1 {
     fun call(handle: Long, operation: Int, first: ByteArray, second: ByteArray) =
         worker.run(fold = operation == 3) { KagemushaWalletNativeV1.call(handle, operation, first, second) }
     fun enrollment(runtime: Long, selector: Int, first: ByteArray, second: ByteArray, third: ByteArray, certificates: Array<ByteArray>) =
-        worker.run { KagemushaWalletNativeV1.enrollment(runtime, selector, first, second, third, certificates) }
+        WalletCallObservationsV1.shared.call(WalletCallBoundaryV1.ENROLLMENT, selector) {
+            worker.run { KagemushaWalletNativeV1.enrollment(runtime, selector, first, second, third, certificates) }
+        }
     fun enrollmentRefusal(code: Int, android: Boolean) = KagemushaWalletNativeV1.enrollmentRefusal(code, android)
     fun setup(handle: Long, exchangeId: Long, setupId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, token: Long, first: ByteArray, second: ByteArray, third: ByteArray) =
         worker.setup(selector) { KagemushaWalletNativeV1.setup(handle, exchangeId, setupId, selector, amountLow, amountHigh, token, first, second, third) }

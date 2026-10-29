@@ -1711,6 +1711,103 @@ fn custody_failure_reasons_preserve_other_failure_contracts() {
 }
 
 #[test]
+fn custody_witness_reasons_identify_open_predicates_without_changing_the_refusal() {
+    for (object, reason) in [
+        ("canonical archive record", 131),
+        ("provider archive authentication", 132),
+        ("archive manifest digest", 133),
+        ("archive manifest binding", 134),
+        ("archive manifest publication", 135),
+        ("manifest before bootstrap", 136),
+        ("manifest ahead of custody", 137),
+        ("manifest head conflict", 138),
+        ("indexed boundary", 139),
+        ("indexed boundary head", 140),
+        ("capsule chain", 141),
+        ("duplicate committed operation", 142),
+        ("duplicate committed Send", 143),
+        ("duplicate committed Receive", 144),
+        ("bootstrap boundary", 145),
+        ("selected capsule", 146),
+        ("capsule binding", 147),
+        ("released completion", 148),
+        ("completion binding", 149),
+        ("step metadata", 150),
+        ("indexed sequence", 151),
+        ("step index", 152),
+        ("selected preparation source snapshot", 153),
+        ("changed source custody", 154),
+        ("index object", 155),
+        ("index object digest", 156),
+        ("index node hash", 157),
+        ("index leaf size", 158),
+        ("index branch", 159),
+        ("index publication digest", 160),
+        ("duplicate committed fee claim", 161),
+        ("fee Request original", 162),
+        ("earned fee originals size", 163),
+        ("earned fee originals binding", 164),
+        ("fold head binding", 165),
+        ("fold index gap", 166),
+        ("recorded Ω", 167),
+        ("source-bound Ω identity", 168),
+    ] {
+        let expected = Failure {
+            status: CUSTODY_LOST,
+            reason,
+            platform_code: 0,
+        };
+        assert_eq!(Failure::from(state::Error::WitnessLost(object)), expected);
+        // The real account-finish path wraps coordinator initialization failures.
+        assert_eq!(
+            Failure::from(state::NativeOpenErrorV1::State(state::Error::WitnessLost(
+                object
+            ))),
+            expected
+        );
+    }
+}
+
+#[test]
+fn custody_witness_reason_is_bounded_for_unknown_private_labels_and_preserves_other_errors() {
+    let expected = Failure {
+        status: CUSTODY_LOST,
+        reason: 130,
+        platform_code: 0,
+    };
+    for label in [
+        "unlisted witness predicate",
+        "/private/wallet/slot/0123456789abcdef",
+        "private key or user payload must never appear",
+    ] {
+        let observed = Failure::from(state::Error::WitnessLost(label));
+        assert_eq!(observed, expected);
+        assert!(!format!("{observed:?}").contains(label));
+    }
+    assert_eq!(
+        Failure::from(state::Error::Provider(
+            advance::KagemushaWalletProviderErrorV1::Unavailable(
+                advance::KagemushaWalletUnavailableV1::Io(17)
+            )
+        )),
+        Failure {
+            status: UNAVAILABLE,
+            reason: 3,
+            platform_code: 17,
+        }
+    );
+    assert_eq!(
+        Failure::from(state::Error::Invalid("ledger activation unconfirmed")),
+        Failure::invalid(200)
+    );
+    assert_eq!(Failure::from(state::Error::NoHead), Failure::invalid(208));
+    assert_eq!(
+        Failure::from(state::Error::FoldRequired),
+        Failure::code(FOLD_REQUIRED)
+    );
+}
+
+#[test]
 fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication_failure() {
     struct Bracket {
         events: Vec<&'static str>,
