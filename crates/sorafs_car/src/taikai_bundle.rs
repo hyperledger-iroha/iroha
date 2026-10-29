@@ -109,6 +109,22 @@ where
             path.display()
         )));
     }
+    // Retain the admitted object through the second open. Windows' stable
+    // std::fs metadata does not expose volume/file IDs; timestamps are not identity.
+    let original = open_identity_input(path)?;
+    let original_metadata = original.metadata()?;
+    if is_symlink_or_reparse(&original_metadata) || !original_metadata.is_file() {
+        return Err(invalid(format!(
+            "{label} changed before identity acquisition"
+        )));
+    }
+    ensure_same_file_state(
+        &path_metadata,
+        &original_metadata,
+        path,
+        label,
+        "during identity acquisition",
+    )?;
     before_open()?;
 
     let mut options = OpenOptions::new();
@@ -132,6 +148,7 @@ where
             path.display()
         )));
     }
+    ensure_same_input_identity(&original, &file, path, label)?;
     ensure_same_file_state(
         &path_metadata,
         &opened_metadata,
@@ -318,6 +335,20 @@ where
             path.display()
         )));
     }
+    let original = open_identity_input(path)?;
+    let original_metadata = original.metadata()?;
+    if !original_metadata.is_dir() || is_symlink_or_reparse(&original_metadata) {
+        return Err(invalid(
+            "bundle directory changed before identity acquisition".into(),
+        ));
+    }
+    ensure_same_file_state(
+        &initial_metadata,
+        &original_metadata,
+        path,
+        "bundle directory",
+        "during identity acquisition",
+    )?;
     update_path_marker(relative, b'D', hasher)?;
     before_traversal()?;
     let mut entries = Vec::new();
@@ -358,6 +389,15 @@ where
             path.display()
         )));
     }
+    let observed = open_identity_input(path)?;
+    ensure_same_input_identity(&original, &observed, path, "bundle directory")?;
+    ensure_same_file_state(
+        &final_metadata,
+        &observed.metadata()?,
+        path,
+        "bundle directory",
+        "during final identity acquisition",
+    )?;
     ensure_same_file_state(
         &initial_metadata,
         &final_metadata,
@@ -420,6 +460,35 @@ fn ensure_same_file_state(
     }
 }
 
+fn open_identity_input(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow_nonblocking(&mut options)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // Backup semantics permits directory handles; OPEN_REPARSE_POINT still
+        // prevents following the final reparse point. No backup privilege is requested.
+        options.custom_flags(0x0200_0000 | 0x0020_0000);
+    }
+    options.open(path)
+}
+
+fn ensure_same_input_identity(
+    original: &File,
+    observed: &File,
+    path: &Path,
+    label: &str,
+) -> io::Result<()> {
+    if iroha_fs::FileIdentity::of(original)? != iroha_fs::FileIdentity::of(observed)? {
+        return Err(invalid(format!(
+            "{label} `{}` changed native identity",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -436,11 +505,9 @@ fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 #[cfg(windows)]
 fn metadata_state_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
+    // Path-to-handle and directory reopens additionally require the original
+    // retained native identity. Read/hash comparisons observe one retained handle.
+    left.file_size() == right.file_size()
         && left.file_attributes() == right.file_attributes()
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
@@ -569,6 +636,57 @@ mod tests {
             file_digest(&second, "policy input").expect("digest"),
             expected
         );
+    }
+
+    #[test]
+    fn native_identity_distinguishes_identical_files_and_directory_reopens() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("first");
+        let replacement = tmp.path().join("second");
+        fs::write(&path, b"same bytes").expect("write original");
+        fs::write(&replacement, b"same bytes").expect("write replacement");
+        let original = open_identity_input(&path).expect("retain original");
+        let reopened = open_identity_input(&path).expect("reopen original");
+        ensure_same_input_identity(&original, &reopened, &path, "file")
+            .expect("reopening the same object preserves identity");
+        let replaced = open_identity_input(&replacement).expect("open replacement");
+        let error = ensure_same_input_identity(&original, &replaced, &path, "file")
+            .expect_err("equal contents do not establish native identity");
+        assert!(error.to_string().contains("changed native identity"));
+
+        let directory = open_identity_input(tmp.path()).expect("retain directory");
+        let reopened = open_identity_input(tmp.path()).expect("reopen directory");
+        ensure_same_input_identity(&directory, &reopened, tmp.path(), "directory")
+            .expect("directory handles preserve native identity");
+    }
+
+    #[test]
+    fn policy_open_rejects_identical_file_replacement() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("policy.to");
+        fs::write(&path, b"policy-document").expect("write policy");
+        let error = open_regular_input_with_hook(&path, "test policy document", || {
+            fs::rename(&path, tmp.path().join("original.to"))?;
+            fs::write(&path, b"policy-document")
+        })
+        .expect_err("replacement must fail even with identical contents");
+        assert!(error.to_string().contains("changed native identity"));
+    }
+
+    #[test]
+    fn bundle_hash_rejects_identical_directory_replacement() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundle = tmp.path().join("bundle");
+        fs::create_dir(&bundle).expect("create bundle");
+        fs::write(bundle.join("entry"), b"same bytes").expect("write entry");
+        let error =
+            hash_directory_entry_with_hook(&bundle, Path::new(""), &mut Hasher::new(), || {
+                fs::rename(&bundle, tmp.path().join("original"))?;
+                fs::create_dir(&bundle)?;
+                fs::write(bundle.join("entry"), b"same bytes")
+            })
+            .expect_err("replacement must fail even with identical entries");
+        assert!(error.to_string().contains("changed native identity"));
     }
 
     #[test]

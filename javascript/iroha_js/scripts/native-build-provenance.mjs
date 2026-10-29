@@ -140,7 +140,7 @@ function canonicalGitEnvironment(env) {
   return {
     ...canonical,
     GIT_CONFIG_COUNT: "0",
-    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "nul" : devNull,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_LITERAL_PATHSPECS: "1",
     GIT_NO_REPLACE_OBJECTS: "1",

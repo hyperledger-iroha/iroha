@@ -1889,6 +1889,32 @@ def test_release_identity_detects_same_tree_head_change(tmp_path: Path) -> None:
 
 
 
+def test_ignore_policy_discovery_without_descriptors_keeps_source_and_policy_guards(
+    ignore_policy_repo: Path, monkeypatch
+) -> None:
+    module = load_module()
+    root = ignore_policy_repo
+    monkeypatch.setattr(module, "_descriptor_source_manifest_supported", lambda: False)
+
+    def reject_descriptor_manifest(*_args):
+        pytest.fail("portable discovery must not require descriptor-bound manifests")
+
+    monkeypatch.setattr(module, "_manifest_for_paths", reject_descriptor_manifest)
+    (root / "target").mkdir()
+    (root / "target/tracked.rs").write_text("tracked source\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-f", "target/tracked.rs"], cwd=root, check=True)
+    (root / "target/.gitignore").write_text("*\n", encoding="utf-8")
+
+    assert module._root_excluded_policy_directories(root) == ([], None)
+    assert module._git_source_paths(root) == [".gitignore", "Cargo.lock", "target/tracked.rs"]
+
+    (root / "visible").mkdir()
+    (root / "visible/.gitignore").write_text("*\n", encoding="utf-8")
+    (root / "visible/hidden.rs").write_text("untracked source\n", encoding="utf-8")
+    with pytest.raises(module.DirtyReleaseSourceError, match="visible/.gitignore"):
+        module._git_source_paths(root)
+
+
 @pytest.mark.parametrize("directory", ["target", "cache space", "cache[1]", "cache:é"])
 def test_ignore_policy_discovery_prunes_only_literal_root_exclusions(
     ignore_policy_repo: Path, monkeypatch, directory: str
