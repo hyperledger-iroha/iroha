@@ -263,6 +263,17 @@ a replaced rules attribute. The handle's only public operation, `enrollmentEvide
 exports the E5 chain of the native-selected payment key with the adapter's own pre-E5
 check; only the Rust provider's role-checked signers reach the payment key through it.
 
+The Android storage adapter retains an immutable 32-byte `KGMROOT1` witness for
+the custody root in the Context-owned credential-encrypted `no_backup` namespace.
+Reopening requires its exact shape, magic, root inode and UID/GID. The recorded
+initial mount device is an observation because stock Android can renumber mount
+devices across restarts or OS updates; reopening never rewrites that witness.
+All device/inode comparisons between live paths and open descriptors, private
+ownership and single-link checks remain required. This local fence is not an
+independent rollback anchor and does not replace Native key, custody, proof or
+replay validation. This follows the normal-update durability and stock-OS scope
+in [the single design, §1.2–2.1](../specs/kagemusha_single_design_proposal.md#12-scope-of-durability).
+
 ### Android Keystore existence decisions
 
 `KeyStore.containsAlias`, `getEntry`, `aliases`, `isKeyEntry` and `getCertificate*`

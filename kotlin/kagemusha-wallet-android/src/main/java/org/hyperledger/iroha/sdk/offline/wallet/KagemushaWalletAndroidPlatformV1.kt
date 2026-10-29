@@ -4,6 +4,7 @@
 package org.hyperledger.iroha.sdk.offline.wallet
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 import java.io.IOException
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AndroidAttestationE1PolicyV1
@@ -50,6 +51,7 @@ import org.hyperledger.iroha.sdk.offline.KagemushaWalletEnrollmentRefusalV1
 class KagemushaWalletAndroidPlatformV1 private constructor(
     private val adapter: KagemushaWalletAndroidPlatformAdapterV1,
 ) {
+    private val storageObservations = WalletStorageObservationV1(::publishWalletStorageObservationV1)
     /**
      * E5 evidence of the exact native-selected payment key, right after its generation: the
      * original leaf-first KeyMint chain and this adapter's own check of it (design §2.4). The
@@ -153,6 +155,8 @@ class KagemushaWalletAndroidPlatformV1 private constructor(
                 KagemushaWalletAndroidKeyGenerationV1.AlreadyPresent -> KagemushaWalletNativeReplyV1(2)
             }
             else -> KagemushaWalletNativeReplyV1(2)
+        }.also { reply ->
+            storageObservations.reply(operation, reply)
         }
 
     companion object {
@@ -310,19 +314,97 @@ internal class KagemushaWalletAndroidPlatformAdapterV1(
         val root = try {
             environment.preparedCustodyRoot().path
         } catch (error: IOException) {
-            return KagemushaWalletAndroidCustodyRootV1.Unavailable(KagemushaWalletAndroidUnavailableV1.io(0))
+            val reason = KagemushaWalletAndroidUnavailableV1.io(0)
+            observeWalletStoragePreparationFailureV1(WalletStoragePreparationFailureV1.IO, reason,
+                publish = ::publishWalletStorageObservationV1)
+            return KagemushaWalletAndroidCustodyRootV1.Unavailable(reason)
         } catch (error: Throwable) {
-            return KagemushaWalletAndroidCustodyRootV1.Unavailable(
-                KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_STORAGE),
-            )
+            val reason = KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_STORAGE)
+            val diagnostic = error as? WalletStoragePreparationExceptionV1
+            observeWalletStoragePreparationFailureV1(diagnostic?.failure ?: WalletStoragePreparationFailureV1.PLATFORM,
+                reason, diagnostic?.witnessMismatch ?: 0, ::publishWalletStorageObservationV1)
+            return KagemushaWalletAndroidCustodyRootV1.Unavailable(reason)
         }
         if (!File(root).isAbsolute) {
-            return KagemushaWalletAndroidCustodyRootV1.Unavailable(
-                KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_STORAGE),
-            )
+            val reason = KagemushaWalletAndroidUnavailableV1.platform(KagemushaWalletAndroidUnavailableV1.PLATFORM_STORAGE)
+            observeWalletStoragePreparationFailureV1(WalletStoragePreparationFailureV1.PATH, reason,
+                publish = ::publishWalletStorageObservationV1)
+            return KagemushaWalletAndroidCustodyRootV1.Unavailable(reason)
         }
         return KagemushaWalletAndroidCustodyRootV1.Present(root)
     }
+}
+
+/** Public storage observations only: no path, slot, payload, exception text or key material.
+ * Diagnostics must never change a platform answer, including when the log sink fails. */
+internal class WalletStorageObservationV1(private val publish: (String) -> Unit) {
+    private var observedSuccesses = 0
+
+    fun reply(operation: Int, reply: KagemushaWalletNativeReplyV1): KagemushaWalletNativeReplyV1 {
+        val name: String
+        val bit: Int
+        when (operation) {
+            7 -> { name = "storage_state"; bit = 1 }
+            9 -> { name = "custody_root"; bit = 2 }
+            else -> return reply
+        }
+        // Storage is probed during ordinary wallet work too. Bound success records per
+        // platform lifetime; every unavailable answer remains visible without a held lock.
+        val report = synchronized(this) {
+            if (reply.tag != 0) true else {
+                val first = (observedSuccesses and bit) == 0
+                observedSuccesses = observedSuccesses or bit
+                first
+            }
+        }
+        if (report) runCatching {
+            publish("operation=$name status=${reply.tag} reason=${reply.reason} platform_code=${reply.code}")
+        }
+        return reply
+    }
+}
+
+internal enum class WalletStoragePreparationFailureV1 {
+    IO, PLATFORM, PATH, WITNESS_BINDING, WITNESS_SHAPE, ROOT_MISSING, PRIVACY, IDENTITY,
+}
+
+/** The original refusal remains an IllegalStateException with the same fixed message.
+ * Only its closed observation category and bounded comparison mask leave this layer. */
+internal class WalletStoragePreparationExceptionV1(
+    val failure: WalletStoragePreparationFailureV1,
+    val witnessMismatch: Int = 0,
+    message: String,
+) : IllegalStateException(message)
+
+/** Compare only the two already-read local identity frames. Bits identify differing fields,
+ * never their values: device=1, inode=2, uid=4, gid=8, malformed shape/prefix=16.
+ * This observation cannot admit, rewrite, migrate or rebind a witness. */
+internal fun walletStorageWitnessMismatchV1(actual: ByteArray, expected: ByteArray): Int {
+    if (actual.size != 32 || expected.size != 32) return 16
+    for (index in 0 until 8) if (actual[index] != expected[index]) return 16
+    var mask = 0
+    for (index in 8 until 32) {
+        if (actual[index] != expected[index]) mask = mask or when {
+            index < 16 -> 1
+            index < 24 -> 2
+            index < 28 -> 4
+            else -> 8
+        }
+    }
+    return mask
+}
+
+internal fun observeWalletStoragePreparationFailureV1(failure: WalletStoragePreparationFailureV1,
+    reason: KagemushaWalletAndroidUnavailableV1, witnessMismatch: Int = 0, publish: (String) -> Unit) {
+    runCatching {
+        val mismatch = if (failure == WalletStoragePreparationFailureV1.WITNESS_BINDING)
+            " witness_mismatch=${witnessMismatch and 31}" else ""
+        publish("operation=custody_root_prepare status=2 reason=${reason.kind.tag} platform_code=${reason.code} failure=${failure.name}$mismatch")
+    }
+}
+
+private fun publishWalletStorageObservationV1(message: String) {
+    Log.i("IrohaWalletStorage", message)
 }
 
 /** Rust `KagemushaWalletAnchorPolicyV1::NotRequired` tag. */

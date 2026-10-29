@@ -147,7 +147,7 @@ fn current_maximum_queue_records_and_populated_manifest_fit_provider_bounds() {
     });
     // All remaining manifest/tree fields are fixed-width, including empty versus nonempty
     // roots. Set every new root and maximal scalar so schema growth cannot hide in defaults.
-    manifest.deferred_archive = DeferredIndex {
+    let maximal = DeferredIndex {
         receipts: IndexRoot([255; 32]),
         sends: IndexRoot([255; 32]),
         unverified: IndexRoot([255; 32]),
@@ -155,6 +155,18 @@ fn current_maximum_queue_records_and_populated_manifest_fit_provider_bounds() {
         next_ordinal: u128::MAX,
         count: u64::MAX,
     };
+    let metadata = archive::encode(&maximal).unwrap();
+    assert!(
+        metadata.len() <= index::INDEX_VALUE_LIMIT,
+        "maximal deferred metadata is {} bytes",
+        metadata.len()
+    );
+    let parsed: DeferredIndex = archive::decode(&metadata).unwrap();
+    assert_eq!(archive::encode(&parsed).unwrap(), metadata);
+    w.select_deferred_archive_index(&mut manifest, &maximal)
+        .unwrap();
+    let selected = w.deferred_archive_index(&manifest).unwrap();
+    assert_eq!(archive::encode(&selected).unwrap(), metadata);
     let bytes = archive::encode(&manifest).unwrap();
     assert!(
         bytes.len()
@@ -210,4 +222,92 @@ fn exhausted_intake_ordinal_never_wraps_or_reuses_a_removed_identity() {
         Err(Error::Invalid("deferred intake ordinal exhausted"))
     ));
     assert_eq!(index.next_ordinal, u128::MAX);
+}
+
+#[test]
+fn authenticated_absence_and_present_invalid_leaf_have_distinct_meaning() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    let (root, mut manifest) = w.manifest().unwrap();
+    let checkpoint = w.custody.checkpoint.clone();
+    let before = w.archive.records.lock().unwrap().clone();
+    let empty = w.deferred_archive_index(&manifest).unwrap();
+    assert_eq!(
+        archive::encode(&empty).unwrap(),
+        archive::encode(&DeferredIndex::default()).unwrap()
+    );
+    assert_eq!(w.custody.checkpoint, checkpoint);
+    assert_eq!(*w.archive.records.lock().unwrap(), before);
+    manifest.sessions = manifest
+        .sessions
+        .set(&mut w.archive, [19; 32], b"unrelated selected value")
+        .unwrap();
+    let mut selected = w.publish_manifest(root, &manifest).unwrap();
+    let index = w.deferred_archive_index(&manifest).unwrap();
+    assert_eq!(index.next_ordinal, 0);
+    assert_eq!(
+        manifest.sessions.get(&mut w.archive, &[19; 32]).unwrap(),
+        Some(b"unrelated selected value".to_vec())
+    );
+
+    let invalid = DeferredIndex {
+        count: 1,
+        ..DeferredIndex::default()
+    };
+    for bytes in [
+        Vec::new(),
+        b"malformed selected metadata".to_vec(),
+        archive::encode(&[7_u8; 32]).unwrap(),
+        archive::encode(&invalid).unwrap(),
+    ] {
+        let mut altered = manifest.clone();
+        altered.sessions = altered
+            .sessions
+            .set(&mut w.archive, DEFERRED_INDEX_KEY, &bytes)
+            .unwrap();
+        selected = w.publish_manifest(selected, &altered).unwrap();
+        // A selected invalid leaf stays selected; no failed read repairs or erases it.
+        let checkpoint = w.custody.checkpoint.clone();
+        let before = w.archive.records.lock().unwrap().clone();
+        assert!(w.deferred_archive_index(&altered).is_err());
+        assert!(w.deferred_archive_summary().is_err());
+        assert!(w.next_deferred_credited().is_err());
+        assert_eq!(w.custody.checkpoint, checkpoint);
+        assert_eq!(*w.archive.records.lock().unwrap(), before);
+        assert_eq!(
+            altered.sessions.get(&mut w.archive, &[19; 32]).unwrap(),
+            Some(b"unrelated selected value".to_vec())
+        );
+    }
+    assert_eq!(w.custody.checkpoint.as_ref().unwrap().0, selected);
+}
+
+#[test]
+fn missing_or_corrupt_selected_metadata_path_never_becomes_an_empty_queue() {
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    let (root, mut manifest) = w.manifest().unwrap();
+    let empty = DeferredIndex::default();
+    w.select_deferred_archive_index(&mut manifest, &empty)
+        .unwrap();
+    w.publish_manifest(root, &manifest).unwrap();
+    let selected = w.custody.checkpoint.clone();
+    w.archive.hide_object(manifest.sessions.0);
+    assert!(w.deferred_archive_summary().is_err());
+    assert!(w.next_deferred_credited().is_err());
+    assert_eq!(w.custody.checkpoint, selected);
+    w.archive.reveal_object(manifest.sessions.0);
+    let key = ArchiveKey::Object(manifest.sessions.0);
+    let original = w
+        .archive
+        .records
+        .lock()
+        .unwrap()
+        .insert(key, b"corrupt selected node".to_vec())
+        .unwrap();
+    assert!(w.deferred_archive_summary().is_err());
+    assert_eq!(w.custody.checkpoint, selected);
+    w.archive.records.lock().unwrap().insert(key, original);
+    assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
+    assert_eq!(w.custody.checkpoint, selected);
 }
