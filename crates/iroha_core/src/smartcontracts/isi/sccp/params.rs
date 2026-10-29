@@ -6,6 +6,7 @@
 
 use super::store;
 use crate::state::WorldReadOnly;
+use iroha_data_model::NetworkId;
 use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
 use iroha_data_model::sccp::params::{
     SCCP_MIN_EPOCH_MS_V1, SccpParameterContextV1, SccpParametersError, SccpParametersV1,
@@ -30,6 +31,10 @@ pub enum SccpPolicyError {
     /// A slashable committee requires a nonzero pinned slash rate.
     #[error("SCCP requires committed staking max_slash_bps >= 1")]
     ZeroSlashRate,
+    /// A staking slash moves value under protocol custody, which the escrow guards skip,
+    /// so neither of its accounts may be an SCCP route escrow (§4.15).
+    #[error("the staking {0} cannot be an SCCP route escrow")]
+    EscrowStakingAccount(&'static str),
     /// An already retained generation remains liable beyond the proposed staking delay.
     #[error(
         "SCCP generation {generation} validity {validity_ms} + grace {grace_ms} exceeds unbonding delay {unbonding_delay_ms}"
@@ -132,6 +137,28 @@ pub fn validate_staking_successor(
         None if world.sccp_committee_generations().iter().next().is_none() => Ok(()),
         None => Err(SccpPolicyError::MissingSccpParameters),
     }
+}
+
+/// Refuse a staking policy whose slash sink or stake escrow is an SCCP route escrow of
+/// `network_id` (§4.15), whether or not SCCP is initialized yet. A slash credits the sink and
+/// debits the stake escrow under protocol custody, which skips the escrow guards, so either
+/// account would move escrow value outside SCCP and break `balance = Σ liability + stranded`.
+///
+/// # Errors
+/// Names the first staking account that is a route escrow id.
+pub fn validate_staking_custody(
+    network_id: &NetworkId,
+    staking: &PublicLaneStakingPolicy,
+) -> Result<(), SccpPolicyError> {
+    for (role, account) in [
+        ("slash sink", &staking.slash_sink_account_id),
+        ("stake escrow", &staking.stake_escrow_account_id),
+    ] {
+        if super::escrow::is_route_escrow_id(network_id, account) {
+            return Err(SccpPolicyError::EscrowStakingAccount(role));
+        }
+    }
+    Ok(())
 }
 
 /// Validate the exact committed policy from one complete original World cut.
@@ -253,6 +280,38 @@ mod policy_tests {
         staking.unbonding_delay_ms = u64::MAX;
         validate_staking_policy(&world, &parameters, &staking).unwrap();
     }
+    #[test]
+    fn staking_custody_refuses_every_route_escrow_id_of_its_own_network() {
+        use iroha_crypto::{Hash, HashOf};
+        use iroha_data_model::{block::BlockHeader, sccp::registry::SCCP_ROUTE_NETWORKS_V1};
+        let network = |seed: u8| {
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; 32]),
+            ))
+        };
+        let (own, foreign) = (network(1), network(2));
+        let policy = staking_policy(u64::MAX, 1);
+        validate_staking_custody(&own, &policy).unwrap();
+        for route in SCCP_ROUTE_NETWORKS_V1 {
+            let escrow = super::super::escrow::escrow_account(&own, route).unwrap();
+            let mut sink = policy.clone();
+            sink.slash_sink_account_id = escrow.clone();
+            assert_eq!(
+                validate_staking_custody(&own, &sink),
+                Err(SccpPolicyError::EscrowStakingAccount("slash sink"))
+            );
+            let mut custody = policy.clone();
+            custody.stake_escrow_account_id = escrow.clone();
+            assert_eq!(
+                validate_staking_custody(&own, &custody),
+                Err(SccpPolicyError::EscrowStakingAccount("stake escrow"))
+            );
+            // Another network's escrow is an ordinary account here.
+            validate_staking_custody(&foreign, &sink).unwrap();
+            validate_staking_custody(&foreign, &custody).unwrap();
+        }
+    }
+
     #[test]
     fn disabled_sccp_requires_original_policy_and_checks_candidate_without_installing() {
         use iroha_data_model::parameter::Parameter;

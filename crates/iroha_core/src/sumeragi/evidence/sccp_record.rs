@@ -442,6 +442,7 @@ impl PreparedSccpRecord {
     }
 }
 /// Fund immutable record custody from the exact verified observation and selected new signers.
+/// An empty selection is a record without offenders (§4.9 step 7); the caller decides it.
 pub fn prepare_claim(
     candidate: &crate::smartcontracts::isi::sccp::forgery::VerifiedForgeryCandidate<'_>,
     new_signers: u32,
@@ -449,7 +450,7 @@ pub fn prepare_claim(
 ) -> Result<PreparedSccpRecord, Preparation> {
     use iroha_crypto::{Algorithm, PreparedPublicKeyDecode, PublicKeyDecodeAdmissionError};
     use iroha_model_base::peer::PeerId;
-    if new_signers == 0 || new_signers & !candidate.qc().signers != 0 {
+    if new_signers & !candidate.qc().signers != 0 {
         return Err(Preparation::Invariant);
     }
     let count = usize::try_from(new_signers.count_ones()).map_err(|_| overflow())?;

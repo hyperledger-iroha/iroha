@@ -1698,5 +1698,50 @@ fn appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic() {
     );
     assert!(excluded.appeal().eligible_jurors.is_empty());
 }
+#[test]
+fn challenge_custody_refuses_sccp_route_escrow_ids_when_the_policy_is_set() {
+    use crate::state::StateReadOnly as _;
+    let manager_pair = keypair(0x51);
+    let manager = account(&manager_pair);
+    let mut state = state(&[&manager_pair], &manager);
+    // SCCP is not initialized here: escrow ids are fixed by the NetworkId alone.
+    let escrow = crate::smartcontracts::isi::sccp::escrow::escrow_account(
+        state.view().network_id(),
+        iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
+    )
+    .expect("TON has a route");
+    let (bond_escrow, slash_receiver) = (
+        state.gov.bond_escrow_account.clone(),
+        state.gov.slash_receiver_account.clone(),
+    );
+    for (role, custody) in [
+        ("bond escrow", (escrow.clone(), slash_receiver.clone())),
+        ("slash receiver", (bond_escrow.clone(), escrow.clone())),
+    ] {
+        // Governance custody names the escrow, so only the SCCP refusal can stop it.
+        state.gov.bond_escrow_account = custody.0.clone();
+        state.gov.slash_receiver_account = custody.1.clone();
+        let error = transact(&mut state, 1, OPENED_AT, |transaction| {
+            SetSorafsModerationPolicy::new(policy_with_custody(custody.0, custody.1))
+                .execute(&manager, transaction)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(message))
+                    if message == &format!("moderation challenge {role} cannot be an SCCP route escrow")
+            ),
+            "{error:?}"
+        );
+        assert!(FindSorafsModerationPolicy.execute(&state.view()).is_err());
+    }
+    state.gov.bond_escrow_account = bond_escrow;
+    state.gov.slash_receiver_account = slash_receiver;
+    transact(&mut state, 1, OPENED_AT, |transaction| {
+        SetSorafsModerationPolicy::new(policy()).execute(&manager, transaction)
+    })
+    .unwrap();
+}
 include!("sorafs/moderation_fixture_contract_tests.rs");
 include!("sorafs/moderation_tail_tests.rs");

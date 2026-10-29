@@ -3130,6 +3130,24 @@ impl Execute for SetSorafsModerationPolicy {
                 "moderation challenge policy must match the consensus governance voting asset and custody accounts",
             ));
         }
+        // Challenge settlement moves value under protocol custody, which skips the SCCP
+        // escrow guards: refuse escrow ids here rather than fail a settlement (§4.15).
+        for (role, account) in [
+            ("bond escrow", &self.policy.challenge_escrow_account),
+            (
+                "slash receiver",
+                &self.policy.challenge_slash_receiver_account,
+            ),
+        ] {
+            if crate::smartcontracts::isi::sccp::escrow::is_route_escrow_id(
+                state_transaction.network_id(),
+                account,
+            ) {
+                return Err(invalid_parameter(format!(
+                    "moderation challenge {role} cannot be an SCCP route escrow"
+                )));
+            }
+        }
         let now = block_time_ms(state_transaction)?;
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest moderation policy: {error}"))

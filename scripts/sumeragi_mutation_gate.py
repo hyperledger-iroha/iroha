@@ -681,6 +681,11 @@ CORE_MUTATIONS = [
       causes=(ExpectedFailure("the value guard must refuse an escrow release that debits no liability",
           "crates/iroha_core/src/smartcontracts/isi/sccp/conservation.rs"),)),
 
+    m("HC489", "SC25 SCCP forgery dedup: no new slashable signer is a duplicate before any record names the generation",
+      ["smartcontracts::isi::sccp::forgery::execution::tests::unresolved_signers_record_their_generation_and_hold_once"],
+      causes=(ExpectedFailure("SC25 a forgery signed only by unresolved members must record its generation",
+          "crates/iroha_core/src/smartcontracts/isi/sccp/forgery/execution/tests.rs"),)),
+
     m("HC461", "Parent-QC decode drops original typed refusal provenance",
       ["execution_attempt::prepared_parent_service_attempt_preserves_original_capacity_and_allocator_fields"],
       causes=(ExpectedFailure("parent-QC decode must retain its original capacity cause", "crates/iroha_core/src/execution_attempt.rs"),)),

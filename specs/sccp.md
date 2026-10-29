@@ -1543,10 +1543,20 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
    G6 binding `(lane, validator, activation_height)`. A `None` member is
    recorded as unslashable and emits `SccpForgeryOffenderUnslashable`.
 7. **Deduplication.** The new offenders are those with no
-   `sccp_forgery_offences[(g, lane, validator)]` entry. If there are none, the
-   result is `EvidenceDuplicate`. Each validator is penalized at most once per
-   generation; a second certificate with other signers penalizes only them
-   (certificates are per node, `specs/bridge_finality.md`).
+   `sccp_forgery_offences[(g, lane, validator)]` entry. The result is
+   `EvidenceDuplicate` only if there are none **and**
+   `sccp_forgery_max_generation ≥ Some(g)`. Otherwise the evidence is recorded,
+   with an empty offender list when every signer's member is `None`: a quorum
+   of `g` forged, so the §4.10 hold must engage even when no signer can be
+   slashed. Each validator is penalized at most once per generation; a second
+   certificate with other signers penalizes only them (certificates are per
+   node, `specs/bridge_finality.md`). A generation gets at most one record
+   without offenders, and only while no record names it or a higher
+   generation; a higher record already holds every revision this one would.
+   Ingress, the honest builder, execution and restart reauthentication evaluate
+   this one predicate (`forgery::is_duplicate`), so R-EX cannot split them.
+   Snapshot restore accordingly checks `sccp_forgery_max_generation` against
+   the generations of the retained SCCP records, not only their offences.
 8. **Record.** Inside the transaction:
    - `evidence_id = H_iroha("sccp/forgery-evidence/v1" ‖ be64(g) ‖ m ‖
      be32(signers))`;
@@ -1566,7 +1576,8 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
      as signer index, the key's peer id and `lane_stake: None`;
      `safety_violation: true`;
    - `penalty_status: Pending`; insert `sccp_forgery_offences` for each new
-     offender; set `sccp_forgery_max_generation = max(·, g)` (§4.10);
+     offender, if any; set `sccp_forgery_max_generation = max(·, g)` (§4.10)
+     whether or not there are offenders;
    - emit `SccpForgeryEvidenceRecorded { evidence_id, generation, height:
      X.height, rule, offenders }`.
 9. **Penalty.** The consensus penalty pipeline
@@ -1579,11 +1590,13 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
    liable), slashes `max_slash_amount(exposure, max_slash_bps)` with
    `ConsensusSlashLiability::Root(record.start_height)` (L2; the tenure check
    holds because G6 resolved the member for that generation's start), credits
-   `slash_sink_account_id`, and marks the record `Applied`. The native evidence
-   horizon of at most three epochs does not apply. Nothing in the penalty reads
-   the generation record, so pruning cannot strand it; pruning also skips
-   generations that pending records name (§4.11). On an idle chain the penalty
-   waits for the next block, and L3 holds the stake meanwhile.
+   `slash_sink_account_id`, and marks the record `Applied`; a record without
+   offenders is marked `Applied` at its due height with nothing slashed. The
+   native evidence horizon of at most three epochs does not apply. Nothing in
+   the penalty reads the generation record, so pruning cannot strand it;
+   pruning also skips generations that pending records name (§4.11). On an
+   idle chain the penalty waits for the next block, and L3 holds the stake
+   meanwhile.
 
 **Fees, admission and validity.**
 
@@ -1603,6 +1616,15 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
   failure can deny a later genuine retry: the forgers themselves must not be
   able to suppress the evidence of their forgery. Refused submissions never
   reach the queue. Per-peer rate limits stay.
+- **The node's own keeper is not throttled.** The LRU and the bucket are
+  shared by every remote submitter, so a distributed flood of fabricated
+  evidence that passes the cheap checks could keep the bucket empty and delay
+  genuine evidence. Submissions of the node's in-node keeper (§4.13.4,
+  `Queue::push_local_keeper_with_state`) therefore skip both and still run
+  every other ingress check and the full pairing. The keeper verifies each
+  discovered certificate before it submits it and is paced by its bounded
+  destination watch; it retires a certificate that step 7 finds duplicate.
+  Torii, P2P gossip and every other source keep the throttled path.
 - **R-EX.** A block that contains a `ForgeryEvidence` transaction that fails at
   execution is `Invalid`. The verdict is deterministic, from the signed content
   and the parent state. An honest builder runs steps 1–7 against the certified
@@ -3420,6 +3442,17 @@ its expiry only consumes its nonce.
   and are enforced in core, not in the upgradable executor. Neither the XOR
   definition owner (burn) nor holders of `CanTransferAssetWithDefinition` can
   move escrow funds.
+- **Protocol-custody counterparties.** A staking slash and a moderation
+  challenge settlement move value under protocol custody, which skips the
+  guards above. Their accounts therefore refuse every escrow id where they are
+  set: `SetParameter` of the staking policy (genesis included) refuses a
+  `slash_sink_account_id` or `stake_escrow_account_id` that is an escrow id of
+  the live `NetworkId` (`params::validate_staking_custody`), and
+  `SetSorafsModerationPolicy` refuses one as `challenge_escrow_account` or
+  `challenge_slash_receiver_account`. Escrow ids derive from the `NetworkId`
+  alone (`escrow::is_route_escrow_id`), so the refusal holds before
+  `InitializeSccpV1` creates them, and no penalty fails at block time for this
+  reason.
 - **Invariants after every transaction:**
   - `balance(escrow(route)) = Σ_r liability(r) + stranded(route)`;
   - `liability(r) ≤ max_wrapped_supply(r)` (a bounce checks the cap of its
@@ -6549,7 +6582,7 @@ resource and process failures are errors, never killed mutations.
 | SC20: L5 destination progress (§4.8) | HC251 keeps clearance work on its bounded pending index; HC322 omits original destination clearance | Current-candidate causal qualification required |
 | SC21: immutable registration attribution and penalty coordinates | HC230, HC250 and HC305 bind captured members to original global registrations; HC318 substitutes forged height; HC319 substitutes the current peer-key mapping | Current-candidate causal qualification required |
 | SC24: pending evidence and anchor retention (§4.11) | HC292, HC293 | None for these registered pruning faults |
-| SC25: per-revision forgery hold (§4.10) | HC283 protects registration after forgery; HC285 protects monotone attestation; HC323 omits the forgery-floor hold | Current-candidate causal qualification required |
+| SC25: per-revision forgery hold (§4.10) | HC283 protects registration after forgery; HC285 protects monotone attestation; HC323 omits the forgery-floor hold; HC489 lets unresolved signers evade the hold | Current-candidate causal qualification required |
 
 HC276–HC290, HC292–HC293 and HC295–HC307 additionally cover exact CREATE2 binding, the proposal launch gate,
 permanent quarantine and forged-mint payload binding, reconciliation reservation
@@ -6559,7 +6592,9 @@ clock budget feasibility, bundled advance expectations and local verifier
 refusal. HC326 rejects substituted TON minter, wallet or bucket code even
 after the caller recomputes its matching StateInit address. HC488 makes the
 §4.15 balanced-entry guard accept a transition whose escrow balance and
-recorded backing changed differently. These are
+recorded backing changed differently. HC489 makes §4.9 step 7 call evidence
+with no new slashable signer a duplicate before any record names its
+generation. These are
 source-owned hooks, not aliases for every open SC row.
 
 Format pins owned by `iroha_data_model` and `iroha_crypto` are enforced by the

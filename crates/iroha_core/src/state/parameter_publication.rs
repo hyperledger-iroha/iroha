@@ -4,7 +4,7 @@
 //! custody. Destination output vectors are physically reserved before install;
 //! TODO(S8): complete their whole-lifetime finite-pool ownership in the output task.
 
-use super::{StateTransaction, WorldTransaction};
+use super::{StateReadOnly as _, StateTransaction, WorldTransaction};
 use crate::{
     execution_attempt::ExecutionDeferred,
     pipeline_gas_policy::{
@@ -237,6 +237,11 @@ impl StateTransaction<'_, '_> {
                     .ok_or(ParameterChangeError::Invalid("staking successor is absent"))?;
                 crate::smartcontracts::isi::sccp::params::validate_staking_successor(
                     &*self.world,
+                    policy,
+                )?;
+                // Every change, genesis included and before SCCP exists: escrow ids are fixed.
+                crate::smartcontracts::isi::sccp::params::validate_staking_custody(
+                    self.network_id(),
                     policy,
                 )?;
             }

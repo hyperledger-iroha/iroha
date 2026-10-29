@@ -11,7 +11,7 @@
 
 use super::params::SccpPolicyError;
 use super::{Error, escrow, generations, parliament_iface, store};
-use crate::state::{StateTransaction, WorldReadOnly};
+use crate::state::{StateReadOnly as _, StateTransaction, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
     isi::sccp::InitializeSccpV1,
@@ -75,6 +75,11 @@ pub fn check_parameters(
             parameters,
             current_policy,
         )?;
+    }
+    // Policy installation already refuses escrow ids; recheck both cuts before the escrows
+    // these ids name come into being (§4.15).
+    for staking in [policy, current_policy] {
+        super::params::validate_staking_custody(state_transaction.network_id(), staking)?;
     }
     parameters
         .validate_against(&SccpParameterContextV1 {
@@ -581,5 +586,23 @@ mod tests {
             );
             assert_eq!(stx.staking_monetary_policy().unwrap(), &original_policy);
         }
+    }
+
+    #[test]
+    fn initialization_refuses_staking_custody_at_a_route_escrow_id() {
+        use crate::state::StateReadOnly;
+        let network_id = *blank_state().view().network_id();
+        let escrow = escrow::escrow_account(&network_id, SccpNetworkV1::EthereumMainnet).unwrap();
+        let mut policy = staking_policy(SCCP_UNBONDING_DELAY_MS, 1);
+        policy.slash_sink_account_id = escrow;
+        // Installed without the parameter instruction, which would already refuse it.
+        let state = blank_state_with_staking(Some(policy));
+        assert_eq!(*state.view().network_id(), network_id);
+        let mut block = state.block(header(2));
+        let stx = block.transaction();
+        assert_eq!(
+            check_parameters(&stx, &SccpParametersV1::taira_default()),
+            Err(SccpPolicyError::EscrowStakingAccount("slash sink"))
+        );
     }
 }

@@ -7,6 +7,11 @@
 //! `(g, m, signers)`. A key is remembered only once a pairing token is taken, and
 //! forgotten again after a local refusal: neither a rate refusal nor local resource
 //! exhaustion is a verdict on the evidence, so neither may deny a later genuine retry.
+//!
+//! The cache and the bucket throttle remote submissions only. A distributed flood of
+//! fabricated evidence passes the cheap checks and could keep the shared bucket empty;
+//! the node's own keeper, which verifies each certificate before it submits, therefore
+//! skips both and still pays the full pairing ([`SubmissionOrigin::LocalKeeper`]).
 
 use std::time::Instant;
 
@@ -53,7 +58,7 @@ pub enum ForgeryIngressError {
     /// A Queue cannot inherit a second State's finite allocation pool.
     #[error("SCCP ingress cache belongs to a different original State pool")]
     PoolMismatch,
-    /// Every slashable selected G6 member already has a permanent offence.
+    /// No selected slashable G6 member is new and recorded evidence names the generation.
     #[error("SCCP evidence duplicate")]
     Duplicate,
     /// The exact (generation, message, signer bitmap, signature) was already seen.
@@ -105,6 +110,18 @@ impl ForgeryIngressError {
             other => Error::SccpForgeryIngress(other),
         }
     }
+}
+
+/// Who submits a transaction to this node's queue. Only the forgery ingress reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SubmissionOrigin {
+    /// Torii, P2P gossip and every other source outside this node: the repeat cache
+    /// and the node-wide pairing bucket apply.
+    Remote,
+    /// This node's own SCCP keeper (`Queue::push_local_keeper_with_state`). Its bounded
+    /// watch paces it and it verifies each certificate first, so its evidence skips the
+    /// cache and bucket that remote floods share. Every other check and the pairing stay.
+    LocalKeeper,
 }
 
 /// The LRU key of one submission: the `(g, m, signers)` triple of spec §4.9 and the
@@ -220,8 +237,9 @@ impl Queue {
         &self,
         view: &StateView<'_>,
         transaction: &SignedTransaction,
+        origin: SubmissionOrigin,
     ) -> Result<SccpAdmissionKeysV1, Error> {
-        self.admit_forgery_inner(view, transaction)
+        self.admit_forgery_inner(view, transaction, origin)
             .map_err(ForgeryIngressError::into_queue)
     }
 
@@ -229,6 +247,7 @@ impl Queue {
         &self,
         view: &StateView<'_>,
         transaction: &SignedTransaction,
+        origin: SubmissionOrigin,
     ) -> Result<SccpAdmissionKeysV1, ForgeryIngressError> {
         let payload = transaction.payload();
         let evidence = match &payload.instructions {
@@ -243,14 +262,15 @@ impl Queue {
         // claim, original Global source, generation/root, E0 and mismatch, in that order.
         let precheck = forgery::prepare_committed(view, evidence, payload.creation_time_ms)?;
         let budget = view.execution_budget();
-        // Query exact original G6 tuples through the shared permanent-state reader.
-        // It funds every nested AccountId query copy before construction; no writes.
-        if forgery::new_signers(
+        // Query exact original G6 tuples through the shared permanent-state reader and the
+        // shared step-7 predicate. It funds every nested AccountId query copy; no writes.
+        if forgery::new_offenders(
             view.world(),
             precheck.generation(),
             precheck.qc().signers,
             &budget,
-        )? == 0
+        )?
+        .is_none()
         {
             return Err(ForgeryIngressError::Duplicate);
         }
@@ -260,12 +280,17 @@ impl Queue {
             signers: precheck.qc().signers,
             signature: iroha_crypto::sha256(evidence.aggregate_signature),
         };
-        self.observe_forgery(key, &budget, Instant::now())?;
+        // Forgers can flood remote ingress to keep the shared bucket empty; the node's own
+        // keeper must not queue behind them, so only remote submissions are throttled.
+        let throttled = origin == SubmissionOrigin::Remote;
+        if throttled {
+            self.observe_forgery(key, &budget, Instant::now())?;
+        }
         // No cache mutex spans cryptography; all observers share its preceding atomic
         // LRU/token decision. No invented read-worker deadline or replacement pool.
         if let Err(error) = forgery::verify_prechecked(&precheck, &budget) {
             let error = ForgeryIngressError::from(error);
-            if error.is_local() {
+            if throttled && error.is_local() {
                 self.forget_forgery(&key);
             }
             return Err(error);
