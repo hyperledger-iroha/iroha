@@ -2605,7 +2605,7 @@ mod recorder {
         // The block proves its own leaves directly, and the handoff proves them through its
         // history root.
         let direct = route.sim.message_proof(1010, 1, &first.header);
-        assert!(direct.block.history_path.is_empty());
+        assert_eq!(direct.block.history_path, Vec::<[u8; 32]>::new());
         let historical = route.sim.control_proof(1010, 0, &handoff.header);
         assert_eq!(historical.block.height, 1010);
         assert_eq!(historical.parliament_paused, 1);

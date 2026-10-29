@@ -421,23 +421,58 @@ p95 startup/deployment measurements remain separate gates in the
 ## Configuration
 
 A local development network needs no configuration: `kagami localnet up` starts and
-verifies four validators. To run a node of a network, create its directory with Kagami:
+verifies four validators. A network of separate machines takes three steps, and no
+validator private key leaves its host.
 
-```bash
-kagami node init --dir ./node --public-address 203.0.113.7:1337
-```
+1. On every validator host, create the node directory:
 
-This writes the BLS validator key, the SoraNet transport key and the streaming identity
-key to `node/secrets/` (owner-only) and a starter `node/config.toml`, and prints the
-node's `public_key`, `pop_hex` and `public_key@host:port` entry for the network's
-validator roster. The starter file names only what differs per network:
+   ```bash
+   kagami node init --dir ./node --public-address 203.0.113.7:1337
+   ```
+
+   This writes the BLS validator key, the SoraNet transport key and the streaming
+   identity key to `node/secrets/` (owner-only) and a starter `node/config.toml`, and
+   prints `validator: PUBLIC_KEY@HOST:PORT=POP_HEX`, the node's roster entry with its
+   proof of possession. Send that line to whoever creates the network.
+
+2. Collect the lines of an exact `3f + 1` set of validators (4, 7, 10, ...) and create
+   the network:
+
+   ```bash
+   kagami network create --out-dir ./network \
+     --validator "$VALIDATOR_A" --validator "$VALIDATOR_B" \
+     --validator "$VALIDATOR_C" --validator "$VALIDATOR_D"
+   ```
+
+   Every key must be BLS-normal with a valid proof of possession at a distinct address.
+   The command signs genesis with a fresh genesis key and writes the four files to
+   copy to every node: `network.toml`, `genesis.signed.nrt`, `genesis.expected_hash`
+   and `nexus-amx-context.v1.bin`. The last file lets `--check-config` name exact
+   configuration fields when they differ from signed genesis. It also
+   writes `genesis.public_key`, the config-bound `genesis.json`, and `client.toml` for an
+   operator account that holds the network's XOR and its administrative permissions. The
+   genesis and operator private keys stay in the owner-only `network/secrets/`.
+   `--chain-id` names the chain (a fresh UUID by default), `--consensus-mode npos`
+   selects NPoS, and `--torii-url` sets the Torii API the operator client dials.
+
+3. Copy the four shared files into every node directory, validate it, and start the
+   validator. On the first boot of a brand-new network, pass
+   `--sumeragi-assert-fresh-key` once; without it, keys that never signed for the chain
+   wait for running peers to anchor them, and a new network never starts (never pass it
+   after losing node data):
+
+   ```bash
+   iroha3d --config node/config.toml --check-config
+   iroha3d --config node/config.toml --sumeragi-assert-fresh-key
+   ```
+
+The node's own `config.toml` names only its identity and listeners, and includes the
+shared file:
 
 ```toml
+extends = "network.toml"
 data_dir = "."
-chain = "my-network"
 public_key = "ea0130..."
-trusted_peers = ["ea0130...@203.0.113.7:1337", "ea0130...@203.0.113.8:1337"]
-trusted_peers_pop = [{ public_key = "ea0130...", pop_hex = "..." }]
 
 [network]
 address = "0.0.0.0:1337"
@@ -445,27 +480,50 @@ public_address = "203.0.113.7:1337"
 
 [torii]
 address = "127.0.0.1:8080"
+```
+
+`network.toml` carries the `chain`, the full `trusted_peers` roster with
+`trusted_peers_pop`, `[genesis]` and every consensus-bound section the genesis was
+signed with:
+
+```toml
+chain = "6b0f3e9a-..."
+trusted_peers = [
+  "ea0130...@203.0.113.7:1337",
+  "ea0130...@203.0.113.8:1337",
+]
+trusted_peers_pop = [
+  { public_key = "ea0130...", pop_hex = "..." },
+  { public_key = "ea0130...", pop_hex = "..." },
+]
 
 [genesis]
 public_key = "ed0120..."
 file = "genesis.signed.nrt"
 expected_hash_file = "genesis.expected_hash"
+
+[nexus.fusion]
+exit_teu = 50000000
 ```
 
+Consensus-bound settings in `nexus`, `gov`, `oracle`, `content` and `settlement`
+feed policy digests committed by the signed genesis, so a
+node keeps them exactly as `network.toml` sets them; otherwise startup fails with a
+signed genesis policy mismatch. To join a network created some other way, put its chain,
+roster, `[genesis]` and the consensus-bound sections its reference node configuration
+sets into `network.toml` (Kagami localnets set `[nexus.fusion] exit_teu`).
+Pipeline, ZK and fraud validity policies come from committed parameters or protocol
+defaults; their node-local resource settings do not need to be copied for these digests.
 Everything else defaults: Kura, snapshot, DA, SoraFS, SoraNet and Torii state paths
 derive from `data_dir`; the transport and streaming public keys derive from their
 private keys; the streaming codec uses the rANS tables compiled into `iroha3d`; and
 governance and VPN accounts keep their defaults for any `chain_discriminant`.
 Addresses are plain `host:port` (the checked `addr:host:port#CRC` form is also
-accepted). Validate the file, then start the node. On the first boot of a brand-new
-network, pass `--sumeragi-assert-fresh-key` once; without it, keys that never signed
-for the chain wait for running peers to anchor them, and a new network never starts
-(never pass it after losing node data):
+accepted).
 
-```bash
-iroha3d --config node/config.toml --check-config
-iroha3d --config node/config.toml --sumeragi-assert-fresh-key
-```
+`network/client.toml` dials `http://127.0.0.1:8080/` unless `--torii-url` names another
+validator's Torii API; `kagami node init` binds Torii to loopback, so pass
+`--api-address` there to reach a node from another machine.
 
 The sections below cover custom key custody and the complete file format.
 
@@ -548,6 +606,15 @@ Run these with a new binary before it replaces an old one:
   `nexus_policy_digest`, `gas_schedule_hash`, `execution_policy_hash`,
   `nexus_amx_context_hash`, plus `status`). Genesis-bound values are `null`
   while the signed genesis is not available locally.
+- When this configuration derives other policy commitments than the signed
+  genesis, `--check-config` fails with a signed genesis policy mismatch. With the
+  network's `nexus-amx-context.v1.bin` (Kagami writes it beside
+  `genesis.signed.nrt`) next to the configured genesis file, the report lists
+  each differing Nexus field with both values, such as
+  `nexus.fusion.exit_teu: signed genesis 50000000, this node 6000`. The file is
+  used only when its hash equals the signed commitment. A mismatch outside the
+  Nexus/AMX context comes from `gov`, `oracle`, `content`, `settlement` or the
+  other `nexus` service sections.
 - `iroha3d --config <file> --check-storage` inspects a stopped node's store:
   it opens Kura in emergency-Fast mode (taking the store-root lock, so a store
   owned by a running node is refused), decodes every retained block body with

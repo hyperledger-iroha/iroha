@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
 # Manual asset formatting owner: one-space JSON indentation, enforced below.
-EXPECTED_ASSET_LENGTH = 129_866
-EXPECTED_ASSET_SHA256 = "c951b933093e7054cb69bca377b17a3a0ae94fecbc3a20f5f604c076a6f35f51"
-EXPECTED_SEMANTIC_SHA256 = "361933913e7e4977780c1bfd2100317a413f3ee0f023ca0361f8740e70d8e536"
+EXPECTED_ASSET_LENGTH = 129_980
+EXPECTED_ASSET_SHA256 = "29333e31136bbce492fcf6c69c13b5938dd49591b512d30e208e50dde5d9d866"
+EXPECTED_SEMANTIC_SHA256 = "0fb59689cdbe56f2deb2a6eb75ca37a206e05a6e3fb08df058cbb475378adffa"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -686,13 +686,14 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 self.assertIs(path["additionalProperties"], False)
                 self.assertEqual(path["properties"], {
                     "dataspace_id": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$"},
-                    "code_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    # A canonical Iroha hash always has its lowest bit set.
+                    "code_hash": {"type": "string", "pattern": "^[0-9a-f]{63}[13579bdf]$"},
                 })
         for old, new in (
             (b'/v1/contracts/artifacts/{dataspace_id}/{code_hash}', b'/v1/contracts/code/{code_hash}'),
             (b'"dataspace_id",', b''),
             (b'^(0|[1-9][0-9]{0,19})$', b'^[0-9]+$'),
-            (b'^[0-9a-f]{64}$', b'^[0-9a-fA-F]{64}$'),
+            (b'^[0-9a-f]{63}[13579bdf]$', b'^[0-9a-f]{64}$'),
         ):
             with self.subTest(old=old):
                 self.assertIn(old, self.asset)

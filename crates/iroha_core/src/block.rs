@@ -1743,7 +1743,7 @@ pub enum BlockValidationError {
     SignatureVerification(#[from] SignatureVerificationError),
     /// Invalid genesis block: {0}
     InvalidGenesis(#[from] InvalidGenesisError),
-    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}
+    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}; this node's consensus-bound sections (`nexus`, `gov`, `oracle`, `content`, `settlement`) differ from the configuration the genesis was signed with, so copy them from the network's reference node configuration (`iroha3d --check-config` lists the differing Nexus fields when the network's `nexus-amx-context.v1.bin` sits beside the signed genesis file)
     #[expect(
         clippy::doc_markdown,
         reason = "displaydoc field placeholders must retain their exact format syntax"
@@ -1757,6 +1757,9 @@ pub enum BlockValidationError {
         expected_nexus: Hash,
         /// Nexus/AMX context derived from the original staged genesis effects.
         actual_nexus: Hash,
+        /// The exact preimage of `actual_nexus`. Diagnostics compare it field by field
+        /// with a published preimage of `expected_nexus`; it carries no authority.
+        actual_nexus_preimage: iroha_data_model::nexus::NexusAmxContextPreimageV1,
     },
     /// Block's creation time is earlier than that of the previous block
     BlockInThePast,

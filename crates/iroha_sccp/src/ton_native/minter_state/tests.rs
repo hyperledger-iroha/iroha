@@ -330,8 +330,8 @@ fn minter_storage_opens_exact_original_account_and_locked_code_references() {
     assert_eq!(state.instance, [2; 32]);
     assert_eq!(state.revision, 3);
     assert_eq!(state.committee.high, 4);
-    assert!(state.checkpoints.is_empty());
-    assert!(state.recovery.is_empty());
+    assert_eq!(state.checkpoints, []);
+    assert_eq!(state.recovery, []);
     for field in 0..2 {
         let mut code = locked_code_refs()[0];
         if field == 0 {

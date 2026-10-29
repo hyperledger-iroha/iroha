@@ -2493,6 +2493,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    // `iroha.runtime.upgrades.list` reads an operator route.
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
+    cfg.torii.mcp.expose_operator_routes = true;
     let authority_key_pair = cfg.common.key_pair.clone();
     let app = build_router(cfg);
     for (id, tool_name, target, authentication) in [
@@ -2569,7 +2572,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_endpoints_dispatch() {
 async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
+    cfg.torii.mcp.expose_operator_routes = true;
     let authority_key_pair = cfg.common.key_pair.clone();
     let app = build_router(cfg);
     for (id, tool_name, target, arguments) in [
@@ -3332,7 +3337,7 @@ async fn mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_p
     cfg.torii.mcp.enabled = true;
     let authority_key_pair = cfg.common.key_pair.clone();
     let app = build_router(cfg);
-    let code_hash = "00".repeat(32);
+    let code_hash = hex::encode(iroha_crypto::Hash::new(b"missing MCP contract artifact").as_ref());
     let target = format!("/v1/contracts/artifacts/0/{code_hash}");
     let arguments = authenticated_mcp_target_arguments(
         &app,
@@ -3369,30 +3374,36 @@ async fn mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_p
             .is_some_and(|status| status >= 400),
         "expected the missing scoped contract artifact to be rejected after target authentication"
     );
-    let arguments = authenticated_mcp_target_arguments(
-        &app,
-        &authority_key_pair,
-        "GET",
-        "/v1/contracts/artifacts/0/not-a-code-hash",
-        norito::json!({ "path": { "dataspace_id": "0", "code_hash": "not-a-code-hash" } }),
-        McpTargetAuthentication::CanonicalAccount,
-    );
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 104061,
-            "method": "tools/call",
-            "params": { "name": "iroha.contracts.code.get", "arguments": arguments }
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let message = assert_tool_schema_error(
-        &call,
-        "contract code hash must be canonical before dispatch",
-    );
-    assert!(message.contains("code_hash"), "{message}");
+    // A canonical Iroha hash has an odd final digit, so all zeroes is malformed too.
+    for (id, code_hash) in [
+        (104061, "not-a-code-hash".to_owned()),
+        (104062, "00".repeat(32)),
+    ] {
+        let arguments = authenticated_mcp_target_arguments(
+            &app,
+            &authority_key_pair,
+            "GET",
+            &format!("/v1/contracts/artifacts/0/{code_hash}"),
+            norito::json!({ "path": { "dataspace_id": "0", "code_hash": code_hash } }),
+            McpTargetAuthentication::CanonicalAccount,
+        );
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": "iroha.contracts.code.get", "arguments": arguments }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let message = assert_tool_schema_error(
+            &call,
+            "contract code hash must be canonical before dispatch",
+        );
+        assert!(message.contains("code_hash"), "{message}");
+    }
     app.shutdown().await;
 }
 #[tokio::test]

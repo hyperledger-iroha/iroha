@@ -4,8 +4,11 @@
 
 A node file needs only `chain`, `public_key`, `trusted_peers`, `trusted_peers_pop`,
 `network.address`, `network.public_address`, `torii.address` and `[genesis]`, plus
-`data_dir` (`kagami node init` writes such a file). Everything else has a working
-default:
+`data_dir`, plus any consensus-bound settings in `nexus`, `gov`, `oracle`, `content`
+and `settlement` that the network's genesis was signed
+with. `kagami node init` writes the per-node part and takes the rest from `network.toml`
+with `extends`; `kagami network create` writes that shared file for the collected
+validator roster. Everything else has a working default:
 
 - `data_dir` completes every state path (`kura`, `snapshot`, `tiered_state`, Torii and
   its DA spools, SoraFS, SoraNet revocations, streaming sessions, Soracloud) under

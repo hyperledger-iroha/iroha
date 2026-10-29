@@ -701,7 +701,7 @@ const ROOTS: &[Root] = &[
             ),
             (
                 "crates/iroha_core/src/block/native_genesis_policy.rs",
-                "let actual_nexus = crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);",
+                "crate::sumeragi::staged_genesis_nexus_amx_context_preimage(state),",
             ),
         ],
     },

@@ -34109,12 +34109,38 @@ mod configuration_regression_tests {
         );
     }
     #[test]
-    fn governance_default_account_literals_reject_foreign_chain_override() {
+    fn governance_default_accounts_parse_under_any_chain_prefix() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
-        let result = std::panic::catch_unwind(|| Governance::default().parse());
+        let parsed = Governance::default().parse();
+        let default_account = defaults::governance::bond_escrow_account_id();
+        assert_eq!(parsed.bond_escrow_account, default_account);
+        assert_eq!(parsed.citizenship_escrow_account, default_account);
+        assert_eq!(parsed.slash_receiver_account, default_account);
+        assert_eq!(
+            parsed.viral_incentives.incentive_pool_account,
+            default_account
+        );
+        assert_eq!(
+            parsed.sorafs_pin_fee_treasury_account,
+            defaults::governance::sorafs_pin_fee::treasury_account_id()
+        );
+    }
+    #[test]
+    fn explicit_governance_account_literals_reject_foreign_chain_prefix() {
+        let account = AccountId::new(
+            "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                .parse()
+                .expect("public key"),
+        );
+        let mut governance = Governance::default();
+        governance.bond_escrow_account = account
+            .to_i105_for_discriminant(defaults::common::chain_discriminant())
+            .expect("default-prefix literal");
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+        let result = std::panic::catch_unwind(move || governance.parse());
         assert!(
             result.is_err(),
-            "account literals for another chain discriminant must be rejected"
+            "a configured literal for another chain discriminant must be rejected"
         );
     }
     #[test]

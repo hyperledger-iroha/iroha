@@ -550,7 +550,7 @@
    "function": "iroha_contracts_code_get_tool",
    "name": "iroha.contracts.code.get",
    "effect": "read",
-   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is 64 lowercase hexadecimal characters.",
+   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is a canonical Iroha hash: 64 lowercase hexadecimal characters ending in an odd digit.",
    "method": "GET",
    "path_template": "/v1/contracts/artifacts/{dataspace_id}/{code_hash}",
    "input_schema": {
@@ -574,7 +574,7 @@
        },
        "code_hash": {
         "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
+        "pattern": "^[0-9a-f]{63}[13579bdf]$"
        }
       }
      },
@@ -594,7 +594,7 @@
    "function": "iroha_contracts_code_bytes_get_tool",
    "name": "iroha.contracts.code.bytes.get",
    "effect": "read",
-   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is 64 lowercase hexadecimal characters.",
+   "description": "Read one account-authorized contract artifact by exact network and dataspace scope; path.dataspace_id is a canonical decimal u64 string and path.code_hash is a canonical Iroha hash: 64 lowercase hexadecimal characters ending in an odd digit.",
    "method": "GET",
    "path_template": "/v1/contracts/artifacts/{dataspace_id}/{code_hash}/bytes",
    "input_schema": {
@@ -618,7 +618,7 @@
        },
        "code_hash": {
         "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
+        "pattern": "^[0-9a-f]{63}[13579bdf]$"
        }
       }
      },

@@ -235,9 +235,8 @@ impl Cell {
             .enumerate()
             .map(|(position, cell)| (cell.hash, position))
             .collect();
-        let width = |value: usize| {
-            usize::try_from((usize::BITS - value.leading_zeros()).div_ceil(8).max(1)).unwrap_or(8)
-        };
+        let width =
+            |value: usize| usize::try_from(value.bit_width().div_ceil(8).max(1)).unwrap_or(8);
         let be = |value: usize, bytes: usize| {
             u64::try_from(value).unwrap_or(u64::MAX).to_be_bytes()[8 - bytes..].to_vec()
         };
@@ -1202,7 +1201,7 @@ mod tests {
         assert_eq!(head.depth(), 2);
         let last = head.refs()[0].cell().unwrap().refs()[0].cell().unwrap();
         assert_eq!(last.bit_len(), 384 + 1);
-        assert!(last.refs().is_empty());
+        assert_eq!(last.refs(), []);
         assert_eq!(key_chunks(&[]).unwrap_err(), TonCellError::Empty);
         assert_eq!(hash_chunks(&[]).unwrap(), None);
         let path = hash_chunks(&[[1; 32]; 4]).unwrap().unwrap();
@@ -1373,7 +1372,7 @@ mod tests {
         let receipts = empty_recovery_receipts().unwrap();
         assert_eq!(receipts.bit_len(), 11);
         assert_eq!(receipts.data(), &[0, 0]);
-        assert!(receipts.refs().is_empty());
+        assert_eq!(receipts.refs(), []);
         let minter = [9; 32];
         let mut wallet = CellBuilder::new();
         wallet
@@ -1484,7 +1483,7 @@ mod tests {
                     "{label}/keys[{index}]"
                 );
                 if index + 1 == key_cells.len() {
-                    assert!(cell.refs().is_empty());
+                    assert_eq!(cell.refs(), []);
                 } else {
                     assert_eq!(cell.refs().len(), 1);
                     cell = cell.refs()[0].cell().unwrap();
