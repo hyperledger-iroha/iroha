@@ -201,13 +201,15 @@ running release does not implement yet is rejected; there is no interim path.
 
 ### 5.1 Complete State, selected by history
 
-- The foundation starts with the keyed complete-State commitment of `sumeragi.md` §16 as its
-  commitment profile, at its genesis or, for a running network, at its adoption checkpoint (section
-  13). Checkpoints and code deletion depend on it, so it is not deferred. The LtHash World
-  accumulator (`state/world_state_accumulator.rs`) is needed afterwards only to check an imported
-  State against the predecessor's roots, and is deleted once adoption completes. Today the World
-  root does not authenticate transaction membership, the canonical runtime policy or commit
-  topologies (finding G1-D2; `first_release_history_cutover.md`, "Snapshots and checkpoints").
+- The foundation's first commitment profile is the LtHash accumulator
+  (`state/world_state_accumulator.rs`), extended to the complete State and with its schema chosen
+  by the selection. Today it commits only the World: transaction membership, the canonical runtime
+  policy and commit topologies sit outside it (finding G1-D2; `first_release_history_cutover.md`,
+  "Snapshots and checkpoints"). Checkpoints and code deletion need them committed, so that
+  extension lands with the foundation.
+- The keyed commitment of `sumeragi.md` §16 (task G.3, not yet selected) follows as a governed
+  commitment-profile transition, without a reset. The LtHash code is deleted once the checkpoint
+  startup floor passes that transition.
 - The commitment covers the storage installed in the selection: every canonical field is a storage
   definition, cells stay explicit at their initial value, and storage not installed leaves every
   root unchanged.
@@ -220,10 +222,11 @@ running release does not implement yet is rejected; there is no interim path.
 - Cold and incremental roots agree across activation, aborted publication, block replacement and
   restart.
 
-`sumeragi.md` §16 is amended accordingly: the keyed commitment selects schemas historically, keeps
-its typing, absence and range proofs, covers every canonical State field, is correct at the
-publication cut, rejects tampering, and a State restored from a checkpoint reaches the same tip roots
-as replay. Because the commitment profile is itself a definition, a later improvement of it is a
+Every commitment profile, the LtHash one included, covers every canonical State field, is correct
+at the publication cut, rejects tampering, and a State restored from a checkpoint reaches the same
+tip roots as replay. `sumeragi.md` §16 is amended accordingly: the keyed commitment arrives as a
+commitment-profile transition, selects schemas historically and keeps its typing, absence and range
+proofs. Because the commitment profile is itself a definition, every later improvement of it is a
 governed transition, not a fresh genesis.
 
 ### 5.2 Envelopes and dispatch
@@ -673,8 +676,9 @@ history survive.
    network's trust anchor. All `n` validators attest it before the foundation history continues at
    `H + 1`. New nodes start from the anchor or a later checkpoint and verify forward; blocks up to
    `H` are verified only with the archived predecessor release, as "Obsolete histories" requires.
-5. **Delete.** The next release deletes the import, the predecessor root rule (the LtHash
-   accumulator) and any legacy genesis profile, once every validator has adopted. From then on no
+5. **Delete.** The next release deletes the import, the predecessor's root rule (World-only coverage
+   with a schema digest over every compiled field) and any legacy genesis profile, once every
+   validator has adopted. From then on no
    release carries pre-foundation code.
 
 An interim checkpoint import that keeps Taira on a newer release before the foundation is ready
@@ -692,13 +696,13 @@ not a date: it happens once everything its first selection needs is implemented 
    bounded carrier-schema language, root selections and their closure check, with pinned identity
    vectors (`crates/iroha_data_model/tests/runtime_definition.rs`). Still to specify: the execution
    and effects contract (5.3), obligations (7.2) and emergency containment (7.1) as types.
-2. **Complete State and execution foundation.** The keyed complete-State commitment, historical
-   schema selection with separate parent and successor contexts, the definition catalog with today's
+2. **Complete State and execution foundation.** The LtHash commitment extended to the complete
+   State (G1-D2), historical schema selection with separate parent and successor contexts, the definition catalog with today's
    engine as one baseline bundle (its interfaces and storage enumerated one by one, its handlers and
    shared services one conservative implementation set with superset dependencies), root selection
    in State, stable envelopes and selection-aware dispatch with native cross-instruction calls
    included, storage capabilities, generic carriers, snapshots through the selection, and staging.
-   Pre-foundation compatibility code and the LtHash accumulator are deleted. The guard inventories
+   Pre-foundation compatibility code is deleted. The guard inventories
    definitions, descriptors and reference closures, and the pinned history
    (`sumeragi/node/tests/history_cutover_tests.rs`, today genesis plus two `Log` blocks), which this
    cutover regenerates anyway, gains successes, rejections, permissions, triggers, contract emissions
@@ -721,8 +725,9 @@ not a date: it happens once everything its first selection needs is implemented 
 7. **Taira adoption** at a governed checkpoint (section 13), then the acceptance journey (1.3). The
    next release deletes the import and every pre-foundation path.
 8. **Later governed upgrades** on the running network, each using only extension contracts that
-   already exist: new rebinding implementations, specific migrations, the IVM instruction adapter
-   (section 10), and independently rooted data spaces with their own selections. A change set that
+   already exist: the keyed commitment profile of `sumeragi.md` §16 (G.3), new rebinding
+   implementations, specific migrations, the IVM instruction adapter (section 10), and independently
+   rooted data spaces with their own selections. A change set that
    asks for anything not yet implemented is rejected.
 
 Minamoto adopts the foundation only after every gate passes on Taira.
@@ -771,7 +776,7 @@ Costs:
 - All-`n` attestation lets one validator delay an activation.
 - Conditional availability: with four validators, one withholding and one restarting leave fewer
   than three, so a rolling upgrade pauses rather than promising zero downtime.
-- The complete-State commitment, checkpoints, Parliament's Core integration and the emergency panel
+- Complete-State coverage for LtHash, checkpoints, Parliament's Core integration and the emergency panel
   all land before Taira's adoption, which puts it later than the execution foundation alone would.
 - Some validity inputs still come from node configuration (`status.md`, ZK delivery task F.4, for
   example `governance.runtime_upgrade_provenance`); they move to committed State with the
@@ -782,10 +787,11 @@ Decided by the owner: SORA Parliament governs the universal root, and the admins
 data space govern only that data space (section 6). Taira adopts the foundation at a governed
 checkpoint that becomes its trust anchor, keeping balances and history (section 13). The
 first-release rule holds: the import and all pre-foundation code are deleted after adoption, and old
-code is deleted rather than kept (7.4).
+code is deleted rather than kept (7.4). The foundation starts on the LtHash commitment extended to the
+complete State; the keyed commitment follows as a governed profile transition (5.1).
 
 Recommended by review and written in as committed defaults, for the owner to confirm or change: the
 emergency panel and its leases (7.1), the notice values (section 6), the checkpoint policy (7.3),
-landing the complete-State commitment with the foundation (5.1), a readiness-gated Taira adoption
+a readiness-gated Taira adoption
 (section 14), and the client contract (8.4). Every value is a committed parameter, so changing one
 later is itself a governed change.
