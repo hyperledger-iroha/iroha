@@ -420,7 +420,54 @@ p95 startup/deployment measurements remain separate gates in the
 
 ## Configuration
 
-To run the Iroha peer binary, you must [generate the keys](#generating-keys) and provide a [configuration file](#configuration-file).
+A local development network needs no configuration: `kagami localnet up` starts and
+verifies four validators. To run a node of a network, create its directory with Kagami:
+
+```bash
+kagami node init --dir ./node --public-address 203.0.113.7:1337
+```
+
+This writes the BLS validator key, the SoraNet transport key and the streaming identity
+key to `node/secrets/` (owner-only) and a starter `node/config.toml`, and prints the
+node's `public_key`, `pop_hex` and `public_key@host:port` entry for the network's
+validator roster. The starter file names only what differs per network:
+
+```toml
+data_dir = "."
+chain = "my-network"
+public_key = "ea0130..."
+trusted_peers = ["ea0130...@203.0.113.7:1337", "ea0130...@203.0.113.8:1337"]
+trusted_peers_pop = [{ public_key = "ea0130...", pop_hex = "..." }]
+
+[network]
+address = "0.0.0.0:1337"
+public_address = "203.0.113.7:1337"
+
+[torii]
+address = "127.0.0.1:8080"
+
+[genesis]
+public_key = "ed0120..."
+file = "genesis.signed.nrt"
+expected_hash_file = "genesis.expected_hash"
+```
+
+Everything else defaults: Kura, snapshot, DA, SoraFS, SoraNet and Torii state paths
+derive from `data_dir`; the transport and streaming public keys derive from their
+private keys; the streaming codec uses the rANS tables compiled into `iroha3d`; and
+governance and VPN accounts keep their defaults for any `chain_discriminant`.
+Addresses are plain `host:port` (the checked `addr:host:port#CRC` form is also
+accepted). Validate the file, then start the node. On the first boot of a brand-new
+network, pass `--sumeragi-assert-fresh-key` once; without it, keys that never signed
+for the chain wait for running peers to anchor them, and a new network never starts
+(never pass it after losing node data):
+
+```bash
+iroha3d --config node/config.toml --check-config
+iroha3d --config node/config.toml --sumeragi-assert-fresh-key
+```
+
+The sections below cover custom key custody and the complete file format.
 
 ### Generating Keys
 

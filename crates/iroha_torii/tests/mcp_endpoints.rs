@@ -4892,6 +4892,92 @@ async fn mcp_jsonrpc_tools_call_blocks_get_accepts_canonical_identifier_path() {
     app.shutdown().await;
 }
 #[tokio::test]
+async fn mcp_jsonrpc_tools_call_explorer_feeds_accept_the_shared_feed_query() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    let app = build_router(cfg);
+    let instruction_filter = "kind = \"Transfer\" and block >= 1";
+    for (id, tool_name, arguments, expected_status) in [
+        (
+            1_061_701,
+            "iroha.instructions.list",
+            norito::json!({
+                "filter": instruction_filter,
+                "select": "kind,block,box.wire_id",
+                "limit": 2
+            }),
+            200,
+        ),
+        (
+            1_061_702,
+            "iroha.explorer.instructions.query",
+            norito::json!({
+                "filter": instruction_filter,
+                "select": ["kind", "block", "box.wire_id"],
+                "limit": 2
+            }),
+            200,
+        ),
+        (
+            1_061_703,
+            "iroha.explorer.instructions.latest.query",
+            norito::json!({ "body": { "filter": instruction_filter, "limit": 2 } }),
+            200,
+        ),
+        (
+            1_061_704,
+            "iroha.transactions.list",
+            norito::json!({ "filter": "status = \"Committed\"", "limit": 1 }),
+            200,
+        ),
+        (
+            1_061_705,
+            "iroha.explorer.accounts.query",
+            norito::json!({ "select": ["id"], "limit": 1 }),
+            200,
+        ),
+        // Explorer rows carry no `box.encoded`; the feed rejects it by name.
+        (
+            1_061_706,
+            "iroha.explorer.instructions.query",
+            norito::json!({ "select": ["box.encoded"] }),
+            400,
+        ),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": arguments
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let structured = structured_content(&call);
+        assert_eq!(
+            structured.get("status").and_then(Value::as_u64),
+            Some(expected_status),
+            "{tool_name}: {structured:?}"
+        );
+        assert_eq!(tool_is_error(&call), expected_status >= 400, "{tool_name}");
+        if expected_status == 200 {
+            let body = structured.get("body").expect("Explorer page body");
+            assert!(
+                body.get("items").and_then(Value::as_array).is_some()
+                    && body.get("next_cursor").is_some(),
+                "{tool_name} must return an Explorer page: {body:?}"
+            );
+        }
+    }
+    app.shutdown().await;
+}
+#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_rejects_retired_flat_arguments() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();

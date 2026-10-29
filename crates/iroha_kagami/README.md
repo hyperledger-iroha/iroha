@@ -128,6 +128,20 @@ view after local `Applied`; the separate parent observation remains historical.
 The [developer acceptance goals](../../specs/kagami_mochi_devex_goals.md) track
 remaining native-platform, private-dataspace, and end-to-end qualification.
 
+One node of another network, from keys to a validated config:
+
+```bash
+kagami node init --dir ./node --public-address 203.0.113.7:1337
+iroha3d --config node/config.toml --check-config
+```
+
+`node init` writes the validator (BLS), SoraNet transport and streaming keys to
+`node/secrets/` in the layout `iroha3d` reads through `data_dir`, and a starter
+`node/config.toml` with this node's roster entry filled in. Add the network's
+`chain`, other validators and `[genesis]`; every other setting has a default. It
+prints the `public_key@host:port` entry and proof of possession to send to the
+network operator, and never replaces existing keys or config.
+
 Existing Sora network / observer peer config, guided:
 
 ```bash
@@ -211,6 +225,13 @@ into the output directory.
   replacements. Identical repeated deployments reconcile their retained operation.
 - `kagami contract saved` lists each alias's resumable journal and whether it applied,
   without starting validators or signing; Mochi's Resume card shows the same list.
+
+`kagami node init`
+- Creates `<dir>/secrets/{validator,transport,streaming}.key` (owner-only, published
+  atomically) and `<dir>/config.toml` with `data_dir = "."`
+- The config names only per-network values; state paths, transport and streaming
+  public keys, and the streaming codec tables are derived defaults
+- Refuses an existing `secrets/` or `config.toml`
 
 `kagami wizard`
 - Guided observer-onboarding flow for the existing Sora Nexus network; use

@@ -182,6 +182,9 @@ stops the owned validators and preserves the ledger. Deployment accepts a `.ko`
 source, `.to` bytecode, or Musubi package directory; it starts the default
 localnet automatically when no context is selected.
 
+To run one node of another network, `kagami node init --dir ./node` creates its keys
+and a starter config; see [the daemon guide](./crates/irohad/README.md#configuration).
+
 See [Kagami](./crates/iroha_kagami/README.md) for native package builds, context
 selection and private dataspace commands. Explicit artifact generation uses
 `kagami localnet generate`; the [swarm guide](./crates/iroha_kagami/docs/swarm.md)

@@ -1314,7 +1314,6 @@ pub mod streaming {
     }
     /// Codec gating defaults.
     pub mod codec {
-        use std::path::PathBuf;
         /// Default CABAC runtime mode (`disabled`).
         pub const CABAC_MODE: &str = "disabled";
         /// Bundled entropy mode advertised by all supported builds (requires `ENABLE_RANS_BUNDLES=1`).
@@ -1327,10 +1326,12 @@ pub mod streaming {
         pub fn trellis_blocks() -> Vec<u16> {
             Vec::new()
         }
-        /// Default deterministic rANS table artefact.
-        pub fn rans_tables_path() -> PathBuf {
-            PathBuf::from("codec/rans/tables/rans_seed0.toml")
-        }
+        /// The canonical `SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml`).
+        ///
+        /// It is compiled into every build, so a node needs no table file on disk unless
+        /// `streaming.codec.rans_tables_path` selects another artefact.
+        pub const CANONICAL_RANS_TABLES_TOML: &str =
+            include_str!("../../../../codec/rans/tables/rans_seed0.toml");
         /// Default entropy mode string (bundled rANS only).
         pub fn entropy_mode() -> String {
             const {
@@ -3502,6 +3503,11 @@ pub mod nexus {
         use iroha_config_base::util::Bytes;
         /// Filesystem capacity reserved as runtime storage headroom (basis points).
         pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
+        /// Upper bound on that headroom (64 GiB).
+        ///
+        /// The percentage protects small volumes; uncapped, it would reserve terabytes on large
+        /// disks and refuse to start nodes that have ample free space.
+        pub const AUTO_STORAGE_HEADROOM_MAX_BYTES: u64 = 64 * 1024 * 1024 * 1024;
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).

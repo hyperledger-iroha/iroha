@@ -39,8 +39,8 @@ pub struct ManagedNodePaths {
     pub torii_sorafs_storage_data_dir: PathBuf,
     /// Streaming session-store directory.
     pub streaming_session_store_dir: PathBuf,
-    /// Streaming codec's signed rANS-table path.
-    pub streaming_rans_tables_path: PathBuf,
+    /// Streaming codec's signed rANS-table path; `None` uses the compiled-in canonical tables.
+    pub streaming_rans_tables_path: Option<PathBuf>,
     /// SoraNet proof-of-work ticket-revocation store path.
     pub soranet_pow_revocation_store_path: PathBuf,
 }
@@ -818,7 +818,7 @@ revocation_store_path = "managed/soranet/revocations.norito"
         );
         assert_eq!(
             projected.managed_paths.streaming_rans_tables_path,
-            directory.path().join("managed/rans_tables.toml")
+            Some(directory.path().join("managed/rans_tables.toml"))
         );
         assert_eq!(
             projected.managed_paths.soranet_pow_revocation_store_path,

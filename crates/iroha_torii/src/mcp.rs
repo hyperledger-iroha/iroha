@@ -2774,6 +2774,51 @@ fn select_purpose_built_tool_dispatch<'a>(
             inbound_headers,
             arguments,
         )),
+        "iroha.explorer.accounts.query" => Box::pin(dispatch_iroha_explorer_accounts_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.domains.query" => Box::pin(dispatch_iroha_explorer_domains_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.asset_definitions.query" => Box::pin(
+            dispatch_iroha_explorer_asset_definitions_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.assets.query" => Box::pin(dispatch_iroha_explorer_assets_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.nfts.query" => Box::pin(dispatch_iroha_explorer_nfts_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.rwas.query" => Box::pin(dispatch_iroha_explorer_rwas_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.blocks.query" => Box::pin(dispatch_iroha_explorer_blocks_query(
+            app,
+            inbound_headers,
+            arguments,
+        )),
+        "iroha.explorer.transactions.query" => Box::pin(
+            dispatch_iroha_explorer_transactions_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.transactions.latest.query" => Box::pin(
+            dispatch_iroha_explorer_transactions_latest_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.instructions.query" => Box::pin(
+            dispatch_iroha_explorer_instructions_query(app, inbound_headers, arguments),
+        ),
+        "iroha.explorer.instructions.latest.query" => Box::pin(
+            dispatch_iroha_explorer_instructions_latest_query(app, inbound_headers, arguments),
+        ),
         "iroha.transactions.query" => Box::pin(dispatch_iroha_transactions_query(
             app,
             inbound_headers,
@@ -5158,9 +5203,6 @@ declare_mcp_dispatch_wrappers! {
     }
     list_query {
         dispatch_iroha_contracts_state_get => "/v1/contracts/state";
-        dispatch_iroha_assets_list => "/v1/explorer/assets";
-        dispatch_iroha_nfts_list => "/v1/explorer/nfts";
-        dispatch_iroha_rwas_list => "/v1/explorer/rwas";
     }
     collection_get {
         dispatch_iroha_subscriptions_list => "/v1/subscriptions";
@@ -5170,6 +5212,12 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_asset_definitions => "/v1/assets/definitions";
         dispatch_iroha_nfts_chain_list => "/v1/nfts";
         dispatch_iroha_rwas_chain_list => "/v1/rwas";
+        dispatch_iroha_assets_list => "/v1/explorer/assets";
+        dispatch_iroha_nfts_list => "/v1/explorer/nfts";
+        dispatch_iroha_rwas_list => "/v1/explorer/rwas";
+        dispatch_iroha_transactions_list => "/v1/explorer/transactions";
+        dispatch_iroha_instructions_list => "/v1/explorer/instructions";
+        dispatch_iroha_blocks_list => "/v1/explorer/blocks";
     }
     collection_post {
         dispatch_iroha_subscriptions_plans_query => "/v1/subscriptions/plans/query";
@@ -5182,6 +5230,17 @@ declare_mcp_dispatch_wrappers! {
         dispatch_iroha_transactions_query => "/v1/transactions/query";
         dispatch_iroha_contracts_activity_query => "/v1/contracts/activity/query";
         dispatch_iroha_contracts_events_query => "/v1/contracts/events/query";
+        dispatch_iroha_explorer_accounts_query => "/v1/explorer/accounts/query";
+        dispatch_iroha_explorer_domains_query => "/v1/explorer/domains/query";
+        dispatch_iroha_explorer_asset_definitions_query => "/v1/explorer/asset-definitions/query";
+        dispatch_iroha_explorer_assets_query => "/v1/explorer/assets/query";
+        dispatch_iroha_explorer_nfts_query => "/v1/explorer/nfts/query";
+        dispatch_iroha_explorer_rwas_query => "/v1/explorer/rwas/query";
+        dispatch_iroha_explorer_blocks_query => "/v1/explorer/blocks/query";
+        dispatch_iroha_explorer_transactions_query => "/v1/explorer/transactions/query";
+        dispatch_iroha_explorer_transactions_latest_query => "/v1/explorer/transactions/latest/query";
+        dispatch_iroha_explorer_instructions_query => "/v1/explorer/instructions/query";
+        dispatch_iroha_explorer_instructions_latest_query => "/v1/explorer/instructions/latest/query";
     }
     path_get {
         dispatch_iroha_bridge_finality_proof => (
@@ -5346,97 +5405,6 @@ fn single_path_route(template: &str, key: &str, value: String) -> Result<String,
     let mut path_args = Map::new();
     path_args.insert(key.into(), Value::String(value));
     fill_path_template(template, Some(&Value::Object(path_args)))
-}
-async fn dispatch_explorer_history_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-    route: &str,
-    query_fields: &[&str],
-    context: &str,
-) -> Result<Value, String> {
-    let route = append_explorer_history_query_arguments(
-        route.to_owned(),
-        arguments,
-        query_fields,
-        context,
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_transactions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_explorer_history_list(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/explorer/transactions",
-        &[
-            "cursor",
-            "limit",
-            "authority",
-            "block",
-            "status",
-            "asset_id",
-        ],
-        "Explorer transaction history request",
-    )
-    .await
-}
-async fn dispatch_iroha_instructions_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_explorer_history_list(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/explorer/instructions",
-        &[
-            "cursor",
-            "limit",
-            "authority",
-            "account",
-            "transaction_hash",
-            "transaction_status",
-            "block",
-            "kind",
-            "asset_id",
-        ],
-        "Explorer instruction history request",
-    )
-    .await
-}
-async fn dispatch_iroha_blocks_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_explorer_history_list(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/explorer/blocks",
-        &["cursor", "limit"],
-        "Explorer block history request",
-    )
-    .await
 }
 /// Render an exact MCP account input into the strict ASCII auth-header form.
 fn vpn_canonical_auth_account_header_value(account: &str) -> Result<String, String> {

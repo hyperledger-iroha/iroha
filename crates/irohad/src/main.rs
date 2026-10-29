@@ -6188,6 +6188,11 @@ fn derive_runtime_nexus_storage_budget(
             .and_then(|value| value.checked_add(bps_total.saturating_sub(1)))
             .map(|value| value / bps_total)
             .and_then(|value| u64::try_from(value).ok())
+            .map(|value| {
+                value.min(
+                    iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_MAX_BYTES,
+                )
+            })
             .ok_or_else(|| {
                 Report::new(ConfigError::ParseConfig).attach(format!(
                     "failed to derive Nexus storage headroom for filesystem `{}`",
@@ -12751,6 +12756,18 @@ mod tests {
                 derive_runtime_nexus_storage_budget(&[probe]).expect("safe derived budget");
             assert_eq!(budgets.len(), 1);
             assert_eq!(budgets[0].budget_bytes.get(), 100);
+        }
+        #[test]
+        fn runtime_budget_caps_headroom_on_large_filesystems() {
+            const GIB: u64 = 1024 * 1024 * 1024;
+            // A 7.3 TiB volume with 617 GiB free: 20% would reserve about 1.46 TiB and leave
+            // no budget, so the reservation stops at the fixed cap.
+            let probe = storage_budget_probe(7_475 * GIB, 617 * GIB, 0);
+            let budgets = derive_runtime_nexus_storage_budget(&[probe])
+                .expect("a large volume with ample free space has a budget");
+            assert_eq!(budgets[0].budget_bytes.get(), 617 * GIB - 64 * GIB);
+            let full = storage_budget_probe(7_475 * GIB, 60 * GIB, 0);
+            assert!(derive_runtime_nexus_storage_budget(&[full]).is_err());
         }
         #[test]
         fn runtime_budget_is_stable_across_restart_usage_splits() {

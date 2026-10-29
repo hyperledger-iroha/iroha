@@ -1097,6 +1097,19 @@ impl Prepared {
             assertion.as_ref(),
         )
         .map_err(|error| NodeError::Input(error.to_string()))?;
+        // An active key without a safety record signs nothing until peers anchor it (§7.4 R2).
+        // That is expected when joining a running network, but on a brand-new network every key
+        // starts unanchored and consensus never begins, so name the one-shot first-boot flag.
+        if found.iter().any(|(_, state, retired)| {
+            !*retired && *state == iroha_sumeragi::safety::RecordState::Absent
+        }) {
+            iroha_logger::warn!(
+                key = %key_pair.public_key(),
+                "sumeragi: this validator key has no safety record for this chain and signs \
+                 nothing until running peers anchor it; on the first boot of a brand-new network \
+                 restart once with --sumeragi-assert-fresh-key (never after losing node data)"
+            );
+        }
         // Height configurations of the window (t, t + 1, t + 2).
         let (configs, demotion_window) = {
             let view = state.view();

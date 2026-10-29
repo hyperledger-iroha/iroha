@@ -10588,8 +10588,9 @@ pub struct StreamingCodec {
     pub cabac_mode: CabacMode,
     /// Trellis-enabled block sizes (empty until claim-avoidance ships).
     pub trellis_block_sizes: Vec<u16>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact.
-    pub rans_tables_path: PathBuf,
+    /// Operator-selected `SignedRansTablesV1` artefact. `None` uses the canonical tables compiled
+    /// into the binary ([`defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML`]).
+    pub rans_tables_path: Option<PathBuf>,
     /// Entropy mode advertised by manifests/headers.
     pub entropy_mode: EntropyMode,
     /// Bundle width used when `entropy_mode` enables bundled rANS.
@@ -10610,7 +10611,7 @@ impl StreamingCodec {
         Self {
             cabac_mode: CabacMode::Disabled,
             trellis_block_sizes: defaults::streaming::codec::trellis_blocks(),
-            rans_tables_path: defaults::streaming::codec::rans_tables_path(),
+            rans_tables_path: None,
             entropy_mode: EntropyMode::RansBundled,
             bundle_width: defaults::streaming::codec::bundle_width(),
             bundle_accel: BundleAcceleration::None,

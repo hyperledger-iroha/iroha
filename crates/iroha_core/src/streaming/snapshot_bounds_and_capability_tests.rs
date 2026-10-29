@@ -7,7 +7,7 @@ fn publisher_rejects_missing_bundle_acceleration_support() {
     codec.entropy_mode = EntropyMode::RansBundled;
     codec.bundle_width = 2;
     codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-    codec.rans_tables_path = repo_rans_tables_path();
+    codec.rans_tables_path = Some(repo_rans_tables_path());
     handle
         .apply_codec_config(&codec)
         .expect("bundle tables should load");

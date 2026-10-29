@@ -1709,6 +1709,22 @@ fn parse_does_not_apply_chain_discriminant_runtime_setting() {
         defaults::governance::slash_receiver_account_id()
     );
     assert_eq!(
+        config.gov.viral_incentives.incentive_pool_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        config.gov.viral_incentives.escrow_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        config.gov.sorafs_pin_fee_treasury_account,
+        defaults::governance::sorafs_pin_fee::treasury_account_id()
+    );
+    assert_eq!(
+        config.network.soranet_vpn.operator_account_id,
+        defaults::governance::bond_escrow_account_id()
+    );
+    assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),
         0x02F1
     );
