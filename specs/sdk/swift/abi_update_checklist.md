@@ -43,7 +43,7 @@ planned for v1). Examples:
 |-------------|-------|---------------------|
 | ABI change proposal, syscall list, pointer policy | IVM maintainers / Core Protocol | `crates/ivm/docs/syscalls.md`, `crates/ivm/docs/pointer_abi.md`, linked RFC |
 | Updated ABI hash + golden tests | IVM maintainers | `crates/ivm/tests/abi_hash_versions.rs`, `crates/ivm/tests/abi_syscall_list_golden.rs`, `crates/ivm/tests/pointer_type_ids_golden.rs` |
-| Torii runtime upgrade schema & endpoints | Torii team | `crates/iroha/src/torii/runtime.rs`, `/v1/runtime/*` OpenAPI entries, fixtures under `integration_tests/tests/runtime_upgrades/` |
+| Torii runtime change-set schema & endpoints | Torii team | `crates/iroha_torii/src/runtime.rs`, `/v1/runtime/*` OpenAPI entries, `crates/iroha_torii/tests/runtime_endpoints.rs`, `specs/runtime_upgrades.md` |
 | Swift SDK surfaces & tests | Swift lead | `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` |
 | Digest/status updates | Swift Program PM / Docs | `status.md`, `specs/status/swift_weekly_digest.md`, exporter automation in `scripts/swift_status_export.py` |
 
@@ -72,14 +72,18 @@ planned for v1). Examples:
 
 ### 3.2 Update Swift Surfaces & Native Bridge
 
-1. **Runtime upgrade manifest structs.** Ensure
-   `ToriiRuntimeUpgradeManifest`, `ToriiRuntimeAbiActive`, and
-   `ToriiRuntimeAbiHash` (see `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`)
-   mirror any new fields (pointer types list, policy labels, start/end height).
+1. **Runtime models.** Ensure `ToriiRuntimeAbiActive`, `ToriiRuntimeAbiHash`,
+   `ToriiRuntimeMetrics` and the change-set models (`ToriiRuntimeUpgradesSnapshot`,
+   `ToriiRuntimeChangeSet`, `ToriiRuntimeChangeSetStatus`, `ToriiRuntimeNotice`; see
+   `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`) mirror the Torii `/v1/runtime/*`
+   JSON. The retired runtime-upgrade manifest has no successor to extend: a runtime
+   change reaches a network only as a governed `ChangeSetV1` (`specs/runtime_upgrades.md`).
 2. **Client APIs.** Verify `ToriiClient` & `TxBuilder` expose the latest `/v1/runtime/*`
    endpoints:
-   - `listRuntimeUpgrades`, `getRuntimeAbiActive`, `getRuntimeAbiHash`,
-     `proposeRuntimeUpgrade`, `activateRuntimeUpgrade`.
+   - `getRuntimeMetrics`, `getRuntimeAbiActive`, `getRuntimeAbiHash`,
+     `listRuntimeUpgrades`, `proposeRuntimeUpgrade(changeSet:)`,
+     `cancelRuntimeUpgrade(idHex:)`. Activation is automatic at the start of a change
+     set's effective height; there is no activation request.
    - Confirm async + completion-handler variants decode and encode the new fields.
 3. **Bridge enforcement.** If the ABI introduces new bridge calls or metadata,
    update `IrohaSwift/Sources/IrohaSwift/NativeBridge.swift` and, when relevant,
@@ -99,7 +103,7 @@ planned for v1). Examples:
    swift test --package-path IrohaSwift --filter ToriiClientTests/testProposeRuntimeUpgradeAsync
    swift test --package-path IrohaSwift --filter ToriiClientTests/testGetRuntimeAbiHash
    ```
-   Add/extend fixtures for any new manifest fields.
+   Add/extend fixtures for any new runtime change-set fields.
 2. **Parity fixtures.** Render the complete create-only owner publication at an
    absent path with `cargo run --locked -p xtask --features dev-tools --bin
    xtask -- norito-rpc-fixtures --output-root

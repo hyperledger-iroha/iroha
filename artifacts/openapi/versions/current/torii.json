@@ -17747,122 +17747,182 @@
           }
         ]
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeChangeSetV1": {
         "additionalProperties": false,
-        "description": "Canonical first-release runtime-upgrade manifest. ABI delta lists are reserved and therefore empty.",
+        "description": "A governed change from the universal root's predecessor selection to its exact successor (iroha_data_model::runtime::lifecycle::ChangeSetV1). Published definitions and transitions are internally tagged Norito JSON objects.",
         "properties": {
-          "abi_hash": {
-            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
-          },
-          "abi_version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          },
-          "added_pointer_types": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "added_syscalls": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "description": {
-            "type": "string"
-          },
-          "end_height": {
+          "effective_height": {
+            "description": "First height executed under the successor.",
             "format": "uint64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
-          "name": {
-            "minLength": 1,
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "predecessor": {
+            "description": "Identity of the selection the change starts from.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "provenance": {
+          "publish": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+              "type": "object"
             },
             "type": "array"
           },
-          "sbom_digests": {
-            "items": {
-              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1"
-            },
-            "type": "array"
-          },
-          "slsa_attestation": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "qualification": {
+            "description": "Digest of the qualification evidence for the successor composition.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "start_height": {
-            "format": "uint64",
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
+          "root": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Universal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          "successor": {
+            "description": "Identity of the exact selection the change produces.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transitions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "name",
-          "description",
-          "abi_version",
-          "abi_hash",
-          "added_syscalls",
-          "added_pointer_types",
-          "start_height",
-          "end_height",
-          "sbom_digests",
-          "slsa_attestation",
-          "provenance"
+          "network",
+          "root",
+          "predecessor",
+          "successor",
+          "effective_height",
+          "publish",
+          "transitions",
+          "qualification"
         ],
         "type": "object"
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeNoticeV1": {
         "additionalProperties": false,
+        "description": "Minimum notice of a runtime change: blocks after approval and committed milliseconds after proposal and approval.",
         "properties": {
-          "algorithm": {
-            "minLength": 1,
-            "type": "string"
+          "approval_cushion_ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
-          "digest": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
-            "type": "string"
+          "blocks": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
-          "algorithm",
-          "digest"
+          "blocks",
+          "ms",
+          "approval_cushion_ms"
         ],
         "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1": {
+        "description": "Schedule a change set at its effective height, or withdraw a scheduled one.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+              },
+              "kind": {
+                "const": "Schedule",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Identity of the scheduled change set.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "GovernanceParliamentProposalPayloadRuntimeUpgradeV1": {
         "additionalProperties": false,
+        "description": "A runtime change-set action for SORA Parliament, with the notice policy frozen at proposal time (specs/live_runtime_upgrades.md section 6).",
         "properties": {
-          "manifest": {
-            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1"
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeNoticeV1"
           },
           "proposal_operator": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposed_ms": {
+            "description": "Committed time of the block that admitted the proposal.",
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "proposal_operator",
-          "manifest"
+          "action",
+          "notice",
+          "proposed_ms"
         ],
         "type": "object"
       },
@@ -93385,6 +93445,52 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/runtime/containments": {
+      "get": {
+        "description": "Every recorded emergency containment of runtime definitions, with its lease, the restrictions it imposed and its status, by authorization height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime containments.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.containment.list"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/runtime/metrics": {
       "get": {
         "description": "Return runtime metrics snapshot.",
@@ -93523,7 +93629,7 @@
     },
     "/v1/runtime/upgrades": {
       "get": {
-        "description": "List proposed and activated runtime upgrades.",
+        "description": "The committed runtime selection and its identity, the attesting committee and its digest, and every recorded change set by effective height then identity.",
         "responses": {
           "200": {
             "content": {
@@ -93554,7 +93660,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "List runtime upgrades.",
+        "summary": "List runtime change sets.",
         "tags": [
           "Runtime"
         ],
@@ -93567,76 +93673,9 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/runtime/upgrades/activate/{id}": {
-      "post": {
-        "description": "Activate a runtime upgrade by id.",
-        "parameters": [
-          {
-            "description": "Upgrade identifier.",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaOperatorNonce": [],
-            "IrohaOperatorPublicKey": [],
-            "IrohaOperatorSignature": [],
-            "IrohaOperatorTimestampMs": []
-          }
-        ],
-        "summary": "Activate a runtime upgrade.",
-        "tags": [
-          "Runtime"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "operator",
-          "authentication": "operator_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "operator.runtime.upgrade.activate"
-        },
-        "x-iroha-tool-effect": "operator"
-      }
-    },
     "/v1/runtime/upgrades/cancel/{id}": {
       "post": {
-        "description": "Cancel a runtime upgrade by id.",
+        "description": "Draft the SORA Parliament proposal that withdraws the scheduled change set with the given 32-byte hex identity, for local signing.",
         "parameters": [
           {
             "description": "Upgrade identifier.",
@@ -93688,7 +93727,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Cancel a runtime upgrade.",
+        "summary": "Draft a runtime change-set withdrawal.",
         "tags": [
           "Runtime"
         ],
@@ -93703,12 +93742,12 @@
     },
     "/v1/runtime/upgrades/propose": {
       "post": {
-        "description": "Submit a runtime upgrade proposal.",
+        "description": "Draft the SORA Parliament proposal that schedules the ChangeSetV1 in the body, for local signing. Admission happens when the signed proposal executes.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
               }
             }
           },
@@ -93744,7 +93783,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Propose a runtime upgrade.",
+        "summary": "Draft a runtime change-set proposal.",
         "tags": [
           "Runtime"
         ],

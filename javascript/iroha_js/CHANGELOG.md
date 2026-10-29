@@ -4,6 +4,20 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Runtime upgrades use governed change sets (`specs/live_runtime_upgrades.md` §6) and the manifest API is
+  removed. `listRuntimeUpgrades()` returns the `/v1/runtime/upgrades` snapshot (`ToriiRuntimeUpgradesSnapshot`):
+  the committed `selectionIdHex` and `selection`, the attesting `committee` and `committeeDigestHex`, and
+  items typing `idHex`, `effectiveHeight`, `predecessorHex`, `successorHex`, `status` (`Scheduled`, or
+  `Activated`, `Lapsed`, `Cancelled` with a height) and `notice`, with the complete record kept losslessly
+  as `record`. `proposeRuntimeUpgrade(changeSet)` posts an exact universal-root `ChangeSetV1`; it and
+  `cancelRuntimeUpgrade(idHex)` return exactly one `ProposeRuntimeUpgradeProposal` draft. The three calls
+  sign with the client's `OperatorSigningContext`, which these operator routes require.
+  `activateRuntimeUpgrade` is removed: an approved change set activates at the start of its effective
+  block. `getRuntimeMetrics()` counts `scheduled`, `activated`, `lapsed` and `canceled` change sets. The
+  governance `RuntimeUpgrade` payload is `{ proposal_operator, action, notice, proposed_ms }`, where
+  `action` schedules a `ChangeSetV1` or cancels a change-set id and every number-encoded u64 is at most
+  `Number.MAX_SAFE_INTEGER`. The manifest, SBOM, SLSA and provenance types are removed.
+
 - `PetalScanSession` reads a capture's turn lanes after its bands when it has time to spare: when the
   capture's work and the session's last turn try fit a 30 fps camera's frame time (`PETAL_CAPTURE_BUDGET_MS`),
   timed with `performance.now()`. A slow phone core never has the time, so it still leaves them to the shown

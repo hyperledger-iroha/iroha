@@ -399,8 +399,8 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 413;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 413;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 410;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 410;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -446,9 +446,9 @@ mod tests {
         use sha2::{Digest, Sha256};
 
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "7b2a802db23d9f4e69770e3d67da01898f5727672cffbb081971669513483e66";
+            "0878c86dfd5911475d6eaa045713fc04f4292758cab6d36f9c43d5c12032e9ee";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "cb249a5052b431d51fbe197b0673a0317d193119f07da160ad17a212bfee16af";
+            "e33ca2c42a90dbf12e39f5f769b87ae99b13cd3addb007f7e22cf8db9bcc5850";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()

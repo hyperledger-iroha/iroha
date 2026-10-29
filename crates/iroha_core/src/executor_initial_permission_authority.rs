@@ -180,14 +180,14 @@ fn validate_initial_permission_payload_constraints(
                 ));
             }
         }
-        "CanManageRuntimeUpgrades" => validate_exact_unit_permission!(
-            executor_permission::governance::CanManageRuntimeUpgrades
-        ),
         "CanManageConsensusKeys" => {
             validate_exact_unit_permission!(executor_permission::governance::CanManageConsensusKeys)
         }
         "CanManageConfidentialParams" => validate_exact_unit_permission!(
             executor_permission::governance::CanManageConfidentialParams
+        ),
+        "CanProposeRuntimeChangeSet" => validate_exact_unit_permission!(
+            executor_permission::governance::CanProposeRuntimeChangeSet
         ),
         "CanSubmitGovernanceBallot" => validate_governance_selector!(
             executor_permission::governance::CanSubmitGovernanceBallot
@@ -826,8 +826,8 @@ fn initial_permission_capability_root_authority(
             let _ = decode!(executor_permission::governance::CanProposeContractDeployment);
             false
         }
-        "CanProposeRuntimeUpgrade" => {
-            let _ = decode!(executor_permission::governance::CanProposeRuntimeUpgrade);
+        "CanProposeRuntimeChangeSet" => {
+            let _ = decode!(executor_permission::governance::CanProposeRuntimeChangeSet);
             false
         }
         "CanSubmitGovernanceBallot" => {
@@ -1735,7 +1735,12 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     // canonical payload validation. Keep the signed governance draft surface
     // usable while the fail-safe Initial executor is active; the lower-level
     // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
+    // Runtime support attestations and emergency containment carry their own
+    // authority: Core verifies the validator's signature against the current
+    // committee and the panel's endorsements against the committed panel.
     if is_any!(
+        iroha_data_model::isi::runtime_upgrade::AttestRuntimeSupportV1,
+        iroha_data_model::isi::runtime_upgrade::ContainRuntimeV1,
         iroha_data_model::isi::settlement::SettlementInstructionBox,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
@@ -3162,7 +3167,6 @@ pub(crate) const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanSetParameters",
     "CanSetHijiriParameters",
     "CanManageVerifyingKeys",
-    "CanManageRuntimeUpgrades",
     "CanManageConsensusKeys",
     "CanManageConfidentialParams",
     "CanProposeSccpRouteGovernance",
@@ -3183,7 +3187,7 @@ pub(crate) const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageFeeSponsorProgram",
     "CanEnrollFeeSponsorProgram",
     "CanProposeContractDeployment",
-    "CanProposeRuntimeUpgrade",
+    "CanProposeRuntimeChangeSet",
     "CanSubmitGovernanceBallot",
     "CanEnactGovernance",
     "CanManageParliament",

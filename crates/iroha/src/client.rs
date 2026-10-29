@@ -21359,16 +21359,28 @@ impl Client {
         let resp = self.send_account_signed_get(url)?;
         Self::decode_json_ok(resp, "Failed to get runtime metrics")
     }
-    /// GET `/v1/runtime/upgrades`
+    /// GET `/v1/runtime/upgrades`: the committed runtime selection and every recorded change set.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_upgrades_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/upgrades");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::decode_json_ok(resp, "Failed to get runtime upgrades")
+    }
+    /// GET `/v1/runtime/containments`: every recorded emergency containment.
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn get_runtime_containments_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/containments");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to get runtime containments")
     }
     /// Canonically signed GET `/v1/accounts/{account_id}` account materialization read.
     ///
@@ -21492,7 +21504,8 @@ impl Client {
         let payload = Self::parse_json_ok_response(&resp, "explorer account qr request")?;
         ExplorerAccountQrSnapshot::from_value(payload)
     }
-    /// POST `/v1/runtime/upgrades/propose` with a JSON DTO body (manifest).
+    /// POST `/v1/runtime/upgrades/propose` with a runtime change set as the JSON body; the
+    /// response drafts the SORA Parliament proposal that schedules it.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_runtime_propose_upgrade_json(
@@ -21502,28 +21515,14 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/runtime/upgrades/propose");
         let body = norito::json::to_vec(value)?;
         let resp = self
-            .default_request(HttpMethod::POST, url)
+            .operator_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
-            .body(body)
             .build()?
             .send_blocking()?;
         Self::decode_json_ok(resp, "Failed to propose runtime upgrade")
     }
-    /// POST `/v1/runtime/upgrades/activate/:id` (id hex in path)
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn post_runtime_activate_upgrade_json(&self, id_hex: &str) -> Result<norito::json::Value> {
-        let path = format!("v1/runtime/upgrades/activate/{id_hex}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(Vec::new()),
-        )?;
-        Self::decode_json_ok(resp, "Failed to activate runtime upgrade")
-    }
-    /// POST `/v1/runtime/upgrades/cancel/:id` (id hex in path)
+    /// POST `/v1/runtime/upgrades/cancel/:id` (change-set id hex in path); the response drafts the
+    /// SORA Parliament proposal that withdraws the scheduled change set.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -21531,9 +21530,8 @@ impl Client {
         let path = format!("v1/runtime/upgrades/cancel/{id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(Vec::new()),
+            self.operator_signed_request(HttpMethod::POST, url, Vec::new())?
+                .header("Content-Type", APPLICATION_JSON),
         )?;
         Self::decode_json_ok(resp, "Failed to cancel runtime upgrade")
     }

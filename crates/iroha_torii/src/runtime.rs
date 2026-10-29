@@ -39,7 +39,6 @@ use iroha_data_model::{
     da::types::{BlobClass, Compression},
     transaction::SignedTransaction,
 };
-use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use std::{
@@ -311,9 +310,15 @@ pub struct RuntimeMetricsResponse {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::UpgradeEventsCounters")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+/// Recorded change sets by lifecycle status (`specs/live_runtime_upgrades.md` §6).
 pub struct UpgradeEventsCounters {
-    pub proposed: u64,
+    /// Approved and waiting for their effective height.
+    pub scheduled: u64,
+    /// Took effect.
     pub activated: u64,
+    /// Reached their effective height without taking effect.
+    pub lapsed: u64,
+    /// Withdrawn by governance.
     pub canceled: u64,
 }
 #[derive(
@@ -338,16 +343,51 @@ pub struct RuntimeAbiHashResponse {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::RuntimeUpgradeListItem")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+/// One recorded change set.
 pub struct RuntimeUpgradeListItem {
+    /// Change-set identity, 32-byte lowercase hex.
     pub id_hex: String,
-    pub record: iroha_data_model::runtime::RuntimeUpgradeRecord,
+    /// The change set with its lifecycle status, notice and attestations.
+    pub record: iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
 }
 #[derive(
     Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_torii::runtime::RuntimeUpgradesListResponse")]
+/// The selection the universal root executes, the committee that attests change sets, and
+/// every recorded change set.
 pub struct RuntimeUpgradesListResponse {
+    /// Identity of the committed selection, 32-byte lowercase hex: the predecessor a new
+    /// change set names.
+    pub selection_id_hex: String,
+    /// The committed selection.
+    pub selection: iroha_data_model::runtime::definition::RootSelectionV1,
+    /// Keys of the current validator committee; each member attests a change set before it
+    /// activates.
+    pub committee: Vec<iroha_crypto::PublicKey>,
+    /// Committee digest an attestation binds, 32-byte lowercase hex.
+    pub committee_digest_hex: String,
+    /// Recorded change sets by effective height, then identity.
     pub items: Vec<RuntimeUpgradeListItem>,
+}
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeContainmentListItem")]
+#[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+/// One recorded emergency containment.
+pub struct RuntimeContainmentListItem {
+    /// Containment identity, 32-byte lowercase hex.
+    pub id_hex: String,
+    /// The containment with its lease, the restrictions it imposed and its status.
+    pub record: iroha_data_model::runtime::lifecycle::ContainmentRecordV1,
+}
+#[derive(
+    Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeContainmentsListResponse")]
+/// Every recorded emergency containment of the universal root.
+pub struct RuntimeContainmentsListResponse {
+    /// Recorded containments by authorization height, then identity.
+    pub items: Vec<RuntimeContainmentListItem>,
 }
 /// GET /v1/runtime/abi/active
 #[expect(
@@ -1380,29 +1420,26 @@ mod bitmap_tests {
 pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeMetricsResponse, crate::Error> {
+    use iroha_data_model::runtime::lifecycle::ChangeSetStatusV1;
     let world = state.world_view();
-    let mut proposed: u64 = 0;
-    let mut activated: u64 = 0;
-    let mut canceled: u64 = 0;
-    for (_id, rec) in world.runtime_upgrades().iter() {
-        proposed = proposed.saturating_add(1);
-        match rec.status {
-            iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) => {
-                activated = activated.saturating_add(1)
-            }
-            iroha_data_model::runtime::RuntimeUpgradeStatus::Canceled => {
-                canceled = canceled.saturating_add(1)
-            }
-            _ => {}
-        }
+    let mut counters = UpgradeEventsCounters {
+        scheduled: 0,
+        activated: 0,
+        lapsed: 0,
+        canceled: 0,
+    };
+    for (_id, record) in world.runtime_change_sets().iter() {
+        let counter = match record.status {
+            ChangeSetStatusV1::Scheduled => &mut counters.scheduled,
+            ChangeSetStatusV1::Activated(_) => &mut counters.activated,
+            ChangeSetStatusV1::Lapsed(_) => &mut counters.lapsed,
+            ChangeSetStatusV1::Cancelled(_) => &mut counters.canceled,
+        };
+        *counter = counter.saturating_add(1);
     }
     Ok(RuntimeMetricsResponse {
         abi_version: world.abi_version(),
-        upgrade_events_total: UpgradeEventsCounters {
-            proposed,
-            activated,
-            canceled,
-        },
+        upgrade_events_total: counters,
     })
 }
 /// GET /v1/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
@@ -1423,30 +1460,78 @@ pub async fn handle_runtime_abi_hash(
 /// GET /v1/runtime/upgrades
 ///
 /// # Errors
-/// Returns an error if the state view cannot be acquired or serialized.
+/// Returns an error if the committed selection or a change-set identity cannot be encoded.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_upgrades_list(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeUpgradesListResponse, crate::Error> {
-    let world = state.world_view();
-    let mut items: Vec<RuntimeUpgradeListItem> = Vec::new();
-    for (id, rec) in world.runtime_upgrades().iter() {
-        items.push(RuntimeUpgradeListItem {
+    let view = state.view();
+    let committee: Vec<iroha_crypto::PublicKey> = view
+        .commit_topology()
+        .iter()
+        .map(|peer| peer.public_key().clone())
+        .collect();
+    let committee_digest = iroha_data_model::runtime::lifecycle::committee_digest(&committee)
+        .map_err(|error| runtime_conversion_error(format!("committee digest: {error}")))?;
+    let world = view.world();
+    let selection = world.runtime_selection().clone();
+    let selection_id = selection
+        .id()
+        .map_err(|error| runtime_conversion_error(format!("selection identity: {error}")))?;
+    let mut items: Vec<RuntimeUpgradeListItem> = world
+        .runtime_change_sets()
+        .iter()
+        .map(|(id, record)| RuntimeUpgradeListItem {
             id_hex: hex::encode(id.0),
-            record: rec.clone(),
-        });
-    }
-    // Stable sort: by start_height then abi_version
-    items.sort_by_key(|it| {
-        (
-            it.record.manifest.start_height,
-            it.record.manifest.abi_version,
-        )
+            record: record.clone(),
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        (left.record.change_set.effective_height, &left.id_hex)
+            .cmp(&(right.record.change_set.effective_height, &right.id_hex))
     });
-    Ok(RuntimeUpgradesListResponse { items })
+    Ok(RuntimeUpgradesListResponse {
+        selection_id_hex: hex::encode(selection_id.0),
+        selection,
+        committee,
+        committee_digest_hex: hex::encode(committee_digest),
+        items,
+    })
 }
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::ProposeUpgradeDto")]
-pub struct ProposeUpgradeDto(pub iroha_data_model::runtime::RuntimeUpgradeManifest);
+fn runtime_conversion_error(message: String) -> crate::Error {
+    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+    ))
+}
+/// GET /v1/runtime/containments
+///
+/// # Errors
+/// Never fails today; the `Result` keeps the handler shape of the runtime routes.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
+pub async fn handle_runtime_containments_list(
+    state: Arc<iroha_core::state::State>,
+) -> Result<RuntimeContainmentsListResponse, crate::Error> {
+    let world = state.world_view();
+    let mut items: Vec<RuntimeContainmentListItem> = world
+        .runtime_containments()
+        .iter()
+        .map(|(id, record)| RuntimeContainmentListItem {
+            id_hex: hex::encode(id),
+            record: record.clone(),
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        (left.record.authorized_height, &left.id_hex)
+            .cmp(&(right.record.authorized_height, &right.id_hex))
+    });
+    Ok(RuntimeContainmentsListResponse { items })
+}
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::TxInstr")]
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
@@ -1462,117 +1547,67 @@ fn instruction_box_to_tx_instr(boxed: &iroha_data_model::isi::InstructionBox) ->
         payload_hex: hex::encode(framed),
     }
 }
+/// The governance proposal instruction that carries `action`, drafted for local signing.
+fn runtime_proposal_draft(
+    action: iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
+) -> ProposeUpgradeResponse {
+    let boxed: iroha_data_model::isi::InstructionBox =
+        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action }.into();
+    ProposeUpgradeResponse {
+        ok: true,
+        tx_instructions: vec![instruction_box_to_tx_instr(&boxed)],
+    }
+}
 #[derive(Debug, JsonSerialize, NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::ProposeUpgradeResponse")]
+/// Instructions the caller signs and submits.
 pub struct ProposeUpgradeResponse {
+    /// Always `true` for a drafted instruction.
     pub ok: bool,
+    /// The drafted instructions.
     pub tx_instructions: Vec<TxInstr>,
 }
-/// POST /v1/runtime/upgrades/propose
+impl IntoResponse for ProposeUpgradeResponse {
+    fn into_response(self) -> axum::response::Response {
+        crate::JsonBody(self).into_response()
+    }
+}
+/// POST /v1/runtime/upgrades/propose — draft the SORA Parliament proposal that schedules the
+/// `ChangeSetV1` in the body (`specs/live_runtime_upgrades.md` §6). Admission happens when the
+/// signed proposal executes.
 #[expect(
     clippy::unused_async,
     reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
 )]
 pub async fn handle_runtime_propose_upgrade(
-    NoritoJson(ProposeUpgradeDto(manifest)): NoritoJson<ProposeUpgradeDto>,
+    NoritoJson(change_set): NoritoJson<iroha_data_model::runtime::lifecycle::ChangeSetV1>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
-    let manifest_bytes = norito::to_bytes(&manifest).map_err(|e| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "encode manifest: {e}"
-            )),
-        ))
-    })?;
-    let isi = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes };
-    let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
-    Ok(ProposeUpgradeResponse {
-        ok: true,
-        tx_instructions,
-    })
+    Ok(runtime_proposal_draft(
+        iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(change_set),
+    ))
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::ActivateCancelResponse")]
-#[derive(Debug, JsonSerialize, NoritoSerialize)]
-/// Response payload describing the outcome of runtime activation/cancellation helpers.
-pub struct ActivateCancelResponse {
-    /// Indicates whether the operation succeeded.
-    pub ok: bool,
-    /// Instructions (if any) that must be signed and submitted by the caller.
-    pub tx_instructions: Vec<TxInstr>,
-}
-impl IntoResponse for ActivateCancelResponse {
-    fn into_response(self) -> axum::response::Response {
-        crate::JsonBody(self).into_response()
-    }
-}
-/// POST /v1/runtime/upgrades/activate/{id}
+/// POST /v1/runtime/upgrades/cancel/{id} — draft the SORA Parliament proposal that withdraws
+/// a scheduled change set.
 ///
 /// # Errors
-/// Returns an error when the provided upgrade identifier is malformed or activation fails.
-pub async fn handle_runtime_activate_upgrade(
-    Path(id): Path<String>,
-) -> Result<ActivateCancelResponse, crate::Error> {
-    let s = id.trim_start_matches("0x");
-    let bytes = hex::decode(s).map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion("invalid id".into()),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid id length".into(),
-                ),
-            ),
-        ));
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let isi = iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade {
-        id: iroha_data_model::runtime::RuntimeUpgradeId(arr),
-    };
-    let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
-    Ok(ActivateCancelResponse {
-        ok: true,
-        tx_instructions,
-    })
-}
-/// POST /v1/runtime/upgrades/cancel/{id}
-///
-/// # Errors
-/// Returns an error when the identifier cannot be decoded or cancellation fails.
+/// Returns an error when the identifier is not 32 bytes of hex.
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
 pub async fn handle_runtime_cancel_upgrade(
     Path(id): Path<String>,
-) -> Result<ActivateCancelResponse, crate::Error> {
-    let s = id.trim_start_matches("0x");
-    let bytes = hex::decode(s).map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion("invalid id".into()),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid id length".into(),
-                ),
-            ),
-        ));
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let isi = iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade {
-        id: iroha_data_model::runtime::RuntimeUpgradeId(arr),
-    };
-    let boxed: iroha_data_model::isi::InstructionBox = isi.into();
-    let tx_instructions = vec![instruction_box_to_tx_instr(&(boxed))];
-    Ok(ActivateCancelResponse {
-        ok: true,
-        tx_instructions,
-    })
+) -> Result<ProposeUpgradeResponse, crate::Error> {
+    let bytes = hex::decode(id.trim_start_matches("0x"))
+        .map_err(|_| runtime_conversion_error("invalid id".into()))?;
+    let id: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| runtime_conversion_error("invalid id length".into()))?;
+    Ok(runtime_proposal_draft(
+        iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(
+            iroha_data_model::runtime::lifecycle::ChangeSetId(id),
+        ),
+    ))
 }
 #[cfg(test)]
 mod tests {
@@ -1583,20 +1618,26 @@ mod tests {
 
     #[test]
     fn runtime_upgrade_instruction_drafts_use_canonical_wire_ids_and_frames() {
-        let boxed: iroha_data_model::isi::InstructionBox =
-            iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade {
-                id: iroha_data_model::runtime::RuntimeUpgradeId([0xA5; 32]),
-            }
-            .into();
-        let draft = instruction_box_to_tx_instr(&(boxed));
+        let response = runtime_proposal_draft(
+            iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(
+                iroha_data_model::runtime::lifecycle::ChangeSetId([0xA5; 32]),
+            ),
+        );
+        let [draft] = response.tx_instructions.as_slice() else {
+            panic!("one drafted instruction");
+        };
 
-        assert_eq!(draft.wire_id, "iroha.runtime_upgrade.cancel");
+        assert_eq!(
+            draft.wire_id,
+            "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+        );
         let framed = hex::decode(&draft.payload_hex).expect("decode framed instruction hex");
         let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &framed)
             .expect("decode canonical runtime-upgrade instruction pair");
         assert_eq!(
             iroha_data_model::isi::Instruction::id(&*decoded),
-            std::any::type_name::<iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade>()
+            std::any::type_name::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(
+            )
         );
     }
 
@@ -2290,6 +2331,49 @@ mod tests {
             other => panic!("unexpected rowset variant: {other:?}"),
         }
     }
+    #[test]
+    fn the_propose_body_is_the_bare_change_set_object() {
+        use iroha_data_model::runtime::{
+            definition::SelectionId,
+            lifecycle::{ChangeSetV1, RootScopeV1},
+        };
+        let change_set = ChangeSetV1 {
+            network: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                    [0x11; 32],
+                )),
+            ),
+            root: RootScopeV1::Universal,
+            predecessor: SelectionId([0x01; 32]),
+            successor: SelectionId([0x02; 32]),
+            effective_height: 9,
+            publish: Vec::new(),
+            transitions: Vec::new(),
+            qualification: [0x03; 32],
+        };
+        let json = norito::json::to_json(&change_set).expect("change-set JSON");
+        assert!(
+            json.starts_with('{'),
+            "clients send the object itself: {json}"
+        );
+        assert_eq!(
+            norito::json::from_str::<ChangeSetV1>(&json).expect("bare object decodes"),
+            change_set
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_containments_start_empty() {
+        let state = State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let response = handle_runtime_containments_list(std::sync::Arc::new(state))
+            .await
+            .expect("list");
+        assert!(response.items.is_empty());
+    }
     #[tokio::test]
     async fn runtime_metrics_defaults() {
         let kura = Kura::blank_kura_for_testing();
@@ -2300,8 +2384,9 @@ mod tests {
             .await
             .expect("ok");
         assert_eq!(resp.abi_version, 1);
-        assert_eq!(resp.upgrade_events_total.proposed, 0);
+        assert_eq!(resp.upgrade_events_total.scheduled, 0);
         assert_eq!(resp.upgrade_events_total.activated, 0);
+        assert_eq!(resp.upgrade_events_total.lapsed, 0);
         assert_eq!(resp.upgrade_events_total.canceled, 0);
     }
 }

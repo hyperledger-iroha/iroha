@@ -4175,28 +4175,48 @@ export interface ToriiGovernanceManifestProvenance {
   signature: string;
 }
 
-export interface ToriiGovernanceRuntimeUpgradeSbomDigest {
-  algorithm: string;
-  digest: string;
+/** Execution root of a runtime change set; this release implements the universal root only. */
+export type ToriiRuntimeRootScope = Readonly<{ kind: "Universal"; content: null }>;
+
+/**
+ * Canonical `ChangeSetV1` JSON object: a governed change from one selection of the universal
+ * root to the next (`specs/live_runtime_upgrades.md` §6). Identities and the qualification
+ * digest are 32-byte lowercase hex; `network` is the exact NetworkId literal. Published
+ * definitions and transitions keep their `{kind, content}` envelopes with opaque content.
+ */
+export interface ToriiRuntimeChangeSet {
+  network: string;
+  root: ToriiRuntimeRootScope;
+  /** Selection the change starts from. */
+  predecessor: string;
+  /** Exact selection the change produces. */
+  successor: string;
+  /** First height executed under the successor; at most `Number.MAX_SAFE_INTEGER`. */
+  effective_height: number;
+  publish: ReadonlyArray<Readonly<{ kind: string; content: unknown }>>;
+  transitions: ReadonlyArray<Readonly<{ kind: string; content: unknown }>>;
+  qualification: string;
 }
 
-export interface ToriiGovernanceRuntimeUpgradeManifest {
-  name: string;
-  description: string;
-  abi_version: 1;
-  abi_hash: ReadonlyArray<number>;
-  added_syscalls: readonly [];
-  added_pointer_types: readonly [];
-  start_height: number;
-  end_height: number;
-  sbom_digests: ReadonlyArray<ToriiGovernanceRuntimeUpgradeSbomDigest>;
-  slsa_attestation: string;
-  provenance: ReadonlyArray<ToriiGovernanceManifestProvenance>;
+/** Minimum notice of a runtime change: blocks and committed milliseconds. */
+export interface ToriiGovernanceRuntimeUpgradeNotice {
+  blocks: number;
+  ms: number;
+  approval_cushion_ms: number;
 }
+
+/** Schedule a change set, or withdraw a scheduled one by its 32-byte lowercase hex id. */
+export type ToriiGovernanceRuntimeUpgradeAction =
+  | Readonly<{ kind: "Schedule"; content: ToriiRuntimeChangeSet }>
+  | Readonly<{ kind: "Cancel"; content: string }>;
 
 export interface ToriiGovernanceRuntimeUpgradeProposal {
   proposal_operator: string;
-  manifest: ToriiGovernanceRuntimeUpgradeManifest;
+  action: ToriiGovernanceRuntimeUpgradeAction;
+  /** Notice the committed policy required when the proposal was admitted, frozen for it. */
+  notice: ToriiGovernanceRuntimeUpgradeNotice;
+  /** Committed time of the block that admitted the proposal. */
+  proposed_ms: number;
 }
 
 export interface ToriiGovernanceSccpRouteProposal {
@@ -5410,9 +5430,12 @@ export interface ToriiRuntimeMetrics {
   upgradeEventsTotal: ToriiRuntimeMetricsCounters;
 }
 
+/** Recorded runtime change sets counted by lifecycle status. */
 export interface ToriiRuntimeMetricsCounters {
-  proposed: number;
+  scheduled: number;
   activated: number;
+  lapsed: number;
+  /** Change sets whose status is `Cancelled`. */
   canceled: number;
 }
 
@@ -5427,53 +5450,71 @@ export interface ToriiConfigurationTransportNoritoRpc {
   canaryAllowlistSize: number;
 }
 
-export interface ToriiRuntimeUpgradeManifestInput {
-  name: string;
-  description: string;
-  abiVersion: number | string | bigint;
-  abiHash: string | BinaryLike;
-  startHeight: number | string | bigint;
-  endHeight: number | string | bigint;
-  addedSyscalls?: ReadonlyArray<number | string | bigint>;
-  addedPointerTypes?: ReadonlyArray<number | string | bigint>;
-}
-
+/** The SORA Parliament proposal instruction Torii drafts for local signing. */
 export interface ToriiRuntimeUpgradeInstruction {
-  wire_id: string;
-  payload_hex?: string | null;
+  wire_id: "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+  /** Canonical framed instruction bytes, lowercase hex. */
+  payload_hex: string;
 }
 
+/** Draft returned by `proposeRuntimeUpgrade` and `cancelRuntimeUpgrade`. */
 export interface ToriiRuntimeUpgradeTxResponse {
-  ok: boolean;
-  tx_instructions: ReadonlyArray<ToriiRuntimeUpgradeInstruction>;
+  ok: true;
+  tx_instructions: readonly [ToriiRuntimeUpgradeInstruction];
 }
 
-export interface ToriiRuntimeUpgradeManifest {
-  name: string;
-  description: string;
-  abiVersion: number;
-  abiHashHex: string;
-  addedSyscalls: ReadonlyArray<number>;
-  addedPointerTypes: ReadonlyArray<number>;
-  startHeight: number;
-  endHeight: number;
+/**
+ * Where a change set stands. `Scheduled` waits for its effective height; `Activated`, `Lapsed`
+ * (the effective height passed without complete, current support or notice) and `Cancelled`
+ * (withdrawn by governance) record the height at which that happened.
+ */
+export type ToriiRuntimeChangeSetStatus =
+  | Readonly<{ kind: "Scheduled" }>
+  | Readonly<{ kind: "Activated"; height: number }>
+  | Readonly<{ kind: "Lapsed"; height: number }>
+  | Readonly<{ kind: "Cancelled"; height: number }>;
+
+/** Notice policy frozen for a change set when its proposal was admitted. */
+export interface ToriiRuntimeNotice {
+  blocks: number;
+  ms: number;
+  approvalCushionMs: number;
 }
 
-export type ToriiRuntimeUpgradeStatus =
-  | { kind: "Proposed" }
-  | { kind: "Canceled" }
-  | { kind: "ActivatedAt"; activatedHeight: number };
-
-export interface ToriiRuntimeUpgradeRecord {
-  manifest: ToriiRuntimeUpgradeManifest;
-  status: ToriiRuntimeUpgradeStatus;
-  proposer: string;
-  createdHeight: number;
-}
-
-export interface ToriiRuntimeUpgradeListItem {
+/** One recorded change set with the fields callers act on typed. */
+export interface ToriiRuntimeChangeSetListItem {
+  /** Change-set identity, 32-byte lowercase hex. */
   idHex: string;
-  record: ToriiRuntimeUpgradeRecord;
+  effectiveHeight: number;
+  /** Selection the change set starts from, 32-byte lowercase hex. */
+  predecessorHex: string;
+  /** Selection the change set produces, 32-byte lowercase hex. */
+  successorHex: string;
+  status: ToriiRuntimeChangeSetStatus;
+  notice: ToriiRuntimeNotice;
+  /**
+   * The complete `ChangeSetRecordV1` JSON object (`change_set`, `status`, `proposed_ms`,
+   * `approved_height`, `approved_ms`, `notice`, `attestations`); integers above
+   * `Number.MAX_SAFE_INTEGER` are bigint.
+   */
+  record: Readonly<Record<string, unknown>>;
+}
+
+/** `GET /v1/runtime/upgrades`: the committed selection, its attesting committee and change sets. */
+export interface ToriiRuntimeUpgradesSnapshot {
+  /**
+   * Identity of the committed selection. A new change set names the selection it will meet:
+   * this one, advanced by every change set scheduled to take effect before it.
+   */
+  selectionIdHex: string;
+  /** The committed `RootSelectionV1` JSON object; integers above the safe range are bigint. */
+  selection: Readonly<Record<string, unknown>>;
+  /** Public keys (multihash) of the validators that attest a change set before it activates. */
+  committee: ReadonlyArray<string>;
+  /** Committee digest an attestation binds, 32-byte lowercase hex. */
+  committeeDigestHex: string;
+  /** Recorded change sets by effective height, then identity. */
+  items: ReadonlyArray<ToriiRuntimeChangeSetListItem>;
 }
 
 export interface ToriiPipelineDagSnapshot {
@@ -10884,17 +10925,16 @@ export declare class ToriiClient {
     signal?: AbortSignal;
   }): Promise<ToriiRuntimeAbiHashResponse>;
   getRuntimeMetrics(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeMetrics>;
+  /** Operator-signed read of the committed selection, committee and recorded change sets. */
   listRuntimeUpgrades(options?: {
     signal?: AbortSignal;
-  }): Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>;
+  }): Promise<ToriiRuntimeUpgradesSnapshot>;
+  /** Operator-signed draft of the Parliament proposal that schedules `changeSet`. */
   proposeRuntimeUpgrade(
-    manifest: ToriiRuntimeUpgradeManifestInput,
+    changeSet: ToriiRuntimeChangeSet,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
-  activateRuntimeUpgrade(
-    idHex: string | BinaryLike,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiRuntimeUpgradeTxResponse>;
+  /** Operator-signed draft of the Parliament proposal that withdraws a scheduled change set. */
   cancelRuntimeUpgrade(
     idHex: string | BinaryLike,
     options?: { signal?: AbortSignal },

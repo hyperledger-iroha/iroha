@@ -509,7 +509,7 @@ operator.governance.protected_namespaces.update	POST	/v1/gov/protected-namespace
 operator.internal_torii_proxy	POST	/v1/internal/torii/proxy	operator	identity_bound_signature	operator	mutation	http	feature(connect)	false	false	false	false
 operator.node.query_projection.shard_catalog	GET	/v1/node/query/projection/catalog/{resource}	operator	operator_signature	operator	read	http	feature(app_api)	false	true	false	true
 operator.node.query_projection.shard_export	GET	/v1/node/query/projection/shards/{resource}/{partition_id}	operator	operator_signature	operator	read	http	feature(app_api)	false	true	false	true
-operator.runtime.upgrade.activate	POST	/v1/runtime/upgrades/activate/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
+operator.runtime.containment.list	GET	/v1/runtime/containments	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.upgrade.cancel	POST	/v1/runtime/upgrades/cancel/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.upgrade.list	GET	/v1/runtime/upgrades	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.upgrade.propose	POST	/v1/runtime/upgrades/propose	operator	operator_signature	operator	mutation	http	always	false	true	false	true

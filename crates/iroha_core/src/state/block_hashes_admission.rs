@@ -103,6 +103,15 @@ pub enum StateStorageAdmissionError {
     /// The original execution-root metadata decoder refused before instruction authority existed.
     #[error("local execution-root decoder resource refusal: {0}")]
     RootScopeDecode(#[source] norito::core::DecodeLocalRefusal),
+    /// This release cannot execute the root's selection at `height`; the node stops until a
+    /// release that supports it replaces this one (`specs/live_runtime_upgrades.md` §6).
+    #[error("this release cannot execute the runtime selection at height {height}: {reason}")]
+    UnsupportedRuntime {
+        /// First height the selection applies to.
+        height: u64,
+        /// What the release lacks.
+        reason: String,
+    },
 }
 
 impl StateStorageAdmissionError {
@@ -120,7 +129,8 @@ impl StateStorageAdmissionError {
             Self::SccpForgery(_)
             | Self::NativeAmx(_)
             | Self::AmxDecode(_)
-            | Self::RootScopeDecode(_) => None,
+            | Self::RootScopeDecode(_)
+            | Self::UnsupportedRuntime { .. } => None,
         }
     }
 }

@@ -476,9 +476,14 @@ capture_world_table_once!(
     "world.poseidon_params"
 );
 capture_world_table_once!(
-    capture_runtime_upgrades_once,
-    runtime_upgrades,
-    "world.runtime_upgrades"
+    capture_runtime_change_sets_once,
+    runtime_change_sets,
+    "world.runtime_change_sets"
+);
+capture_world_table_once!(
+    capture_runtime_containments_once,
+    runtime_containments,
+    "world.runtime_containments"
 );
 capture_world_table_once!(
     capture_runtime_definitions_once,
@@ -893,7 +898,8 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_domain_endorsements_by_domain_once::MATERIALIZER,
     capture_pedersen_params_once::MATERIALIZER,
     capture_poseidon_params_once::MATERIALIZER,
-    capture_runtime_upgrades_once::MATERIALIZER,
+    capture_runtime_change_sets_once::MATERIALIZER,
+    capture_runtime_containments_once::MATERIALIZER,
     capture_runtime_definitions_once::MATERIALIZER,
     capture_privacy_protocol_policies_once::MATERIALIZER,
     capture_kagemusha_wallet_ledger_once::MATERIALIZER,
@@ -1327,7 +1333,8 @@ mod tests {
             "world.domain_endorsements_by_domain",
             "world.pedersen_params",
             "world.poseidon_params",
-            "world.runtime_upgrades",
+            "world.runtime_change_sets",
+            "world.runtime_containments",
             "world.runtime_definitions",
             "world.privacy_protocol_policies",
             "world.kagemusha_wallet_ledger",

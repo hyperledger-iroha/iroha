@@ -70,6 +70,8 @@ pub enum RootScopeV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -109,6 +111,8 @@ impl RestrictionKindV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -167,11 +171,17 @@ pub enum SelectionTransitionV1 {
     Decode,
     iroha_schema::IntoSchema,
     norito::NoritoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::lifecycle::ChangeSetId")]
 pub struct ChangeSetId(pub [u8; 32]);
+
+crate::runtime::definition::hex_identity_json!(ChangeSetId);
+
+impl core::fmt::Display for ChangeSetId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&hex::encode(self.0))
+    }
+}
 
 /// A governed change from one selection of an execution root to the next.
 #[derive(
@@ -179,6 +189,8 @@ pub struct ChangeSetId(pub [u8; 32]);
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -454,6 +466,8 @@ impl ChangeSetV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -497,6 +511,8 @@ pub struct SupportAttestationV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -580,12 +596,17 @@ impl SignedSupportAttestationV1 {
     }
 }
 
-/// Identity of an ordered committee: `H(COMMITTEE_DOMAIN ‖ canonical member keys)`.
+/// Identity of a committee as a set of members: `H(COMMITTEE_DOMAIN ‖ canonical member keys in
+/// key order)`. The leader order the consensus derives within one committee does not change it;
+/// any change of membership does, so attestations are given again (§6, "Activate").
 ///
 /// # Errors
 /// The keys cannot be encoded.
 pub fn committee_digest(committee: &[PublicKey]) -> Result<[u8; 32], LifecycleSignatureError> {
-    let bytes = norito::encode_canonical(&committee.to_vec())
+    let mut members = committee.to_vec();
+    members.sort();
+    members.dedup();
+    let bytes = norito::encode_canonical(&members)
         .map_err(|error| LifecycleSignatureError::Encoding(error.to_string()))?;
     Ok(Hash::new_from_chunks(&[COMMITTEE_DOMAIN, &bytes]).into())
 }
@@ -620,6 +641,8 @@ pub fn committee_supports(
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -671,6 +694,8 @@ impl AdoptionRecordV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -699,6 +724,8 @@ pub enum ObligationKindV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -729,6 +756,8 @@ pub struct ObligationRecordV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -751,6 +780,8 @@ pub enum ContainmentKindV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -781,6 +812,8 @@ pub struct ContainmentV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -913,12 +946,106 @@ impl EndorsementV1 {
     }
 }
 
+/// One definition a containment restricted, with what it replaced.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ContainedDefinitionV1")]
+pub struct ContainedDefinitionV1 {
+    /// The contained definition.
+    pub definition: DefinitionId,
+    /// Its restriction before containment, restored when the containment expires while it still
+    /// holds the restriction it imposed.
+    pub previous: Option<RestrictionV1>,
+    /// The restriction the containment imposed.
+    pub imposed: RestrictionV1,
+}
+
+/// Where an authorized containment stands.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ContainmentStatusV1")]
+#[norito(tag = "kind", content = "content")]
+pub enum ContainmentStatusV1 {
+    /// In force until its lease ends.
+    Active,
+    /// A renewal of the same incident took it over at this height.
+    Renewed(u64),
+    /// Its lease ended at this height; restrictions it still held were restored.
+    Expired(u64),
+}
+
+/// An authorized containment and its effect, keyed by containment identity in State.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ContainmentRecordV1")]
+pub struct ContainmentRecordV1 {
+    /// The containment.
+    pub containment: ContainmentV1,
+    /// Height of the block that authorized it; it restricts from the next height.
+    pub authorized_height: u64,
+    /// Committed time of that block.
+    pub authorized_ms: u64,
+    /// The definitions it restricted, sorted by definition.
+    pub contained: Vec<ContainedDefinitionV1>,
+    /// Where it stands.
+    pub status: ContainmentStatusV1,
+}
+
+impl ContainmentRecordV1 {
+    /// Committed time from which a renewal with fresh endorsements may replace it: halfway
+    /// through its lease (§7.1, "Expiry").
+    #[must_use]
+    pub fn renewal_opens_ms(&self) -> u64 {
+        let lease = self
+            .containment
+            .lease_until_ms
+            .saturating_sub(self.authorized_ms);
+        self.authorized_ms.saturating_add(lease / 2)
+    }
+}
+
 /// What a transaction expects behind the wire IDs it uses (§8.1).
 #[derive(
     Clone,
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
@@ -1023,4 +1150,140 @@ pub const fn activatable(kind: DefinitionKind) -> bool {
             | DefinitionKind::CommitmentProfile
             | DefinitionKind::Kernel
     )
+}
+
+/// Where a governed change set stands.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ChangeSetStatusV1")]
+#[norito(tag = "kind", content = "content")]
+pub enum ChangeSetStatusV1 {
+    /// Approved; it applies at its effective height once every validator supports it.
+    Scheduled,
+    /// Applied at this height.
+    Activated(u64),
+    /// Its effective height passed without complete, current support or notice; it never applies.
+    Lapsed(u64),
+    /// Governance withdrew it at this height, before activation.
+    Cancelled(u64),
+}
+
+/// A governed change set and its progress, keyed by [`ChangeSetId`] in State.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ChangeSetRecordV1")]
+pub struct ChangeSetRecordV1 {
+    /// The change set.
+    pub change_set: ChangeSetV1,
+    /// Where it stands.
+    pub status: ChangeSetStatusV1,
+    /// Committed time of the block that admitted its proposal.
+    pub proposed_ms: u64,
+    /// Height of the block in which governance approved it.
+    pub approved_height: u64,
+    /// Committed time of that block.
+    pub approved_ms: u64,
+    /// The notice policy in force when the proposal was admitted (§6, "Notice").
+    pub notice: RuntimeNoticeV1,
+    /// The latest attestation of each validator, sorted by validator key.
+    pub attestations: Vec<SignedSupportAttestationV1>,
+}
+
+/// Minimum notice of one kind of change: blocks and committed time (§6, "Notice").
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::RuntimeNoticeV1")]
+pub struct RuntimeNoticeV1 {
+    /// Fewest blocks between approval and the effective height.
+    pub blocks: u64,
+    /// Fewest committed milliseconds between proposal and activation.
+    pub ms: u64,
+    /// Fewest committed milliseconds between approval and activation.
+    pub approval_cushion_ms: u64,
+}
+
+impl ChangeSetRecordV1 {
+    /// Whether the committed block time `now_ms` satisfies the frozen notice.
+    #[must_use]
+    pub fn notice_elapsed(&self, now_ms: u64) -> bool {
+        now_ms >= self.proposed_ms.saturating_add(self.notice.ms)
+            && now_ms
+                >= self
+                    .approved_ms
+                    .saturating_add(self.notice.approval_cushion_ms)
+    }
+}
+
+/// What a runtime-upgrade proposal asks SORA Parliament to enact (§6).
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1")]
+#[norito(tag = "kind", content = "content")]
+pub enum RuntimeUpgradeActionV1 {
+    /// Schedule a change set at its effective height.
+    Schedule(ChangeSetV1),
+    /// Withdraw a scheduled change set before it takes effect.
+    Cancel(ChangeSetId),
+}
+
+/// A minimal scheduling action for codec fixtures: no publication and no transitions.
+#[cfg(test)]
+pub(crate) fn test_schedule(effective_height: u64) -> RuntimeUpgradeActionV1 {
+    use iroha_crypto::HashOf;
+    RuntimeUpgradeActionV1::Schedule(ChangeSetV1 {
+        network: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0x11; 32],
+        ))),
+        root: RootScopeV1::Universal,
+        predecessor: SelectionId([1; 32]),
+        successor: SelectionId([2; 32]),
+        effective_height,
+        publish: Vec::new(),
+        transitions: Vec::new(),
+        qualification: [3; 32],
+    })
 }

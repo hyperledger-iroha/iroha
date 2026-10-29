@@ -469,9 +469,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::RestituteGovernanceLock => "iroha.instruction.v1::governance::RestituteGovernanceLock"),
     governance_wire_id!(governance::RegisterCitizen => "iroha.instruction.v1::governance::RegisterCitizen"),
     governance_wire_id!(governance::UnregisterCitizen => "iroha.instruction.v1::governance::UnregisterCitizen"),
-    built_in_wire_id!(runtime_upgrade::ProposeRuntimeUpgrade => "iroha.runtime_upgrade.propose"),
-    built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
-    built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),
+    built_in_wire_id!(runtime_upgrade::AttestRuntimeSupportV1 => "iroha.runtime.support.attest.v1"),
+    built_in_wire_id!(runtime_upgrade::ContainRuntimeV1 => "iroha.runtime.contain.v1"),
 ];
 /// Borrow encoding metadata from this same canonical registration inventory.
 pub(super) fn encoding_entry(

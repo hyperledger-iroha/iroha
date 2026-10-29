@@ -915,7 +915,7 @@ fn current_world_schema_and_empty_predecessor_match_the_canonical_inventory() {
     );
     assert_eq!(
         hex::encode_upper(schema.as_ref()),
-        "F22C8EA43685900727E2009B6F7C695693AFAEF37FAA7ADA574C42016ED6B83D"
+        "BEFAAB6ECA40248A3533BE72147CFF9CA9893B721998610A20BBE77860C2367D"
     );
     assert_eq!(
         hex::encode_upper(
@@ -924,7 +924,7 @@ fn current_world_schema_and_empty_predecessor_match_the_canonical_inventory() {
                 .unwrap()
                 .as_ref()
         ),
-        "A7A7B1BBD45B4EAC2377A1642866DD2E54E91881D46DA9AEA17D51CC3AE581FB"
+        "487F15449ABB0C28510EDE9FD6767A3A72725CAC00240CDAEA0FAE9BE2F7FA2F"
     );
 }
 
@@ -1149,7 +1149,10 @@ fn predecessor_root_restores_the_retired_registry_and_cell() {
     assert_eq!(
         fingerprint,
         norito_identity_fingerprint(
-            crate::state::upgrade_checkpoint::RETIRED_WORLD_FIELDS[0].value
+            crate::state::upgrade_checkpoint::added_world_field("privacy_protocol_policies")
+                .unwrap()
+                .retired[0]
+                .value
         )
         .unwrap()
     );
@@ -1159,4 +1162,6 @@ fn predecessor_root_restores_the_retired_registry_and_cell() {
             .contains_key("world.privacy_protocol_policies")
     );
     assert!(!index.fingerprints.contains_key("world.privacy_activations"));
+    assert!(index.fingerprints.contains_key("world.runtime_change_sets"));
+    assert!(!index.fingerprints.contains_key("world.runtime_upgrades"));
 }

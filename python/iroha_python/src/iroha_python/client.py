@@ -17,6 +17,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from decimal import Decimal
 from enum import Enum
+from itertools import pairwise
 from pathlib import Path
 from types import MappingProxyType, ModuleType
 from typing import (
@@ -41,6 +42,7 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
 from blake3 import blake3
+from iroha_torii_client._public_key_multihash import decode_canonical_public_key_multihash
 from iroha_torii_client._strict_json_response import (
     decode_exact_json_bytes,
     expect_status_without_body,
@@ -159,7 +161,10 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalSorafsProviderGovernance,
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalValidationFeePolicy,
-    GovernanceRuntimeUpgradeManifest,
+    GovernanceRuntimeChangeSet,
+    GovernanceRuntimeNotice,
+    GovernanceRuntimeUpgradeAction,
+    GovernanceRuntimeUpgradeActionKind,
     GovernanceSorafsProviderAction,
     GovernanceSorafsProviderActionKind,
     GovernanceValidationFeeChargingMode,
@@ -9684,44 +9689,50 @@ class SumeragiEvidenceCount:
 
 @dataclass(frozen=True)
 class RuntimeUpgradeCounters:
-    """Lifecycle counters returned by `/v1/runtime/metrics`."""
+    """Recorded runtime change sets by lifecycle status (`/v1/runtime/metrics`)."""
 
-    proposed: int
+    scheduled: int
     activated: int
+    lapsed: int
     canceled: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradeCounters":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime upgrade counters payload must be an object")
-        try:
-            proposed = int(payload.get("proposed", 0))
-            activated = int(payload.get("activated", 0))
-            canceled = int(payload.get("canceled", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("runtime upgrade counter values must be numeric") from exc
-        return cls(proposed=proposed, activated=activated, canceled=canceled)
+        context = "runtime upgrade counters"
+        record = _require_mapping(payload, context)
+        _require_wire_fields(
+            record,
+            required=("scheduled", "activated", "lapsed", "canceled"),
+            context=context,
+        )
+        return cls(
+            scheduled=_require_u64(record["scheduled"], f"{context}.scheduled"),
+            activated=_require_u64(record["activated"], f"{context}.activated"),
+            lapsed=_require_u64(record["lapsed"], f"{context}.lapsed"),
+            canceled=_require_u64(record["canceled"], f"{context}.canceled"),
+        )
 
 
 @dataclass(frozen=True)
 class RuntimeMetrics:
-    """Summary metrics for runtime upgrades."""
+    """ABI version and runtime change-set counters (`/v1/runtime/metrics`)."""
 
     abi_version: int
     upgrade_events_total: RuntimeUpgradeCounters
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeMetrics":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime metrics payload must be an object")
-        try:
-            abi_version = int(payload["abi_version"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("runtime metrics `abi_version` must be numeric") from exc
-        counters_payload = payload.get("upgrade_events_total", {})
-        counters = RuntimeUpgradeCounters.from_payload(
-            counters_payload if isinstance(counters_payload, Mapping) else {}
+        context = "runtime metrics"
+        record = _require_mapping(payload, context)
+        _require_wire_fields(
+            record,
+            required=("abi_version", "upgrade_events_total"),
+            context=context,
         )
+        abi_version = _require_u64(record["abi_version"], f"{context}.abi_version")
+        if not 1 <= abi_version <= 0xFFFF:
+            raise ValueError(f"{context}.abi_version must be a non-zero u16")
+        counters = RuntimeUpgradeCounters.from_payload(record["upgrade_events_total"])
         return cls(abi_version=abi_version, upgrade_events_total=counters)
 
 
@@ -9762,240 +9773,210 @@ class RuntimeAbiHash:
         return cls(policy=policy, abi_hash_hex=abi_hash_hex)
 
 
+def _require_runtime_hex32(value: Any, context: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{context} must be exactly 64 lowercase hexadecimal characters")
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError(f"{context} must be exactly 64 lowercase hexadecimal characters")
+    return value
+
+
+# `Scheduled` carries no content; every other status carries the height of its transition.
+_RUNTIME_CHANGE_SET_HEIGHT_STATUSES = ("Activated", "Lapsed", "Cancelled")
+
+
 @dataclass(frozen=True)
-class RuntimeUpgradeStatus:
-    """Lifecycle status for a runtime upgrade record."""
+class RuntimeChangeSetStatus:
+    """Lifecycle status of a recorded runtime change set.
+
+    ``kind`` is ``Scheduled``, ``Activated``, ``Lapsed`` or ``Cancelled``.
+    ``height`` is the block height at which the change set activated, lapsed
+    or was cancelled, and ``None`` while it is scheduled.
+    """
 
     kind: str
-    activated_height: Optional[int] = None
+    height: Optional[int] = None
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradeStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime upgrade status payload must be an object")
-        if len(payload) != 1:
-            raise TypeError("runtime upgrade status payload must contain exactly one variant")
-        variant, value = next(iter(payload.items()))
-        if variant == "Proposed":
-            return cls(kind="Proposed")
-        if variant == "Canceled":
-            return cls(kind="Canceled")
-        if variant == "ActivatedAt":
-            if value is None:
-                raise TypeError("runtime upgrade status `ActivatedAt` requires a height value")
-            try:
-                height = int(value)
-            except (TypeError, ValueError) as exc:
-                raise TypeError(
-                    "runtime upgrade status `ActivatedAt` height must be numeric"
-                ) from exc
-            if height < 0:
-                raise ValueError("runtime upgrade status `ActivatedAt` height must be non-negative")
-            return cls(kind="ActivatedAt", activated_height=height)
-        raise TypeError(f"unknown runtime upgrade status variant `{variant}`")
-
-
-def _coerce_int_list(values: Any, label: str) -> List[int]:
-    if values is None:
-        return []
-    if not isinstance(values, list):
-        raise TypeError(f"{label} must be a list")
-    result: List[int] = []
-    for entry in values:
-        try:
-            number = int(entry)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(f"{label} entries must be integers") from exc
-        if number < 0:
-            raise ValueError(f"{label} entries must be non-negative")
-        result.append(number)
-    return result
-
-
-def _validate_runtime_upgrade_manifest_fields(
-    *,
-    abi_version: int,
-    added_syscalls: List[int],
-    added_pointer_types: List[int],
-    start_height: int,
-    end_height: int,
-) -> None:
-    if abi_version != 1:
-        raise ValueError("runtime upgrade manifest `abi_version` must be 1 in the first release")
-    if added_syscalls:
-        raise ValueError(
-            "runtime upgrade manifest `added_syscalls` must be empty in the first release"
-        )
-    if added_pointer_types:
-        raise ValueError(
-            "runtime upgrade manifest `added_pointer_types` must be empty in the first release"
-        )
-    if end_height <= start_height:
-        raise ValueError(
-            "runtime upgrade manifest `end_height` must be greater than `start_height`"
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeChangeSetStatus":
+        context = "runtime change set status"
+        record = _require_mapping(payload, context)
+        kind = record.get("kind")
+        if kind == "Scheduled":
+            _require_wire_fields(
+                record, required=("kind",), optional=("content",), context=context
+            )
+            if record.get("content") is not None:
+                raise ValueError(f"{context} `Scheduled` must not carry content")
+            return cls(kind="Scheduled")
+        if kind in _RUNTIME_CHANGE_SET_HEIGHT_STATUSES:
+            _require_wire_fields(record, required=("kind", "content"), context=context)
+            return cls(kind=kind, height=_require_u64(record["content"], f"{context}.content"))
+        raise TypeError(
+            f"{context}.kind must be one of: Scheduled, "
+            + ", ".join(_RUNTIME_CHANGE_SET_HEIGHT_STATUSES)
         )
 
 
 @dataclass(frozen=True)
-class RuntimeUpgradeManifest:
-    """Runtime upgrade manifest advertised by `/v1/runtime/upgrades`."""
+class RuntimeNotice:
+    """Notice frozen for a runtime change set when its proposal was admitted.
 
-    name: str
-    description: str
-    abi_version: int
-    abi_hash_hex: str
-    added_syscalls: List[int]
-    added_pointer_types: List[int]
-    start_height: int
-    end_height: int
+    ``blocks`` is the fewest blocks between approval and the effective height;
+    ``ms`` and ``approval_cushion_ms`` are the fewest committed milliseconds
+    from proposal and from approval to activation.
+    """
 
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradeManifest":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime upgrade manifest payload must be an object")
-        name = payload.get("name")
-        description = payload.get("description")
-        if not isinstance(name, str) or not isinstance(description, str):
-            raise TypeError("runtime upgrade manifest requires string `name` and `description`")
-        abi_hash_hex = payload.get("abi_hash")
-        if not isinstance(abi_hash_hex, str):
-            raise TypeError("runtime upgrade manifest missing string `abi_hash` field")
-        abi_version_raw = payload.get("abi_version")
-        start_height_raw = payload.get("start_height")
-        end_height_raw = payload.get("end_height")
-        if abi_version_raw is None or start_height_raw is None or end_height_raw is None:
-            raise TypeError("runtime upgrade manifest missing numeric fields")
-        try:
-            abi_version = int(abi_version_raw)
-            start_height = int(start_height_raw)
-            end_height = int(end_height_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("runtime upgrade manifest numeric fields must be integers") from exc
-        added_syscalls = _coerce_int_list(
-            payload.get("added_syscalls", []), "runtime upgrade manifest `added_syscalls`"
-        )
-        added_pointer_types = _coerce_int_list(
-            payload.get("added_pointer_types", []), "runtime upgrade manifest `added_pointer_types`"
-        )
-        _validate_runtime_upgrade_manifest_fields(
-            abi_version=abi_version,
-            added_syscalls=added_syscalls,
-            added_pointer_types=added_pointer_types,
-            start_height=start_height,
-            end_height=end_height,
-        )
-        return cls(
-            name=name,
-            description=description,
-            abi_version=abi_version,
-            abi_hash_hex=abi_hash_hex,
-            added_syscalls=added_syscalls,
-            added_pointer_types=added_pointer_types,
-            start_height=start_height,
-            end_height=end_height,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        """Return a JSON-serialisable payload suitable for Torii POST requests."""
-
-        _validate_runtime_upgrade_manifest_fields(
-            abi_version=self.abi_version,
-            added_syscalls=self.added_syscalls,
-            added_pointer_types=self.added_pointer_types,
-            start_height=self.start_height,
-            end_height=self.end_height,
-        )
-        return {
-            "name": self.name,
-            "description": self.description,
-            "abi_version": self.abi_version,
-            "abi_hash": self.abi_hash_hex,
-            "added_syscalls": list(self.added_syscalls),
-            "added_pointer_types": list(self.added_pointer_types),
-            "start_height": self.start_height,
-            "end_height": self.end_height,
-        }
-
-
-@dataclass(frozen=True)
-class RuntimeUpgradeRecord:
-    """Individual runtime upgrade record maintained by the node."""
-
-    manifest: RuntimeUpgradeManifest
-    status: RuntimeUpgradeStatus
-    proposer: str
-    created_height: int
+    blocks: int
+    ms: int
+    approval_cushion_ms: int
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradeRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime upgrade record payload must be an object")
-        manifest_payload = payload.get("manifest")
-        status_payload = payload.get("status")
-        if not isinstance(manifest_payload, Mapping):
-            raise TypeError("runtime upgrade record missing object `manifest` field")
-        if not isinstance(status_payload, Mapping):
-            raise TypeError("runtime upgrade record missing object `status` field")
-        proposer = payload.get("proposer")
-        if not isinstance(proposer, str):
-            raise TypeError("runtime upgrade record missing string `proposer` field")
-        created_height_raw = payload.get("created_height")
-        if created_height_raw is None:
-            raise TypeError("runtime upgrade record missing numeric `created_height` field")
-        try:
-            created_height = int(created_height_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("runtime upgrade record `created_height` must be numeric") from exc
-        manifest = RuntimeUpgradeManifest.from_payload(manifest_payload)
-        status = RuntimeUpgradeStatus.from_payload(status_payload)
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeNotice":
+        context = "runtime change set notice"
+        record = _require_mapping(payload, context)
+        _require_wire_fields(
+            record, required=("blocks", "ms", "approval_cushion_ms"), context=context
+        )
         return cls(
-            manifest=manifest, status=status, proposer=proposer, created_height=created_height
+            blocks=_require_u64(record["blocks"], f"{context}.blocks"),
+            ms=_require_u64(record["ms"], f"{context}.ms"),
+            approval_cushion_ms=_require_u64(
+                record["approval_cushion_ms"], f"{context}.approval_cushion_ms"
+            ),
         )
 
 
 @dataclass(frozen=True)
 class RuntimeUpgradeListItem:
-    """Entry returned from `/v1/runtime/upgrades`."""
+    """One recorded change set returned by `/v1/runtime/upgrades`.
+
+    The typed fields are the ones a client acts on. ``record`` keeps the
+    complete ``ChangeSetRecordV1`` object as Torii returned it: the change set
+    with its published definitions and transitions, the approval times and the
+    validator attestations.
+    """
 
     id_hex: str
-    record: RuntimeUpgradeRecord
+    effective_height: int
+    predecessor_hex: str
+    successor_hex: str
+    status: RuntimeChangeSetStatus
+    notice: RuntimeNotice
+    record: Dict[str, Any]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradeListItem":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime upgrade list entry must be an object")
-        id_hex = payload.get("id_hex")
-        if not isinstance(id_hex, str):
-            raise TypeError("runtime upgrade list entry missing string `id_hex` field")
-        record_payload = payload.get("record")
-        if not isinstance(record_payload, Mapping):
-            raise TypeError("runtime upgrade list entry missing object `record` field")
-        record = RuntimeUpgradeRecord.from_payload(record_payload)
-        return cls(id_hex=id_hex, record=record)
+        context = "runtime upgrade list entry"
+        item = _require_mapping(payload, context)
+        _require_wire_fields(item, required=("id_hex", "record"), context=context)
+        id_hex = _require_runtime_hex32(item["id_hex"], f"{context}.id_hex")
+        record_context = f"{context}.record"
+        record = _require_mapping(item["record"], record_context)
+        _require_wire_fields(
+            record,
+            required=(
+                "change_set",
+                "status",
+                "proposed_ms",
+                "approved_height",
+                "approved_ms",
+                "notice",
+                "attestations",
+            ),
+            context=record_context,
+        )
+        change_set_context = f"{record_context}.change_set"
+        change_set = _require_mapping(record["change_set"], change_set_context)
+        for name in ("proposed_ms", "approved_height", "approved_ms"):
+            _require_u64(record[name], f"{record_context}.{name}")
+        attestations = record["attestations"]
+        if not isinstance(attestations, list) or not all(
+            isinstance(attestation, Mapping) for attestation in attestations
+        ):
+            raise TypeError(f"{record_context}.attestations must be a list of objects")
+        return cls(
+            id_hex=id_hex,
+            effective_height=_require_u64(
+                change_set.get("effective_height"), f"{change_set_context}.effective_height"
+            ),
+            predecessor_hex=_require_runtime_hex32(
+                change_set.get("predecessor"), f"{change_set_context}.predecessor"
+            ),
+            successor_hex=_require_runtime_hex32(
+                change_set.get("successor"), f"{change_set_context}.successor"
+            ),
+            status=RuntimeChangeSetStatus.from_payload(record["status"]),
+            notice=RuntimeNotice.from_payload(record["notice"]),
+            record=dict(record),
+        )
 
 
 @dataclass(frozen=True)
-class RuntimeUpgradeListPage:
-    """Paginated runtime upgrade listing."""
+class RuntimeUpgradesSnapshot:
+    """Committed runtime selection and recorded change sets (`/v1/runtime/upgrades`).
 
+    ``selection_id_hex`` is the identity a new change set names as its
+    predecessor and ``selection`` the committed ``RootSelectionV1`` object.
+    ``committee`` lists the validator public keys that attest a change set
+    before it activates, and ``committee_digest_hex`` is the digest each
+    attestation binds. ``items`` are ordered by effective height, then identity.
+    """
+
+    selection_id_hex: str
+    selection: Dict[str, Any]
+    committee: List[str]
+    committee_digest_hex: str
     items: List[RuntimeUpgradeListItem]
-    total: int
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradeListPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("runtime upgrades response must be an object")
-        items_raw = payload.get("items", [])
-        if items_raw is None:
-            items_raw = []
-        if not isinstance(items_raw, list):
-            raise TypeError("runtime upgrades response `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_raw)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("runtime upgrades response `total` must be numeric") from exc
-        items = [RuntimeUpgradeListItem.from_payload(entry) for entry in items_raw]
-        return cls(items=items, total=total)
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeUpgradesSnapshot":
+        context = "runtime upgrades response"
+        record = _require_mapping(payload, context)
+        _require_wire_fields(
+            record,
+            required=(
+                "selection_id_hex",
+                "selection",
+                "committee",
+                "committee_digest_hex",
+                "items",
+            ),
+            context=context,
+        )
+        selection_id_hex = _require_runtime_hex32(
+            record["selection_id_hex"], f"{context}.selection_id_hex"
+        )
+        selection = _require_mapping(record["selection"], f"{context}.selection")
+        committee_payload = record["committee"]
+        if not isinstance(committee_payload, list):
+            raise TypeError(f"{context}.committee must be a list")
+        committee = [
+            decode_canonical_public_key_multihash(key, f"{context}.committee[{index}]")[0]
+            for index, key in enumerate(committee_payload)
+        ]
+        committee_digest_hex = _require_runtime_hex32(
+            record["committee_digest_hex"], f"{context}.committee_digest_hex"
+        )
+        items_payload = record["items"]
+        if not isinstance(items_payload, list):
+            raise TypeError(f"{context}.items must be a list")
+        items = [RuntimeUpgradeListItem.from_payload(entry) for entry in items_payload]
+        for previous, current in pairwise(items):
+            if (previous.effective_height, previous.id_hex) >= (
+                current.effective_height,
+                current.id_hex,
+            ):
+                raise ValueError(
+                    f"{context}.items must be unique and ordered by effective height, then id"
+                )
+        return cls(
+            selection_id_hex=selection_id_hex,
+            selection=dict(selection),
+            committee=committee,
+            committee_digest_hex=committee_digest_hex,
+            items=items,
+        )
 
 
 @dataclass(frozen=True)
@@ -10020,7 +10001,7 @@ class RuntimeInstruction:
 
 @dataclass(frozen=True)
 class RuntimeUpgradeActionResponse:
-    """Response returned by runtime upgrade proposal/activation helpers."""
+    """Drafted SORA Parliament proposal returned by the runtime change-set helpers."""
 
     ok: bool
     tx_instructions: List[RuntimeInstruction]
@@ -11520,11 +11501,10 @@ __all__ = [
     "RuntimeMetrics",
     "RuntimeAbiActive",
     "RuntimeAbiHash",
-    "RuntimeUpgradeStatus",
-    "RuntimeUpgradeManifest",
-    "RuntimeUpgradeRecord",
+    "RuntimeChangeSetStatus",
+    "RuntimeNotice",
     "RuntimeUpgradeListItem",
-    "RuntimeUpgradeListPage",
+    "RuntimeUpgradesSnapshot",
     "RuntimeInstruction",
     "RuntimeUpgradeActionResponse",
     "GovernanceCanonicalObject",
@@ -11556,7 +11536,10 @@ __all__ = [
     "GovernanceProposalLifecycleStatus",
     "GovernanceProposalValidationFeePayoutLifecycle",
     "GovernanceProposalValidationFeePolicy",
-    "GovernanceRuntimeUpgradeManifest",
+    "GovernanceRuntimeChangeSet",
+    "GovernanceRuntimeNotice",
+    "GovernanceRuntimeUpgradeAction",
+    "GovernanceRuntimeUpgradeActionKind",
     "GovernanceSorafsProviderAction",
     "GovernanceSorafsProviderActionKind",
     "GovernanceValidationFeeChargingMode",
@@ -15311,7 +15294,7 @@ class ToriiClient(
         return RuntimeAbiHash.from_payload(payload)
 
     def list_runtime_upgrades(self) -> Optional[Any]:
-        """List runtime upgrade records (`GET /v1/runtime/upgrades`)."""
+        """Fetch the committed runtime selection and every recorded change set (`GET /v1/runtime/upgrades`)."""
 
         return self.request_json(
             "GET",
@@ -15319,21 +15302,28 @@ class ToriiClient(
             expected_status=(200,),
         )
 
-    def list_runtime_upgrades_typed(self) -> RuntimeUpgradeListPage:
+    def list_runtime_upgrades_typed(self) -> RuntimeUpgradesSnapshot:
         """Typed wrapper for :meth:`list_runtime_upgrades`."""
 
         payload = self.list_runtime_upgrades()
         if payload is None:
-            return RuntimeUpgradeListPage(items=[], total=0)
-        return RuntimeUpgradeListPage.from_payload(payload)
+            raise RuntimeError("runtime upgrades endpoint returned no payload")
+        return RuntimeUpgradesSnapshot.from_payload(payload)
 
-    def propose_runtime_upgrade(self, manifest: Mapping[str, Any]) -> Dict[str, Any]:
-        """Wrap a runtime upgrade manifest into instructions (`POST /v1/runtime/upgrades/propose`)."""
+    def propose_runtime_upgrade(self, change_set: Mapping[str, Any]) -> Dict[str, Any]:
+        """Draft the SORA Parliament proposal that schedules a runtime change set.
 
+        ``change_set`` is the complete ``ChangeSetV1`` JSON object and is sent to
+        ``POST /v1/runtime/upgrades/propose`` as given; the node admits it when
+        the signed proposal executes. Sign and submit the returned instructions.
+        """
+
+        if not isinstance(change_set, Mapping):
+            raise TypeError("runtime change set must be a JSON object")
         response = self._request(
             "POST",
             "/v1/runtime/upgrades/propose",
-            json_body=dict(manifest),
+            json_body=dict(change_set),
         )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)
@@ -15342,47 +15332,26 @@ class ToriiClient(
         return payload
 
     def propose_runtime_upgrade_typed(
-        self, manifest: Union[RuntimeUpgradeManifest, Mapping[str, Any]]
+        self, change_set: Mapping[str, Any]
     ) -> RuntimeUpgradeActionResponse:
         """Typed wrapper for :meth:`propose_runtime_upgrade`."""
 
-        manifest_payload: Mapping[str, Any]
-        if isinstance(manifest, RuntimeUpgradeManifest):
-            manifest_payload = manifest.to_payload()
-        else:
-            manifest_payload = manifest
-        payload = self.propose_runtime_upgrade(manifest_payload)
+        payload = self.propose_runtime_upgrade(change_set)
         return RuntimeUpgradeActionResponse.from_payload(payload)
 
-    def activate_runtime_upgrade(self, upgrade_id_hex: str) -> Dict[str, Any]:
-        """Generate activation instructions for a runtime upgrade (`POST /v1/runtime/upgrades/activate/{id}`)."""
+    def cancel_runtime_upgrade(self, change_set_id_hex: str) -> Dict[str, Any]:
+        """Draft the SORA Parliament proposal that withdraws a scheduled change set.
 
-        path = f"/v1/runtime/upgrades/activate/{upgrade_id_hex.strip()}"
+        ``change_set_id_hex`` is the exact lowercase 32-byte change-set identity
+        listed as ``id_hex`` by :meth:`list_runtime_upgrades_typed`
+        (``POST /v1/runtime/upgrades/cancel/{id}``). Sign and submit the returned
+        instructions.
+        """
+
+        identifier = _require_runtime_hex32(change_set_id_hex, "change_set_id_hex")
         response = self._request(
             "POST",
-            path,
-            headers={"Content-Type": "application/json"},
-            data=b"",
-        )
-        self._expect_status(response, {200})
-        payload = self._maybe_json(response)
-        if not isinstance(payload, dict):
-            raise RuntimeError("unexpected runtime upgrade activation response")
-        return payload
-
-    def activate_runtime_upgrade_typed(self, upgrade_id_hex: str) -> RuntimeUpgradeActionResponse:
-        """Typed wrapper for :meth:`activate_runtime_upgrade`."""
-
-        payload = self.activate_runtime_upgrade(upgrade_id_hex)
-        return RuntimeUpgradeActionResponse.from_payload(payload)
-
-    def cancel_runtime_upgrade(self, upgrade_id_hex: str) -> Dict[str, Any]:
-        """Generate cancellation instructions for a runtime upgrade (`POST /v1/runtime/upgrades/cancel/{id}`)."""
-
-        path = f"/v1/runtime/upgrades/cancel/{upgrade_id_hex.strip()}"
-        response = self._request(
-            "POST",
-            path,
+            f"/v1/runtime/upgrades/cancel/{identifier}",
             headers={"Content-Type": "application/json"},
             data=b"",
         )
@@ -15392,10 +15361,10 @@ class ToriiClient(
             raise RuntimeError("unexpected runtime upgrade cancellation response")
         return payload
 
-    def cancel_runtime_upgrade_typed(self, upgrade_id_hex: str) -> RuntimeUpgradeActionResponse:
+    def cancel_runtime_upgrade_typed(self, change_set_id_hex: str) -> RuntimeUpgradeActionResponse:
         """Typed wrapper for :meth:`cancel_runtime_upgrade`."""
 
-        payload = self.cancel_runtime_upgrade(upgrade_id_hex)
+        payload = self.cancel_runtime_upgrade(change_set_id_hex)
         return RuntimeUpgradeActionResponse.from_payload(payload)
 
     # ------------------------------------------------------------------

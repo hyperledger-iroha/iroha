@@ -252,54 +252,10 @@
    }
   },
   {
-   "function": "iroha_runtime_upgrades_activate_tool",
-   "name": "iroha.runtime.upgrades.activate",
-   "effect": "write",
-   "description": "Activate a runtime upgrade by canonical `path.id` (`/v1/runtime/upgrades/activate/{id}`).",
-   "method": "POST",
-   "path_template": "/v1/runtime/upgrades/activate/{id}",
-   "input_schema": {
-    "type": "object",
-    "additionalProperties": true,
-    "required": [
-     "path",
-     "body"
-    ],
-    "properties": {
-     "path": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-       "id"
-      ],
-      "properties": {
-       "id": {
-        "type": "string"
-       }
-      }
-     },
-     "body": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Activation request payload."
-     },
-     "headers": {
-      "type": "object",
-      "additionalProperties": {
-       "type": "string"
-      }
-     },
-     "accept": {
-      "type": "string"
-     }
-    }
-   }
-  },
-  {
    "function": "iroha_runtime_upgrades_cancel_tool",
    "name": "iroha.runtime.upgrades.cancel",
    "effect": "write",
-   "description": "Cancel a runtime upgrade by canonical `path.id` (`/v1/runtime/upgrades/cancel/{id}`).",
+   "description": "Draft the Parliament proposal that withdraws a scheduled runtime change set by canonical `path.id` (`/v1/runtime/upgrades/cancel/{id}`).",
    "method": "POST",
    "path_template": "/v1/runtime/upgrades/cancel/{id}",
    "input_schema": {

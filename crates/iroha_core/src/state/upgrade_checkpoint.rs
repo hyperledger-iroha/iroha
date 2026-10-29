@@ -7,11 +7,12 @@
 //!
 //! The certified root binds the World registry of the release that computed it (`S` of
 //! [`super::world_projection::WorldStateAccumulator`]). The predecessor this release accepts is
-//! iroha f24908b4b3, the Taira release of 2026-10-25. Its canonical World differs in three fields:
-//! it held the cell `privacy_exact12_qualification` and the table `privacy_activations`, which
-//! this release retired, and it lacked the table `privacy_protocol_policies`. An import accepts a
-//! predecessor World only when both retired fields hold their empty value, so nothing is dropped,
-//! and starts the new table empty.
+//! iroha f24908b4b3, the Taira release of 2026-10-25. Its canonical World held the cell
+//! `privacy_exact12_qualification` and the tables `privacy_activations` and `runtime_upgrades`,
+//! which this release retired, and lacked the tables `privacy_protocol_policies`,
+//! `runtime_change_sets` and `runtime_containments` ([`ADDED_WORLD_FIELDS`]). An import accepts
+//! a predecessor World only when every retired field holds its empty value, so nothing is
+//! dropped, and starts the added tables empty.
 //!
 //! The predecessor also predates the live-upgrade foundation (`specs/live_runtime_upgrades.md`
 //! §13): it has no runtime definitions or selection. The import founds them on this release's
@@ -62,30 +63,69 @@ pub(super) struct PredecessorField {
     pub(super) empty_json: &'static str,
 }
 
-/// The predecessor's fields this release retired, in the predecessor's World order.
-pub(super) const RETIRED_WORLD_FIELDS: [PredecessorField; 2] = [
-    PredecessorField {
-        id: "world.privacy_exact12_qualification",
-        name: "privacy_exact12_qualification",
-        key: None,
-        value: "core::option::Option<iroha_data_model::privacy::release_manifest::PrivacyExact12QualificationRecordV1>",
-        empty_json: r#"{"revert":null,"blocks":null}"#,
+/// One table this release added, in place of the predecessor fields it retired, if any. An
+/// import admits the retired fields only empty and starts the added table empty.
+pub(super) struct AddedWorldField {
+    /// Registry identity of the added field.
+    pub(super) id: &'static str,
+    /// Its snapshot JSON name.
+    pub(super) name: &'static str,
+    /// The predecessor's fields it replaced, in the predecessor's World order; empty for a
+    /// table without a predecessor.
+    pub(super) retired: &'static [PredecessorField],
+}
+
+/// Every table this release added, in this release's World order.
+pub(super) const ADDED_WORLD_FIELDS: [AddedWorldField; 3] = [
+    AddedWorldField {
+        id: "world.runtime_change_sets",
+        name: "runtime_change_sets",
+        retired: &[PredecessorField {
+            id: "world.runtime_upgrades",
+            name: "runtime_upgrades",
+            key: Some("iroha_data_model::runtime::RuntimeUpgradeId"),
+            value: "iroha_data_model::runtime::RuntimeUpgradeRecord",
+            empty_json: r#"{"revert":{},"blocks":{}}"#,
+        }],
     },
-    PredecessorField {
-        id: "world.privacy_activations",
-        name: "privacy_activations",
-        key: Some("iroha_core::privacy_state::PrivacyActivationKeyV1"),
-        value: "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1",
-        empty_json: r#"{"revert":{},"blocks":{}}"#,
+    AddedWorldField {
+        id: "world.runtime_containments",
+        name: "runtime_containments",
+        retired: &[],
+    },
+    AddedWorldField {
+        id: "world.privacy_protocol_policies",
+        name: "privacy_protocol_policies",
+        retired: &[
+            PredecessorField {
+                id: "world.privacy_exact12_qualification",
+                name: "privacy_exact12_qualification",
+                key: None,
+                value: "core::option::Option<iroha_data_model::privacy::release_manifest::PrivacyExact12QualificationRecordV1>",
+                empty_json: r#"{"revert":null,"blocks":null}"#,
+            },
+            PredecessorField {
+                id: "world.privacy_activations",
+                name: "privacy_activations",
+                key: Some("iroha_core::privacy_state::PrivacyActivationKeyV1"),
+                value: "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1",
+                empty_json: r#"{"revert":{},"blocks":{}}"#,
+            },
+        ],
     },
 ];
 
-/// The field this release added in place of [`RETIRED_WORLD_FIELDS`]: registry identity and
-/// snapshot JSON name. An import starts it empty.
-pub(super) const ADDED_WORLD_FIELD: (&str, &str) = (
-    "world.privacy_protocol_policies",
-    "privacy_protocol_policies",
-);
+/// The predecessor's retired fields, in the predecessor's World order.
+pub(super) fn retired_world_fields() -> impl Iterator<Item = &'static PredecessorField> {
+    ADDED_WORLD_FIELDS
+        .iter()
+        .flat_map(|added| added.retired.iter())
+}
+
+/// The added table with the snapshot JSON name `name`.
+pub(super) fn added_world_field(name: &str) -> Option<&'static AddedWorldField> {
+    ADDED_WORLD_FIELDS.iter().find(|added| added.name == name)
+}
 
 /// The fields the predecessor lacked that an import founds on this release's baseline:
 /// registry identity and snapshot JSON name.
@@ -109,8 +149,8 @@ pub(super) fn predecessor_world_field_order(current: &[&'static str]) -> Vec<&'s
         if is_founded_world_field(field) {
             continue;
         }
-        if *field == ADDED_WORLD_FIELD.1 {
-            order.extend(RETIRED_WORLD_FIELDS.iter().map(|retired| retired.name));
+        if let Some(added) = added_world_field(field) {
+            order.extend(added.retired.iter().map(|retired| retired.name));
         } else {
             order.push(*field);
         }
@@ -125,6 +165,9 @@ mod tests {
     #[test]
     fn predecessor_order_puts_the_retired_fields_where_the_added_field_is() {
         let current: &'static [&'static str] = &[
+            "poseidon_params",
+            "runtime_change_sets",
+            "runtime_containments",
             "runtime_definitions",
             "runtime_selection",
             "privacy_consensus_policy",
@@ -134,6 +177,8 @@ mod tests {
         assert_eq!(
             predecessor_world_field_order(current),
             [
+                "poseidon_params",
+                "runtime_upgrades",
                 "privacy_consensus_policy",
                 "privacy_exact12_qualification",
                 "privacy_activations",
@@ -144,7 +189,7 @@ mod tests {
 
     #[test]
     fn retired_fields_admit_only_the_empty_values_of_their_kind() {
-        for retired in &RETIRED_WORLD_FIELDS {
+        for retired in retired_world_fields() {
             let value: norito::json::Value =
                 norito::json::from_str(retired.empty_json).expect("empty value is JSON");
             let empty = if retired.key.is_some() {
@@ -158,10 +203,13 @@ mod tests {
             );
             assert_eq!(retired.id, format!("world.{}", retired.name));
         }
-        assert_eq!(
-            ADDED_WORLD_FIELD.0,
-            format!("world.{}", ADDED_WORLD_FIELD.1)
-        );
+        for added in &ADDED_WORLD_FIELDS {
+            assert_eq!(added.id, format!("world.{}", added.name));
+            assert_eq!(
+                added_world_field(added.name).map(|found| found.id),
+                Some(added.id)
+            );
+        }
         for (id, name) in FOUNDED_WORLD_FIELDS {
             assert_eq!(id, format!("world.{name}"));
             assert!(is_founded_world_field(name));

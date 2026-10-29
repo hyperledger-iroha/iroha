@@ -11762,229 +11762,514 @@ test("getRuntimeAbiHash enforces AbortSignal option type", async () => {
   );
 });
 
-test("getRuntimeMetrics normalizes counters", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        abi_version: 1,
-        upgrade_events_total: { proposed: 3, activated: 1, canceled: 1 },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getRuntimeMetrics(canonicalReadOptions());
-  assert.deepEqual(result, {
-    abiVersion: 1,
-    upgradeEventsTotal: { proposed: 3, activated: 1, canceled: 1 },
-  });
-});
+const RUNTIME_UPGRADE_PROPOSAL_WIRE_ID =
+  "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
 
-test("listRuntimeUpgrades normalizes manifest and status payloads", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            id_hex: "aa".repeat(32),
-            record: {
-              manifest: {
-                name: "ABI v1 refresh",
-                description: "scheduled rollout",
-                abi_version: 1,
-                abi_hash: "11".repeat(32),
-                added_syscalls: [],
-                added_pointer_types: [],
-                start_height: 10,
-                end_height: 20,
-              },
-              status: { ActivatedAt: 12 },
-              proposer: FIXTURE_ALICE_ID,
-              created_height: 8,
-            },
-          },
-          {
-            id_hex: "bb".repeat(32),
-            record: {
-              manifest: {
-                name: "ABI v1 maintenance",
-                description: "next window",
-                abi_version: 1,
-                abi_hash: "22".repeat(32),
-                added_syscalls: [],
-                added_pointer_types: [],
-                start_height: 30,
-                end_height: 40,
-              },
-              status: { Proposed: null },
-              proposer: FIXTURE_BOB_ID,
-              created_height: 25,
-            },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const upgrades = await client.listRuntimeUpgrades();
-  assert.equal(upgrades.length, 2);
-  assert.deepEqual(upgrades[0], {
-    idHex: "aa".repeat(32),
-    record: {
-      manifest: {
-        name: "ABI v1 refresh",
-        description: "scheduled rollout",
-        abiVersion: 1,
-        abiHashHex: "11".repeat(32),
-        addedSyscalls: [],
-        addedPointerTypes: [],
-        startHeight: 10,
-        endHeight: 20,
-      },
-      status: { kind: "ActivatedAt", activatedHeight: 12 },
-      proposer: FIXTURE_ALICE_ID,
-      createdHeight: 8,
+function runtimeChangeSetFixture(overrides = {}) {
+  return {
+    network: VK_SIGNING_NETWORK_ID.toString(),
+    root: { kind: "Universal", content: null },
+    predecessor: "01".repeat(32),
+    successor: "02".repeat(32),
+    effective_height: 120,
+    publish: [],
+    transitions: [{ kind: "Activate", content: "0a".repeat(32) }],
+    qualification: "03".repeat(32),
+    ...overrides,
+  };
+}
+
+function runtimeChangeSetRecordFixture(changeSet, status, overrides = {}) {
+  return {
+    change_set: changeSet,
+    status,
+    proposed_ms: 1_700_000_000_000,
+    approved_height: 10,
+    approved_ms: 1_700_000_600_000,
+    notice: { blocks: 100, ms: 86_400_000, approval_cushion_ms: 3_600_000 },
+    attestations: [],
+    ...overrides,
+  };
+}
+
+function runtimeUpgradesSnapshotFixture(items) {
+  return {
+    selection_id_hex: "5a".repeat(32),
+    selection: {
+      kernel: "0b".repeat(32),
+      commitment_profile: "0c".repeat(32),
+      services_profile: "0d".repeat(32),
+      installed_storage: [],
+      active: ["0a".repeat(32)],
+      bindings: [],
+      restrictions: [],
+      completion_closures: [],
     },
-  });
-  assert.deepEqual(upgrades[1].record.status, { kind: "Proposed" });
-});
+    committee: [SAMPLE_ACCOUNT_SIGNATORY],
+    committee_digest_hex: "6b".repeat(32),
+    items,
+  };
+}
 
-test("proposeRuntimeUpgrade posts manifest and normalizes response", async () => {
+function runtimeSnapshotResponse(snapshot) {
+  return createResponse({
+    status: 200,
+    textBody: stringifyStrictLosslessIntegerJson(snapshot, "runtime snapshot fixture"),
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function runtimeDraftResponseFixture(payloadHex = "0a0b0c0d") {
+  return {
+    ok: true,
+    tx_instructions: [{ wire_id: RUNTIME_UPGRADE_PROPOSAL_WIRE_ID, payload_hex: payloadHex }],
+  };
+}
+
+test("getRuntimeMetrics normalizes change-set lifecycle counters", async () => {
   let captured;
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
       status: 200,
       jsonData: {
-        ok: true,
-        tx_instructions: [{ wire_id: "ProposeRuntimeUpgrade", payload_hex: "aa".repeat(32) }],
+        abi_version: 1,
+        upgrade_events_total: { scheduled: 2, activated: 1, lapsed: 4, canceled: 3 },
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const manifest = {
-    name: "ABI v1 maintenance",
-    description: "roll out refreshed binaries",
-    abiVersion: 1,
-    abiHash: "11".repeat(32),
-    startHeight: 100,
-    endHeight: 200,
-    addedSyscalls: [],
-    addedPointerTypes: [],
-  };
-  const result = await client.proposeRuntimeUpgrade(manifest);
-  assert.equal(captured.url, `${BASE_URL}/v1/runtime/upgrades/propose`);
-  assert.equal(captured.init.method, "POST");
-  const body = JSON.parse(captured.init.body);
-  assert.equal(body.name, "ABI v1 maintenance");
-  assert.equal(body.abi_version, 1);
-  assert.deepEqual(body.added_syscalls, []);
+  const result = await client.getRuntimeMetrics(canonicalReadOptions());
+  assert.equal(captured.url, `${BASE_URL}/v1/runtime/metrics`);
   assert.deepEqual(result, {
-    ok: true,
-    tx_instructions: [{ wire_id: "ProposeRuntimeUpgrade", payload_hex: "aa".repeat(32) }],
+    abiVersion: 1,
+    upgradeEventsTotal: { scheduled: 2, activated: 1, lapsed: 4, canceled: 3 },
   });
 });
 
-test("listRuntimeUpgrades rejects non-v1 manifest ABI", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            id_hex: "aa".repeat(32),
-            record: {
-              manifest: {
-                name: "invalid",
-                description: "bad abi",
-                abi_version: 2,
-                abi_hash: "11".repeat(32),
-                added_syscalls: [],
-                added_pointer_types: [],
-                start_height: 10,
-                end_height: 20,
-              },
-              status: { Proposed: null },
-              proposer: FIXTURE_ALICE_ID,
-              created_height: 8,
-            },
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
+test("getRuntimeMetrics rejects retired and incomplete counter sets", async () => {
+  for (const [label, counters, pattern] of [
+    [
+      "retired proposed counter",
+      { proposed: 3, scheduled: 0, activated: 1, lapsed: 0, canceled: 1 },
+      /upgrade_events_total contains unsupported fields: proposed/u,
+    ],
+    [
+      "retired manifest counters",
+      { proposed: 3, activated: 1, canceled: 1 },
+      /upgrade_events_total contains unsupported fields: proposed/u,
+    ],
+    [
+      "missing lapsed counter",
+      { scheduled: 0, activated: 1, canceled: 1 },
+      /upgrade_events_total is missing required fields: lapsed/u,
+    ],
+    [
+      "inexact counter",
+      { scheduled: "2", activated: 1, lapsed: 0, canceled: 1 },
+      /upgrade_events_total\.scheduled must be a non-negative JSON safe integer/u,
+    ],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: { abi_version: 1, upgrade_events_total: counters },
+        headers: { "content-type": "application/json" },
+      }),
     });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listRuntimeUpgrades(),
-    /abi_version must be 1 in the first release/,
-  );
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(client.getRuntimeMetrics(canonicalReadOptions()), pattern, label);
+  }
 });
 
-test("proposeRuntimeUpgrade rejects added syscall deltas in the first release", async () => {
+test("listRuntimeUpgrades signs the operator read and types the change-set snapshot", async () => {
+  let captured;
+  const attestation = {
+    validator: SAMPLE_ACCOUNT_SIGNATORY,
+    valid_until: (1n << 64n) - 1n,
+  };
+  const activated = runtimeChangeSetFixture({ effective_height: 12 });
+  const scheduledWithNull = runtimeChangeSetFixture({ effective_height: 40 });
+  const scheduledWithoutContent = runtimeChangeSetFixture({
+    effective_height: 40,
+    successor: "05".repeat(32),
+  });
+  const snapshot = runtimeUpgradesSnapshotFixture([
+    {
+      id_hex: "aa".repeat(32),
+      record: runtimeChangeSetRecordFixture(
+        activated,
+        { kind: "Activated", content: 12 },
+        { attestations: [attestation] },
+      ),
+    },
+    {
+      id_hex: "bb".repeat(32),
+      record: runtimeChangeSetRecordFixture(
+        runtimeChangeSetFixture({ effective_height: 20, successor: "04".repeat(32) }),
+        { kind: "Lapsed", content: 20 },
+      ),
+    },
+    {
+      id_hex: "11".repeat(32),
+      record: runtimeChangeSetRecordFixture(scheduledWithNull, { kind: "Scheduled", content: null }),
+    },
+    {
+      id_hex: "22".repeat(32),
+      record: runtimeChangeSetRecordFixture(scheduledWithoutContent, { kind: "Scheduled" }),
+    },
+    {
+      id_hex: "33".repeat(32),
+      record: runtimeChangeSetRecordFixture(
+        runtimeChangeSetFixture({ effective_height: 55 }),
+        { kind: "Cancelled", content: 35 },
+      ),
+    },
+  ]);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return runtimeSnapshotResponse(snapshot);
+    },
+  });
+  const result = await client.listRuntimeUpgrades();
+  assert.equal(captured.url, `${BASE_URL}/v1/runtime/upgrades`);
+  assert.equal(captured.init.method, "GET");
+  assert.equal(captured.init.headers.Accept, "application/json");
+  assert.ok(captured.init.headers["X-Iroha-Operator-Public-Key"]);
+  assert.ok(captured.init.headers["X-Iroha-Operator-Signature"]);
+
+  assert.equal(result.selectionIdHex, "5a".repeat(32));
+  assert.deepEqual(result.selection, snapshot.selection);
+  assert.deepEqual(result.committee, [SAMPLE_ACCOUNT_SIGNATORY]);
+  assert.equal(result.committeeDigestHex, "6b".repeat(32));
+  assert.deepEqual(
+    result.items.map((item) => item.status),
+    [
+      { kind: "Activated", height: 12 },
+      { kind: "Lapsed", height: 20 },
+      { kind: "Scheduled" },
+      { kind: "Scheduled" },
+      { kind: "Cancelled", height: 35 },
+    ],
+  );
+  const [first] = result.items;
+  assert.equal(first.idHex, "aa".repeat(32));
+  assert.equal(first.effectiveHeight, 12);
+  assert.equal(first.predecessorHex, "01".repeat(32));
+  assert.equal(first.successorHex, "02".repeat(32));
+  assert.deepEqual(first.notice, {
+    blocks: 100,
+    ms: 86_400_000,
+    approvalCushionMs: 3_600_000,
+  });
+  assert.deepEqual(first.record.change_set, activated);
+  assert.equal(first.record.approved_height, 10);
+  assert.equal(first.record.attestations[0].valid_until, (1n << 64n) - 1n);
+  assert.deepEqual(result.items[2].record.status, { kind: "Scheduled", content: null });
+  assert.deepEqual(result.items[3].record.status, { kind: "Scheduled" });
+  assert.deepEqual(result.items[3].record.change_set, scheduledWithoutContent);
+  assert.equal(Object.getPrototypeOf(first.record), Object.prototype);
+});
+
+test("listRuntimeUpgrades rejects retired, unsorted and inexact snapshots", async () => {
+  const canonical = () => runtimeUpgradesSnapshotFixture([
+    {
+      id_hex: "aa".repeat(32),
+      record: runtimeChangeSetRecordFixture(
+        runtimeChangeSetFixture({ effective_height: 12 }),
+        { kind: "Activated", content: 12 },
+      ),
+    },
+    {
+      id_hex: "bb".repeat(32),
+      record: runtimeChangeSetRecordFixture(
+        runtimeChangeSetFixture({ effective_height: 40 }),
+        { kind: "Scheduled", content: null },
+      ),
+    },
+  ]);
+  const cases = [
+    ["retired item array", () => ({ items: [] }), /missing required fields/u],
+    ["retired manifest record", (snapshot) => {
+      snapshot.items[0].record = {
+        manifest: { name: "ABI v1 refresh", abi_version: 1, start_height: 10, end_height: 20 },
+        status: { ActivatedAt: 12 },
+        proposer: FIXTURE_ALICE_ID,
+        created_height: 8,
+      };
+    }, /record\.change_set must be an object/u],
+    ["retired externally tagged status", (snapshot) => {
+      snapshot.items[0].record.status = { ActivatedAt: 12 };
+    }, /status contains unsupported fields: ActivatedAt/u],
+    ["retired Proposed status", (snapshot) => {
+      snapshot.items[1].record.status = { kind: "Proposed", content: null };
+    }, /status\.kind must be Scheduled, Activated, Lapsed or Cancelled/u],
+    ["metrics spelling of Cancelled", (snapshot) => {
+      snapshot.items[1].record.status = { kind: "Canceled", content: 30 };
+    }, /status\.kind must be Scheduled, Activated, Lapsed or Cancelled/u],
+    ["Scheduled with a height", (snapshot) => {
+      snapshot.items[1].record.status = { kind: "Scheduled", content: 7 };
+    }, /status\.content must be null for a Scheduled change set/u],
+    ["Cancelled without a height", (snapshot) => {
+      snapshot.items[1].record.status = { kind: "Cancelled", content: null };
+    }, /status\.content must be a positive JSON safe integer/u],
+    ["unsafe effective height", (snapshot) => {
+      snapshot.items[1].record.change_set.effective_height = 1n << 53n;
+    }, /effective_height must be a positive JSON safe integer/u],
+    ["incomplete notice", (snapshot) => {
+      delete snapshot.items[0].record.notice.approval_cushion_ms;
+    }, /notice is missing required fields: approval_cushion_ms/u],
+    ["unsorted items", (snapshot) => {
+      snapshot.items.reverse();
+    }, /items must be sorted by effective height, then unique identity/u],
+    ["repeated identity", (snapshot) => {
+      snapshot.items[1] = structuredClone(snapshot.items[0]);
+    }, /items must be sorted by effective height, then unique identity/u],
+    ["uppercase identity", (snapshot) => {
+      snapshot.items[0].id_hex = "AA".repeat(32);
+    }, /id_hex must be an exact lowercase 32-byte hex string/u],
+    ["missing committee digest", (snapshot) => {
+      delete snapshot.committee_digest_hex;
+    }, /missing required fields: committee_digest_hex/u],
+    ["malformed committee key", (snapshot) => {
+      snapshot.committee = ["validator-a"];
+    }, /committee\[0\]/u],
+  ];
+  for (const [label, mutate, pattern] of cases) {
+    const snapshot = canonical();
+    const mutated = mutate(snapshot) ?? snapshot;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => runtimeSnapshotResponse(mutated),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(client.listRuntimeUpgrades(), pattern, label);
+  }
+});
+
+test("proposeRuntimeUpgrade posts the exact change set and admits the drafted proposal", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: runtimeDraftResponseFixture(),
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const changeSet = runtimeChangeSetFixture({
+    publish: [{
+      kind: "Storage",
+      content: { namespace: "runtime.example", initial: null, limit: 1n << 60n },
+    }],
+  });
+  const result = await client.proposeRuntimeUpgrade(changeSet);
+  assert.equal(captured.url, `${BASE_URL}/v1/runtime/upgrades/propose`);
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.headers["Content-Type"], "application/json");
+  assert.ok(captured.init.headers["X-Iroha-Operator-Public-Key"]);
+  assert.ok(captured.init.headers["X-Iroha-Operator-Signature"]);
+  assert.equal(
+    captured.init.body,
+    stringifyStrictLosslessIntegerJson(changeSet, "expected change set"),
+  );
+  assert.match(captured.init.body, /"limit":1152921504606846976/u);
+  assert.deepEqual(result, runtimeDraftResponseFixture());
+});
+
+test("proposeRuntimeUpgrade rejects retired manifests and non-canonical change sets before fetch", async () => {
+  let calls = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
+      calls += 1;
       throw new Error("fetch should not run");
     },
   });
-  await assert.rejects(
-    () =>
-      client.proposeRuntimeUpgrade({
-        name: "invalid",
-        description: "bad delta",
-        abiVersion: 1,
-        abiHash: "11".repeat(32),
-        startHeight: 100,
-        endHeight: 200,
-        addedSyscalls: [600],
+  const cases = [
+    ["retired manifest", {
+      name: "ABI v1 maintenance",
+      description: "roll out refreshed binaries",
+      abiVersion: 1,
+      abiHash: "11".repeat(32),
+      startHeight: 100,
+      endHeight: 200,
+    }, /changeSet contains unsupported fields/u],
+    ["camelCase alias", (() => {
+      const { effective_height: effectiveHeight, ...rest } = runtimeChangeSetFixture();
+      return { ...rest, effectiveHeight };
+    })(), /changeSet contains unsupported fields: effectiveHeight/u],
+    ["unsafe effective height", runtimeChangeSetFixture({ effective_height: 2 ** 53 }),
+      /effective_height must be a positive JSON safe integer/u],
+    ["bigint effective height", runtimeChangeSetFixture({ effective_height: 120n }),
+      /effective_height must be a positive JSON safe integer/u],
+    ["zero effective height", runtimeChangeSetFixture({ effective_height: 0 }),
+      /effective_height must be a positive JSON safe integer/u],
+    ["data space root", runtimeChangeSetFixture({ root: { kind: "DataSpace", content: 7 } }),
+      /root must be the universal root with null content/u],
+    ["unit root without content", runtimeChangeSetFixture({ root: { kind: "Universal" } }),
+      /root is missing required fields: content/u],
+    ["uppercase predecessor", runtimeChangeSetFixture({ predecessor: "AB".repeat(32) }),
+      /predecessor must be exactly 32 lowercase hexadecimal bytes/u],
+    ["short qualification", runtimeChangeSetFixture({ qualification: "03".repeat(31) }),
+      /qualification must be exactly 32 lowercase hexadecimal bytes/u],
+    ["chain label network", runtimeChangeSetFixture({ network: "taira" }),
+      /network must be an exact canonical NetworkId literal/u],
+    ["bare transition", runtimeChangeSetFixture({ transitions: ["0a".repeat(32)] }),
+      /transitions\[0\] must be an object/u],
+    ["fractional content", runtimeChangeSetFixture({
+      transitions: [{ kind: "Restrict", content: { definition: "0a".repeat(32), restriction: 1.5 } }],
+    }), /transitions\[0\]\.content\.restriction must contain only safe integer numbers or bigint/u],
+  ];
+  for (const [label, changeSet, pattern] of cases) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(client.proposeRuntimeUpgrade(changeSet), pattern, label);
+  }
+  assert.equal(calls, 0);
+});
+
+test("cancelRuntimeUpgrade signs the operator draft for the change-set id", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: runtimeDraftResponseFixture("ff00"),
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const response = await client.cancelRuntimeUpgrade(`0x${"AB".repeat(32)}`);
+  assert.equal(
+    captured.url,
+    `${BASE_URL}/v1/runtime/upgrades/cancel/0x${"ab".repeat(32)}`,
+  );
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.body, undefined);
+  assert.ok(captured.init.headers["X-Iroha-Operator-Public-Key"]);
+  assert.ok(captured.init.headers["X-Iroha-Operator-Signature"]);
+  assert.deepEqual(response, runtimeDraftResponseFixture("ff00"));
+});
+
+test("runtime change-set drafts admit exactly one ProposeRuntimeUpgradeProposal instruction", async () => {
+  const instruction = runtimeDraftResponseFixture().tx_instructions[0];
+  const cases = [
+    ["retired activation draft", {
+      ok: true,
+      tx_instructions: [{ wire_id: "ActivateRuntimeUpgrade", payload_hex: "aa" }],
+    }, /wire_id must be iroha\.instruction\.v1::governance::ProposeRuntimeUpgradeProposal/u],
+    ["two instructions", { ok: true, tx_instructions: [instruction, instruction] },
+      /tx_instructions must contain exactly one instruction/u],
+    ["unsuccessful draft", { ...runtimeDraftResponseFixture(), ok: false }, /ok must be true/u],
+    ["missing payload", {
+      ok: true,
+      tx_instructions: [{ wire_id: RUNTIME_UPGRADE_PROPOSAL_WIRE_ID }],
+    }, /missing required fields: payload_hex/u],
+    ["uppercase payload", runtimeDraftResponseFixture("0A0B"),
+      /payload_hex must be an exact lowercase even-length hex string/u],
+    ["proposal id envelope", { ...runtimeDraftResponseFixture(), proposal_id: "aa".repeat(32) },
+      /contains unsupported fields: proposal_id/u],
+  ];
+  for (const [label, payload, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
       }),
-    /added_syscalls must be empty in the first release/,
-  );
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(client.cancelRuntimeUpgrade("aa".repeat(32)), pattern, label);
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      client.proposeRuntimeUpgrade(runtimeChangeSetFixture()),
+      pattern,
+      label,
+    );
+  }
 });
 
-test("activateRuntimeUpgrade posts id and normalizes response", async () => {
-  let calledUrl;
-  const fetchImpl = async (url) => {
-    calledUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: { ok: true, tx_instructions: [{ wire_id: "ActivateRuntimeUpgrade" }] },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.activateRuntimeUpgrade("0x" + "ff".repeat(32));
-  assert.equal(
-    calledUrl,
-    `${BASE_URL}/v1/runtime/upgrades/activate/0x${"ff".repeat(32)}`,
-  );
-  assert.deepEqual(response, {
-    ok: true,
-    tx_instructions: [{ wire_id: "ActivateRuntimeUpgrade" }],
+test("runtime change-set routes require an operator signing context before fetch", async () => {
+  let calls = 0;
+  const client = new SourceToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("fetch should not run without operator authentication");
+    },
   });
+  for (const [label, invoke] of [
+    ["listRuntimeUpgrades", () => client.listRuntimeUpgrades()],
+    ["proposeRuntimeUpgrade", () => client.proposeRuntimeUpgrade(runtimeChangeSetFixture())],
+    ["cancelRuntimeUpgrade", () => client.cancelRuntimeUpgrade("aa".repeat(32))],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      invoke,
+      new RegExp(`${label} requires an immutable OperatorSigningContext`, "u"),
+    );
+  }
+  assert.equal(calls, 0);
 });
 
-test("cancelRuntimeUpgrade posts id and normalizes response", async () => {
-  let calledUrl;
-  const fetchImpl = async (url) => {
-    calledUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: { ok: true, tx_instructions: [{ wire_id: "CancelRuntimeUpgrade" }] },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.cancelRuntimeUpgrade("aa".repeat(32));
+test("retired runtime upgrade manifest and activation surface is absent", () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/toriiClient.js", import.meta.url), "utf8");
+  const client = new ToriiClient(BASE_URL);
   assert.equal(
-    calledUrl,
-    `${BASE_URL}/v1/runtime/upgrades/cancel/0x${"aa".repeat(32)}`,
+    Object.getOwnPropertyDescriptor(SourceToriiClient.prototype, "activateRuntimeUpgrade"),
+    undefined,
   );
-  assert.deepEqual(response, {
-    ok: true,
-    tx_instructions: [{ wire_id: "CancelRuntimeUpgrade" }],
-  });
+  assert.equal(client.activateRuntimeUpgrade, undefined);
+  assert.doesNotMatch(source, /\/v1\/runtime\/upgrades\/activate/u);
+  assert.doesNotMatch(source, /\bactivateRuntimeUpgrade\b/u);
+  for (const retired of [
+    "activateRuntimeUpgrade",
+    "ToriiRuntimeUpgradeManifestInput",
+    "ToriiRuntimeUpgradeManifest",
+    "ToriiRuntimeUpgradeRecord",
+    "ToriiRuntimeUpgradeStatus",
+    "ToriiRuntimeUpgradeListItem",
+    "ToriiGovernanceRuntimeUpgradeManifest",
+    "ToriiGovernanceRuntimeUpgradeSbomDigest",
+  ]) {
+    assert.doesNotMatch(declarations, new RegExp(`\\b${retired}\\b`, "u"), retired);
+  }
+  const interfaceFields = (name) => {
+    const match = declarations.match(
+      new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`, "u"),
+    );
+    assert.ok(match, `missing ${name}`);
+    return [...match[1].matchAll(/^\s+([A-Za-z_][A-Za-z0-9_]*)\??:/gmu)]
+      .map((field) => field[1])
+      .sort();
+  };
+  assert.deepEqual(interfaceFields("ToriiGovernanceRuntimeUpgradeProposal"), [
+    "action",
+    "notice",
+    "proposal_operator",
+    "proposed_ms",
+  ]);
+  assert.deepEqual(interfaceFields("ToriiRuntimeMetricsCounters"), [
+    "activated",
+    "canceled",
+    "lapsed",
+    "scheduled",
+  ]);
+  assert.deepEqual(interfaceFields("ToriiRuntimeChangeSet"), [
+    "effective_height",
+    "network",
+    "predecessor",
+    "publish",
+    "qualification",
+    "root",
+    "successor",
+    "transitions",
+  ]);
+  assert.match(
+    declarations,
+    /listRuntimeUpgrades\(options\?: \{\n\s+signal\?: AbortSignal;\n\s+\}\): Promise<ToriiRuntimeUpgradesSnapshot>;/u,
+  );
 });
 
 test("runtime upgrade wrappers reject unsupported option fields", async () => {
@@ -11998,24 +12283,8 @@ test("runtime upgrade wrappers reject unsupported option fields", async () => {
     ["getRuntimeMetrics", () => client.getRuntimeMetrics({ note: "nope" }), "note"],
     ["listRuntimeUpgrades", () => client.listRuntimeUpgrades({ surprise: 1 }), "surprise"],
     [
-      "activateRuntimeUpgrade",
-      () => client.activateRuntimeUpgrade("aa".repeat(32), { junk: true }),
-      "junk",
-    ],
-    [
       "proposeRuntimeUpgrade",
-      () =>
-        client.proposeRuntimeUpgrade(
-          {
-            name: "upgrade",
-            description: "test",
-            abi_version: 1,
-            abi_hash: "aa".repeat(32),
-            start_height: 0,
-            end_height: 1,
-          },
-          { note: "skip" },
-        ),
+      () => client.proposeRuntimeUpgrade(runtimeChangeSetFixture(), { note: "skip" }),
       "note",
     ],
     [

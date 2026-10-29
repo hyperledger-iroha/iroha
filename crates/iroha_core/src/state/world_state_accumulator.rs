@@ -450,7 +450,7 @@ fn schema_digest(fingerprints: &BTreeMap<&'static str, Fingerprint>) -> Result<H
 /// predecessor's snapshot with the added field still empty and the runtime fields founded on
 /// the baseline. The predecessor's registry held the retired fields instead and none of the
 /// founded ones. An import admits only the retired fields' empty values, so the retired cell
-/// adds its one element at `None` and the retired table adds none; the founded fields' baseline
+/// adds its one element at `None` and the retired tables add none; the founded fields' baseline
 /// elements are removed again.
 ///
 /// # Errors
@@ -460,18 +460,20 @@ pub(in crate::state) fn predecessor_root(
     current: &WorldStateAccumulator,
 ) -> Result<(WorldStateAccumulator, Hash), String> {
     use crate::state::upgrade_checkpoint::{
-        ADDED_WORLD_FIELD, FOUNDED_WORLD_FIELDS, RETIRED_WORLD_FIELDS,
+        ADDED_WORLD_FIELDS, FOUNDED_WORLD_FIELDS, retired_world_fields,
     };
     let mut fingerprints = field_index()
         .as_ref()
         .map_err(Clone::clone)?
         .fingerprints
         .clone();
-    if fingerprints.remove(ADDED_WORLD_FIELD.0).is_none() {
-        return Err(format!(
-            "{} is not a canonical World field of this release",
-            ADDED_WORLD_FIELD.0
-        ));
+    for added in &ADDED_WORLD_FIELDS {
+        if fingerprints.remove(added.id).is_none() {
+            return Err(format!(
+                "{} is not a canonical World field of this release",
+                added.id
+            ));
+        }
     }
     let mut predecessor = current.clone();
     for (id, _) in &FOUNDED_WORLD_FIELDS {
@@ -499,7 +501,7 @@ pub(in crate::state) fn predecessor_root(
         None,
         &hash_value(&catalog.baseline)?,
     ));
-    for retired in &RETIRED_WORLD_FIELDS {
+    for retired in retired_world_fields() {
         let kind = if retired.key.is_some() { TABLE } else { CELL };
         let key = retired.key.map(norito_identity_fingerprint).transpose()?;
         let value = norito_identity_fingerprint(retired.value)?;

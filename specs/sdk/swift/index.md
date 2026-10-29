@@ -634,9 +634,11 @@ For higher-level walkthroughs, see:
   deliberately exposes no generic shield, shielded-transfer, or unshield request,
   encoder, or submission helper.
 - **Runtime & capabilities:** `getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`,
-  `getRuntimeAbiHash`, `listRuntimeUpgrades`, and the helper trio
-  (`proposeRuntimeUpgrade`, `activateRuntimeUpgrade`, `cancelRuntimeUpgrade`) mirroring the
-  `/v1/node/capabilities` and `/v1/runtime/*` surfaces with typed instruction bundles.
+  `getRuntimeAbiHash`, and the operator-signed change-set helpers: `listRuntimeUpgrades` returns
+  the committed selection, the attesting committee and every change-set record;
+  `proposeRuntimeUpgrade` and `cancelRuntimeUpgrade` return the drafted SORA Parliament proposal.
+  Change sets activate at their effective height without a client call
+  (`specs/runtime_upgrades.md`).
 - **Governance:** draft typed V1 deployment proposals
   (`submitGovernanceDeployContractProposal`), submit standalone plain/ZK
   ballots, fetch proposal/lock/tally snapshots, and inspect certificate-driven

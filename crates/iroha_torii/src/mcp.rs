@@ -1080,7 +1080,6 @@ pub fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec
     tools.push(iroha_runtime_metrics_tool());
     tools.push(iroha_runtime_upgrades_list_tool());
     tools.push(iroha_runtime_upgrades_propose_tool());
-    tools.push(iroha_runtime_upgrades_activate_tool());
     tools.push(iroha_runtime_upgrades_cancel_tool());
     tools.push(iroha_bridge_finality_proof_tool());
     tools.push(iroha_bridge_finality_bundle_tool());
@@ -2562,11 +2561,6 @@ fn select_purpose_built_tool_dispatch<'a>(
             arguments,
         )),
         "iroha.runtime.upgrades.propose" => Box::pin(dispatch_iroha_runtime_upgrades_propose(
-            app,
-            inbound_headers,
-            arguments,
-        )),
-        "iroha.runtime.upgrades.activate" => Box::pin(dispatch_iroha_runtime_upgrades_activate(
             app,
             inbound_headers,
             arguments,
@@ -5783,19 +5777,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
     )
     .await
 }
-async fn dispatch_iroha_runtime_upgrades_activate(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_runtime_upgrades_action(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/runtime/upgrades/activate/{id}",
-    )
-    .await
-}
 async fn dispatch_iroha_runtime_upgrades_cancel(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -8406,7 +8387,7 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
-const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 79;
+const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 78;
 // Includes the fully typed account-onboarding receipt schemas in the embedded catalog.
 const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
@@ -8882,7 +8863,6 @@ manual_tool! {
     iroha_connect_session_delete_tool => "iroha.connect.session.delete";
     iroha_node_query_projection_shard_catalog_tool => "iroha.node.query_projection_shard_catalog";
     iroha_da_manifests_get_tool => "iroha.da.manifests.get";
-    iroha_runtime_upgrades_activate_tool => "iroha.runtime.upgrades.activate";
     iroha_runtime_upgrades_cancel_tool => "iroha.runtime.upgrades.cancel";
     iroha_bridge_finality_proof_tool => "iroha.bridge.finality.proof";
     iroha_bridge_finality_bundle_tool => "iroha.bridge.finality.bundle";
@@ -9380,16 +9360,16 @@ fn iroha_runtime_metrics_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
     simple_manual_get_tool(
         "iroha.runtime.upgrades.list",
-        "List runtime upgrades (`/v1/runtime/upgrades`).",
+        "List the committed runtime selection and every recorded change set (`/v1/runtime/upgrades`).",
         "/v1/runtime/upgrades",
     )
 }
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.runtime.upgrades.propose",
-        "Propose a runtime upgrade (`/v1/runtime/upgrades/propose`); the request payload is the required `body` object.",
+        "Draft the Parliament proposal that schedules a runtime change set (`/v1/runtime/upgrades/propose`); the change set is the required `body` object.",
         "/v1/runtime/upgrades/propose",
-        "Raw runtime-upgrade proposal payload.",
+        "Runtime change set to schedule.",
     )
 }
 fn iroha_proofs_query_tool() -> ToolSpec {

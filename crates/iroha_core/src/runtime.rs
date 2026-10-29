@@ -7,6 +7,8 @@
 //! State commitment covers exactly the storage it installs.
 
 pub mod catalog;
+pub(crate) mod change_set;
+pub(crate) mod containment;
 
 use iroha_data_model::runtime::{
     definition::{DefinitionDescriptorV1, DefinitionId, RestrictionV1, RootSelectionV1},

@@ -1377,7 +1377,7 @@ pub async fn collection_query_for_bench(
     .await
 }
 pub use runtime::{
-    ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
+    ProposeUpgradeResponse, handle_runtime_cancel_upgrade, handle_runtime_propose_upgrade,
     handle_runtime_upgrades_list,
 };
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
@@ -13250,12 +13250,34 @@ async fn handler_runtime_upgrades_list(
     let payload = crate::runtime::handle_runtime_upgrades_list(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
+async fn handler_runtime_containments_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/containments",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_runtime_containments_list(app.state.clone()).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
 async fn handler_runtime_propose_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
-    body: crate::utils::extractors::NoritoJson<crate::runtime::ProposeUpgradeDto>,
+    body: crate::utils::extractors::NoritoJson<iroha_data_model::runtime::lifecycle::ChangeSetV1>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(
@@ -13271,29 +13293,6 @@ async fn handler_runtime_propose_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
-    Ok(crate::utils::respond_with_format(&payload, format))
-}
-async fn handler_runtime_activate_upgrade(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    id: AxPath<String>,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/runtime/upgrades/activate",
-        true,
-    )
-    .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let payload = crate::runtime::handle_runtime_activate_upgrade(id).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_cancel_upgrade(
@@ -38876,8 +38875,8 @@ impl Torii {
             NODE_PROJECTION_CHECKPOINT => canonical_account_get(handler_node_query_projection_checkpoint, app_state, 0);
             RUNTIME_UPGRADES => operator_get(handler_runtime_upgrades_list, app_state);
             RUNTIME_UPGRADE_PROPOSE => operator_post(handler_runtime_propose_upgrade, app_state);
-            RUNTIME_UPGRADE_ACTIVATE => operator_post(handler_runtime_activate_upgrade, app_state);
             RUNTIME_UPGRADE_CANCEL => operator_post(handler_runtime_cancel_upgrade, app_state);
+            RUNTIME_CONTAINMENTS => operator_get(handler_runtime_containments_list, app_state);
         );
         #[cfg(feature = "app_api")]
         {

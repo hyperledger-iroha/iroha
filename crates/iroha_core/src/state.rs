@@ -1270,7 +1270,8 @@ macro_rules! with_world_overlay_fields {
             verifying_keys_by_circuit,
             pedersen_params,
             poseidon_params,
-            runtime_upgrades,
+            runtime_change_sets,
+            runtime_containments,
             runtime_definitions,
             runtime_selection,
             privacy_consensus_policy,
@@ -4342,11 +4343,16 @@ pub struct WorldData {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades keyed by manifest id.
-    pub(crate) runtime_upgrades: Storage<
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+    /// Governed runtime change sets by identity, with their lifecycle
+    /// (`specs/live_runtime_upgrades.md` §6).
+    pub(crate) runtime_change_sets: Storage<
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity
+    /// (`specs/live_runtime_upgrades.md` §7.1).
+    pub(crate) runtime_containments:
+        Storage<[u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1>,
     /// Published live-upgrade definitions by identity (`specs/live_runtime_upgrades.md` §3).
     pub(crate) runtime_definitions: Storage<
         iroha_data_model::runtime::definition::DefinitionId,
@@ -5330,12 +5336,15 @@ pub struct WorldBlockFields<'world> {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades
-    pub(crate) runtime_upgrades: StorageField<
+    /// Governed runtime change sets by identity.
+    pub(crate) runtime_change_sets: StorageField<
         'world,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity.
+    pub(crate) runtime_containments:
+        StorageField<'world, [u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1>,
     /// Published live-upgrade definitions.
     pub(crate) runtime_definitions: StorageField<
         'world,
@@ -6152,7 +6161,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.account_roles, AccountRole);
         collect_reverts!(self.tx_sequences, TxSequence);
         collect_reverts!(self.verifying_keys, VerifyingKey);
-        collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_reverts!(self.runtime_change_sets, RuntimeChangeSet);
         collect_reverts!(self.privacy_protocol_policies, PrivacyProtocolPolicy);
         collect_reverts!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_reverts!(
@@ -6258,7 +6267,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.account_roles, AccountRole);
         collect_payload!(self.tx_sequences, TxSequence);
         collect_payload!(self.verifying_keys, VerifyingKey);
-        collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
+        collect_payload!(self.runtime_change_sets, RuntimeChangeSet);
         collect_payload!(self.privacy_protocol_policies, PrivacyProtocolPolicy);
         collect_payload!(self.kagemusha_wallet_ledger, KagemushaWalletLedger);
         collect_payload!(
@@ -6472,7 +6481,8 @@ impl WorldBlock<'_> {
             verifying_keys_by_circuit,
             pedersen_params,
             poseidon_params,
-            runtime_upgrades,
+            runtime_change_sets,
+            runtime_containments,
             runtime_definitions,
             privacy_protocol_policies,
             kagemusha_wallet_ledger,
@@ -7069,11 +7079,17 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades
-    pub(crate) runtime_upgrades: StorageTransaction<
+    /// Governed runtime change sets by identity.
+    pub(crate) runtime_change_sets: StorageTransaction<
         'block,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
+    >,
+    /// Emergency containments of runtime definitions by identity.
+    pub(crate) runtime_containments: StorageTransaction<
+        'block,
+        [u8; 32],
+        iroha_data_model::runtime::lifecycle::ContainmentRecordV1,
     >,
     /// Published live-upgrade definitions.
     pub(crate) runtime_definitions: StorageTransaction<
@@ -9336,12 +9352,15 @@ pub struct WorldView<'world> {
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
-    /// Registry of runtime upgrades
-    pub(crate) runtime_upgrades: StorageView<
+    /// Governed runtime change sets by identity.
+    pub(crate) runtime_change_sets: StorageView<
         'world,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     >,
+    /// Emergency containments of runtime definitions by identity.
+    pub(crate) runtime_containments:
+        StorageView<'world, [u8; 32], iroha_data_model::runtime::lifecycle::ContainmentRecordV1>,
     /// Published live-upgrade definitions.
     pub(crate) runtime_definitions: StorageView<
         'world,
@@ -21324,10 +21343,13 @@ macro_rules! world_ro_accessors {
             storage poseidon_params:
                 iroha_data_model::confidential::ConfidentialParamsId =>
                 iroha_data_model::confidential::PoseidonParams;
-            /// Runtime upgrade registry (read-only).
-            storage runtime_upgrades:
-                iroha_data_model::runtime::RuntimeUpgradeId =>
-                iroha_data_model::runtime::RuntimeUpgradeRecord;
+            /// Governed runtime change sets by identity (read-only).
+            storage runtime_change_sets:
+                iroha_data_model::runtime::lifecycle::ChangeSetId =>
+                iroha_data_model::runtime::lifecycle::ChangeSetRecordV1;
+            /// Emergency containments of runtime definitions (read-only).
+            storage runtime_containments:
+                [u8; 32] => iroha_data_model::runtime::lifecycle::ContainmentRecordV1;
             /// Published live-upgrade definitions (read-only).
             storage runtime_definitions:
                 iroha_data_model::runtime::definition::DefinitionId =>
@@ -25059,7 +25081,8 @@ impl WorldTransaction<'_, '_> {
             private_dataspaces: _,
             pedersen_params: _,
             poseidon_params: _,
-            runtime_upgrades: _,
+            runtime_change_sets: _,
+            runtime_containments: _,
             runtime_definitions: _,
             runtime_selection: _,
             privacy_consensus_policy: _,
@@ -25288,7 +25311,8 @@ impl WorldTransaction<'_, '_> {
         self.private_dataspaces.apply();
         self.pedersen_params.apply();
         self.poseidon_params.apply();
-        self.runtime_upgrades.apply();
+        self.runtime_change_sets.apply();
+        self.runtime_containments.apply();
         self.runtime_definitions.apply();
         self.runtime_selection.apply();
         self.privacy_consensus_policy.apply();
@@ -26100,15 +26124,15 @@ impl WorldTransaction<'_, '_> {
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
-    /// Test helper: mutable access to runtime upgrade registry.
-    pub fn runtime_upgrades_mut(
+    /// Test helper: mutable access to the governed runtime change sets.
+    pub fn runtime_change_sets_mut(
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        iroha_data_model::runtime::RuntimeUpgradeId,
-        iroha_data_model::runtime::RuntimeUpgradeRecord,
+        iroha_data_model::runtime::lifecycle::ChangeSetId,
+        iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
     > {
-        &mut self.runtime_upgrades
+        &mut self.runtime_change_sets
     }
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
@@ -27928,12 +27952,15 @@ impl State {
                 "incompatible persisted SoraFS moderation V1 policy/appeal/anchor/case state; regenerate first-release genesis and snapshots: {error}"
             ))
         })?;
-        crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
-                )
-            });
+        // A restored State is executed only by a release that implements its selection.
+        let catalog = crate::runtime::release_catalog().map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(error.to_string())
+        })?;
+        if let Some(definition) = catalog.unsupported(world.runtime_selection.view().get()) {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "this release cannot execute the restored runtime selection: definition {definition} is not implemented"
+            )));
+        }
         contract_subject_restore::rebuild(&mut world).expect(
             "incompatible contract lifecycle state; regenerate first-release genesis and snapshots",
         );
@@ -29376,11 +29403,12 @@ impl State {
             drop(waker);
         }
     }
-    /// Create a block after validating the persisted active runtime ABI.
+    /// Create a block after validating that every host profile the committed
+    /// runtime selection activates is published.
     ///
     /// # Errors
-    /// Returns the stable admission reason when persisted governance state
-    /// selects an ABI surface different from this binary.
+    /// Returns the stable admission reason when the committed selection names
+    /// a definition the World does not hold.
     pub fn try_block(
         &self,
         curr_block: BlockHeader,
@@ -29389,11 +29417,7 @@ impl State {
         self.block_with_pristine_stage(curr_block, |block| {
             // Validate the acquired predecessor, before any start effects. A
             // separate World view can belong to a different publication.
-            crate::smartcontracts::ivm::active_runtime_abi_hash(
-                &block.world,
-                curr_block.height().get(),
-            )
-            .map(|_| ())
+            crate::smartcontracts::ivm::active_host_abi_hashes(&block.world).map(|_| ())
         })
     }
     #[expect(
@@ -29535,16 +29559,6 @@ impl State {
         // Plan every due tightening before applying any of them so malformed
         // restored state cannot leave the block overlay partially updated.
         sb.apply_due_privacy_protocol_limits();
-        crate::smartcontracts::ivm::active_runtime_abi_hash(
-            &sb.world,
-            sb._curr_block.height().get(),
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "persisted active runtime ABI is incompatible with this node at block height {}: {error:?}",
-                sb._curr_block.height().get()
-            )
-        });
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
             .world
@@ -29802,58 +29816,18 @@ impl State {
             current_slot,
         );
         apply_confidential_transitions(&mut wtx, &transitions, sb.zk.registry_max_delta_per_block);
-        let upgrades_to_activate: Vec<(iroha_data_model::runtime::RuntimeUpgradeId, u16)> = wtx
-            .runtime_upgrades
+        // Governed runtime change sets take effect before ordinary execution of their height.
+        let committee: Vec<iroha_crypto::PublicKey> = sb
+            .commit_topology
+            .get()
             .iter()
-            .filter_map(|(id, rec)| {
-                if matches!(
-                    rec.status,
-                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                ) && rec.manifest.start_height == now_h
-                    && now_h < rec.manifest.end_height
-                {
-                    Some((*id, rec.manifest.abi_version))
-                } else {
-                    None
-                }
-            })
+            .map(|peer| peer.public_key().clone())
             .collect();
-        for (id, abi_version) in upgrades_to_activate {
-            if let Some(mut rec) = wtx.runtime_upgrades.get(&id).cloned()
-                && matches!(
-                    rec.status,
-                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                )
-                && rec.manifest.start_height == now_h
-                && now_h < rec.manifest.end_height
-            {
-                crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
-                    &rec.manifest,
-                )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
-                    )
-                });
-                rec.status = iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
-                wtx.runtime_upgrades.insert(id, rec);
-                wtx.emit_events(Some(
-                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
-                        iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
-                            id,
-                            abi_version,
-                            at_height: now_h,
-                        },
-                    ),
-                ));
-                #[cfg(feature = "telemetry")]
-                {
-                    if let Some(telemetry) = wtx.telemetry {
-                        telemetry.inc_runtime_upgrade_event("activated");
-                    }
-                }
-            }
-        }
+        let now_ms = u64::try_from(sb._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
+        crate::runtime::change_set::activate_due(&mut wtx, now_h, now_ms, &committee)?;
+        // Containment leases end after the height's change sets apply, so a ratification that
+        // takes a contained definition over is never undone by the expiry it replaces.
+        crate::runtime::containment::expire_due(&mut wtx, now_h, now_ms);
         // Collect candidates to open (avoid borrow conflicts)
         let to_open: Vec<(String, u64, u64)> = wtx
             .governance_referenda
@@ -30150,13 +30124,6 @@ impl State {
             axt_lane_map,
         )?;
         update_oracle_change_pipeline(&mut wtx, now_h, &static_policy.oracle.governance);
-        crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
-            |error| {
-                panic!(
-                    "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
-                )
-            },
-        );
         // Classify this original block-start child before its existing publication.
         // Raw quantity leases remain a refusal; only successful apply advances lineage.
         let mut quantity_candidate = fastpq_quantity_capture::QuantityCandidateArchive::default();

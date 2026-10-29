@@ -97,75 +97,147 @@ function normalizeManifestProvenance(value, context) {
   };
 }
 
+/**
+ * Admit the exact `RuntimeUpgradeProposal`: the change set SORA Parliament schedules, or the
+ * scheduled change set it withdraws, with the notice and proposal time frozen at admission.
+ * Every number-encoded u64, including the change set's effective height, is a JSON safe integer.
+ */
 function normalizeRuntimeUpgrade(value, context) {
-  const record = exactRecord(value, ["proposal_operator", "manifest"], context);
-  const manifestContext = `${context}.manifest`;
-  const manifest = exactRecord(record.manifest, [
-    "name",
-    "description",
-    "abi_version",
-    "abi_hash",
-    "added_syscalls",
-    "added_pointer_types",
-    "start_height",
-    "end_height",
-    "sbom_digests",
-    "slsa_attestation",
-    "provenance",
-  ], manifestContext);
-  if (manifest.abi_version !== 1) {
-    throw new TypeError(`${manifestContext}.abi_version must be the number 1`);
-  }
-  const addedSyscalls = uint16Array(
-    manifest.added_syscalls,
-    `${manifestContext}.added_syscalls`,
+  const record = exactRecord(
+    value,
+    ["proposal_operator", "action", "notice", "proposed_ms"],
+    context,
   );
-  const addedPointerTypes = uint16Array(
-    manifest.added_pointer_types,
-    `${manifestContext}.added_pointer_types`,
-  );
-  if (addedSyscalls.length !== 0 || addedPointerTypes.length !== 0) {
-    throw new TypeError(`${manifestContext} ABI delta lists must be empty in V1`);
-  }
-  const startHeight = jsonUint(manifest.start_height, `${manifestContext}.start_height`);
-  const endHeight = jsonUint(manifest.end_height, `${manifestContext}.end_height`);
-  if (endHeight <= startHeight) {
-    throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
-  }
   return {
     proposal_operator: canonicalAccountId(
       record.proposal_operator,
       `${context}.proposal_operator`,
     ),
-    manifest: {
-      name: nonEmptyString(manifest.name, `${manifestContext}.name`),
-      description: exactString(manifest.description, `${manifestContext}.description`),
-      abi_version: 1,
-      abi_hash: byteArray(manifest.abi_hash, 32, `${manifestContext}.abi_hash`),
-      added_syscalls: addedSyscalls,
-      added_pointer_types: addedPointerTypes,
-      start_height: startHeight,
-      end_height: endHeight,
-      sbom_digests: array(manifest.sbom_digests, `${manifestContext}.sbom_digests`)
-        .map((item, index) => {
-          const itemContext = `${manifestContext}.sbom_digests[${index}]`;
-          const digest = exactRecord(item, ["algorithm", "digest"], itemContext);
-          return {
-            algorithm: nonEmptyString(digest.algorithm, `${itemContext}.algorithm`),
-            digest: canonicalBase64(digest.digest, `${itemContext}.digest`),
-          };
-        }),
-      slsa_attestation: canonicalBase64(
-        manifest.slsa_attestation,
-        `${manifestContext}.slsa_attestation`,
-      ),
-      provenance: array(manifest.provenance, `${manifestContext}.provenance`)
-        .map((item, index) => normalizeManifestProvenance(
-          item,
-          `${manifestContext}.provenance[${index}]`,
-        )),
-    },
+    action: normalizeRuntimeUpgradeAction(record.action, `${context}.action`),
+    notice: normalizeRuntimeNotice(record.notice, `${context}.notice`),
+    proposed_ms: jsonUint(record.proposed_ms, `${context}.proposed_ms`),
   };
+}
+
+function normalizeRuntimeUpgradeAction(value, context) {
+  const record = exactRecord(value, ["kind", "content"], context);
+  switch (record.kind) {
+    case "Schedule":
+      return {
+        kind: "Schedule",
+        content: normalizeRuntimeChangeSetV1(record.content, `${context}.content`),
+      };
+    case "Cancel":
+      return { kind: "Cancel", content: lowerHex32(record.content, `${context}.content`) };
+    default:
+      throw new TypeError(`${context}.kind must be Schedule or Cancel`);
+  }
+}
+
+function normalizeRuntimeNotice(value, context) {
+  const record = exactRecord(value, ["blocks", "ms", "approval_cushion_ms"], context);
+  return {
+    blocks: jsonUint(record.blocks, `${context}.blocks`),
+    ms: jsonUint(record.ms, `${context}.ms`),
+    approval_cushion_ms: jsonUint(
+      record.approval_cushion_ms,
+      `${context}.approval_cushion_ms`,
+    ),
+  };
+}
+
+/**
+ * Validate and rebuild one exact `ChangeSetV1` JSON object
+ * (`specs/live_runtime_upgrades.md` §6).
+ *
+ * This release implements change sets of the universal root only. Published definitions and
+ * transitions keep their canonical `{kind, content}` envelopes with opaque JSON content;
+ * integers in that content must be safe JSON numbers or bigint. The node checks the
+ * transitions against the selection the change set meets when the proposal is admitted.
+ */
+export function normalizeRuntimeChangeSetV1(value, context = "changeSet") {
+  const record = exactRecord(value, [
+    "network",
+    "root",
+    "predecessor",
+    "successor",
+    "effective_height",
+    "publish",
+    "transitions",
+    "qualification",
+  ], context);
+  const network = nonEmptyString(record.network, `${context}.network`);
+  try {
+    NetworkId.parse(network);
+  } catch (error) {
+    throw new TypeError(
+      `${context}.network must be an exact canonical NetworkId literal`,
+      { cause: error },
+    );
+  }
+  const root = exactRecord(record.root, ["kind", "content"], `${context}.root`);
+  if (root.kind !== "Universal" || root.content !== null) {
+    throw new TypeError(`${context}.root must be the universal root with null content`);
+  }
+  return {
+    network,
+    root: { kind: "Universal", content: null },
+    predecessor: lowerHex32(record.predecessor, `${context}.predecessor`),
+    successor: lowerHex32(record.successor, `${context}.successor`),
+    effective_height: jsonUint(record.effective_height, `${context}.effective_height`, {
+      allowZero: false,
+    }),
+    publish: taggedJsonArray(record.publish, `${context}.publish`),
+    transitions: taggedJsonArray(record.transitions, `${context}.transitions`),
+    qualification: lowerHex32(record.qualification, `${context}.qualification`),
+  };
+}
+
+function taggedJsonArray(value, context) {
+  return array(value, context).map((item, index) => {
+    const itemContext = `${context}[${index}]`;
+    const entry = exactRecord(item, ["kind", "content"], itemContext);
+    return {
+      kind: nonEmptyString(entry.kind, `${itemContext}.kind`),
+      content: jsonValue(entry.content, `${itemContext}.content`, 0),
+    };
+  });
+}
+
+const OPAQUE_JSON_MAX_DEPTH = 128;
+
+function jsonValue(value, context, depth) {
+  if (depth > OPAQUE_JSON_MAX_DEPTH) {
+    throw new RangeError(`${context} exceeds the ${OPAQUE_JSON_MAX_DEPTH}-level JSON nesting limit`);
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
+      throw new TypeError(`${context} must contain only safe integer numbers or bigint`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Array.from(value, (item, index) => jsonValue(item, `${context}[${index}]`, depth + 1));
+  }
+  if (!plainObject(value)) {
+    throw new TypeError(`${context} must contain only JSON values`);
+  }
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    Object.defineProperty(result, key, {
+      value: jsonValue(item, `${context}.${key}`, depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return result;
 }
 
 const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
@@ -1377,16 +1449,6 @@ function stringTuple(value, context) {
     throw new TypeError(`${context} must be the exact one-field string tuple`);
   }
   return value[0];
-}
-
-function uint16Array(value, context) {
-  return array(value, context).map((item, index) => {
-    const normalized = jsonUint(item, `${context}[${index}]`);
-    if (normalized > 0xffff) {
-      throw new TypeError(`${context}[${index}] must fit in an unsigned 16-bit integer`);
-    }
-    return normalized;
-  });
 }
 
 function jsonUint(value, context, options = {}) {

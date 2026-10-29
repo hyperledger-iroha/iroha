@@ -8632,7 +8632,8 @@ fn decode_world_fields(
         })?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
-    let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
+    let runtime_change_sets = take_required(&mut map, "runtime_change_sets")?;
+    let runtime_containments = take_required(&mut map, "runtime_containments")?;
     let runtime_definitions = take_required(&mut map, "runtime_definitions")?;
     let runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> =
         take_required(&mut map, "runtime_selection")?;
@@ -9090,7 +9091,8 @@ fn decode_world_fields(
         private_dataspaces,
         pedersen_params,
         poseidon_params,
-        runtime_upgrades,
+        runtime_change_sets,
+        runtime_containments,
         runtime_definitions,
         runtime_selection,
         privacy_consensus_policy,

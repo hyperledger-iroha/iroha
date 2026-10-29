@@ -865,7 +865,7 @@ RBAC
     execution height, or a compare-and-set head.
   - Certificate-only proposal creation and standalone governance operations:
     - Proposals: `CanProposeContractDeployment{ contract_address }`
-    - Runtime-upgrade proposals: `CanProposeRuntimeUpgrade{ abi_version, abi_hash }`
+    - Runtime change-set proposals: `CanProposeRuntimeChangeSet` (unit; `specs/runtime_upgrades.md`)
     - SCCP proposals: a registered citizen or `CanProposeSccpRouteGovernance`
     - Global data-trigger permission proposals: a registered bonded citizen
     - Standalone ballots: `CanSubmitGovernanceBallot{ referendum_id }`
@@ -917,7 +917,7 @@ Protected Namespaces
 - Admission enforces that an Enacted governance proposal exists for the tuple `(contract_address, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
 Runtime Upgrade Hooks
-- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime change-set instructions (`ProposeRuntimeUpgradeProposal` and `AttestRuntimeSupportV1`).
 - The first-release manifest schema is closed. `runtime_upgrade` is the only
   accepted hook name, its object accepts exactly the fields below, and any
   unknown top-level, validator-binding, overlay, module, hook, or hook-field

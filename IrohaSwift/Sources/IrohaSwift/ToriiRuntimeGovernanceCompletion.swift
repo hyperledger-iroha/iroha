@@ -164,25 +164,17 @@ extension ToriiClient {
 
     @discardableResult
     public func listRuntimeUpgrades(
-        completion: @escaping (Result<[ToriiRuntimeUpgradeListItem], Swift.Error>) -> Void
+        completion: @escaping (Result<ToriiRuntimeUpgradesSnapshot, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) { try await self.listRuntimeUpgrades() }
     }
 
     @discardableResult
     public func proposeRuntimeUpgrade(
-        manifest: ToriiRuntimeUpgradeManifest,
+        changeSet: ToriiRuntimeChangeSet,
         completion: @escaping (Result<ToriiRuntimeUpgradeActionResponse, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.proposeRuntimeUpgrade(manifest: manifest) }
-    }
-
-    @discardableResult
-    public func activateRuntimeUpgrade(
-        idHex: String,
-        completion: @escaping (Result<ToriiRuntimeUpgradeActionResponse, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.activateRuntimeUpgrade(idHex: idHex) }
+        runTask(completion) { try await self.proposeRuntimeUpgrade(changeSet: changeSet) }
     }
 
     @discardableResult

@@ -340,57 +340,155 @@ class GovernanceProposalDeployContract:
         return cls(_contract_address(record["contract_address"], f"{context}.contract_address"), _lower_hex32(record["code_hash"], f"{context}.code_hash"), _lower_hex32(record["abi_hash"], f"{context}.abi_hash"), abi_version, provenance)
 
 
-@dataclass(frozen=True)
-class GovernanceRuntimeUpgradeManifest:
-    """Complete canonical first-release runtime-upgrade manifest."""
+class GovernanceRuntimeUpgradeActionKind(str, Enum):
+    """Closed `RuntimeUpgradeActionV1` tags."""
 
-    name: str
-    description: str
-    abi_version: int
-    abi_hash: tuple[int, ...]
-    added_syscalls: tuple[int, ...]
-    added_pointer_types: tuple[int, ...]
-    start_height: int
-    end_height: int
-    sbom_digests: tuple[GovernanceCanonicalObject, ...]
-    slsa_attestation: str
-    provenance: tuple[GovernanceManifestProvenance, ...]
+    SCHEDULE = "Schedule"
+    CANCEL = "Cancel"
+
+
+@dataclass(frozen=True)
+class GovernanceRuntimeNotice:
+    """Exact `RuntimeNoticeV1` frozen into a runtime-upgrade proposal.
+
+    `blocks` is the fewest blocks between approval and the effective height;
+    `ms` and `approval_cushion_ms` are the fewest committed milliseconds from
+    proposal and from approval to activation.
+    """
+
+    blocks: int
+    ms: int
+    approval_cushion_ms: int
 
     @classmethod
-    def from_payload(cls, value: Any) -> "GovernanceRuntimeUpgradeManifest":
-        context = "RuntimeUpgrade payload.manifest"
-        fields = frozenset({"name", "description", "abi_version", "abi_hash", "added_syscalls", "added_pointer_types", "start_height", "end_height", "sbom_digests", "slsa_attestation", "provenance"})
-        record = _exact(value, fields, context)
-        abi = _uint(record["abi_version"], f"{context}.abi_version", 0xFFFF, positive=True)
-        if abi != 1 or record["added_syscalls"] != [] or record["added_pointer_types"] != []:
-            raise TypeError(f"{context} must use ABI 1 with empty syscall and pointer-type deltas")
-        start = _proposal_exact_json_uint(
-            record["start_height"], f"{context}.start_height"
+    def from_payload(cls, value: Any, context: str) -> "GovernanceRuntimeNotice":
+        record = _exact(value, frozenset({"blocks", "ms", "approval_cushion_ms"}), context)
+        return cls(
+            _proposal_exact_json_uint(record["blocks"], f"{context}.blocks"),
+            _proposal_exact_json_uint(record["ms"], f"{context}.ms"),
+            _proposal_exact_json_uint(
+                record["approval_cushion_ms"], f"{context}.approval_cushion_ms"
+            ),
         )
-        end = _proposal_exact_json_uint(record["end_height"], f"{context}.end_height")
-        if end <= start:
-            raise TypeError(f"{context}.end_height must be greater than start_height")
-        if not isinstance(record["sbom_digests"], list) or not isinstance(record["provenance"], list):
-            raise TypeError(f"{context} SBOM and provenance fields must be arrays")
-        sboms = []
-        for index, item in enumerate(record["sbom_digests"]):
-            item_context = f"{context}.sbom_digests[{index}]"
-            item_record = _exact(item, frozenset({"algorithm", "digest"}), item_context)
-            sboms.append(_freeze({"algorithm": _string(item_record["algorithm"], f"{item_context}.algorithm"), "digest": _canonical_base64(item_record["digest"], f"{item_context}.digest")}))
-        provenance = tuple(GovernanceManifestProvenance.from_payload(item, f"{context}.provenance[{index}]") for index, item in enumerate(record["provenance"]))
-        return cls(_string(record["name"], f"{context}.name"), _string(record["description"], f"{context}.description", nonempty=False), abi, _bytes32(record["abi_hash"], f"{context}.abi_hash"), (), (), start, end, tuple(sboms), _canonical_base64(record["slsa_attestation"], f"{context}.slsa_attestation"), provenance)
+
+
+_RUNTIME_CHANGE_SET_FIELDS = frozenset(
+    {
+        "network",
+        "root",
+        "predecessor",
+        "successor",
+        "effective_height",
+        "publish",
+        "transitions",
+        "qualification",
+    }
+)
+
+
+@dataclass(frozen=True)
+class GovernanceRuntimeChangeSet:
+    """Exact universal-root `ChangeSetV1` that a proposal schedules.
+
+    The typed fields are the ones a voter checks. `change_set` is the complete
+    object, including its published definitions and ordered transitions, frozen
+    after its envelope is checked. Whether the change set applies to the
+    selection it meets, and its notice, remain node checks.
+    """
+
+    network_id: str
+    predecessor: str
+    successor: str
+    effective_height: int
+    change_set: GovernanceCanonicalObject
+
+    @classmethod
+    def from_payload(cls, value: Any, context: str) -> "GovernanceRuntimeChangeSet":
+        record = _exact(value, _RUNTIME_CHANGE_SET_FIELDS, context)
+        root = _exact(record["root"], frozenset({"kind", "content"}), f"{context}.root")
+        if root["kind"] != "Universal" or root["content"] is not None:
+            raise TypeError(
+                f"{context}.root must be the universal root that SORA Parliament governs"
+            )
+        for field in ("publish", "transitions"):
+            if not isinstance(record[field], list):
+                raise TypeError(f"{context}.{field} must be an array")
+        _lower_hex32(record["qualification"], f"{context}.qualification")
+        network_id = _network_id(record["network"], f"{context}.network")
+        predecessor = _lower_hex32(record["predecessor"], f"{context}.predecessor")
+        successor = _lower_hex32(record["successor"], f"{context}.successor")
+        effective_height = _proposal_exact_json_uint(
+            record["effective_height"], f"{context}.effective_height"
+        )
+        return cls(
+            network_id,
+            predecessor,
+            successor,
+            effective_height,
+            cast(GovernanceCanonicalObject, _freeze(record)),
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceRuntimeUpgradeAction:
+    """One exact adjacently-tagged `RuntimeUpgradeActionV1`.
+
+    `Schedule` carries the change set to schedule. `Cancel` carries the exact
+    lowercase-hex identity of the scheduled change set to withdraw.
+    """
+
+    kind: GovernanceRuntimeUpgradeActionKind
+    change_set: Optional[GovernanceRuntimeChangeSet]
+    change_set_id: Optional[str]
+
+    @classmethod
+    def from_payload(cls, value: Any, context: str) -> "GovernanceRuntimeUpgradeAction":
+        record = _exact(value, frozenset({"kind", "content"}), context)
+        try:
+            kind = GovernanceRuntimeUpgradeActionKind(record["kind"])
+        except (ValueError, TypeError) as exc:
+            raise TypeError(f"{context}.kind must be Schedule or Cancel") from exc
+        content_context = f"{context}.content"
+        if kind is GovernanceRuntimeUpgradeActionKind.SCHEDULE:
+            return cls(
+                kind,
+                GovernanceRuntimeChangeSet.from_payload(record["content"], content_context),
+                None,
+            )
+        return cls(kind, None, _lower_hex32(record["content"], content_context))
 
 
 @dataclass(frozen=True)
 class GovernanceProposalRuntimeUpgrade:
-    """Canonical `RuntimeUpgradeProposal` payload."""
+    """Canonical `RuntimeUpgradeProposal` payload.
 
-    manifest: GovernanceRuntimeUpgradeManifest
+    It asks SORA Parliament to schedule a runtime change set or to withdraw a
+    scheduled one. `notice` and `proposed_ms` are frozen when the proposal is
+    admitted.
+    """
+
+    proposal_operator: str
+    action: GovernanceRuntimeUpgradeAction
+    notice: GovernanceRuntimeNotice
+    proposed_ms: int
 
     @classmethod
     def from_payload(cls, value: Any) -> "GovernanceProposalRuntimeUpgrade":
-        record = _exact(value, frozenset({"manifest"}), "RuntimeUpgrade payload")
-        return cls(GovernanceRuntimeUpgradeManifest.from_payload(record["manifest"]))
+        context = "RuntimeUpgrade payload"
+        record = _exact(
+            value,
+            frozenset({"proposal_operator", "action", "notice", "proposed_ms"}),
+            context,
+        )
+        action = GovernanceRuntimeUpgradeAction.from_payload(record["action"], f"{context}.action")
+        notice = GovernanceRuntimeNotice.from_payload(record["notice"], f"{context}.notice")
+        proposed_ms = _proposal_exact_json_uint(record["proposed_ms"], f"{context}.proposed_ms")
+        return cls(
+            _account_id(record["proposal_operator"], f"{context}.proposal_operator"),
+            action,
+            notice,
+            proposed_ms,
+        )
 
 
 def _sccp_network(value: Any, context: str) -> str:

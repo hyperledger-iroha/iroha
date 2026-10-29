@@ -384,9 +384,8 @@ impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudMailboxMessag
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);
 impl_direct_instruction_box!(crate::isi::soracloud::ApplySoracloudOrderedMailboxResult);
 // Allow direct boxing of runtime upgrade instructions
-impl_direct_instruction_box!(crate::isi::runtime_upgrade::ProposeRuntimeUpgrade);
-impl_direct_instruction_box!(crate::isi::runtime_upgrade::ActivateRuntimeUpgrade);
-impl_direct_instruction_box!(crate::isi::runtime_upgrade::CancelRuntimeUpgrade);
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::AttestRuntimeSupportV1);
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::ContainRuntimeV1);
 // Allow direct boxing of verifying-keys registry instructions
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);

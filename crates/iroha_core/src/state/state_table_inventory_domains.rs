@@ -829,7 +829,6 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"ml-kem-768-xchacha20-poly1305-v1",
             r"monero-fcmp-plus-plus-v1",
             r"native-goldilocks-sha3-384-stark-fri-v1",
-            r"numeric-v1",
             r"orchard-halo2-actions-v1",
             r"other-v1",
             r"pepper-social-v1",
@@ -1423,6 +1422,19 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:runtime:containment:v1\0",
             r"iroha:runtime:support-attestation:v1\0",
         ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Exact wire identities of the runtime lifecycle instructions that are not governance proposals (specs/live_runtime_upgrades.md §6, §7.1): a validator's support attestation of a scheduled change set and the emergency panel's containment, including their built-in dispatch entries. They select instruction layouts; the attestation's and endorsements' own signature domains authenticate them, and the identifiers compute no State digest",
+        literals: &[
+            r"iroha.runtime.contain.v1",
+            r"iroha.runtime.support.attest.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Wire identity of the instruction a test change set adds to the baseline selection (cfg(test) change-set fixtures); never bound by a release, a consensus input or a State commitment",
+        literals: &[r"iroha.test.added.v1"],
     },
     OtherDomains {
         usage: Use::Test,

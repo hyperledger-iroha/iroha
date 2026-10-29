@@ -2047,40 +2047,59 @@ under the referendum asset's frozen smallest-unit scale by Core.
 
 ## Runtime upgrades and ABI helpers
 
+A network changes its runtime through governed change sets: SORA Parliament
+schedules a `ChangeSetV1` that moves the universal root from its committed
+selection to a successor selection at an effective height.
+
 ```python
-from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
+import json
 
-operator_context = OperatorSigningContext(
-    NetworkId.parse(exact_network_id),
-    runtime_operator_key_pair,
+from iroha_python import ToriiCanonicalRequestAuth, ToriiClient
+
+client = ToriiClient("http://127.0.0.1:8080")
+canonical_auth = ToriiCanonicalRequestAuth(
+    network_id=exact_network_id,
+    account_id=canonical_i105_account_id,
+    signer=wallet.sign,
 )
-client = ToriiClient(
-    "http://127.0.0.1:8080",
-    operator_signing_context=operator_context,
-)
 
-# Inspect ABI policy advertised by the node
-abi_state = client.get_runtime_abi_active()
-abi_hash = client.get_runtime_abi_hash()
-metrics = client.get_runtime_metrics()
+# ABI policy and change-set counters advertised by the node
+abi_state = client.get_runtime_abi_active_typed(canonical_auth=canonical_auth)
+abi_hash = client.get_runtime_abi_hash_typed()
+counts = client.get_runtime_metrics_typed(canonical_auth=canonical_auth).upgrade_events_total
+print(counts.scheduled, counts.activated, counts.lapsed, counts.canceled)
 
-# Draft a runtime upgrade manifest (ABI stays fixed to v1 in the first release)
-manifest = {
-    "name": "Refresh runtime provenance",
-    "description": "Schedules a no-ABI-change runtime rollout.",
-    "abi_version": 1,
-    "abi_hash": "00" * 32,
-    "added_syscalls": [],
-    "added_pointer_types": [],
-    "start_height": 1_500_000,
-    "end_height": 1_500_256,
-}
-proposal = client.propose_runtime_upgrade(manifest)
+# The committed selection, the validator committee and every recorded change set
+snapshot = client.list_runtime_upgrades_typed()
+print("Selection:", snapshot.selection_id_hex, "committee:", len(snapshot.committee))
+for item in snapshot.items:
+    print(item.id_hex, item.effective_height, item.status.kind, item.status.height)
 
-# Later, coordinate activation/cancellation using the manifest id (hex string)
-activation = client.activate_runtime_upgrade("deadbeef" * 4)
-cancel = client.cancel_runtime_upgrade("0x" + "feedface" * 4)
+# Draft the SORA Parliament proposal that schedules a change set. The change set
+# names the committed selection as its predecessor and is sent as given.
+with open("change_set.json", encoding="utf-8") as handle:
+    change_set = json.load(handle)
+assert change_set["predecessor"] == snapshot.selection_id_hex
+schedule = client.propose_runtime_upgrade_typed(change_set)
+
+# Draft the proposal that withdraws a scheduled change set by its identity
+cancel = client.cancel_runtime_upgrade_typed(snapshot.items[0].id_hex)
 ```
+
+Both drafts return the `ProposeRuntimeUpgradeProposal` instruction for local
+signing and submission. There is no activation call: at the start of its
+effective height a scheduled change set activates when every committee member
+has attested support for it (`iroha runtime upgrade attest`), its frozen notice
+has elapsed and it still applies to the committed selection; otherwise it lapses.
+
+`RuntimeUpgradeListItem` types the change-set identity, effective height,
+predecessor and successor selections, status (`Scheduled`, or `Activated`,
+`Lapsed` and `Cancelled` with their height) and frozen `RuntimeNotice`; `record`
+keeps the complete `ChangeSetRecordV1` object, including published definitions,
+transitions and attestations. Change-set identities are exact lowercase
+64-character hex. `GovernanceProposalRuntimeUpgrade` reads a `RuntimeUpgrade`
+Parliament proposal: its `Schedule` or `Cancel` action, the frozen notice and
+`proposed_ms`, each integer at most 2^53 − 1.
 
 ## Peer inventory & Network Time Service
 
@@ -2773,10 +2792,10 @@ no environment variables need to be exported.
   operators can script parity checks without massaging raw JSON from
   `/v1/configuration`, `/v1/peers`, `/v1/time/{now,status}`, `/v1/node/capabilities`,
   and `/v1/runtime/*`.
-- Add typed runtime upgrade helpers (`list_runtime_upgrades_typed`, the
-  `RuntimeUpgrade*` dataclasses, and typed wrappers around `propose_runtime_upgrade`,
-  `activate_runtime_upgrade`, `cancel_runtime_upgrade`) to inspect manifests and
-  instruction bundles without hand-decoding JSON payloads.
+- Add typed runtime change-set helpers (`list_runtime_upgrades_typed` returning
+  `RuntimeUpgradesSnapshot`, and typed wrappers around `propose_runtime_upgrade` and
+  `cancel_runtime_upgrade`) to inspect the committed selection, the change-set
+  lifecycle and the drafted Parliament proposals without hand-decoding JSON payloads.
 - Provide trigger helpers for registering time/pre-commit actions, executing triggers, and
   minting/burning/unregistering repetitions so automation flows avoid manual Norito. Typed trigger
   listings (`TriggerRecord`, `TriggerListPage`) and mutation responses

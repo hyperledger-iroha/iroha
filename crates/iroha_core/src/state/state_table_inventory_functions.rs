@@ -428,7 +428,7 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/smartcontracts/ivm.rs",
-        "active_runtime_abi_hash",
+        "active_host_abi_hashes",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),

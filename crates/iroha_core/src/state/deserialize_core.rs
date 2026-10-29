@@ -580,8 +580,8 @@ impl<'a> SnapshotJsonMap<'a> {
         budget: &iroha_allocation::AllocationBudget,
     ) -> Result<Option<String>, StateRestoreError> {
         use crate::state::upgrade_checkpoint::{
-            ADDED_WORLD_FIELD, RETIRED_WORLD_FIELDS, is_founded_world_field,
-            predecessor_world_field_order,
+            added_world_field, is_founded_world_field, predecessor_world_field_order,
+            retired_world_fields,
         };
         let current = canonical_world_field_order();
         let predecessor = predecessor_world_field_order(current);
@@ -592,7 +592,7 @@ impl<'a> SnapshotJsonMap<'a> {
         if map.require_source_order(&predecessor, "world").is_err() {
             return Ok(None);
         }
-        for retired in &RETIRED_WORLD_FIELDS {
+        for retired in retired_world_fields() {
             let field = format!("world.{}", retired.name);
             let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(retired.name) else {
                 return Err(json::Error::missing_field(field).into());
@@ -617,8 +617,8 @@ impl<'a> SnapshotJsonMap<'a> {
             world.push('"');
             world.push_str(key);
             world.push_str("\":");
-            if *key == ADDED_WORLD_FIELD.1 {
-                world.push_str(empty_added_world_field_json()?);
+            if let Some(added) = added_world_field(key) {
+                world.push_str(&empty_added_world_field_json(added.name)?);
                 continue;
             }
             if is_founded_world_field(key) {
@@ -870,8 +870,6 @@ fn canonical_world_field_order() -> &'static [&'static str] {
     <World as norito::json::FastJsonWrite>::json_object_field_order()
         .expect("World snapshot has a fixed derived object schema")
 }
-/// This release's canonical snapshot JSON of the empty table an upgrade checkpoint adds
-/// (`state::upgrade_checkpoint::ADDED_WORLD_FIELD`).
 /// The founded value of a runtime World field, in snapshot JSON.
 fn founded_world_field_json(name: &str) -> Result<String, json::Error> {
     let field = format!("world.{name}");
@@ -891,21 +889,34 @@ fn founded_world_field_json(name: &str) -> Result<String, json::Error> {
     .map_err(|error| invalid(error.to_string()))
 }
 
-fn empty_added_world_field_json() -> Result<&'static str, json::Error> {
-    static EMPTY: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
-    EMPTY
-        .get_or_init(|| {
-            let empty: Storage<
-                crate::privacy_state::PrivacyProtocolPolicyKeyV1,
-                iroha_data_model::privacy::PrivacyProtocolPolicyV1,
-            > = Storage::new();
-            json::to_json(&empty).map_err(|error| error.to_string())
-        })
-        .as_deref()
-        .map_err(|message| json::Error::InvalidField {
-            field: "world.privacy_protocol_policies".to_owned(),
-            message: message.clone(),
-        })
+/// This release's canonical snapshot JSON of an empty table an upgrade checkpoint adds
+/// (`state::upgrade_checkpoint::ADDED_WORLD_FIELDS`).
+fn empty_added_world_field_json(name: &str) -> Result<String, json::Error> {
+    let field = format!("world.{name}");
+    match name {
+        "privacy_protocol_policies" => json::to_json(&Storage::<
+            crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+            iroha_data_model::privacy::PrivacyProtocolPolicyV1,
+        >::new()),
+        "runtime_change_sets" => json::to_json(&Storage::<
+            iroha_data_model::runtime::lifecycle::ChangeSetId,
+            iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
+        >::new()),
+        "runtime_containments" => json::to_json(&Storage::<
+            [u8; 32],
+            iroha_data_model::runtime::lifecycle::ContainmentRecordV1,
+        >::new()),
+        _ => {
+            return Err(json::Error::InvalidField {
+                field,
+                message: "not a World field an upgrade checkpoint adds".to_owned(),
+            });
+        }
+    }
+    .map_err(|error| json::Error::InvalidField {
+        field,
+        message: error.to_string(),
+    })
 }
 /// The predecessor's `privacy_consensus_policy` Cell in this release's canonical serialization.
 ///

@@ -21233,19 +21233,20 @@ state_test! { sync state_restore_rejects_inexact_nested_proposal_number
         proposer: ALICE_ID.clone(),
         kind: ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
             proposal_operator: ALICE_ID.clone(),
-            manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
-                name: "hostile restore".to_owned(),
-                description: "inexact runtime height".to_owned(),
-                abi_version: 1,
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: maximum + 1,
-                end_height: maximum + 2,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
+            action: crate::runtime::change_set::test_support::schedule(
+                iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                        [0x11; 32],
+                    )),
+                ),
+                maximum + 1,
+            ),
+            notice: iroha_data_model::runtime::lifecycle::RuntimeNoticeV1 {
+                blocks: 1,
+                ms: 0,
+                approval_cushion_ms: 0,
             },
+            proposed_ms: 0,
         }),
         created_height: 0,
         status: GovernanceProposalStatus::Proposed,
@@ -21263,7 +21264,9 @@ state_test! { sync state_restore_rejects_inexact_nested_proposal_number
         .err()
         .expect("an inexact nested proposal number must fail closed");
     assert!(
-        error.to_string().contains("runtime-upgrade proposal start height"),
+        error
+            .to_string()
+            .contains("runtime-upgrade proposal effective height"),
         "unexpected nested proposal error: {error}"
     );
 }

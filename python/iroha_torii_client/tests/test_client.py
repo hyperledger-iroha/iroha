@@ -46,6 +46,9 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     GovernanceLockRecord,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
+    RuntimeChangeSetStatus,
+    RuntimeNotice,
+    RuntimeUpgradeEventCounters,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     ToriiLocalSigningContext,
@@ -4159,54 +4162,22 @@ def test_get_health_status_returns_plain_text() -> None:
     assert session.calls[0]["method"] == "GET"
 
 
-def test_runtime_manifest_rejects_alias_fields() -> None:
-    try:
-        ToriiClient._normalize_runtime_manifest_payload(
-            {
-                "name": "upgrade-1",
-                "description": "First upgrade",
-                "abiVersion": 1,
-                "abi_hash": "0" * 64,
-                "start_height": 1,
-                "end_height": 2,
-            },
-            context="runtime upgrade manifest",
-        )
-    except RuntimeError as exc:
-        assert "abi_version is required" in str(exc)
-    else:
-        raise AssertionError("expected RuntimeError for alias manifest fields")
-
-
-def test_runtime_manifest_rejects_non_v1_abi_version() -> None:
-    with pytest.raises(RuntimeError, match="abi_version must be 1"):
-        ToriiClient._normalize_runtime_manifest_payload(
-            {
-                "name": "upgrade-1",
-                "description": "First upgrade",
-                "abi_version": 2,
-                "abi_hash": "0" * 64,
-                "start_height": 1,
-                "end_height": 2,
-            },
-            context="runtime upgrade manifest",
-        )
-
-
-def test_runtime_manifest_rejects_non_empty_added_surfaces() -> None:
-    with pytest.raises(RuntimeError, match="added_syscalls must be empty"):
-        ToriiClient._normalize_runtime_manifest_payload(
-            {
-                "name": "upgrade-1",
-                "description": "First upgrade",
-                "abi_version": 1,
-                "abi_hash": "0" * 64,
-                "added_syscalls": [512],
-                "start_height": 1,
-                "end_height": 2,
-            },
-            context="runtime upgrade manifest",
-        )
+def test_retired_runtime_upgrade_manifest_surface_is_absent() -> None:
+    for name in (
+        "activate_runtime_upgrade",
+        "_normalize_runtime_manifest_payload",
+        "_validate_first_release_runtime_manifest",
+        "_parse_runtime_upgrade_manifest",
+        "_parse_runtime_upgrade_record",
+    ):
+        assert not hasattr(ToriiClient, name), name
+    for name in ("RuntimeUpgradeManifest", "RuntimeUpgradeStatus", "RuntimeUpgradeRecord"):
+        assert not hasattr(client_module, name), name
+        assert name not in client_module.__all__, name
+        assert not hasattr(torii_module, name), name
+        assert name not in torii_module.__all__, name
+    assert not hasattr(torii_module, "GovernanceRuntimeUpgradeManifest")
+    assert "GovernanceRuntimeUpgradeManifest" not in torii_module.__all__
 
 
 def test_get_node_version_returns_string() -> None:
@@ -4826,7 +4797,12 @@ def test_get_runtime_metrics_parses_payload() -> None:
         StubResponse(
             payload={
                 "abi_version": 1,
-                "upgrade_events_total": {"proposed": 5, "activated": 3, "canceled": 1},
+                "upgrade_events_total": {
+                    "scheduled": 2,
+                    "activated": 3,
+                    "lapsed": 1,
+                    "canceled": 4,
+                },
             }
         )
     )
@@ -4835,134 +4811,298 @@ def test_get_runtime_metrics_parses_payload() -> None:
     metrics = client.get_runtime_metrics(canonical_auth=_governance_auth())
 
     assert metrics.abi_version == 1
-    assert metrics.upgrade_events_total.proposed == 5
+    assert metrics.upgrade_events_total.scheduled == 2
     assert metrics.upgrade_events_total.activated == 3
-    assert metrics.upgrade_events_total.canceled == 1
+    assert metrics.upgrade_events_total.lapsed == 1
+    assert metrics.upgrade_events_total.canceled == 4
 
 
-def test_list_runtime_upgrades_parses_records() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "items": [
-                    {
-                        "id_hex": "aa" * 32,
-                        "record": {
-                            "manifest": {
-                                "name": "ABI v1 refresh",
-                                "description": "scheduled rollout",
-                                "abi_version": 1,
-                                "abi_hash": "11" * 32,
-                                "added_syscalls": [],
-                                "added_pointer_types": [],
-                                "start_height": 10,
-                                "end_height": 20,
-                            },
-                            "status": {"ActivatedAt": 12},
-                            "proposer": CANONICAL_OWNER,
-                            "created_height": 8,
-                        },
-                    },
-                    {
-                        "id_hex": "bb" * 32,
-                        "record": {
-                            "manifest": {
-                                "name": "ABI v1 maintenance",
-                                "description": "next window",
-                                "abi_version": 1,
-                                "abi_hash": "22" * 32,
-                                "added_syscalls": [],
-                                "added_pointer_types": [],
-                                "start_height": 30,
-                                "end_height": 40,
-                            },
-                            "status": {"Proposed": None},
-                            "proposer": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-                            "created_height": 25,
-                        },
-                    },
-                ]
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    upgrades = client.list_runtime_upgrades()
-
-    assert len(upgrades) == 2
-    assert upgrades[0].record.status.kind == "ActivatedAt"
-    assert upgrades[0].record.status.activated_height == 12
-    assert upgrades[1].record.status.kind == "Proposed"
-
-
-def test_propose_runtime_upgrade_posts_manifest() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "tx_instructions": [{"wire_id": "ProposeRuntimeUpgrade", "payload_hex": "aa" * 32}],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.propose_runtime_upgrade(
+def test_runtime_metrics_parser_reads_change_set_counters() -> None:
+    metrics = ToriiClient._parse_runtime_metrics(
         {
-            "name": "ABI v1 maintenance",
-            "description": "roll out refreshed binaries",
             "abi_version": 1,
-            "abi_hash": "ff" * 32,
-            "start_height": 50,
-            "end_height": 60,
-            "added_syscalls": [],
-            "added_pointer_types": [],
-        }
+            "upgrade_events_total": {
+                "scheduled": 2,
+                "activated": 3,
+                "lapsed": 1,
+                "canceled": 4,
+            },
+        },
+        context="runtime metrics response",
     )
+
+    assert metrics.abi_version == 1
+    assert metrics.upgrade_events_total == RuntimeUpgradeEventCounters(
+        scheduled=2, activated=3, lapsed=1, canceled=4
+    )
+
+
+@pytest.mark.parametrize(
+    ("counters", "message"),
+    [
+        (
+            {"proposed": 5, "activated": 3, "canceled": 1},
+            "unsupported fields: proposed",
+        ),
+        (
+            {"scheduled": 0, "activated": 0, "canceled": 0},
+            "missing required fields: lapsed",
+        ),
+        (
+            {"scheduled": 0, "activated": 0, "lapsed": "1", "canceled": 0},
+            "lapsed must be an unsigned 64-bit JSON integer",
+        ),
+    ],
+)
+def test_runtime_metrics_parser_rejects_retired_and_malformed_counters(
+    counters: Dict[str, Any], message: str
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        ToriiClient._parse_runtime_metrics(
+            {"abi_version": 1, "upgrade_events_total": counters},
+            context="runtime metrics response",
+        )
+
+
+_RUNTIME_SELECTION_ID = "5a" * 32
+_RUNTIME_SUCCESSOR_ID = "6b" * 32
+_RUNTIME_COMMITTEE_DIGEST = "7c" * 32
+_RUNTIME_PROPOSAL_WIRE_ID = "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+
+
+def _runtime_change_set(effective_height: int) -> Dict[str, Any]:
+    return {
+        "network": OFFLINE_NETWORK_ID,
+        "root": {"kind": "Universal", "content": None},
+        "predecessor": _RUNTIME_SELECTION_ID,
+        "successor": _RUNTIME_SUCCESSOR_ID,
+        "effective_height": effective_height,
+        "publish": [],
+        "transitions": [],
+        "qualification": "3c" * 32,
+    }
+
+
+def _runtime_change_set_item(
+    id_hex: str, effective_height: int, status: Dict[str, Any]
+) -> Dict[str, Any]:
+    return {
+        "id_hex": id_hex,
+        "record": {
+            "change_set": _runtime_change_set(effective_height),
+            "status": status,
+            "proposed_ms": 1_700_000_000_000,
+            "approved_height": 90,
+            "approved_ms": 1_700_000_600_000,
+            "notice": {
+                "blocks": 3_600,
+                "ms": 1_209_600_000,
+                "approval_cushion_ms": 86_400_000,
+            },
+            "attestations": [],
+        },
+    }
+
+
+def _runtime_upgrades_payload(*items: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "selection_id_hex": _RUNTIME_SELECTION_ID,
+        "selection": {
+            "kernel": "11" * 32,
+            "commitment_profile": "12" * 32,
+            "services_profile": "13" * 32,
+            "installed_storage": [],
+            "active": [],
+            "bindings": [],
+            "restrictions": [],
+            "completion_closures": [],
+        },
+        "committee": list(_NATIVE_AMX_VALIDATOR_SET),
+        "committee_digest_hex": _RUNTIME_COMMITTEE_DIGEST,
+        "items": list(items),
+    }
+
+
+def _runtime_tx_response(payload_hex: str) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "tx_instructions": [
+            {"wire_id": _RUNTIME_PROPOSAL_WIRE_ID, "payload_hex": payload_hex}
+        ],
+    }
+
+
+def test_list_runtime_upgrades_parses_selection_and_change_sets() -> None:
+    payload = _runtime_upgrades_payload(
+        _runtime_change_set_item("aa" * 32, 120, {"kind": "Scheduled", "content": None}),
+        _runtime_change_set_item("bb" * 32, 120, {"kind": "Scheduled"}),
+        _runtime_change_set_item("cc" * 32, 140, {"kind": "Cancelled", "content": 101}),
+    )
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    snapshot = client.list_runtime_upgrades()
+
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"].endswith("/v1/runtime/upgrades")
+    assert snapshot.selection_id_hex == _RUNTIME_SELECTION_ID
+    assert snapshot.selection == payload["selection"]
+    assert snapshot.committee == _NATIVE_AMX_VALIDATOR_SET
+    assert snapshot.committee_digest_hex == _RUNTIME_COMMITTEE_DIGEST
+    assert [item.id_hex for item in snapshot.items] == ["aa" * 32, "bb" * 32, "cc" * 32]
+    scheduled, scheduled_without_content, cancelled = snapshot.items
+    assert scheduled.status == RuntimeChangeSetStatus(kind="Scheduled", height=None)
+    assert scheduled_without_content.status == RuntimeChangeSetStatus(
+        kind="Scheduled", height=None
+    )
+    assert cancelled.status == RuntimeChangeSetStatus(kind="Cancelled", height=101)
+    assert cancelled.effective_height == 140
+    assert cancelled.predecessor_hex == _RUNTIME_SELECTION_ID
+    assert cancelled.successor_hex == _RUNTIME_SUCCESSOR_ID
+    assert cancelled.notice == RuntimeNotice(
+        blocks=3_600, ms=1_209_600_000, approval_cushion_ms=86_400_000
+    )
+    assert cancelled.record == payload["items"][2]["record"]
+
+
+@pytest.mark.parametrize("kind", ["Activated", "Lapsed", "Cancelled"])
+def test_runtime_change_set_status_carries_its_transition_height(kind: str) -> None:
+    status = ToriiClient._parse_runtime_change_set_status(
+        {"kind": kind, "content": 77}, context="status"
+    )
+
+    assert status == RuntimeChangeSetStatus(kind=kind, height=77)
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        ({"kind": "Scheduled", "content": 5}, "content must be null for Scheduled"),
+        ({"kind": "Cancelled"}, "missing required fields: content"),
+        ({"kind": "Activated", "content": None}, "unsigned 64-bit JSON integer"),
+        ({"kind": "Canceled", "content": 3}, "kind must be one of"),
+        ({"kind": "Proposed", "content": None}, "kind must be one of"),
+        ({"ActivatedAt": 12}, "kind must be one of"),
+    ],
+)
+def test_runtime_change_set_status_rejects_retired_and_malformed_variants(
+    status: Dict[str, Any], message: str
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        ToriiClient._parse_runtime_change_set_status(status, context="status")
+
+
+def _retired_manifest_record(payload: Dict[str, Any]) -> None:
+    payload["items"][0]["record"] = {
+        "manifest": {"name": "ABI v1 refresh", "abi_version": 1},
+        "status": {"Proposed": None},
+        "proposer": CANONICAL_OWNER,
+        "created_height": 8,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            _retired_manifest_record,
+            "unsupported fields: created_height, manifest, proposer",
+        ),
+        (lambda payload: payload.pop("selection_id_hex"), "missing required fields: selection_id_hex"),
+        (lambda payload: payload.__setitem__("total", 2), "unsupported fields: total"),
+        (
+            lambda payload: payload["committee"].__setitem__(
+                0, _NATIVE_AMX_VALIDATOR_SET[0].lower()
+            ),
+            r"committee\[0\] must be an exact canonical public-key multihash",
+        ),
+        (
+            lambda payload: payload.__setitem__("committee_digest_hex", "7C" * 32),
+            "committee_digest_hex must be an exact lowercase 32-byte hex string",
+        ),
+        (lambda payload: payload["items"].reverse(), "ordered by effective height, then id"),
+        (
+            lambda payload: payload["items"].append(copy.deepcopy(payload["items"][-1])),
+            "must be unique",
+        ),
+        (
+            lambda payload: payload["items"][0]["record"]["change_set"].__setitem__(
+                "effective_height", -1
+            ),
+            "effective_height must be an unsigned 64-bit JSON integer",
+        ),
+        (
+            lambda payload: payload["items"][0]["record"].__setitem__("attestations", None),
+            "attestations must be a list of objects",
+        ),
+    ],
+)
+def test_list_runtime_upgrades_rejects_malformed_and_retired_snapshots(
+    mutate: Callable[[Dict[str, Any]], Any], message: str
+) -> None:
+    payload = _runtime_upgrades_payload(
+        _runtime_change_set_item("aa" * 32, 120, {"kind": "Scheduled", "content": None}),
+        _runtime_change_set_item("bb" * 32, 130, {"kind": "Activated", "content": 130}),
+    )
+    mutate(payload)
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match=message):
+        client.list_runtime_upgrades()
+
+
+def test_propose_runtime_upgrade_posts_change_set_as_given() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_runtime_tx_response("aa" * 32)))
+    client = ToriiClient("http://node.test", session=session)
+    change_set = _runtime_change_set(240)
+
+    result = client.propose_runtime_upgrade(change_set)
 
     assert result.ok is True
-    assert result.tx_instructions[0].wire_id == "ProposeRuntimeUpgrade"
+    assert result.tx_instructions[0].wire_id == _RUNTIME_PROPOSAL_WIRE_ID
+    assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/propose")
-    body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert body["abi_version"] == 1
-    assert body["abi_hash"] == "ff" * 32
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == change_set
 
 
-def test_activate_runtime_upgrade_posts_identifier() -> None:
+def test_propose_runtime_upgrade_requires_a_change_set_object() -> None:
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "tx_instructions": [{"wire_id": "ActivateRuntimeUpgrade", "payload_hex": "cc" * 32}],
-            }
-        )
-    )
     client = ToriiClient("http://node.test", session=session)
 
-    response = client.activate_runtime_upgrade("0x" + "bb" * 32)
+    with pytest.raises(TypeError, match="runtime change set must be a JSON object"):
+        client.propose_runtime_upgrade([_runtime_change_set(240)])  # type: ignore[arg-type]
 
-    assert response.tx_instructions[0].wire_id == "ActivateRuntimeUpgrade"
-    assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/activate/0x" + "bb" * 32)
+    assert session.calls == []
 
 
-def test_cancel_runtime_upgrade_posts_identifier() -> None:
+def test_cancel_runtime_upgrade_posts_change_set_id() -> None:
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "ok": True,
-                "tx_instructions": [{"wire_id": "CancelRuntimeUpgrade", "payload_hex": "dd" * 32}],
-            }
-        )
-    )
+    session.queue(StubResponse(payload=_runtime_tx_response("dd" * 32)))
     client = ToriiClient("http://node.test", session=session)
 
     response = client.cancel_runtime_upgrade("aa" * 32)
 
-    assert response.tx_instructions[0].wire_id == "CancelRuntimeUpgrade"
-    assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/cancel/0x" + "aa" * 32)
+    assert response.tx_instructions[0].wire_id == _RUNTIME_PROPOSAL_WIRE_ID
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/cancel/" + "aa" * 32)
+    assert session.calls[0]["data"] is None
+
+
+@pytest.mark.parametrize(
+    "change_set_id", ["0x" + "aa" * 32, "AA" * 32, "aa" * 31, bytes([0xAA]) * 32]
+)
+def test_cancel_runtime_upgrade_requires_an_exact_change_set_id(change_set_id: Any) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="exact lowercase 32-byte hex string"):
+        client.cancel_runtime_upgrade(change_set_id)
+
+    assert session.calls == []
 
 
 def test_get_uaid_portfolio_parses_payload() -> None:

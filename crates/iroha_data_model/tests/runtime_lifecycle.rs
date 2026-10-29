@@ -12,10 +12,10 @@ use iroha_data_model::{
             SelectionId,
         },
         lifecycle::{
-            ChangeSetError, ChangeSetV1, ContainmentError, ContainmentKindV1, ContainmentV1,
-            ENDORSEMENT_LIFETIME_MS, EndorsementV1, ExpectationV1, RestrictionKindV1, RootScopeV1,
-            RuntimeRejectionV1, SelectionTransitionV1, SupportAttestationV1, committee_digest,
-            committee_supports,
+            ChangeSetError, ChangeSetId, ChangeSetV1, ContainmentError, ContainmentKindV1,
+            ContainmentRecordV1, ContainmentStatusV1, ContainmentV1, ENDORSEMENT_LIFETIME_MS,
+            EndorsementV1, ExpectationV1, RestrictionKindV1, RootScopeV1, RuntimeRejectionV1,
+            SelectionTransitionV1, SupportAttestationV1, committee_digest, committee_supports,
         },
     },
 };
@@ -303,6 +303,52 @@ fn activation_needs_every_validator() {
     forged[0].attestation.successor = SelectionId([0x99; 32]);
     assert!(forged[0].verify().is_err());
     assert!(!committee_supports(&committee, &forged, id, 150));
+}
+
+#[test]
+fn change_set_identities_are_hex_strings_in_json() {
+    let id = ChangeSetId([0xab; 32]);
+    let json = norito::json::to_json(&id).unwrap();
+    assert_eq!(json, format!("\"{}\"", "ab".repeat(32)));
+    assert_eq!(norito::json::from_str::<ChangeSetId>(&json).unwrap(), id);
+}
+
+#[test]
+fn containment_renewal_opens_halfway_through_the_lease() {
+    let record = ContainmentRecordV1 {
+        containment: ContainmentV1 {
+            network: network(),
+            root: RootScopeV1::Universal,
+            incident: [0x2c; 32],
+            targets: vec![DefinitionId([3; 32])],
+            kind: ContainmentKindV1::AdmissionClosed,
+            lease_until_ms: 1_000 + 172_800_000,
+        },
+        authorized_height: 7,
+        authorized_ms: 1_000,
+        contained: Vec::new(),
+        status: ContainmentStatusV1::Active,
+    };
+    assert_eq!(record.renewal_opens_ms(), 1_000 + 86_400_000);
+}
+
+#[test]
+fn the_committee_digest_names_members_not_their_order() {
+    let committee: Vec<PublicKey> = (1..=4).map(|seed| key(seed).public_key().clone()).collect();
+    let mut rotated = committee.clone();
+    rotated.rotate_left(1);
+    assert_eq!(
+        committee_digest(&committee).unwrap(),
+        committee_digest(&rotated).unwrap(),
+        "a leader rotation keeps the attestations"
+    );
+    let mut replaced = committee.clone();
+    replaced[3] = key(9).public_key().clone();
+    assert_ne!(
+        committee_digest(&committee).unwrap(),
+        committee_digest(&replaced).unwrap(),
+        "a membership change needs new attestations"
+    );
 }
 
 #[test]

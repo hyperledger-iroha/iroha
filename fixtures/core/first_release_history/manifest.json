@@ -5,30 +5,30 @@
       "bytes": 19036,
       "file": "block-1.wire",
       "height": 1,
-      "sha256": "0b41a30b824f40c4accbe9d3534e503b19e6a30815ad617af72d54081f7d2cb5"
+      "sha256": "2cc9bbd5178d4a23f9641297be793895999ea12498530b68481958fafa9a9117"
     },
     {
-      "block_hash": "8fa141786e56fc5ace124fbff9a87d790e33004637231ccf230b06a64f5cd2f9",
+      "block_hash": "e274eb38c0a60f55a0257bec59c5ac0d468a34e49b34ac933a65bf61b72cd8f9",
       "bytes": 13498,
       "file": "block-2.wire",
       "height": 2,
-      "sha256": "0495487bfd70dea092d83bd698915db86e6abab2e8c76b5cc4109f683dbbec8c"
+      "sha256": "2ce785f34c5bd15fb873eaa6a74a0356a06371c83d95b31793591b300105db08"
     },
     {
-      "block_hash": "cbbbb2142ad96ce86a1fbfb4a4b9c77219c2602614bd30a7d5e7e545b0afd4d1",
+      "block_hash": "9d19c1607f16bb4187c19b2020784fc460a9ebfd5bae11847b0ae930cee879f3",
       "bytes": 13883,
       "file": "block-3.wire",
       "height": 3,
-      "sha256": "20a822c302d5cc22422d92c7c580f99e353c817b101324492214520e2a16786e"
+      "sha256": "90e796d5c0f77292bc029de25abbf10f316ec6f6f6591cc464c7c17f27ee1e84"
     }
   ],
   "chain_id": "sumeragi-node-test",
   "execution_tip": {
-    "core_hash": "637698868C414FDE8BC09E0E74EBEBA4884DD01AF68D4DEBB154826FA3F5961B",
-    "creation_time_ms": 1793291284583,
+    "core_hash": "14439638CBAF60908F39084A6F794D9C1E602865D8CED3194E285B5381EFBBF1",
+    "creation_time_ms": 1793303254802,
     "height": 3,
-    "iroha_hash": "hash:CBBBB2142AD96CE86A1FBFB4A4B9C77219C2602614BD30A7D5E7E545B0AFD4D1#C2ED",
-    "result": "71161E16DCDD227F6B5EDCA196369A9C17B12E3B89BAB6FDF63DDF4344934F55",
+    "iroha_hash": "hash:9D19C1607F16BB4187C19B2020784FC460A9EBFD5BAE11847B0AE930CEE879F3#38D7",
+    "result": "588FA04BAD05C677715D0D96268E4F61BC8DF76A97B24A8B32428A4B5E2723AD",
     "root_scope": {
       "kind": "global",
       "value": null
@@ -39,7 +39,7 @@
     "path": "crates/iroha_core/src/sumeragi/node/tests/history_cutover_tests.rs",
     "test": "sumeragi::node::tests::history_cutover_tests::capture_pinned_first_release_history"
   },
-  "history_sha256": "8f704a31f1714c8c81b6ce2ba60902c236e21d50c02735e8e3e8e3e714acb762",
+  "history_sha256": "61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5",
   "validators": 4,
-  "world_state_root": "4cf06bb4485af27ad841bd7912c4debe739ec00d74e147bd2a21cc2e3d4274a5"
+  "world_state_root": "96d0e9544da1c171918fa14fb2b5a9a1cf920d5c6e26feb6977efe9ff1e59057"
 }

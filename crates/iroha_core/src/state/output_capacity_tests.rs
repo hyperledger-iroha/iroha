@@ -506,40 +506,36 @@ fn replacement_gas_limit_comes_from_the_reverted_world() {
 }
 
 #[test]
-fn try_block_rejects_invalid_acquired_abi_and_releases_the_overlay() {
+fn try_block_rejects_an_unpublished_host_profile_and_releases_the_overlay() {
     use iroha_data_model::{
-        executor::IvmAdmissionError,
-        runtime::{
-            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
-        },
+        executor::IvmAdmissionError, runtime::definition::DefinitionDescriptorV1,
     };
+    use mv::storage::StorageReadOnly;
     let state = state(2);
-    let id = RuntimeUpgradeId([7; 32]);
-    {
-        let mut upgrades = state.world.runtime_upgrades.block();
-        upgrades.insert(
-            id,
-            RuntimeUpgradeRecord {
-                manifest: RuntimeUpgradeManifest {
-                    name: "invalid-window".into(),
-                    description: "fixture".into(),
-                    abi_version: 1,
-                    abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                    added_syscalls: vec![],
-                    added_pointer_types: vec![],
-                    start_height: 1,
-                    end_height: 1,
-                    sbom_digests: vec![],
-                    slsa_attestation: vec![],
-                    provenance: vec![],
-                },
-                status: RuntimeUpgradeStatus::Proposed,
-                proposer: ALICE_ID.clone(),
-                created_height: 0,
-            },
-        );
-        upgrades.commit();
-    }
+    let host_profile = {
+        let selection = state.world.runtime_selection.view();
+        let definitions = state.world.runtime_definitions.view();
+        selection
+            .get()
+            .active
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    definitions.get(id),
+                    Some(DefinitionDescriptorV1::HostProfile(_))
+                )
+            })
+            .expect("the baseline activates a host profile")
+    };
+    let descriptor = {
+        let mut definitions = state.world.runtime_definitions.block();
+        let descriptor = definitions
+            .remove(host_profile)
+            .expect("published host profile");
+        definitions.commit();
+        descriptor
+    };
     assert!(matches!(
         state.try_block(header()),
         Err(crate::state::StateBlockStartError::Stage(
@@ -548,13 +544,12 @@ fn try_block_rejects_invalid_acquired_abi_and_releases_the_overlay() {
     ));
     // A failed constructor releases every acquired guard and leaves the input
     // unchanged; repairing the actual fixture store permits a fresh constructor.
-    let mut upgrades = state.world.runtime_upgrades.block();
-    assert!(upgrades.get(&id).is_some());
-    upgrades.remove(id);
-    upgrades.commit();
+    let mut definitions = state.world.runtime_definitions.block();
+    assert!(definitions.get(&host_profile).is_none());
+    definitions.insert(host_profile, descriptor);
+    definitions.commit();
     let block = state.try_block(header()).unwrap();
     assert!(block.start_of_block_effects_applied);
-    assert!(block.world.runtime_upgrades.is_empty());
     assert!(block.execution_output_plan.is_none());
 }
 

@@ -249,22 +249,6 @@ private func governanceNonBlankReason(
     return raw
 }
 
-private func governanceCanonicalBase64(
-    _ raw: String,
-    codingPath: [CodingKey],
-    field: String
-) throws -> Data {
-    guard let decoded = Data(base64Encoded: raw), decoded.base64EncodedString() == raw else {
-        throw DecodingError.dataCorrupted(
-            .init(
-                codingPath: codingPath,
-                debugDescription: "\(field) must use exact canonical base64"
-            )
-        )
-    }
-    return decoded
-}
-
 private func governanceCanonicalQuantity(
     _ raw: String,
     codingPath: [CodingKey],
@@ -332,14 +316,26 @@ private func governanceCanonicalUInt64String(
     return raw
 }
 
-/// Stored payload for a governed runtime-upgrade proposal.
+/// Stored payload for a governed runtime-upgrade proposal: schedule one runtime change set or
+/// withdraw a scheduled one (`specs/live_runtime_upgrades.md` §6).
+///
+/// Every number in the payload is a first-release exact JSON integer (at most `2^53 - 1`),
+/// including the change set's effective height.
 public struct ToriiGovernanceRuntimeUpgradeProposal: Decodable, Sendable, Equatable {
+    /// Canonical transaction authority that created this proposal.
     public let proposalOperator: String
-    public let manifest: ToriiGovernanceRuntimeUpgradeManifest
+    /// The change set to schedule, or the scheduled change set to withdraw.
+    public let action: ToriiGovernanceRuntimeUpgradeAction
+    /// The notice the committed policy required when the proposal was admitted, frozen for it.
+    public let notice: ToriiRuntimeNotice
+    /// Committed time of the block that admitted the proposal, in milliseconds.
+    public let proposedMs: UInt64
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case proposalOperator = "proposal_operator"
-        case manifest
+        case action
+        case notice
+        case proposedMs = "proposed_ms"
     }
 
     public init(from decoder: Decoder) throws {
@@ -354,129 +350,65 @@ public struct ToriiGovernanceRuntimeUpgradeProposal: Decodable, Sendable, Equata
             codingPath: container.codingPath + [CodingKeys.proposalOperator],
             field: "proposal_operator"
         )
-        manifest = try container.decode(ToriiGovernanceRuntimeUpgradeManifest.self, forKey: .manifest)
+        action = try container.decode(ToriiGovernanceRuntimeUpgradeAction.self, forKey: .action)
+        notice = try container.decode(ToriiRuntimeNotice.self, forKey: .notice)
+        proposedMs = try decodeExactJSONUInt64(
+            container,
+            forKey: .proposedMs,
+            userInfo: decoder.userInfo,
+            field: "proposed_ms",
+            maximum: firstReleaseMaxExactJSONUInt64
+        )
     }
 }
 
-/// Exact SBOM digest carried by a governed runtime-upgrade manifest.
-public struct ToriiGovernanceRuntimeUpgradeSbomDigest: Decodable, Sendable, Equatable {
-    public let algorithm: String
-    public let digest: Data
+/// What a runtime-upgrade proposal asks SORA Parliament to enact (`RuntimeUpgradeActionV1`).
+public enum ToriiGovernanceRuntimeUpgradeAction: Decodable, Sendable, Equatable {
+    /// Schedule this change set at its effective height.
+    case schedule(ToriiRuntimeChangeSet)
+    /// Withdraw the scheduled change set with this identity (32-byte lowercase hex).
+    case cancel(changeSetIdHex: String)
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case algorithm
-        case digest
+        case kind
+        case content
     }
 
     public init(from decoder: Decoder) throws {
         try governanceRejectUnknownFields(
             decoder,
             allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "runtime-upgrade SBOM digest"
+            name: "runtime-upgrade action"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        algorithm = try container.decode(String.self, forKey: .algorithm)
-        guard !algorithm.isEmpty,
-              algorithm.utf8.elementsEqual(
-                  algorithm.trimmingCharacters(in: .whitespacesAndNewlines).utf8
-              ) else {
+        let kind = try container.decode(String.self, forKey: .kind)
+        let contentPath = container.codingPath + [CodingKeys.content]
+        switch kind {
+        case "Schedule":
+            let changeSet = try container.decode(ToriiRuntimeChangeSet.self, forKey: .content)
+            try governanceRequireExactJSONIntegers(
+                changeSet.json,
+                codingPath: contentPath,
+                context: "runtime-upgrade change set",
+                exactIntegerLexemes: decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
+                    as? [String: String]
+            )
+            self = .schedule(changeSet)
+        case "Cancel":
+            let changeSetIdHex = try container.decode(String.self, forKey: .content)
+            _ = try governanceLowercaseHash32(
+                changeSetIdHex,
+                codingPath: contentPath,
+                field: "change-set id"
+            )
+            self = .cancel(changeSetIdHex: changeSetIdHex)
+        default:
             throw DecodingError.dataCorruptedError(
-                forKey: .algorithm,
+                forKey: .kind,
                 in: container,
-                debugDescription: "SBOM algorithm must be an exact non-empty string"
+                debugDescription: "unknown runtime-upgrade action \(kind)"
             )
         }
-        digest = try governanceCanonicalBase64(
-            container.decode(String.self, forKey: .digest),
-            codingPath: container.codingPath + [CodingKeys.digest],
-            field: "digest"
-        )
-    }
-}
-
-/// Canonical V1 runtime-upgrade manifest stored inside a governance proposal.
-public struct ToriiGovernanceRuntimeUpgradeManifest: Decodable, Sendable, Equatable {
-    public let name: String
-    public let description: String
-    public let abiVersion: UInt16
-    public let abiHash: Data
-    public let addedSyscalls: [UInt16]
-    public let addedPointerTypes: [UInt16]
-    public let startHeight: UInt64
-    public let endHeight: UInt64
-    public let sbomDigests: [ToriiGovernanceRuntimeUpgradeSbomDigest]
-    public let slsaAttestation: Data
-    public let provenance: [ToriiContractManifestProvenance]
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case name
-        case description
-        case abiVersion = "abi_version"
-        case abiHash = "abi_hash"
-        case addedSyscalls = "added_syscalls"
-        case addedPointerTypes = "added_pointer_types"
-        case startHeight = "start_height"
-        case endHeight = "end_height"
-        case sbomDigests = "sbom_digests"
-        case slsaAttestation = "slsa_attestation"
-        case provenance
-    }
-
-    public init(from decoder: Decoder) throws {
-        try governanceRejectUnknownFields(
-            decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            name: "runtime-upgrade manifest"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        description = try container.decode(String.self, forKey: .description)
-        abiVersion = try container.decode(UInt16.self, forKey: .abiVersion)
-        guard abiVersion == 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .abiVersion,
-                in: container,
-                debugDescription: "runtime-upgrade abi_version must be exactly 1"
-            )
-        }
-        abiHash = try governanceFixedBytes(
-            container.decode([UInt8].self, forKey: .abiHash),
-            count: 32,
-            codingPath: container.codingPath + [CodingKeys.abiHash],
-            field: "abi_hash"
-        )
-        addedSyscalls = try container.decode([UInt16].self, forKey: .addedSyscalls)
-        addedPointerTypes = try container.decode([UInt16].self, forKey: .addedPointerTypes)
-        guard addedSyscalls.isEmpty, addedPointerTypes.isEmpty else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "runtime-upgrade V1 delta lists must be empty"
-                )
-            )
-        }
-        startHeight = try container.decode(UInt64.self, forKey: .startHeight)
-        endHeight = try container.decode(UInt64.self, forKey: .endHeight)
-        guard startHeight < endHeight else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .endHeight,
-                in: container,
-                debugDescription: "runtime-upgrade end_height must be greater than start_height"
-            )
-        }
-        sbomDigests = try container.decode(
-            [ToriiGovernanceRuntimeUpgradeSbomDigest].self,
-            forKey: .sbomDigests
-        )
-        slsaAttestation = try governanceCanonicalBase64(
-            container.decode(String.self, forKey: .slsaAttestation),
-            codingPath: container.codingPath + [CodingKeys.slsaAttestation],
-            field: "slsa_attestation"
-        )
-        provenance = try container.decode(
-            [ToriiContractManifestProvenance].self,
-            forKey: .provenance
-        )
     }
 }
 

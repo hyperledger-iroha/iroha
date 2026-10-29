@@ -62,8 +62,6 @@ mod registry_excludes_signatory_quorum;
 mod runtime_definition;
 #[path = "../runtime_lifecycle.rs"]
 mod runtime_lifecycle;
-#[path = "../runtime_doc_sync.rs"]
-mod runtime_doc_sync;
 #[path = "../signed_block_roundtrip.rs"]
 mod signed_block_roundtrip;
 #[path = "../sm_norito_roundtrip.rs"]

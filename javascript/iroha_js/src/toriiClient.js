@@ -5901,8 +5901,9 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch runtime metrics summary (`GET /v1/runtime/metrics`).
-   * @param {{signal?: AbortSignal}} [options]
+   * Fetch runtime metrics summary (`GET /v1/runtime/metrics`): the active ABI version and the
+   * recorded runtime change sets counted by lifecycle status.
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiRuntimeMetrics>}
    */
   async getRuntimeMetrics(options) {
@@ -5917,71 +5918,74 @@ export class ToriiClient {
   }
 
   /**
-   * List recorded runtime upgrades (`GET /v1/runtime/upgrades`).
+   * Read the committed runtime selection, the validator committee that attests change sets,
+   * and every recorded change set (`GET /v1/runtime/upgrades`). Operator-only: the request is
+   * signed with the client's `OperatorSigningContext`.
+   *
+   * Items keep Torii's order (effective height, then identity). Each item types its identity,
+   * effective height, predecessor and successor selections, status and frozen notice; the
+   * complete `ChangeSetRecordV1` stays available as `record`, with integers above
+   * `Number.MAX_SAFE_INTEGER` returned as bigint.
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>}
+   * @returns {Promise<ToriiRuntimeUpgradesSnapshot>}
    */
   async listRuntimeUpgrades(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listRuntimeUpgrades");
     const response = await this._request("GET", "/v1/runtime/upgrades", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "listRuntimeUpgrades",
+      ),
     });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeRuntimeUpgradesListResponse(payload);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "runtime upgrades list response",
+      { signal },
+    );
+    return normalizeRuntimeUpgradesSnapshot(payload);
   }
 
   /**
-   * Propose a runtime upgrade manifest (`POST /v1/runtime/upgrades/propose`).
-   * @param {ToriiRuntimeUpgradeManifestInput} manifest
+   * Draft the SORA Parliament proposal that schedules a runtime change set
+   * (`POST /v1/runtime/upgrades/propose`). The body is the exact `ChangeSetV1` JSON object of
+   * the universal root; Torii returns the `ProposeRuntimeUpgradeProposal` instruction to sign
+   * and submit. Admission happens when the signed proposal executes, and an approved change
+   * set activates on its own at the start of its effective block. Operator-only.
+   * @param {ToriiRuntimeChangeSet} changeSet
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeUpgradeTxResponse>}
    */
-  async proposeRuntimeUpgrade(manifest, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "proposeRuntimeUpgrade",
-    );
-    const payload = normalizeRuntimeUpgradeManifestPayload(
-      manifest,
-      "proposeRuntimeUpgrade.manifest",
-    );
+  async proposeRuntimeUpgrade(changeSet, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "proposeRuntimeUpgrade");
+    const { normalizeRuntimeChangeSetV1 } = await loadToriiOptionalModule();
+    const body = normalizeRuntimeChangeSetV1(changeSet, "proposeRuntimeUpgrade.changeSet");
     const response = await this._request("POST", "/v1/runtime/upgrades/propose", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: stringifyStrictLosslessIntegerJson(body, "proposeRuntimeUpgrade request"),
       signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "proposeRuntimeUpgrade",
+      ),
     });
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    return normalizeRuntimeUpgradeTxResponse(json, "runtime upgrade propose response");
-  }
-
-  /**
-   * Build activation instructions for a runtime upgrade (`POST /v1/runtime/upgrades/activate/{id}`).
-   * @param {string | BinaryLike} idHex
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiRuntimeUpgradeTxResponse>}
-   */
-  async activateRuntimeUpgrade(idHex, options = {}) {
-    const hash = normalizeHex32String(idHex, "activateRuntimeUpgrade.idHex");
-    const { signal } = normalizeSignalOnlyOption(options, "activateRuntimeUpgrade");
-    const response = await this._request(
-      "POST",
-      `/v1/runtime/upgrades/activate/0x${hash}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-      },
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "runtime upgrade propose response",
+      { signal },
     );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeRuntimeUpgradeTxResponse(payload, "runtime upgrade activate response");
+    return normalizeRuntimeUpgradeTxResponse(payload, "runtime upgrade propose response");
   }
 
   /**
-   * Build cancellation instructions for a runtime upgrade (`POST /v1/runtime/upgrades/cancel/{id}`).
-   * @param {string | BinaryLike} idHex
+   * Draft the SORA Parliament proposal that withdraws a scheduled runtime change set
+   * (`POST /v1/runtime/upgrades/cancel/{id}`). Operator-only.
+   * @param {string | BinaryLike} idHex 32-byte change-set identity
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeUpgradeTxResponse>}
    */
@@ -5994,10 +5998,19 @@ export class ToriiClient {
       {
         headers: JSON_ACCEPT_HEADERS,
         signal,
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "cancelRuntimeUpgrade",
+        ),
       },
     );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "runtime upgrade cancel response",
+      { signal },
+    );
     return normalizeRuntimeUpgradeTxResponse(payload, "runtime upgrade cancel response");
   }
 
@@ -12892,11 +12905,13 @@ async function parseGovernanceProposalKind(payload, context) {
           `${context}.payload`,
         ),
       };
-    case "RuntimeUpgrade":
+    case "RuntimeUpgrade": {
+      const { normalizeGovernanceProposalWireV1 } = await loadToriiOptionalModule();
       return {
         variant,
-        runtime_upgrade: parseGovernanceRuntimeUpgrade(details, `${context}.payload`),
+        runtime_upgrade: normalizeGovernanceProposalWireV1(record, context).payload,
       };
+    }
     case "SccpRouteGovernance":
       return {
         variant,
@@ -13022,107 +13037,6 @@ function parseGovernanceManifestProvenance(payload, context) {
     signer: requireExactNonEmptyString(record.signer, `${context}.signer`),
     signature: requireExactNonEmptyString(record.signature, `${context}.signature`),
   };
-}
-
-function parseGovernanceRuntimeUpgrade(payload, context) {
-  const record = requireExactGovernanceProposalRecord(
-    payload,
-    ["proposal_operator", "manifest"],
-    context,
-  );
-  const manifestContext = `${context}.manifest`;
-  const manifest = requireExactGovernanceProposalRecord(
-    record.manifest,
-    [
-      "name",
-      "description",
-      "abi_version",
-      "abi_hash",
-      "added_syscalls",
-      "added_pointer_types",
-      "start_height",
-      "end_height",
-      "sbom_digests",
-      "slsa_attestation",
-      "provenance",
-    ],
-    manifestContext,
-  );
-  if (manifest.abi_version !== 1) {
-    rejectType(`${manifestContext}.abi_version must be the number 1`);
-  }
-  const addedSyscalls = parseGovernanceUint16Array(
-    manifest.added_syscalls,
-    `${manifestContext}.added_syscalls`,
-  );
-  const addedPointerTypes = parseGovernanceUint16Array(
-    manifest.added_pointer_types,
-    `${manifestContext}.added_pointer_types`,
-  );
-  if (addedSyscalls.length !== 0 || addedPointerTypes.length !== 0) {
-    rejectType(`${manifestContext} ABI delta lists must be empty in V1`);
-  }
-  const startHeight = requireExactJsonUnsignedInteger(
-    manifest.start_height,
-    `${manifestContext}.start_height`,
-  );
-  const endHeight = requireExactJsonUnsignedInteger(
-    manifest.end_height,
-    `${manifestContext}.end_height`,
-  );
-  if (endHeight <= startHeight) {
-    rejectType(`${manifestContext}.end_height must be greater than start_height`);
-  }
-  return {
-    proposal_operator: requireCanonicalGovernanceAccountId(
-      record.proposal_operator,
-      `${context}.proposal_operator`,
-    ),
-    manifest: {
-      name: requireExactNonEmptyString(manifest.name, `${manifestContext}.name`),
-      description: requireExactString(manifest.description, `${manifestContext}.description`),
-      abi_version: 1,
-      abi_hash: requireExactGovernanceByteArray(
-        manifest.abi_hash,
-        32,
-        `${manifestContext}.abi_hash`,
-      ),
-      added_syscalls: addedSyscalls,
-      added_pointer_types: addedPointerTypes,
-      start_height: startHeight,
-      end_height: endHeight,
-      sbom_digests: parseGovernanceSbomDigests(
-        manifest.sbom_digests,
-        `${manifestContext}.sbom_digests`,
-      ),
-      slsa_attestation: requireCanonicalGovernanceBase64(
-        manifest.slsa_attestation,
-        `${manifestContext}.slsa_attestation`,
-      ),
-      provenance: requireGovernanceArray(
-        manifest.provenance,
-        `${manifestContext}.provenance`,
-      ).map((item, index) => parseGovernanceManifestProvenance(
-        item,
-        `${manifestContext}.provenance[${index}]`,
-      )),
-    },
-  };
-}
-
-function parseGovernanceSbomDigests(payload, context) {
-  return requireGovernanceArray(payload, context).map((item, index) => {
-    const itemContext = `${context}[${index}]`;
-    const record = requireExactGovernanceProposalRecord(
-      item,
-      ["algorithm", "digest"],
-      itemContext,
-    );
-    return {
-      algorithm: requireExactNonEmptyString(record.algorithm, `${itemContext}.algorithm`),
-      digest: requireCanonicalGovernanceBase64(record.digest, `${itemContext}.digest`),
-    };
-  });
 }
 
 
@@ -13519,18 +13433,6 @@ function requireExactGovernanceStringTuple(value, context) {
   return value[0];
 }
 
-function parseGovernanceUint16Array(value, context) {
-  return requireGovernanceArray(value, context).map((item, index) => {
-    const parsed = requireExactJsonUnsignedInteger(item, `${context}[${index}]`);
-    if (parsed > 0xffff) {
-      rejectType(`${context}[${index}] must fit in an unsigned 16-bit integer`);
-    }
-    return parsed;
-  });
-}
-
-
-
 function requireCanonicalGovernanceAccountId(value, context) {
   const literal = requireExactNonEmptyString(value, context);
   const canonical = ensureCanonicalAccountId(literal, context);
@@ -13538,24 +13440,6 @@ function requireCanonicalGovernanceAccountId(value, context) {
     rejectType(`${context} must use the canonical account literal`);
   }
   return literal;
-}
-
-
-
-function requireCanonicalGovernanceBase64(value, context) {
-  if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a canonical base64 string`);
-  }
-  if (value === "") return value;
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
-    rejectType(`${context} must be canonical padded base64`);
-  }
-  try {
-    strictDecodeBase64(value);
-  } catch {
-    rejectType(`${context} must be canonical padded base64`);
-  }
-  return value;
 }
 
 
@@ -13878,35 +13762,40 @@ function normalizeRuntimeAbiHashResponse(payload) {
   };
 }
 
+// Change-set lifecycle counters of `GET /v1/runtime/metrics`; `canceled` counts `Cancelled`.
+const RUNTIME_UPGRADE_EVENT_COUNTERS = Object.freeze([
+  "scheduled",
+  "activated",
+  "lapsed",
+  "canceled",
+]);
+
 function normalizeRuntimeMetricsResponse(payload) {
-  const record = ensureRecord(payload, "runtime metrics response");
-  const counters = ensureRecord(
-    record.upgrade_events_total ?? {},
-    "runtime metrics response.upgrade_events_total",
+  const context = "runtime metrics response";
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["abi_version", "upgrade_events_total"],
+    context,
   );
+  const counters = requireExactGovernanceProposalRecord(
+    record.upgrade_events_total,
+    RUNTIME_UPGRADE_EVENT_COUNTERS,
+    `${context}.upgrade_events_total`,
+  );
+  const upgradeEventsTotal = {};
+  for (const key of RUNTIME_UPGRADE_EVENT_COUNTERS) {
+    upgradeEventsTotal[key] = requireExactJsonUnsignedInteger(
+      counters[key],
+      `${context}.upgrade_events_total.${key}`,
+    );
+  }
   return {
     abiVersion: ToriiClient._normalizeUnsignedInteger(
       record.abi_version,
-      "runtime metrics response.abi_version",
-      { allowZero: false },
+      `${context}.abi_version`,
+      { allowZero: false, max: 0xffff },
     ),
-    upgradeEventsTotal: {
-      proposed: ToriiClient._normalizeUnsignedInteger(
-        counters.proposed ?? 0,
-        "runtime metrics response.upgrade_events_total.proposed",
-        { allowZero: true },
-      ),
-      activated: ToriiClient._normalizeUnsignedInteger(
-        counters.activated ?? 0,
-        "runtime metrics response.upgrade_events_total.activated",
-        { allowZero: true },
-      ),
-      canceled: ToriiClient._normalizeUnsignedInteger(
-        counters.canceled ?? 0,
-        "runtime metrics response.upgrade_events_total.canceled",
-        { allowZero: true },
-      ),
-    },
+    upgradeEventsTotal,
   };
 }
 
@@ -15009,206 +14898,164 @@ function normalizeExplorerBlockRecord(payload, context) {
   };
 }
 
-function normalizeRuntimeUpgradesListResponse(payload) {
-  const record = ensureRecord(payload, "runtime upgrades list response");
-  const items = record.items ?? [];
-  if (!arrayIsArray(items)) {
-    rejectType("runtime upgrades list response.items must be an array");
-  }
-  return items.map((item, index) =>
-    normalizeRuntimeUpgradeListItem(item, index, "runtime upgrades list response.items"),
-  );
-}
+// Wire identity of the instruction Torii drafts for a runtime change-set proposal.
+const RUNTIME_UPGRADE_PROPOSAL_WIRE_ID =
+  "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+// `ChangeSetStatusV1` variants that record the height at which they took hold.
+const RUNTIME_CHANGE_SET_HEIGHT_STATUSES = new Set(["Activated", "Lapsed", "Cancelled"]);
 
-function normalizeRuntimeUpgradeListItem(value, index, context) {
-  const record = ensureRecord(value, `${context}[${index}]`);
-  const idHex = requireHexString(record.id_hex ?? "", `${context}[${index}].id_hex`);
-  const normalizedRecord = normalizeRuntimeUpgradeRecord(
-    record.record,
-    `${context}[${index}].record`,
-  );
-  return { idHex, record: normalizedRecord };
-}
-
-function normalizeRuntimeUpgradeRecord(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    manifest: normalizeRuntimeUpgradeManifest(record.manifest, `${context}.manifest`),
-    status: normalizeRuntimeUpgradeStatus(record.status, `${context}.status`),
-    proposer: requireNonEmptyString(record.proposer, `${context}.proposer`),
-    createdHeight: ToriiClient._normalizeUnsignedInteger(
-      record.created_height,
-      `${context}.created_height`,
-      { allowZero: true },
-    ),
-  };
-}
-
-function normalizeRuntimeUpgradeManifest(value, context) {
-  const record = ensureRecord(value, context);
-  const abiVersion = ToriiClient._normalizeUnsignedInteger(
-    record.abi_version,
-    `${context}.abi_version`,
-    { allowZero: false },
-  );
-  const addedSyscalls = parseIntegerArray(
-    record.added_syscalls,
-    `${context}.added_syscalls`,
-  );
-  const addedPointerTypes = parseIntegerArray(
-    record.added_pointer_types,
-    `${context}.added_pointer_types`,
-  );
-  assertFirstReleaseRuntimeUpgradeManifest({
-    abiVersion,
-    addedSyscalls,
-    addedPointerTypes,
+/**
+ * Admit the `GET /v1/runtime/upgrades` snapshot. The selection and each change-set record
+ * stay opaque JSON (unsafe integers as bigint); the fields a caller acts on are typed.
+ */
+function normalizeRuntimeUpgradesSnapshot(payload) {
+  const context = "runtime upgrades list response";
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["selection_id_hex", "selection", "committee", "committee_digest_hex", "items"],
     context,
-  });
+  );
+  const selection = ensureRecord(record.selection, `${context}.selection`);
+  const committee = requireGovernanceArray(record.committee, `${context}.committee`).map(
+    (key, index) => requireRuntimeCommitteeKey(key, `${context}.committee[${index}]`),
+  );
+  const items = requireGovernanceArray(record.items, `${context}.items`).map(
+    (item, index) => normalizeRuntimeChangeSetListItem(item, `${context}.items[${index}]`),
+  );
+  for (let index = 1; index < items.length; index += 1) {
+    const previous = items[index - 1];
+    const current = items[index];
+    if (
+      previous.effectiveHeight > current.effectiveHeight ||
+      (previous.effectiveHeight === current.effectiveHeight && previous.idHex >= current.idHex)
+    ) {
+      rejectType(`${context}.items must be sorted by effective height, then unique identity`);
+    }
+  }
   return {
-    name: requireNonEmptyString(record.name, `${context}.name`),
-    description: requireNonEmptyString(record.description, `${context}.description`),
-    abiVersion,
-    abiHashHex: requireHexString(
-      record.abi_hash ?? "",
-      `${context}.abi_hash`,
+    selectionIdHex: requireExactLowerHex32String(
+      record.selection_id_hex,
+      `${context}.selection_id_hex`,
     ),
-    addedSyscalls,
-    addedPointerTypes,
-    startHeight: ToriiClient._normalizeUnsignedInteger(
-      record.start_height,
-      `${context}.start_height`,
-      { allowZero: true },
+    selection: cloneJsonValue(selection, `${context}.selection`, { preserveBigInt: true }),
+    committee,
+    committeeDigestHex: requireExactLowerHex32String(
+      record.committee_digest_hex,
+      `${context}.committee_digest_hex`,
     ),
-    endHeight: ToriiClient._normalizeUnsignedInteger(
-      record.end_height,
-      `${context}.end_height`,
-      { allowZero: true },
-    ),
+    items,
   };
 }
 
-function normalizeRuntimeUpgradeStatus(value, context) {
+function requireRuntimeCommitteeKey(value, context) {
+  const literal = requireExactTokenString(value, context);
+  canonicalizeMultihashHex(literal, context);
+  return literal;
+}
+
+function normalizeRuntimeChangeSetListItem(value, context) {
+  const item = requireExactGovernanceProposalRecord(value, ["id_hex", "record"], context);
+  const recordContext = `${context}.record`;
+  const record = ensureRecord(item.record, recordContext);
+  const changeSetContext = `${recordContext}.change_set`;
+  const changeSet = ensureRecord(record.change_set, changeSetContext);
+  return {
+    idHex: requireExactLowerHex32String(item.id_hex, `${context}.id_hex`),
+    effectiveHeight: requireExactJsonUnsignedInteger(
+      changeSet.effective_height,
+      `${changeSetContext}.effective_height`,
+      { allowZero: false },
+    ),
+    predecessorHex: requireExactLowerHex32String(
+      changeSet.predecessor,
+      `${changeSetContext}.predecessor`,
+    ),
+    successorHex: requireExactLowerHex32String(
+      changeSet.successor,
+      `${changeSetContext}.successor`,
+    ),
+    status: normalizeRuntimeChangeSetStatus(record.status, `${recordContext}.status`),
+    notice: normalizeRuntimeNotice(record.notice, `${recordContext}.notice`),
+    record: cloneJsonValue(record, recordContext, { preserveBigInt: true }),
+  };
+}
+
+function normalizeRuntimeChangeSetStatus(value, context) {
   const record = ensureRecord(value, context);
-  const keys = objectKeys(record);
-  if (keys.length !== 1) {
-    rejectType(`${context} must contain exactly one status key`);
+  const unsupported = objectKeys(record).filter((key) => key !== "kind" && key !== "content");
+  if (unsupported.length !== 0) {
+    rejectType(`${context} contains unsupported fields: ${unsupported.sort().join(", ")}`);
   }
-  const kind = keys[0];
-  const payload = record[kind];
-  if (kind === "Proposed" || kind === "Canceled") {
+  const kind = record.kind;
+  if (kind === "Scheduled") {
+    if (record.content !== undefined && record.content !== null) {
+      rejectType(`${context}.content must be null for a Scheduled change set`);
+    }
     return { kind };
   }
-  if (kind === "ActivatedAt") {
-    const height = ToriiClient._normalizeUnsignedInteger(
-      payload,
-      `${context}.ActivatedAt`,
-      { allowZero: true },
-    );
-    return { kind: "ActivatedAt", activatedHeight: height };
+  if (RUNTIME_CHANGE_SET_HEIGHT_STATUSES.has(kind)) {
+    return {
+      kind,
+      height: requireExactJsonUnsignedInteger(record.content, `${context}.content`, {
+        allowZero: false,
+      }),
+    };
   }
-  rejectType(`${context} contains unsupported variant ${kind}`);
+  rejectType(`${context}.kind must be Scheduled, Activated, Lapsed or Cancelled`);
 }
 
-function normalizeRuntimeUpgradeManifestPayload(value, context) {
-  const record = ensureRecord(value, context);
-  const abiVersion = record.abi_version ?? record.abiVersion;
-  const abiHashValue =
-    record.abi_hash ?? record.abiHash ?? record.abiHashHex;
-  const startValue = record.start_height ?? record.startHeight;
-  const endValue = record.end_height ?? record.endHeight;
-  if (abiVersion === undefined || abiVersion === null) {
-    rejectType(`${context}.abi_version is required`);
-  }
-  if (abiHashValue === undefined || abiHashValue === null) {
-    rejectType(`${context}.abi_hash is required`);
-  }
-  const startHeight = ToriiClient._normalizeUnsignedInteger(
-    startValue,
-    `${context}.start_height`,
-    { allowZero: true },
-  );
-  const endHeight = ToriiClient._normalizeUnsignedInteger(
-    endValue,
-    `${context}.end_height`,
-    { allowZero: true },
-  );
-  if (endHeight <= startHeight) {
-    rejectType(`${context}.end_height must be greater than start_height`);
-  }
-  const normalizedAbiVersion = ToriiClient._normalizeUnsignedInteger(
-    abiVersion,
-    `${context}.abi_version`,
-    { allowZero: false },
-  );
-  const addedSyscalls = parseIntegerArray(
-    record.added_syscalls ?? record.addedSyscalls ?? [],
-    `${context}.added_syscalls`,
-  );
-  const addedPointerTypes = parseIntegerArray(
-    record.added_pointer_types ?? record.addedPointerTypes ?? [],
-    `${context}.added_pointer_types`,
-  );
-  assertFirstReleaseRuntimeUpgradeManifest({
-    abiVersion: normalizedAbiVersion,
-    addedSyscalls,
-    addedPointerTypes,
+function normalizeRuntimeNotice(value, context) {
+  const record = requireExactGovernanceProposalRecord(
+    value,
+    ["blocks", "ms", "approval_cushion_ms"],
     context,
-  });
+  );
   return {
-    name: requireNonEmptyString(record.name, `${context}.name`),
-    description: requireNonEmptyString(
-      record.description,
-      `${context}.description`,
+    blocks: requireExactJsonUnsignedInteger(record.blocks, `${context}.blocks`),
+    ms: requireExactJsonUnsignedInteger(record.ms, `${context}.ms`),
+    approvalCushionMs: requireExactJsonUnsignedInteger(
+      record.approval_cushion_ms,
+      `${context}.approval_cushion_ms`,
     ),
-    abi_version: normalizedAbiVersion,
-    abi_hash: normalizeHex32String(abiHashValue, `${context}.abi_hash`),
-    added_syscalls: addedSyscalls,
-    added_pointer_types: addedPointerTypes,
-    start_height: startHeight,
-    end_height: endHeight,
   };
 }
 
-function assertFirstReleaseRuntimeUpgradeManifest({
-  abiVersion,
-  addedSyscalls,
-  addedPointerTypes,
-  context,
-}) {
-  if (abiVersion !== 1) {
-    rejectType(`${context}.abi_version must be 1 in the first release`);
-  }
-  if (addedSyscalls.length > 0) {
-    rejectType(`${context}.added_syscalls must be empty in the first release`);
-  }
-  if (addedPointerTypes.length > 0) {
-    rejectType(`${context}.added_pointer_types must be empty in the first release`);
-  }
-}
-
+/** Admit the one drafted `ProposeRuntimeUpgradeProposal` instruction of a propose/cancel draft. */
 function normalizeRuntimeUpgradeTxResponse(payload, context) {
-  const base = normalizeGovernanceDraftResponse(payload, context);
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["ok", "tx_instructions"],
+    context,
+  );
+  if (record.ok !== true) {
+    rejectType(`${context}.ok must be true`);
+  }
+  const instructions = requireGovernanceArray(
+    record.tx_instructions,
+    `${context}.tx_instructions`,
+  );
+  if (instructions.length !== 1) {
+    rejectType(`${context}.tx_instructions must contain exactly one instruction`);
+  }
+  const instructionContext = `${context}.tx_instructions[0]`;
+  const instruction = requireExactGovernanceProposalRecord(
+    instructions[0],
+    ["wire_id", "payload_hex"],
+    instructionContext,
+  );
+  if (instruction.wire_id !== RUNTIME_UPGRADE_PROPOSAL_WIRE_ID) {
+    rejectType(`${instructionContext}.wire_id must be ${RUNTIME_UPGRADE_PROPOSAL_WIRE_ID}`);
+  }
   return {
-    ok: base.ok,
-    tx_instructions: base.tx_instructions,
+    ok: true,
+    tx_instructions: [{
+      wire_id: RUNTIME_UPGRADE_PROPOSAL_WIRE_ID,
+      payload_hex: requireExactLowerEvenHexString(
+        instruction.payload_hex,
+        `${instructionContext}.payload_hex`,
+      ),
+    }],
   };
-}
-
-function parseIntegerArray(value, context) {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!arrayIsArray(value)) {
-    rejectType(`${context} must be an array`);
-  }
-  return value.map((entry, index) => {
-    const numeric = coerceIntegerLike(entry, `${context}[${index}]`);
-    if (numeric < 0) {
-      rejectRange(`${context}[${index}] must be non-negative`);
-    }
-    return numeric;
-  });
 }
 
 function coerceStatusInt(value, context) {
@@ -18487,7 +18334,6 @@ const {
   normalizeGovernanceBallotIdentity,
   normalizeGovernanceBallotResponse,
   normalizeGovernanceDeployContractProposalPayload,
-  normalizeGovernanceDraftResponse,
   normalizeGovernanceProposalDraftResponseV1,
   normalizeGovernancePlainBallotPayload,
   normalizeGovernanceZkBallotProofPayload,

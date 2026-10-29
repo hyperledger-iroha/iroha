@@ -78,7 +78,7 @@ use iroha_data_model::{
     isi::{
         InstructionBox,
         error::Mismatch,
-        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        runtime_upgrade::{AttestRuntimeSupportV1, ContainRuntimeV1},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -2246,15 +2246,15 @@ impl Queue {
         let contains = |instruction: &InstructionBox| {
             instruction
                 .as_any()
-                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .downcast_ref::<AttestRuntimeSupportV1>()
                 .is_some()
                 || instruction
                     .as_any()
-                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .downcast_ref::<ContainRuntimeV1>()
                     .is_some()
                 || instruction
                     .as_any()
-                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
                     .is_some()
         };
         match tx.as_accepted().executable() {
@@ -5807,7 +5807,6 @@ pub mod tests {
         account::{AccountDetails, AccountValue},
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
-        isi::runtime_upgrade::ProposeRuntimeUpgrade,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
             AuditControls, DataSpaceCatalog, DataSpaceMetadata, JurisdictionSet, LaneCatalog,
@@ -5818,7 +5817,6 @@ pub mod tests {
         parameter::TransactionParameters,
         prelude::*,
         proof::{ProofAttachment, ProofBox},
-        runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
             SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,

@@ -2585,15 +2585,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_d
             norito::json!({ "body": {} }),
         ),
         (
-            1056,
-            "iroha.runtime.upgrades.activate",
-            "/v1/runtime/upgrades/activate/upgrade-001",
-            norito::json!({
-                "path": { "id": "upgrade-001" },
-                "body": {}
-            }),
-        ),
-        (
             1057,
             "iroha.runtime.upgrades.cancel",
             "/v1/runtime/upgrades/cancel/upgrade-001",
@@ -3669,16 +3660,11 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.runtime.upgrades.activate"),
-        "expected agent-friendly runtime upgrades-activate MCP tool"
-    );
-    assert!(
-        names
-            .iter()
             .any(|name| name == "iroha.runtime.upgrades.cancel"),
         "expected agent-friendly runtime upgrades-cancel MCP tool"
     );
     for retired_name in [
+        "iroha.runtime.upgrades.activate",
         "iroha.sumeragi.pacemaker",
         "iroha.sumeragi.commit_certificates",
         "iroha.sumeragi.validator_sets.list",

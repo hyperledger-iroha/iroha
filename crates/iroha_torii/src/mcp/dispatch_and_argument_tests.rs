@@ -187,9 +187,10 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .any(|tool| tool.name == "iroha.runtime.upgrades.propose")
     );
     assert!(
-        tools
+        !tools
             .iter()
-            .any(|tool| tool.name == "iroha.runtime.upgrades.activate")
+            .any(|tool| tool.name == "iroha.runtime.upgrades.activate"),
+        "change sets activate at block start; there is no activation tool"
     );
     assert!(
         tools

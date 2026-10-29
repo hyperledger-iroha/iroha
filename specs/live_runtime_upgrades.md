@@ -1,7 +1,10 @@
 # Live runtime upgrades
 
-Status: proposed design, 2026-10-29. Independent model reviews (Codex, `gpt-6-astra`, read-only)
-shaped it. Nothing is implemented. When it lands it amends `AGENTS.md`,
+Status: accepted design, 2026-10-29; implementation in progress (section 14). Independent model
+reviews (Codex, `gpt-6-astra`, read-only) shaped it. The definition contracts, the founded baseline
+selection with selection-aware dispatch, and the change-set lifecycle of the universal root
+(proposal, notice, attestation, activation, lapse and the unsupported-node stop) are implemented;
+[`runtime_upgrades.md`](runtime_upgrades.md) records that surface as built. It amends `AGENTS.md`,
 [`first_release_history_cutover.md`](first_release_history_cutover.md),
 [`runtime_upgrades.md`](runtime_upgrades.md) and `sumeragi.md` §16. This document authorizes no
 live reset, deployment or movement of value.
@@ -296,14 +299,13 @@ place so neither storage version is corrupted, and a certified repair resumes or
 sets, restrictions and retirements. The admins of a permissioned data space govern that data
 space's own selection and nothing else. Every rule that decides whether a change set is valid
 (provenance requirements, notice, the checkpoint startup floor) comes from committed State, never
-from node configuration; today provenance validation reads node configuration
-(`state_transaction.gov.runtime_upgrade_provenance` in `smartcontracts/isi/world.rs`), which moves
-to committed State with the foundation.
+from node configuration. The notice policy is the committed parameter `runtime_upgrade_policy_v1`;
+the manifest provenance check that read node configuration is deleted, and provenance requirements
+return only as committed State.
 
 1. **Stage.** Publish the definitions and artifacts. A node stores and authenticates definitions it
-   cannot execute; today `active_runtime_abi_hash` validates every proposed record and fails before
-   activation when the release cannot support it (`smartcontracts/ivm.rs`), which staging must not
-   do.
+   cannot execute: admission checks only that the change set applies to the selection it will meet
+   (`runtime/change_set.rs`), never that this release implements it.
 2. **Install.** Validators install supporting releases one at a time (section 9) while the old
    selection stays active.
 3. **Attest.** Each validator attests on chain that its release executes the exact successor
@@ -311,13 +313,17 @@ to committed State with the foundation.
    the kernel and commitment profiles, the committee epoch, the checkpoint it tested and a validity
    interval. A compact catalog commitment can carry the per-definition detail. Supporting
    definitions A and B separately does not establish support for their composition.
-4. **Activate.** Governance finalizes the change set after the notice period, once every target
-   validator has attested. Attestations are revalidated at activation; a committee change requires
-   them again.
+4. **Activate.** Governance approval schedules the change set at its effective height. At the
+   start of that height it activates only if every committee member attested for the current
+   committee and the notice elapsed in committed time; otherwise it lapses and never applies.
+   Attestations are revalidated at activation; a committee change requires them again.
 5. **Stop the unsupported.** A node whose release cannot execute the successor selection stops voting
    and executing before the boundary, reports the selection and height in `/status` and telemetry,
    and resumes after its release is replaced. It never classifies a valid upgraded block as invalid.
-   This replaces today's panic in `State::apply_block_start_world_transitions`.
+   Block start returns `StateStorageAdmissionError::UnsupportedRuntime`, which consensus classifies
+   as recovery-required: the node halts with `PublicationRecoveryRequired(height)`, served by
+   `/v1/sumeragi/status` and telemetry. A halt reason that names the unsupported selection is still
+   open.
 
 - **All `n`.** Attestation comes from every validator, not a quorum: of `q = n − f` reports, `f` may
   be Byzantine, leaving `q − f` honest upgraded validators, fewer than `q`. One Byzantine validator
@@ -711,10 +717,17 @@ not a date: it happens once everything its first selection needs is implemented 
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
    adopted State carries (triggers, multisig, AMX), expectations and deferred consent, stable
-   rejection codes and event envelopes.
+   rejection codes and event envelopes. Done for the universal root: change sets with proposal
+   through Parliament, the committed notice policy, all-`n` attestation bound to the committee,
+   scheduling, activation and lapse at block start, the unsupported-node stop, stable rejection
+   codes and lifecycle events. Still open: committed provenance policy, handshake profiles,
+   completion capabilities and obligation kinds, expectations and deferred consent, node-side
+   attestation and a halt reason naming the unsupported selection.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
-   panel. Neither gets a temporary substitute on Taira.
+   panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
+   (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry); its bound ratification
+   case and recorded review progress are still open.
 5. **Checkpoints, adoption and deletion.** Checkpoint export and certificate-chain bootstrap, the
    startup floor and its advancement, the deletion rule and its guard, the adoption carrier, import
    and trust anchor (section 13), and a rehearsal that adopts a copy of a running network, physically
