@@ -66,6 +66,8 @@ pub use sccp::{
 };
 mod socket_addr;
 pub use socket_addr::{ConfigSocketAddr, ConfigSocketAddrError};
+mod legacy_genesis;
+pub use legacy_genesis::{CryptoCurves, CurveIdListConfig};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -1432,7 +1434,9 @@ impl Root {
         };
         let gov = gov_provider_binding_valid.then(|| self.gov.parse());
         let nts = self.nts.parse(&mut emitter);
-        let nexus = self.nexus.parse(&mut emitter);
+        let mut nexus_input = self.nexus;
+        let legacy_staking = nexus_input.staking.take_legacy_genesis();
+        let nexus = nexus_input.parse(&mut emitter);
         let confidential = self.confidential.parse();
         let streaming = if let Some(ref key_pair) = key_pair {
             self.streaming
@@ -1451,7 +1455,11 @@ impl Root {
                 ),
             );
         }
-        let crypto = self.crypto.parse(&mut emitter);
+        let mut crypto_input = self.crypto;
+        let legacy_crypto = crypto_input.take_legacy_genesis();
+        let crypto = crypto_input.parse(&mut emitter);
+        let legacy_genesis =
+            legacy_genesis::parse(legacy_crypto, legacy_staking, &crypto, &mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let amx_relay = self.amx_relay.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
@@ -1463,13 +1471,17 @@ impl Root {
         if let Err(message) = snapshot.validate_read_buffer_budget() {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
+        if let Err(message) = snapshot.upgrade_checkpoint.checkpoint() {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
+        }
         // The verification attempt budget is the one local value `[confidential]` gives ZK.
         zk.verify_timeout = confidential.verify_timeout;
         emitter.into_result()?;
         soracloud_runtime.assert_runtime_posture();
         let sumeragi =
             sumeragi.expect("sumeragi configuration should be valid when emitter succeeds");
-        let nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
+        let mut nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
+        nexus.legacy_genesis = legacy_genesis;
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
@@ -9052,6 +9064,13 @@ pub struct Crypto {
         default = "defaults::crypto::SM2_DISTID_DEFAULT.to_owned()"
     )]
     pub sm2_distid_default: String,
+    /// Retired signing allowlist of a network whose signed genesis predates genesis-authored
+    /// crypto admission. Setting it selects that network's legacy genesis profile
+    /// (`legacy_genesis`); every other network authors the policy in genesis.
+    pub allowed_signing: Option<AlgorithmListConfig>,
+    /// Retired curve allowlist configured together with `allowed_signing`.
+    #[config(nested)]
+    pub curves: CryptoCurves,
 }
 impl Crypto {
     /// Convert this user configuration into the runtime representation.
@@ -9559,7 +9578,7 @@ impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
     }
 }
 /// Validator modes and capacity; monetary terms come from committed State.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
@@ -9571,11 +9590,37 @@ pub struct NexusStaking {
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
+    /// Retired monetary terms of the legacy genesis profile (`crypto.allowed_signing`); a
+    /// genesis that authors its staking policy refuses them. Omitted terms take the
+    /// retired V1 defaults.
+    pub min_validator_stake: Option<Quantity>,
+    /// Retired maximum stake-share rows per validator of the legacy genesis profile.
+    pub max_stake_shares_per_validator: Option<NonZeroU32>,
+    /// Retired maximum pending unbonds per share of the legacy genesis profile.
+    pub max_pending_unbonds_per_share: Option<NonZeroU32>,
+    /// Retired unbonding delay of the legacy genesis profile.
+    pub unbonding_delay_ms: Option<DurationMs>,
+    /// Retired maximum slash ratio (basis points) of the legacy genesis profile.
+    pub max_slash_bps: Option<u16>,
+    /// Retired stake asset literal of the legacy genesis profile.
+    pub stake_asset_id: Option<String>,
+    /// Retired stake escrow account literal of the legacy genesis profile.
+    pub stake_escrow_account_id: Option<String>,
+    /// Retired slash sink account literal of the legacy genesis profile.
+    pub slash_sink_account_id: Option<String>,
 }
 impl_default!(NexusStaking {
     public_validator_mode: LaneValidatorModeConfig::StakeElected,
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    min_validator_stake: None,
+    max_stake_shares_per_validator: None,
+    max_pending_unbonds_per_share: None,
+    unbonding_delay_ms: None,
+    max_slash_bps: None,
+    stake_asset_id: None,
+    stake_escrow_account_id: None,
+    slash_sink_account_id: None,
 });
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
@@ -11057,6 +11102,7 @@ impl Nexus {
             }
         }
         Some(actual::Nexus {
+            legacy_genesis: None,
             fees: defaults::nexus::fees::genesis_policy(),
             storage,
             staking,
@@ -12485,6 +12531,119 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<PrivateKey>,
+    /// Last block executed by the previous node release of this running network.
+    #[config(nested)]
+    pub upgrade_checkpoint: SnapshotUpgradeCheckpoint,
+}
+/// Last block executed by the previous node release of a running network.
+///
+/// A release whose execution writes differ from its predecessor's cannot re-execute the history
+/// the predecessor certified. With a checkpoint it restores the World at `height` from the
+/// predecessor's signed snapshot, proves that World against the block's certified World root and
+/// executes from the next block on. Blocks at or below the checkpoint are never re-executed.
+#[derive(Debug, Clone, Default, ReadConfig)]
+pub struct SnapshotUpgradeCheckpoint {
+    /// Height of the last block the previous release executed.
+    pub height: Option<u64>,
+    /// Hex hash (64 digits) of that block.
+    pub block_hash: Option<String>,
+    /// Public key that signed the checkpoint snapshot when another validator produced it.
+    pub signer: Option<PublicKey>,
+}
+/// A validated [`SnapshotUpgradeCheckpoint`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeCheckpoint {
+    /// Height of the last block the previous release executed.
+    pub height: u64,
+    /// Hash of that block.
+    pub block_hash: [u8; 32],
+    /// Signer of the checkpoint snapshot when it is not the node's own snapshot key.
+    pub signer: Option<PublicKey>,
+}
+impl SnapshotUpgradeCheckpoint {
+    /// The configured checkpoint, or `None` when this network has none.
+    ///
+    /// # Errors
+    /// Only one of `height` and `block_hash` is set, the height is below 2 (genesis is always
+    /// re-executed), or the hash is not 64 hex digits.
+    pub fn checkpoint(&self) -> core::result::Result<Option<UpgradeCheckpoint>, String> {
+        let (height, block_hash) = match (self.height, self.block_hash.as_deref()) {
+            (None, None) => {
+                if self.signer.is_some() {
+                    return Err(
+                        "snapshot.upgrade_checkpoint.signer needs height and block_hash".to_owned(),
+                    );
+                }
+                return Ok(None);
+            }
+            (Some(height), Some(block_hash)) => (height, block_hash),
+            _ => {
+                return Err(
+                    "snapshot.upgrade_checkpoint needs both height and block_hash".to_owned(),
+                );
+            }
+        };
+        if height < 2 {
+            return Err("snapshot.upgrade_checkpoint.height must be at least 2".to_owned());
+        }
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(block_hash.trim(), &mut bytes).map_err(|error| {
+            format!("snapshot.upgrade_checkpoint.block_hash must be 64 hex digits: {error}")
+        })?;
+        Ok(Some(UpgradeCheckpoint {
+            height,
+            block_hash: bytes,
+            signer: self.signer.clone(),
+        }))
+    }
+}
+#[cfg(test)]
+mod upgrade_checkpoint_tests {
+    use super::*;
+
+    const HASH: &str = "889e753c2f11c8836f7fdd651132c7b9f5fcf3c5ed6b7a1531b6fd4911c855a3";
+
+    fn checkpoint(height: Option<u64>, block_hash: Option<&str>) -> SnapshotUpgradeCheckpoint {
+        SnapshotUpgradeCheckpoint {
+            height,
+            block_hash: block_hash.map(str::to_owned),
+            signer: None,
+        }
+    }
+
+    #[test]
+    fn absent_checkpoint_is_none() {
+        assert_eq!(checkpoint(None, None).checkpoint(), Ok(None));
+    }
+
+    #[test]
+    fn checkpoint_parses_height_and_hash() {
+        let parsed = checkpoint(Some(5518), Some(HASH))
+            .checkpoint()
+            .expect("valid checkpoint")
+            .expect("configured");
+        assert_eq!(parsed.height, 5518);
+        assert_eq!(hex::encode(parsed.block_hash), HASH);
+        assert_eq!(parsed.signer, None);
+    }
+
+    #[test]
+    fn checkpoint_refuses_partial_genesis_and_malformed_values() {
+        assert!(checkpoint(Some(5518), None).checkpoint().is_err());
+        assert!(checkpoint(None, Some(HASH)).checkpoint().is_err());
+        assert!(checkpoint(Some(1), Some(HASH)).checkpoint().is_err());
+        assert!(
+            checkpoint(Some(5518), Some(&HASH[2..]))
+                .checkpoint()
+                .is_err()
+        );
+        assert!(checkpoint(Some(5518), Some("zz")).checkpoint().is_err());
+        let signer_only = SnapshotUpgradeCheckpoint {
+            signer: Some(iroha_crypto::KeyPair::random().public_key().clone()),
+            ..checkpoint(None, None)
+        };
+        assert!(signer_only.checkpoint().is_err());
+    }
 }
 impl Snapshot {
     fn validate_read_buffer_budget(&self) -> core::result::Result<(), String> {

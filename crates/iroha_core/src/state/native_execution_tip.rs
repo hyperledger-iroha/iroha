@@ -217,6 +217,28 @@ impl NativeExecutionTipSnapshot {
         kura: &Kura,
         observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
     ) -> Result<RestoredNativeTip, TipRestoreError> {
+        self.restore_with_checkpoint(budget, chain_id, network, hashes, kura, None, observe)
+    }
+
+    /// [`Self::restore`] for a node that may take over at an upgrade checkpoint.
+    ///
+    /// A tip at the checkpoint needs no certified successor: the previous release executed its
+    /// last block, and this release proves the decoded World against that block's own certified
+    /// World root ([`RestoredNativeTip::checkpoint_world_root`]) instead.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the walk inputs of restore plus the optional upgrade checkpoint"
+    )]
+    pub(in crate::state) fn restore_with_checkpoint(
+        self,
+        budget: &AllocationBudget,
+        chain_id: &iroha_model_base::chain::ChainId,
+        network: &iroha_data_model::NetworkId,
+        hashes: &[HashOf<BlockHeader>],
+        kura: &Kura,
+        checkpoint: Option<&super::upgrade_checkpoint::UpgradeCheckpointV1>,
+        observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
+    ) -> Result<RestoredNativeTip, TipRestoreError> {
         let height = u64::try_from(hashes.len()).map_err(|error| error.to_string())?;
         if height == 0 {
             if self.blocks.is_some() || self.revert.is_some() {
@@ -225,6 +247,7 @@ impl NativeExecutionTipSnapshot {
             return Ok(RestoredNativeTip {
                 cell: initialize(budget, None, None).map_err(TipRestoreError::Admission)?,
                 world_root: None,
+                checkpoint_world_root: None,
             });
         }
         if height == 1 {
@@ -233,15 +256,19 @@ impl NativeExecutionTipSnapshot {
             // A decoded H1 result never authorizes World or bypasses original replay.
             return Err(TipRestoreError::GenesisReplayRequired);
         }
+        let at_checkpoint =
+            checkpoint.is_some_and(|checkpoint| checkpoint.is_tip_of(height, hashes));
         let successor = height + 1;
         let successor_hash = usize::try_from(successor)
             .ok()
             .and_then(core::num::NonZeroUsize::new)
-            .and_then(|successor| kura.get_block_hash(successor))
-            .ok_or(TipRestoreError::SuccessorRequired { height })?;
+            .and_then(|successor| kura.get_block_hash(successor));
+        if successor_hash.is_none() && !at_checkpoint {
+            return Err(TipRestoreError::SuccessorRequired { height });
+        }
         let mut pinned = Vec::with_capacity(hashes.len() + 1);
         pinned.extend_from_slice(hashes);
-        pinned.push(successor_hash);
+        pinned.extend(successor_hash);
         let chain = CertifiedChain::from_pinned(chain_id, network, &pinned, kura, budget)
             .map_err(TipRestoreError::from)?;
         // One verified walk over the native prefix authenticates the tip and its
@@ -253,11 +280,13 @@ impl NativeExecutionTipSnapshot {
             None
         };
         let mut current = None;
+        let mut tip_world_root = None;
         let mut walk = chain.walk(1, height);
         observe_restored_genesis(&mut walk, observe)?;
-        while let Some(block) = next_restored_record(&mut walk, observe)? {
+        while let Some((block, world_root)) = next_restored_record(&mut walk, observe)? {
             checkpoints.record_sparse(block.height, checkpoint_of(block));
             previous = current.replace(block).or(previous);
+            tip_world_root = Some(world_root);
         }
         let (Some(current), Some(previous)) = (current, previous) else {
             return Err("verified native prefix ended before the snapshot tip".into());
@@ -271,7 +300,9 @@ impl NativeExecutionTipSnapshot {
         }
         drop(walk);
         // The sequential cursor stands at the tip, so the successor costs one certificate.
-        let world_root = restored_successor_world_root(&chain, successor, current)?;
+        let world_root = successor_hash
+            .map(|_| restored_successor_world_root(&chain, successor, current))
+            .transpose()?;
         Ok(RestoredNativeTip {
             cell: initialize(
                 budget,
@@ -279,7 +310,8 @@ impl NativeExecutionTipSnapshot {
                 Some(Some(NativeExecutionTip(previous))),
             )
             .map_err(TipRestoreError::Admission)?,
-            world_root: Some(world_root),
+            world_root,
+            checkpoint_world_root: if at_checkpoint { tip_world_root } else { None },
         })
     }
 }
@@ -288,8 +320,12 @@ impl NativeExecutionTipSnapshot {
 pub(in crate::state) struct RestoredNativeTip {
     /// The funded tip Cell with its authenticated predecessor undo.
     pub(in crate::state) cell: TipCell,
-    /// `parent_world_state_root` of the tip's certified successor; `None` for empty history.
+    /// `parent_world_state_root` of the tip's certified successor; `None` for empty history and
+    /// for an upgrade checkpoint that is still the Kura tip.
     pub(in crate::state) world_root: Option<Hash>,
+    /// The tip's own certified World root when the tip is the configured upgrade checkpoint.
+    /// The previous release computed it under its own World registry.
+    pub(in crate::state) checkpoint_world_root: Option<Hash>,
 }
 
 // The successor's certified header must extend the authenticated tip; its certified result
@@ -350,7 +386,7 @@ fn observe_restored_genesis(
 fn next_restored_record(
     walk: &mut impl Iterator<Item = Result<CertifiedBlock, ExecutionAttemptError<ChainReadError>>>,
     observe: &mut dyn FnMut(&CertifiedBlock) -> Result<(), TipRestoreError>,
-) -> Result<Option<NativeExecutionTipRecord>, TipRestoreError> {
+) -> Result<Option<(NativeExecutionTipRecord, Hash)>, TipRestoreError> {
     let Some(certified) = walk.next() else {
         return Ok(None);
     };
@@ -359,7 +395,11 @@ fn next_restored_record(
     let block = certified
         .into_authenticated_execution()
         .map_err(|error| error.to_string())?;
-    Ok(Some(record(block.committed())))
+    let committed = block.committed();
+    Ok(Some((
+        record(committed),
+        committed.commitment().execution.world_state_root,
+    )))
 }
 
 /// The history checkpoint of an authenticated native execution identity.

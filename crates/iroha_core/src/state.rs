@@ -20,7 +20,8 @@ use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 /// Canonical parameter MV value with inseparable validated pipeline fee and limit policies.
 pub use crate::pipeline_gas_policy::{
-    ParameterIngressError, ParameterRetentionError, RetainedStateParameters, StateParameters,
+    LegacyGenesisPolicies, ParameterIngressError, ParameterRetentionError, RetainedStateParameters,
+    StateParameters, install_legacy_genesis_policies, legacy_genesis_policies,
 };
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
@@ -335,6 +336,7 @@ mod canonical_history;
 mod committed_execution_read;
 mod contract_event_journal;
 pub(crate) mod native_execution_tip;
+pub mod upgrade_checkpoint;
 #[cfg(test)]
 mod world_view_admission_parameters_tests;
 pub use native_execution_tip::NativeExecutionTip;
@@ -33289,6 +33291,17 @@ impl State {
             .iter()
             .map(|entry| (entry.alias.clone(), entry.id))
             .collect();
+        // Rows naming a dataspace outside the catalog are dropped only when this update changes
+        // the catalog, which happens only before genesis. Afterwards such a row is committed
+        // World state its blocks certify: dropping it at a restart would leave the restarted
+        // node with a World that differs from its stored accumulator and from its peers'.
+        let dataspace_catalog_changed = previous_nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .map(|entry| (entry.alias.clone(), entry.id))
+            .collect::<BTreeMap<_, _>>()
+            != dataspace_ids_by_alias;
         // This must precede lane-geometry publication, catalog replacement, and stale-token
         // pruning. A failed retirement therefore leaves both the binding and its authority path
         // intact so the owner can clear it and retry.
@@ -33579,6 +33592,7 @@ impl State {
             .uaid_dataspaces
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(uaid, bindings)| {
                 bindings
                     .iter()
@@ -33610,6 +33624,7 @@ impl State {
             .space_directory_manifests
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(uaid, manifests)| {
                 manifests
                     .iter()
@@ -33647,6 +33662,7 @@ impl State {
             .account_scope_directory
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(account_id, entry)| {
                 entry
                     .iter()
@@ -33679,6 +33695,7 @@ impl State {
             .axt_policies
             .view()
             .iter()
+            .filter(|_| dataspace_catalog_changed)
             .filter_map(|(dataspace_id, _)| {
                 (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
             })
@@ -33727,6 +33744,9 @@ impl State {
                 }
             };
         let is_stale_dataspace_permission = |permission: &Permission| {
+            if !dataspace_catalog_changed {
+                return false;
+            }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::query::CanReadRestrictedDataspace::try_from(
                     permission,
@@ -37868,6 +37888,7 @@ fn compute_execution_policy_digest_v1(
             settlement,
             nexus_policy_digest,
             compute_zk_consensus_policy_hash(zk),
+            nexus.legacy_genesis.as_ref().map(|legacy| &legacy.crypto),
         ),
     )
 }

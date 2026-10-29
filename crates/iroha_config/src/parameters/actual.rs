@@ -68,6 +68,8 @@ use std::{
 mod actual_soranet_handshake_debug;
 mod amx_relay;
 pub use amx_relay::{AmxRelay, AmxRelayRoute};
+mod legacy_genesis;
+pub use legacy_genesis::{LegacyGenesisCryptoV1, LegacyGenesisStakingV1, LegacyGenesisV1};
 mod kagemusha_enrollment;
 pub use kagemusha_enrollment::{
     KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider, KagemushaEnrollmentWorker,
@@ -3518,6 +3520,9 @@ pub struct Nexus {
     pub commit: Commit,
     /// Data-availability sampling configuration.
     pub da: Da,
+    /// Configured terms of a signed genesis that predates genesis-authored policy; see
+    /// [`LegacyGenesisV1`]. `None` on every network whose genesis signs its policies.
+    pub legacy_genesis: Option<LegacyGenesisV1>,
 }
 impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
         Self {
@@ -3543,6 +3548,7 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             autoscale: Autoscale::default(),
             commit: Commit::default(),
             da: Da::default(),
+            legacy_genesis: None,
         }
 });
 impl Nexus {
@@ -4148,6 +4154,13 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             )?,
         },
     };
+    if let Some(legacy) = nexus.legacy_genesis.as_ref() {
+        return Ok(legacy_genesis::nexus_policy_preimage(
+            preimage,
+            legacy,
+            original_fees.unwrap_or(&nexus.fees),
+        ));
+    }
     Ok(preimage.encode())
 }
 #[derive(Encode)]
@@ -4217,6 +4230,7 @@ pub fn execution_policy_digest_v1(
     settlement: &Settlement,
     nexus_policy_digest: [u8; 32],
     zk_policy_digest: [u8; 32],
+    legacy_crypto: Option<&LegacyGenesisCryptoV1>,
 ) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
     const VERSION: u16 = 1;
@@ -4311,6 +4325,10 @@ pub fn execution_policy_digest_v1(
     policy.push("pipeline.amx_per_syscall_ns", &pipeline.amx_per_syscall_ns);
     // Ordinary crypto admission belongs exclusively to committed Parameters.
     // Local generation defaults and implementation selection carry no execution authority.
+    // A pre-policy genesis instead bound its configured crypto terms at this position.
+    if let Some(crypto) = legacy_crypto {
+        legacy_genesis::push_execution_crypto(&mut policy, crypto);
+    }
     // Oracle state transitions, economics, governance, and binding admission.
     policy.push(
         "oracle.history_depth",
@@ -5750,16 +5768,26 @@ pub fn sumeragi_nexus_amx_context_preimage(
         tag::STAKING_RESTRICTED_VALIDATOR_MODE,
         &restricted_validator_mode,
     );
-    preimage.field(
-        tag::STAKING_MAX_VALIDATORS,
-        &nexus.staking.max_validators.get(),
-    );
-    // The exact caller-owned original policy is encoded once as a typed option.
-    // No node-local fee defaults, account rendering or monetary mirror is consulted.
-    preimage.field(
-        tag::ROOT_FEE_POLICY,
-        &original_fees.map(norito::core::PayloadRef),
-    );
+    if let Some(legacy) = nexus.legacy_genesis.as_ref() {
+        // A pre-policy genesis committed its configured staking terms and each fee term.
+        legacy_genesis::write_amx_staking_and_fees(
+            &mut preimage,
+            nexus,
+            legacy,
+            original_fees.unwrap_or(&nexus.fees),
+        );
+    } else {
+        preimage.field(
+            tag::STAKING_MAX_VALIDATORS,
+            &nexus.staking.max_validators.get(),
+        );
+        // The exact caller-owned original policy is encoded once as a typed option.
+        // No node-local fee defaults, account rendering or monetary mirror is consulted.
+        preimage.field(
+            tag::ROOT_FEE_POLICY,
+            &original_fees.map(norito::core::PayloadRef),
+        );
+    }
     preimage.field(
         tag::DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
         &nexus.dataspace_fee_sponsor_program_ids,

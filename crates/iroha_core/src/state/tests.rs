@@ -3872,6 +3872,40 @@ fn set_nexus_alias_relabel_preserves_catalog_and_lane_identity() {
         activation_heights
     );
 }
+state_test! { sync set_nexus_keeps_committed_rows_naming_a_dataspace_outside_an_unchanged_catalog
+    // Taira held a test account's alias permissions in a dataspace no catalog lists: dropping them
+    // at a restart left the restarted node's World one entry short of the one its blocks certify.
+    let mut state = blank_test_state();
+    let holder = (*ALICE_ID).clone();
+    let outside = DataSpaceId::new(17_301_767_951_379_993_708);
+    assert!(
+        !state
+            .nexus_snapshot()
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .any(|entry| entry.id == outside)
+    );
+    let permission = Permission::from(
+        iroha_executor_data_model::permission::query::CanReadRestrictedDataspace {
+            dataspace: outside,
+        },
+    );
+    state
+        .world
+        .account_permissions
+        .insert(holder.clone(), BTreeSet::from([permission.clone()]));
+    state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
+        b"committed-post-genesis-height",
+    )));
+    let unchanged = state.nexus_snapshot();
+    state.set_nexus(unchanged).expect("an unchanged catalog installs");
+    assert_eq!(
+        state.world.account_permissions.view().get(&holder),
+        Some(&BTreeSet::from([permission])),
+        "a committed row survives a restart's catalog install"
+    );
+}
 state_test! { sync set_nexus_rejects_post_genesis_catalog_mutation_atomically
     let mut state = blank_test_state();
     let_row! { lane_one = LaneConfig { id: LaneId::new(1), alias: "lane-one".to_owned(), ..LaneConfig::default() } };

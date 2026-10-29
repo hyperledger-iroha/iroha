@@ -8226,6 +8226,17 @@ fn run_main_with_config_guard(
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
+    // A genesis signed before genesis authored its policies keeps the crypto and staking
+    // policy its configuration committed; install it before genesis or State reads it.
+    if let Some(legacy) = config.nexus.legacy_genesis.as_ref() {
+        iroha_core::state::install_legacy_genesis_policies(
+            iroha_core::state::LegacyGenesisPolicies {
+                crypto: legacy.crypto.policy.clone(),
+                staking: legacy.staking.policy.clone(),
+            },
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let emergency_fast = config.kura.init_mode == InitMode::Fast;
     if let Some(guard) = launcher_config_guard {
         guard(&config).map_err(|error| {

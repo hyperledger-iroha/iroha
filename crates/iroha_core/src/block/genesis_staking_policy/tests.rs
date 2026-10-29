@@ -584,7 +584,7 @@ fn production_combined_bootstrap_installs_crypto_and_staking_at_one_pristine_cut
     let state = state();
     let block = combined_source();
     let source = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
-    let mut initial = Some(source.initial_policies(&block).unwrap());
+    let mut initial = source.initial_policies(&block).unwrap();
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     let generation = state.state_view_generation();
     let result = state.block_with_recorded_pristine_carrier_stage(
@@ -649,7 +649,7 @@ fn second_policy_decoder_refusal_keeps_both_original_capabilities_and_pristine_s
     let state = state();
     let block = combined_source();
     let source = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
-    let mut initial = Some(source.initial_policies(&block).unwrap());
+    let mut initial = source.initial_policies(&block).unwrap();
     let crypto = source.initial_crypto_policy(&block).unwrap();
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     let generation = state.state_view_generation();
@@ -748,7 +748,7 @@ fn combined_initialization_pool_refusal_keeps_both_capabilities_and_retries() {
         instruction(1_000),
     ]]);
     let original = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
-    let mut selected = Some(original.initial_policies(&block).unwrap());
+    let mut selected = original.initial_policies(&block).unwrap();
     let source_bytes = block.canonical_wire().unwrap();
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     let generation = state.state_view_generation();

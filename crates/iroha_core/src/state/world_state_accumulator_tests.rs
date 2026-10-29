@@ -1001,3 +1001,71 @@ fn current_certified_genesis_binds_the_current_empty_world() {
         finalized
     );
 }
+
+#[test]
+fn shared_schema_fold_is_the_registry_digest() {
+    // The original single-pass fold over the registry, kept here as the reference.
+    let mut flat = Vec::new();
+    flatten(WORLD_FIELDS, &mut flat);
+    let mut canonical = BTreeMap::new();
+    for field in flat {
+        match field.role {
+            Role::Canonical(Canonical::Table { key, value }) => {
+                canonical.insert(field.id, (TABLE, Some(key), value));
+            }
+            Role::Canonical(Canonical::Cell(value)) => {
+                canonical.insert(field.id, (CELL, None, value));
+            }
+            _ => {}
+        }
+    }
+    let mut schema = Hash::new(SCHEMA_START);
+    for (id, (kind, key, value)) in &canonical {
+        let key = key
+            .map(schema_fingerprint)
+            .transpose()
+            .unwrap()
+            .unwrap_or_else(|| Hash::new(SCHEMA_NO_KEY));
+        schema = Hash::new_from_chunks(&[
+            SCHEMA_FIELD,
+            schema.as_ref(),
+            path_hash(id, *kind).unwrap().as_ref(),
+            key.as_ref(),
+            schema_fingerprint(*value).unwrap().as_ref(),
+        ]);
+    }
+    let reference = Hash::new_from_chunks(&[
+        SCHEMA_START,
+        schema.as_ref(),
+        &u64::try_from(canonical.len()).unwrap().to_le_bytes(),
+    ]);
+    assert_eq!(field_index().as_ref().unwrap().schema, reference);
+}
+
+#[test]
+fn predecessor_root_restores_the_retired_registry_and_cell() {
+    let index = field_index().as_ref().unwrap();
+    let current = WorldStateAccumulator::empty();
+    let (predecessor, root) = predecessor_root(&current).unwrap();
+    // The retired cell holds `None`; the retired table and the added table are empty.
+    assert_eq!(predecessor.entries(), current.entries() + 1);
+    assert_ne!(root, current.root().unwrap());
+    // Exactly the predecessor's identities enter its schema digest.
+    let fingerprint = norito_identity_fingerprint(&norito::schema::identity::nominal_name::<
+        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
+    >())
+    .unwrap();
+    assert_eq!(
+        fingerprint,
+        norito_identity_fingerprint(
+            crate::state::upgrade_checkpoint::RETIRED_WORLD_FIELDS[0].value
+        )
+        .unwrap()
+    );
+    assert!(
+        index
+            .fingerprints
+            .contains_key("world.privacy_protocol_policies")
+    );
+    assert!(!index.fingerprints.contains_key("world.privacy_activations"));
+}

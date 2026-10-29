@@ -276,6 +276,8 @@ struct FieldIndex {
     ids: Vec<&'static str>,
     canonical: usize,
     schema: Hash,
+    /// Kind and key/value schema fingerprints of every canonical field, by registry identity.
+    fingerprints: BTreeMap<&'static str, Fingerprint>,
 }
 
 fn field_index() -> &'static Result<FieldIndex, String> {
@@ -315,20 +317,17 @@ impl FieldIndex {
                 return Err(format!("World field registered twice: {}", field.id));
             }
         }
-        let mut schema = Hash::new(SCHEMA_START);
+        let mut fingerprints = BTreeMap::new();
         for (slot, (id, (kind, key, value))) in canonical.iter().enumerate() {
             let path = path_hash(id, *kind)?;
-            let key = key
-                .map(schema_fingerprint)
-                .transpose()?
-                .unwrap_or_else(|| Hash::new(SCHEMA_NO_KEY));
-            schema = Hash::new_from_chunks(&[
-                SCHEMA_FIELD,
-                schema.as_ref(),
-                path.as_ref(),
-                key.as_ref(),
-                schema_fingerprint(*value)?.as_ref(),
-            ]);
+            fingerprints.insert(
+                *id,
+                (
+                    *kind,
+                    key.map(schema_fingerprint).transpose()?,
+                    schema_fingerprint(*value)?,
+                ),
+            );
             let name = id.strip_prefix("world.").unwrap_or(id);
             by_name.insert(
                 name,
@@ -343,15 +342,107 @@ impl FieldIndex {
             by_name,
             ids: canonical.keys().copied().collect(),
             canonical: canonical.len(),
-            schema: Hash::new_from_chunks(&[
-                SCHEMA_START,
-                schema.as_ref(),
-                &u64::try_from(canonical.len())
-                    .map_err(|_| "canonical World field count exceeds u64")?
-                    .to_le_bytes(),
-            ]),
+            schema: schema_digest(&fingerprints)?,
+            fingerprints,
         })
     }
+}
+
+/// Kind and key/value schema fingerprints of one canonical field (no key for a cell).
+type Fingerprint = (u8, Option<Hash>, Hash);
+
+/// `S`: every canonical field's identity, kind and key/value schema folded in identity order,
+/// followed by the field count.
+fn schema_digest(fingerprints: &BTreeMap<&'static str, Fingerprint>) -> Result<Hash, String> {
+    let mut schema = Hash::new(SCHEMA_START);
+    for (id, (kind, key, value)) in fingerprints {
+        let path = path_hash(id, *kind)?;
+        let key = key.unwrap_or_else(|| Hash::new(SCHEMA_NO_KEY));
+        schema = Hash::new_from_chunks(&[
+            SCHEMA_FIELD,
+            schema.as_ref(),
+            path.as_ref(),
+            key.as_ref(),
+            value.as_ref(),
+        ]);
+    }
+    Ok(Hash::new_from_chunks(&[
+        SCHEMA_START,
+        schema.as_ref(),
+        &u64::try_from(fingerprints.len())
+            .map_err(|_| "canonical World field count exceeds u64")?
+            .to_le_bytes(),
+    ]))
+}
+
+/// The accumulator and World root that the predecessor release of an upgrade checkpoint
+/// certified for an imported World (`state::upgrade_checkpoint`).
+///
+/// `current` is a cold capture, under this release's registry, of a World imported from the
+/// predecessor's snapshot with the added field still empty. The predecessor's registry held the
+/// retired fields instead. An import admits only their empty values, so the retired cell adds its
+/// one element at `None` and the retired table adds none.
+///
+/// # Errors
+/// The registry of this release no longer matches the predecessor profile, or a value fails to
+/// encode.
+pub(in crate::state) fn predecessor_root(
+    current: &WorldStateAccumulator,
+) -> Result<(WorldStateAccumulator, Hash), String> {
+    use crate::state::upgrade_checkpoint::{ADDED_WORLD_FIELD, RETIRED_WORLD_FIELDS};
+    let mut fingerprints = field_index()
+        .as_ref()
+        .map_err(Clone::clone)?
+        .fingerprints
+        .clone();
+    if fingerprints.remove(ADDED_WORLD_FIELD.0).is_none() {
+        return Err(format!(
+            "{} is not a canonical World field of this release",
+            ADDED_WORLD_FIELD.0
+        ));
+    }
+    let mut predecessor = current.clone();
+    for retired in &RETIRED_WORLD_FIELDS {
+        let kind = if retired.key.is_some() { TABLE } else { CELL };
+        let key = retired.key.map(norito_identity_fingerprint).transpose()?;
+        let value = norito_identity_fingerprint(retired.value)?;
+        if fingerprints
+            .insert(retired.id, (kind, key, value))
+            .is_some()
+        {
+            return Err(format!(
+                "{} is still a canonical World field of this release",
+                retired.id
+            ));
+        }
+        if kind == CELL {
+            let empty: Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1> =
+                None;
+            predecessor.add(&element(
+                &path_hash(retired.id, CELL)?,
+                None,
+                &hash_value(&empty)?,
+            ));
+        }
+    }
+    let root = world_state_root_from_accumulator_v1(
+        schema_digest(&fingerprints)?,
+        predecessor.entries,
+        &predecessor.lanes,
+    );
+    Ok((predecessor, root))
+}
+
+/// [`schema_fingerprint`] of a Norito schema whose nominal identity was `identity`.
+fn norito_identity_fingerprint(identity: &str) -> Result<Hash, String> {
+    let layout = crate::state::authority_registry::V1_LAYOUT;
+    let length = u64::try_from(identity.len()).map_err(|_| "World schema identity exceeds u64")?;
+    Ok(Hash::new_from_chunks(&[
+        SCHEMA_VALUE,
+        &[0, layout.major, layout.minor, layout.flags],
+        &length.to_le_bytes(),
+        identity.as_bytes(),
+    ]))
 }
 
 fn flatten(fields: &'static [Field], out: &mut Vec<&'static Field>) {
@@ -721,6 +812,47 @@ impl crate::state::World {
     ) -> Result<Hash, WorldStateVerificationError> {
         let stored = self.state_accumulator.view().get().clone();
         self.verify_captured_accumulator(&stored, execution_budget)
+    }
+
+    /// Take over a World imported at an upgrade checkpoint (`state::upgrade_checkpoint`).
+    ///
+    /// The decoded accumulator Cell is the predecessor's. A cold capture of this World under
+    /// this release's registry must equal it once the predecessor's retired fields are added back
+    /// ([`predecessor_root`]), which proves every canonical entry was imported exactly, and the
+    /// predecessor's root of it must equal `certified`, the checkpoint block's certified World
+    /// root. The Cell then holds the capture under this release's registry, from which the next
+    /// block chains. Returns that root.
+    ///
+    /// # Errors
+    /// The import differs from the predecessor's World, the root differs from `certified`, the
+    /// World cannot be acquired or a value cannot be encoded.
+    pub(crate) fn adopt_checkpoint_accumulator(
+        &mut self,
+        execution_budget: &iroha_allocation::AllocationBudget,
+        certified: Hash,
+    ) -> Result<Hash, WorldStateVerificationError> {
+        let stored = self.state_accumulator.view().get().clone();
+        let block = self
+            .try_block(execution_budget)
+            .map_err(WorldStateVerificationError::Acquisition)?;
+        let captured =
+            WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
+        drop(block);
+        let (predecessor, root) =
+            predecessor_root(&captured).map_err(WorldStateVerificationError::Capture)?;
+        if predecessor != stored || root != certified {
+            return Err(WorldStateVerificationError::Mismatch {
+                stored_root: certified,
+                stored_entries: stored.entries(),
+                captured_root: root,
+                captured_entries: predecessor.entries(),
+            });
+        }
+        let current = captured
+            .root()
+            .map_err(WorldStateVerificationError::Capture)?;
+        self.state_accumulator = mv::cell::Cell::new(captured);
+        Ok(current)
     }
 
     fn verify_captured_accumulator(

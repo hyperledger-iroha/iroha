@@ -19,6 +19,43 @@ mod ingress;
 pub(crate) use ingress::ParameterIngressAttemptError;
 pub use ingress::ParameterIngressError;
 
+/// Crypto and staking policy of a network whose signed genesis predates genesis-authored
+/// policy. Its node configuration supplies them (`nexus.legacy_genesis`), and the daemon
+/// installs them once, before any genesis or State work.
+static LEGACY_GENESIS_POLICIES: std::sync::OnceLock<LegacyGenesisPolicies> =
+    std::sync::OnceLock::new();
+
+/// The policies a pre-policy signed genesis committed through node configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyGenesisPolicies {
+    /// Ordinary crypto admission policy.
+    pub crypto: CryptoAdmissionPolicyV1,
+    /// Public-lane staking monetary policy.
+    pub staking: PublicLaneStakingPolicy,
+}
+
+/// Install the configured policies of a pre-policy signed genesis for this process.
+///
+/// Committed parameters keep precedence: the policies stand in only while committed State
+/// holds none, which on such a network covers its whole history.
+///
+/// # Errors
+/// Refuses a different second installation.
+pub fn install_legacy_genesis_policies(
+    policies: LegacyGenesisPolicies,
+) -> Result<(), &'static str> {
+    if *LEGACY_GENESIS_POLICIES.get_or_init(|| policies.clone()) == policies {
+        Ok(())
+    } else {
+        Err("a different legacy genesis policy is already installed")
+    }
+}
+
+/// The installed pre-policy genesis policies, when this node runs such a network.
+pub fn legacy_genesis_policies() -> Option<&'static LegacyGenesisPolicies> {
+    LEGACY_GENESIS_POLICIES.get()
+}
+
 use iroha_config::parameters::actual::{Gas, GasLiquidity, GasRate, GasVolatility};
 use iroha_data_model::{
     account::{
@@ -169,9 +206,12 @@ impl StateParameters {
     }
 
     /// Borrow the policy from this exact parameters version, if genesis initialized it.
-    /// Absence is never an ordinary-admission default.
+    /// Absence is never an ordinary-admission default; a pre-policy genesis network
+    /// reads its installed configured policy instead.
     pub fn crypto_policy(&self) -> Option<&CryptoAdmissionPolicyV1> {
-        self.crypto.as_ref()
+        self.crypto
+            .as_ref()
+            .or_else(|| legacy_genesis_policies().map(|legacy| &legacy.crypto))
     }
 
     /// Require the explicit committed policy for ordinary admission or publication.
@@ -179,15 +219,17 @@ impl StateParameters {
     /// # Errors
     /// Rejects the uninitialized pre-genesis owner without inventing a default.
     pub fn require_crypto_policy(&self) -> Result<&CryptoAdmissionPolicyV1, &'static str> {
-        self.crypto
-            .as_ref()
+        self.crypto_policy()
             .ok_or("ordinary crypto policy has not been initialized by authenticated genesis")
     }
 
     /// Borrow this exact version's validated staking policy, if genesis initialized it.
-    /// No JSON decoder or node-local fallback runs on this read path.
+    /// No JSON decoder runs on this read path; a pre-policy genesis network reads its
+    /// installed configured policy instead.
     pub fn staking_policy(&self) -> Option<&PublicLaneStakingPolicy> {
-        self.staking.as_ref()
+        self.staking
+            .as_ref()
+            .or_else(|| legacy_genesis_policies().map(|legacy| &legacy.staking))
     }
 
     /// Require the initialized monetary policy without allocating a substitute.
@@ -197,8 +239,7 @@ impl StateParameters {
     pub fn require_staking_policy(
         &self,
     ) -> Result<&PublicLaneStakingPolicy, PublicLaneStakingPolicyError> {
-        self.staking
-            .as_ref()
+        self.staking_policy()
             .ok_or(PublicLaneStakingPolicyError::MissingParameter)
     }
 

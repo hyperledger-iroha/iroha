@@ -969,6 +969,19 @@ impl SnapshotMaker {
     }
     /// Invoke snapshot creation task
     fn create_snapshot(&mut self) {
+        // The predecessor release's snapshot is the World at the upgrade checkpoint; a snapshot of
+        // this release there cannot be authenticated before its successor block exists.
+        if self
+            .state
+            .kura()
+            .upgrade_checkpoint()
+            .is_some_and(|checkpoint| {
+                u64::try_from(self.state.committed_height())
+                    .is_ok_and(|height| height == checkpoint.height)
+            })
+        {
+            return;
+        }
         let store_dir = self.store_dir.clone();
         let latest_block_hash = self.state.latest_block_hash_fast();
         if latest_block_hash != self.latest_block_hash {
@@ -2799,13 +2812,18 @@ fn verify_snapshot_restore_preflight(
 }
 
 /// Only the certified successor of a positive-height snapshot authenticates its World, so a
-/// snapshot at the Kura tip cannot be restored; refuse it before reading its payload.
+/// snapshot at the Kura tip cannot be restored; refuse it before reading its payload. The
+/// upgrade checkpoint is the exception: its own certified result authenticates its World.
 fn require_certified_successor(
     manifest: &EmergencyFastSnapshotManifestV1,
     block_count: usize,
+    checkpoint: Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
 ) -> Result<(), TryReadError> {
     let height = manifest.committed_height;
-    if height > 0 && u64::try_from(block_count).is_ok_and(|count| height == count) {
+    if height > 0
+        && u64::try_from(block_count).is_ok_and(|count| height == count)
+        && checkpoint.is_none_or(|checkpoint| checkpoint.height != height)
+    {
         return Err(TryReadError::SuccessorRequired {
             snapshot_height: height,
         });
@@ -2815,9 +2833,11 @@ fn require_certified_successor(
 
 /// Signed generations of this chain whose World the next Kura block certifies, newest first.
 struct RestorableGenerations {
-    /// Eligible generation names: this chain and network, an empty State or a committed height
-    /// below the Kura tip.
+    /// Eligible generation names: this chain and network, an empty State, a committed height
+    /// below the Kura tip, or the upgrade checkpoint height.
     names: Vec<String>,
+    /// Eligible generations signed by the upgrade checkpoint's signer instead of the node key.
+    checkpoint_signed: Vec<String>,
     /// Signed height of the current generation when it is not eligible: the snapshot at the
     /// Kura tip, or one above it after Kura lost its tail.
     current_height: Option<u64>,
@@ -2833,6 +2853,7 @@ fn restorable_snapshot_generations(
     verification_key: &PublicKey,
     expected_chain_id: &ChainId,
     expected_network_id: NetworkId,
+    checkpoint: Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
 ) -> Result<Option<RestorableGenerations>, TryReadError> {
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
     let Some((_, pointer_bytes)) = bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?
@@ -2844,6 +2865,7 @@ fn restorable_snapshot_generations(
     let entries = std::fs::read_dir(&generations_dir)
         .map_err(|error| TryReadError::IO(error, generations_dir.clone()))?;
     let mut eligible = Vec::new();
+    let mut checkpoint_signed = Vec::new();
     let mut current_height = None;
     let mut current_settled = false;
     for (scanned, entry) in entries.enumerate() {
@@ -2860,17 +2882,37 @@ fn restorable_snapshot_generations(
         if !canonical_snapshot_digest_name(&name) {
             continue;
         }
-        let Some(manifest) = signed_generation_manifest(&entry.path(), verification_key) else {
-            continue;
-        };
+        // Another validator's snapshot is admitted only at the upgrade checkpoint, and only
+        // under the checkpoint's own signer; the restore still proves its World.
+        let (manifest, by_checkpoint_signer) =
+            match signed_generation_manifest(&entry.path(), verification_key) {
+                Some(manifest) => (manifest, false),
+                None => match checkpoint
+                    .and_then(|checkpoint| Some((checkpoint.height, checkpoint.signer.as_ref()?)))
+                    .and_then(|(height, signer)| {
+                        signed_generation_manifest(&entry.path(), signer)
+                            .filter(|manifest| manifest.committed_height == height)
+                    }) {
+                    Some(manifest) => (manifest, true),
+                    None => continue,
+                },
+            };
         if manifest.chain_id != *expected_chain_id || manifest.network_id != expected_network_id {
             continue;
         }
         let height = manifest.committed_height;
         let is_current = name == current;
         current_settled |= is_current;
-        // An empty State needs no certificate; a positive height needs its successor in Kura.
-        if height == 0 || u64::try_from(block_count).is_ok_and(|count| height < count) {
+        // An empty State needs no certificate; a positive height needs its successor in Kura,
+        // except the upgrade checkpoint, which its own certified result authenticates.
+        let at_checkpoint = checkpoint.is_some_and(|checkpoint| checkpoint.height == height);
+        if height == 0
+            || u64::try_from(block_count)
+                .is_ok_and(|count| height < count || (at_checkpoint && height == count))
+        {
+            if by_checkpoint_signer {
+                checkpoint_signed.push(name.clone());
+            }
             eligible.push((height, is_current, name));
         } else if is_current {
             current_height = Some(height);
@@ -2886,6 +2928,7 @@ fn restorable_snapshot_generations(
             .into_iter()
             .chain(eligible.into_iter().map(|(_, _, name)| name))
             .collect(),
+        checkpoint_signed,
         current_height,
     }))
 }
@@ -3041,7 +3084,7 @@ where
         return Ok(SnapshotReadOutcome { state });
     }
     verify_signature_hex(signature_hex, &bundle_digest, verification_key)?;
-    require_certified_successor(&fast_manifest, block_count)?;
+    require_certified_successor(&fast_manifest, block_count, kura.upgrade_checkpoint())?;
     let payload = read_bound_snapshot_payload(&generation.payload, read_buffer_budget)?.0;
     let bytes = payload.as_slice();
     let bytes_len = bytes.len();
@@ -3346,12 +3389,14 @@ where
         }
         // The newest signed generation below the Kura tip: the next Kura block certifies its
         // World. The snapshot written at shutdown sits at the tip and waits for its successor.
+        let checkpoint = kura.upgrade_checkpoint();
         let Some(restorable) = restorable_snapshot_generations(
             store_dir,
             block_count,
             verification_key,
             expected_chain_id,
             *expected_network_id,
+            checkpoint,
         )?
         else {
             return Err(TryReadError::NotFound);
@@ -3370,6 +3415,11 @@ where
         let live_query_store = live_query_store_lazy();
         let mut first_failure = None;
         for name in &restorable.names {
+            let generation_key = match checkpoint.and_then(|checkpoint| checkpoint.signer.as_ref())
+            {
+                Some(signer) if restorable.checkpoint_signed.contains(name) => signer,
+                _ => verification_key,
+            };
             let read = bind_snapshot_generation_with_mode(
                 store_dir,
                 payload_limit,
@@ -3388,7 +3438,7 @@ where
                     block_count,
                     merkle_chunk_size,
                     resource_policy,
-                    verification_key,
+                    generation_key,
                     expected_chain_id,
                     expected_network_id,
                     initialize_state,

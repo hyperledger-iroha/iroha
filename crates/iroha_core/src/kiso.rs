@@ -1397,6 +1397,7 @@ mod tests {
                 resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
                 verification_public_key: None,
                 signing_private_key: None,
+                upgrade_checkpoint: Default::default(),
             },
             telemetry_profile: iroha_config::parameters::actual::TelemetryProfile::Disabled,
             telemetry: None,

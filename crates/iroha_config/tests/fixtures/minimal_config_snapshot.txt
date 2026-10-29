@@ -1110,6 +1110,7 @@ Root {
                 latency_decay: 0.25,
             },
         },
+        legacy_genesis: None,
     },
     snapshot: Snapshot {
         mode: ReadWrite,
@@ -1134,6 +1135,11 @@ Root {
         },
         verification_public_key: None,
         signing_private_key: None,
+        upgrade_checkpoint: SnapshotUpgradeCheckpoint {
+            height: None,
+            block_hash: None,
+            signer: None,
+        },
     },
     telemetry_profile: Operator,
     telemetry: None,
