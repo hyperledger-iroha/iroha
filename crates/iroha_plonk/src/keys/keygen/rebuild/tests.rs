@@ -347,6 +347,10 @@ fn mutations<C: PastaCurve>() {
     let source = Source::default();
     let original = keygen_pk_v2(&params, &source, &config(false)).unwrap();
     let verifier = SourceBoundVerifyingKeyV2::from_proving_key(&original, None).unwrap();
+    let probe = CommitmentProbe::start();
+    check_source_v2_cancellable(&params, &source, &verifier.view(), None).unwrap();
+    assert_eq!(probe.calls(), 0);
+    drop(probe);
     let changed = [
         Source {
             fixed: C::ScalarExt::from(8),
@@ -379,6 +383,11 @@ fn mutations<C: PastaCurve>() {
             .err(),
             Some(RebuildError::Source)
         );
+        // The admission-time check refuses exactly what the rebuild refuses.
+        assert_eq!(
+            check_source_v2_cancellable(&params, &source, &verifier.view(), None).err(),
+            Some(RebuildError::Source)
+        );
         assert_eq!(probe.calls(), 0);
         // Per-witness exact fixed/copy/selector checks remain independently present.
         let known = Source {
@@ -391,6 +400,10 @@ fn mutations<C: PastaCurve>() {
         ));
     }
     let larger = PinnedParams::<C>::derive(7).unwrap();
+    assert_eq!(
+        check_source_v2_cancellable(&larger, &source, &verifier.view(), None).err(),
+        Some(RebuildError::Profile)
+    );
     assert_eq!(
         keygen_pk_from_vk_v2(
             &larger,

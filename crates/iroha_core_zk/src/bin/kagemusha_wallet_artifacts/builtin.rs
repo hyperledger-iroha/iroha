@@ -1,15 +1,91 @@
 //! Independent strict profile generation and explicit compiled-profile inspection.
 
+use std::cell::Cell;
+
 use super::*;
 use iroha_core_zk::kagemusha_wallet_artifacts_v1::producer_inventory::{
-    EncodedDirectoryOriginalsV1, EncodedTransportV1, OpeningMetricsV1, ProducerInventoryV1,
-    TRANSPORT_MAX_BYTES_V1, WalletSourcesErrorV1,
+    AuthenticatedProducerInventoryV1, EncodedDirectoryOriginalsV1, EncodedTransportV1,
+    OpeningMetricsV1, OperationQualificationProgressV1, ProducerInventoryV1,
+    QQualificationProgressV1, QualifiedWalletSourcesV1, TRANSPORT_MAX_BYTES_V1,
+    WalletSourcesErrorV1,
 };
+use iroha_kagemusha_proof::a_relation::schedule::compiled::compiled_routes;
+
+/// What one closed built-in profile request does with its authenticated carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Strictly qualify every source and export one native registry entry.
+    Export,
+    /// Check the exact compiled graph the way an installation opens it.
+    Inspect,
+    /// Also rebuild every actual current source and compare it with its installed
+    /// key, as each proof would on a phone. Run before a Native ships.
+    VerifySources,
+}
 
 struct InspectionSummary {
     routes: usize,
     programs: usize,
     peak_proving_bytes: u64,
+    sources_verified: bool,
+}
+
+// The Q program or route that started and has not completed. Qualification
+// reports both in index order, so after a refusal this names the failing one;
+// `None` then means a sigma or the final Omega source.
+type Pending = Cell<Option<(&'static str, u32)>>;
+
+fn qualify(
+    inventory: AuthenticatedProducerInventoryV1,
+    installed: &InstalledVerifierPackV1,
+    native: &SumeragiFinalityVerifier,
+    source: &mut dyn OriginalSourceV1,
+    config: ReadConfig,
+    mode: Mode,
+    pending: &Pending,
+) -> Result<QualifiedWalletSourcesV1, WalletSourcesErrorV1> {
+    if mode != Mode::VerifySources {
+        return inventory.qualify_wallet_builtin(installed, native, source, config);
+    }
+    inventory.qualify_wallet_builtin_verifying_sources(
+        installed,
+        native,
+        source,
+        config,
+        |event| match event {
+            QQualificationProgressV1::Started { program_index } => {
+                pending.set(Some(("q_program", program_index)));
+            }
+            QQualificationProgressV1::Completed { .. } => pending.set(None),
+        },
+        |event| match event {
+            OperationQualificationProgressV1::Started { route_index } => {
+                pending.set(Some(("route", route_index)));
+            }
+            OperationQualificationProgressV1::Completed { .. } => pending.set(None),
+        },
+    )
+}
+
+fn mismatch_line(pending: Option<(&'static str, u32)>, error: &io::Error) -> String {
+    match pending {
+        Some(("route", index)) => {
+            // Inventory routes follow the compiled route order.
+            let variant = usize::try_from(index)
+                .ok()
+                .and_then(|index| compiled_routes().get(index).map(|route| route.variant));
+            match variant {
+                Some(variant) => format!(
+                    "BUILTIN_SOURCE_MISMATCH stage=route index={index} variant={variant:?} error={error}"
+                ),
+                None => format!("BUILTIN_SOURCE_MISMATCH stage=route index={index} error={error}"),
+            }
+        }
+        Some((stage, index)) => {
+            format!("BUILTIN_SOURCE_MISMATCH stage={stage} index={index} error={error}")
+        }
+        None => format!("BUILTIN_SOURCE_MISMATCH stage=sigma_or_omega error={error}"),
+    }
 }
 
 /// Records `catalog_intake` and `snapshot_capture`; the body's own owner reports its stages.
@@ -61,7 +137,11 @@ fn finish_profile(
             "BUILTIN_SOURCE_ACCEPTED complete_routes={} complete_programs={} peak_proving_bytes={}",
             summary.routes, summary.programs, summary.peak_proving_bytes,
         )?;
-        "compiled_inspection"
+        if summary.sources_verified {
+            "source_verification"
+        } else {
+            "compiled_inspection"
+        }
     } else {
         "strict_export"
     };
@@ -112,12 +192,12 @@ fn parse_request(bytes: &[u8]) -> io::Result<BuiltinRequest> {
     Ok(request)
 }
 
-/// Both modes authenticate the independent native genesis. Export always takes
+/// Every mode authenticates the independent native genesis. Export always takes
 /// the unconditional strict path and never looks up an existing registry entry.
 ///
 /// # Errors
 /// Returns request, genesis, source-qualification, custody, or output-publication errors.
-pub fn run(path: &str, export: bool) -> io::Result<()> {
+pub fn run(path: &str, mode: Mode) -> io::Result<()> {
     let total = std::time::Instant::now();
     let mut opening = OpeningMetricsV1::start();
     let request_original = Original::open(path, REQUEST_MAX, None)?;
@@ -178,7 +258,7 @@ pub fn run(path: &str, export: bool) -> io::Result<()> {
         msm_budget: MemoryBudget::DEFAULT,
     };
     let graph_start = std::time::Instant::now();
-    let (inspection, transport) = if export {
+    let (inspection, transport) = if mode == Mode::Export {
         // Independent registry generation keeps the original complete strict
         // file reader; it never consumes a compiled entry or admission snapshot.
         let (mut originals, transport): (Box<dyn OriginalSourceV1>, Option<Original>) =
@@ -213,29 +293,55 @@ pub fn run(path: &str, export: bool) -> io::Result<()> {
         publish(&output, "builtin-profile-entry.rs", entry.as_bytes())?;
         (None, transport)
     } else {
-        eprintln!(
-            "Checking the complete exact built-in graph, all originals and independent native genesis."
-        );
-        let (wallet, transport) = if request.encoded {
+        if mode == Mode::VerifySources {
+            eprintln!(
+                "Checking the complete exact built-in graph and independent native genesis, and rebuilding every actual source against its installed key."
+            );
+        } else {
+            eprintln!(
+                "Checking the complete exact built-in graph, all originals and independent native genesis."
+            );
+        }
+        let pending = Pending::new(None);
+        let qualified = if request.encoded {
             // Retain the exact authenticated DATA closure while the callback
             // consumes its opaque authenticated owner into the complete wallet.
             let expected = inventory.inventory().clone();
-            let (wallet, transport) =
-                with_encoded_snapshot(&root, &expected, &mut opening, |source| {
-                    inventory.qualify_wallet_builtin(&installed, &native, source, config)
-                })?;
-            (wallet, Some(transport))
+            with_encoded_snapshot(&root, &expected, &mut opening, |source| {
+                qualify(
+                    inventory, &installed, &native, source, config, mode, &pending,
+                )
+            })
+            .map(|(wallet, transport)| (wallet, Some(transport)))
         } else {
-            let mut originals = DirectoryOriginalsV1::open_existing(
+            DirectoryOriginalsV1::open_existing(
                 root.path().join(&request.originals_name),
                 PROVING_KEY_MAX_BYTES_V1,
-            )?;
-            opening.lap("catalog_intake");
-            let wallet = inventory
-                .qualify_wallet_builtin(&installed, &native, &mut originals, config)
+            )
+            .and_then(|mut originals| {
+                opening.lap("catalog_intake");
+                let wallet = qualify(
+                    inventory,
+                    &installed,
+                    &native,
+                    &mut originals,
+                    config,
+                    mode,
+                    &pending,
+                )
                 .map_err(io::Error::other)?;
-            opening.restart();
-            (wallet, None)
+                opening.restart();
+                Ok((wallet, None))
+            })
+        };
+        let (wallet, transport) = match qualified {
+            Ok(qualified) => qualified,
+            Err(error) => {
+                if mode == Mode::VerifySources {
+                    println!("{}", mismatch_line(pending.get(), &error));
+                }
+                return Err(error);
+            }
         };
         opening.qualification(wallet.qualification_metrics());
         opening.lap("closing");
@@ -245,6 +351,7 @@ pub fn run(path: &str, export: bool) -> io::Result<()> {
             peak_proving_bytes: wallet
                 .peak_proving_memory_bytes()
                 .map_err(io::Error::other)?,
+            sources_verified: mode == Mode::VerifySources,
         };
         (Some(summary), transport)
     };
@@ -267,8 +374,9 @@ pub fn run(path: &str, export: bool) -> io::Result<()> {
         },
         &mut io::stdout().lock(),
     )?;
-    if !export {
+    if mode == Mode::Inspect {
         // Observation only, printed after every final custody check passed.
+        // Source verification adds synthesis no phone performs while opening.
         opening.finish();
         println!("OPENING_METRICS {}", opening.to_json());
     }
@@ -392,6 +500,7 @@ mod tests {
                 routes: 52,
                 programs: 32,
                 peak_proving_bytes: 123,
+                sources_verified: true,
             }),
             std::time::Instant::now(),
             || {
@@ -406,21 +515,26 @@ mod tests {
     }
 
     #[test]
-    fn terminal_markers_preserve_distinct_strict_and_compiled_modes() {
-        for compiled in [false, true] {
+    fn terminal_markers_preserve_distinct_strict_compiled_and_verifying_modes() {
+        for (compiled, sources_verified) in [(false, false), (true, false), (true, true)] {
             let mut output = Vec::new();
             let summary = compiled.then_some(InspectionSummary {
                 routes: 52,
                 programs: 32,
                 peak_proving_bytes: 123,
+                sources_verified,
             });
             finish_profile(summary, std::time::Instant::now(), || Ok(()), &mut output).unwrap();
             let output = String::from_utf8(output).unwrap();
             if compiled {
                 assert!(output.starts_with("BUILTIN_SOURCE_ACCEPTED complete_routes=52 complete_programs=32 peak_proving_bytes=123\n"));
+                let mode = if sources_verified {
+                    "source_verification"
+                } else {
+                    "compiled_inspection"
+                };
                 assert!(
-                    output
-                        .contains("BUILTIN_PROFILE_COMPLETE mode=compiled_inspection elapsed_ms=")
+                    output.contains(&format!("BUILTIN_PROFILE_COMPLETE mode={mode} elapsed_ms="))
                 );
                 assert_eq!(output.lines().count(), 2);
             } else {
@@ -431,6 +545,27 @@ mod tests {
                 assert_eq!(output.lines().count(), 1);
             }
         }
+    }
+
+    #[test]
+    fn source_mismatch_names_the_pending_program_or_route() {
+        let error = io::Error::other("operation A source 0 failed original import");
+        assert_eq!(
+            mismatch_line(Some(("route", 1)), &error),
+            "BUILTIN_SOURCE_MISMATCH stage=route index=1 variant=Load error=operation A source 0 failed original import"
+        );
+        assert!(
+            mismatch_line(Some(("route", u32::MAX)), &error)
+                .starts_with("BUILTIN_SOURCE_MISMATCH stage=route index=4294967295 error=")
+        );
+        assert_eq!(
+            mismatch_line(Some(("q_program", 0)), &error),
+            "BUILTIN_SOURCE_MISMATCH stage=q_program index=0 error=operation A source 0 failed original import"
+        );
+        assert!(
+            mismatch_line(None, &error)
+                .starts_with("BUILTIN_SOURCE_MISMATCH stage=sigma_or_omega ")
+        );
     }
 
     fn request_text() -> String {
