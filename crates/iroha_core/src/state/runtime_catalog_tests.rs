@@ -1062,6 +1062,9 @@ include!("runtime_catalog_commit_tests.rs");
 #[test]
 fn runtime_catalog_preparation_preserves_cut_and_publication_allocates_nothing() {
     run_catalog_test(|| {
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let mut block = state.block(catalog_test_header(&state));
@@ -1230,6 +1233,9 @@ fn runtime_catalog_second_parameter_refusal_keeps_complete_original_cut_and_retr
     run_catalog_test(|| {
         use crate::pipeline_gas_policy::RetainedStateParameters;
         use crate::test_allocations::refuse_layout_occurrence_during;
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let original_state = norito::json::to_json(&state.world).unwrap();
@@ -1321,6 +1327,9 @@ fn actual_catalog_command_refusal_is_atomic_and_success_has_no_third_parameter_w
         use crate::smartcontracts::Execute as _;
         use crate::test_allocations::refuse_layout_occurrence_during;
         use iroha_data_model::{isi::SetParameter, parameter::Parameter};
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let command = payload.clone().into_custom_parameter().unwrap();
@@ -1421,6 +1430,9 @@ fn actual_catalog_command_decode_and_staging_budgets_preserve_refusal_and_retry(
         use crate::smartcontracts::Execute as _;
         use iroha_data_model::{isi::SetParameter, parameter::Parameter};
         use norito::core::{DecodeBudgetContext, DecodeLocalRefusalKind, DecodeResourceError};
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let command = payload.clone().into_custom_parameter().unwrap();
@@ -1636,6 +1648,9 @@ fn actual_catalog_invalid_json_version_and_protocol_bound_reject_without_deferra
 fn protected_catalog_reader_refusal_keeps_original_staged_state_and_retries() {
     run_catalog_test(|| {
         use norito::core::{DecodeLocalRefusalKind, DecodeResourceError};
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let mut block = state.block(catalog_test_header(&state));
@@ -1761,6 +1776,9 @@ fn catalog_observer_rejects_inner_protocol_reconstructed_and_stale_resource_erro
 fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_refunds_intermediate()
 {
     run_catalog_test(|| {
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let mut block = state.block(catalog_test_header(&state));
@@ -1824,6 +1842,9 @@ fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_ref
 fn actual_runtime_manifest_registry_refusal_preserves_catalog_cut_and_retries() {
     run_catalog_test(|| {
         use norito::core::{DecodeBudgetContext, DecodeLocalRefusalKind, DecodeResourceError};
+        // Retain every generation created by this pool before measuring it:
+        // unrelated epoch collection cannot refund genesis fixture owners mid-check.
+        let _retirement_pin = crossbeam_epoch::pin();
         let (state, keys) = catalog_fixture(InvalidMember::None);
         let payload = catalog_payload(&state, &keys);
         let mut block = state.block(catalog_test_header(&state));
@@ -2005,6 +2026,9 @@ fn actual_runtime_manifest_registry_invalid_json_and_binding_reject_without_defe
 #[test]
 fn materialized_privacy_admission_refuses_before_publication_and_reuses_installed_owner() {
     run_catalog_test(|| {
+        // Keep fixture generations live while measuring exact synchronous refunds;
+        // unrelated epoch collection must not change this pool baseline.
+        let _retirement_pin = crossbeam_epoch::pin();
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),

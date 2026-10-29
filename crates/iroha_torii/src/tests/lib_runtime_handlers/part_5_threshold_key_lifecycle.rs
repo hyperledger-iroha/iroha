@@ -415,7 +415,16 @@ async fn lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_rou
             ),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        if has_parent {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        } else {
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                torii_response_header(&response, "x-iroha-reject-code"),
+                Some("native_root_scope_unavailable"),
+                "unapplied genesis must fail before ordinary lifecycle admission"
+            );
+        }
         assert_eq!(app.queue.active_len(), 0);
         assert_eq!(lifecycle_pending_wire(&app), before);
     }

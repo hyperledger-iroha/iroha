@@ -340,6 +340,9 @@ fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
 #[tokio::test]
 async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visibility_and_health()
 {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     #[cfg(feature = "app_api")]
     use futures::FutureExt as _;
     use iroha_core::execution_attempt::ExecutionAttemptError;

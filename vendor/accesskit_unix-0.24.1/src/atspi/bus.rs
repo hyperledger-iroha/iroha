@@ -445,7 +445,7 @@ impl Bus {
 
     async fn emit_cache_signal<B>(&self, signal_name: &str, body: &B) -> Result<()>
     where
-        B: serde::Serialize + zbus::DynamicType,
+        B: serde::Serialize + zbus::Type,
     {
         map_or_ignoring_recoverable_error(
             self.conn
@@ -454,7 +454,7 @@ impl Bus {
                     cache_path(),
                     InterfaceName::from_str_unchecked("org.a11y.atspi.Cache"),
                     MemberName::from_str_unchecked(signal_name),
-                    body,
+                    &(body,),
                 )
                 .await,
             (),
@@ -510,6 +510,42 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_signal_preserves_its_single_structure_argument() {
+        use crate::atspi::object_address::OwnedObjectAddress;
+        use futures_lite::StreamExt as _;
+        crate::util::block_on(async {
+            let (server_socket, client_socket) = std::os::unix::net::UnixStream::pair().unwrap();
+            let (server, client) = futures_lite::future::zip(
+                Builder::unix_stream(server_socket)
+                    .server(zbus::Guid::generate())
+                    .p2p()
+                    .build(),
+                Builder::unix_stream(client_socket).p2p().build(),
+            )
+            .await;
+            let (server, client) = (server.unwrap(), client.unwrap());
+            let bus = Bus {
+                socket_proxy: SocketProxy::new(&server).await.unwrap(),
+                conn: server.clone(),
+                desktop: Arc::new(OnceLock::new()),
+            };
+            let mut messages = zbus::MessageStream::from(&client);
+            let reference = OwnedObjectAddress::null();
+            bus.emit_cache_signal("RemoveAccessible", &reference)
+                .await
+                .unwrap();
+            let message = messages.next().await.unwrap().unwrap();
+            assert_eq!(message.body().signature().to_string(), "(so)");
+            let (decoded,): (OwnedObjectAddress,) = message.body().deserialize().unwrap();
+            assert_eq!(decoded, reference);
+            drop(messages);
+            drop(bus);
+            client.close().await.unwrap();
+            server.closed().await;
+        });
+    }
 
     /// The runtime must dispatch the real AT-SPI application interface while
     /// the owning thread waits for requests and distinguish insertion from a duplicate.

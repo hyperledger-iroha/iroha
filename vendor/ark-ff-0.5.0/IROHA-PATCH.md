@@ -5,4 +5,17 @@ Upstream: ark-ff 0.5.0, crates.io archive SHA-256
 
 Replace the unmaintained paste procedural macro with maintained pastey 0.2.3. The dependency keeps its upstream import name; runtime arithmetic and algorithms are unchanged.
 
-The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the unmodified upstream manifest. All other upstream source bytes are retained. Remove this patch when an upstream release carries this dependency change.
+The crate always links Rust `std`. The retired no-std crate attribute and
+WebAssembly-specific multiplication/unroll paths are removed; native widening
+multiplication and the native 12-limb unroll policy remain unchanged.
+`tests/native_arithmetic.rs` locks full-width product vectors and canonical
+Montgomery reduction to independent fixed integer expectations. Copy this
+directory outside the repository and run
+`cargo test --manifest-path <copy>/Cargo.toml --test native_arithmetic`, then
+repeat with `--features std`. This keeps the standalone test lockfile outside
+the reviewed vendor tree. Downstream standalone curve suites also need a Cargo
+`patch.crates-io.ark-ff.path` override pointing to this patched source.
+
+The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the
+unmodified upstream manifest. Remove the macro dependency patch when an upstream
+release carries it; retain the repository's native-only build policy.

@@ -3,7 +3,8 @@ use super::*;
 use crate::McpDispatchRouterOwner;
 use crate::tests_runtime_handlers::{
     app_auth_test_guard, checked_torii_test_ed25519_keypair, mk_app_state_for_tests,
-    mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,
+    mk_app_state_for_tests_with_world, mk_native_app_state_for_tests, signed_app_headers,
+    world_with_account,
 };
 use iroha_config::parameters::actual::ToriiMcpProfile;
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
@@ -1053,7 +1054,7 @@ async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
                 )
             }
         }));
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let (global, long_poll, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1409,7 +1410,7 @@ fn cancellation_keys_preserve_lossless_json_id_representation() {
 
 #[tokio::test]
 async fn malformed_authenticated_cancellation_nonce_is_rejected() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1439,7 +1440,7 @@ async fn malformed_authenticated_cancellation_nonce_is_rejected() {
 
 #[test]
 fn authenticated_call_without_nonce_remains_non_cancellable() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1483,7 +1484,7 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
                 )
             }
         }));
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _mcp_dispatch_router_owner = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1593,7 +1594,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
                 )
             }
         }));
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let (global, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1624,12 +1625,19 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
         .await
         .expect("client B dispatch starts");
 
-    let duplicate = handle_tool_call_request(
-        std::sync::Arc::clone(&app),
-        &cancellation_test_headers("client-a"),
-        cancellable_health_request_with_nonce(&(shared_id), cancellation_test_nonce(0x42).as_str()),
+    let duplicate = tokio::time::timeout(
+        Duration::from_secs(2),
+        handle_tool_call_request(
+            std::sync::Arc::clone(&app),
+            &cancellation_test_headers("client-a"),
+            cancellable_health_request_with_nonce(
+                &(shared_id),
+                cancellation_test_nonce(0x42).as_str(),
+            ),
+        ),
     )
-    .await;
+    .await
+    .expect("a duplicate live id is rejected before entering its blocked target route");
     let JsonRpcRequestOutcome::Response(duplicate) = duplicate else {
         panic!("duplicate live id must fail without cancelling its incumbent");
     };
@@ -1745,7 +1753,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
                 )
             }
         }));
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let (global, _mcp_dispatch_router_owner) = {
         let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -1876,7 +1884,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
 
 #[test]
 fn anonymous_or_invalid_tokens_have_no_cancellation_identity() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     assert!(authenticated_cancellation_client_fingerprint(&app, &HeaderMap::new()).is_none());
     let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
@@ -1885,6 +1893,11 @@ fn anonymous_or_invalid_tokens_have_no_cancellation_identity() {
     assert!(
         authenticated_cancellation_client_fingerprint(&app, &cancellation_test_headers("invalid"))
             .is_none()
+    );
+    assert!(
+        authenticated_cancellation_client_fingerprint(&app, &cancellation_test_headers("valid"))
+            .is_some(),
+        "the rejection control runs on an authenticated root with a configured token"
     );
 }
 #[test]

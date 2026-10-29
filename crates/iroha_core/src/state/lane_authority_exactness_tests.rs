@@ -716,7 +716,8 @@ fn exact_lane_committee_rejects_manifest_dataspace_mismatch() {
 
 #[test]
 fn exact_stake_committee_reselects_then_fails_closed_across_peer_churn() {
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
     let height = seed_lane_committee_beacon_for_test(&state);
     let keypairs = (0x31_u8..=0x35)
         .map(|seed| {
@@ -754,7 +755,8 @@ fn exact_stake_committee_reselects_then_fails_closed_across_peer_churn() {
 
 #[test]
 fn exact_stake_committee_rejects_split_dataspace_projections() {
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
     let second_lane = LaneId::new(1);
     let mut nexus = state.nexus_snapshot();
     nexus.lane_catalog = LaneCatalog::new(
@@ -796,6 +798,37 @@ fn exact_stake_committee_rejects_split_dataspace_projections() {
         resolve_universal_committee(&state),
         Err(LaneAuthorityError::InvalidAuthoritySource { .. })
     ));
+
+    // Consolidating the same live stake under its owner restores valid authority.
+    for keypair in &keypairs[2..] {
+        let validator = AccountId::new(keypair.public_key().clone());
+        {
+            let mut world = state.world.block();
+            world
+                .public_lane_validators
+                .remove((second_lane, validator.clone()));
+            world.public_lane_stake_shares.remove((
+                second_lane,
+                validator.clone(),
+                validator.clone(),
+            ));
+            world.commit();
+        }
+        insert_active_public_lane_validator_for_test(
+            &state,
+            LaneId::SINGLE,
+            &validator,
+            keypair,
+            1_000_000,
+        );
+    }
+    assert_eq!(
+        resolve_universal_committee(&state)
+            .expect("the authored policy admits the consolidated stake projection")
+            .validators()
+            .len(),
+        4
+    );
 }
 
 #[test]

@@ -438,30 +438,57 @@ fn fx_output_preparation_refusal_keeps_original_cause_and_rolls_back_dirty_prefi
                 .collect::<Vec<_>>(),
             initial_receipts
         );
-        let mut retry = block.transaction_for_fastpq_testing(identity);
-        configure_fx_catalog(&mut retry, &policy);
         assert_eq!(
-            asset_balance_or_zero(&retry, &source_id),
-            Quantity::from(10_u32)
+            block
+                .world
+                .assets
+                .get(&source_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(10_u32))
         );
         assert_eq!(
-            asset_balance_or_zero(&retry, &receiver_id),
+            block
+                .world
+                .assets
+                .get(&receiver_id)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero),
             Quantity::zero()
         );
+        let unchanged_registry = FxCorridorPolicyRegistry::from_custom_parameter(
+            block
+                .world
+                .parameters
+                .get()
+                .custom()
+                .get(&FxCorridorPolicyRegistry::parameter_id())
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(unchanged_registry.usage(&policy.policy_id).is_none());
         assert!(
-            fx_policy_registry(&retry)
-                .unwrap()
-                .usage(&policy.policy_id)
-                .is_none()
-        );
-        assert!(
-            retry
+            block
                 .world
                 .settlement_receipts
                 .get(&instruction.settlement_id)
                 .is_none()
         );
-        if !attempt_refused_apply {
+        if attempt_refused_apply {
+            // Attempting to publish the deferred overlay poisons its carrier.
+            // Keep the rollback observations above read-only and prove that a
+            // fresh child cannot erase this sticky publication refusal.
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(block.transaction());
+            }))
+            .expect_err("refused publication must retain its poisoned carrier");
+            assert_eq!(
+                error.downcast_ref::<&str>().copied(),
+                Some("completed execution retains immutable original State")
+            );
+        } else {
+            let mut retry = block.transaction_for_fastpq_testing(identity);
+            configure_fx_catalog(&mut retry, &policy);
             fund_fx_corridor(&mut retry, &policy, 1);
             assert_eq!(
                 retry
@@ -640,11 +667,10 @@ fn fx_usage_preparation_original_pool_refusal_refunds_and_retries_identical_inpu
     );
     assert_eq!(registration.poll_wait(release, &mut context), Poll::Pending);
     drop(occupied);
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        registration.poll_wait(release, &mut context),
-        Poll::Ready(())
-    );
+    // Credits are reusable immediately, but callbacks cannot run while the
+    // enclosing World still owns its physical writers.
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    assert_eq!(registration.poll_wait(release, &mut context), Poll::Pending);
     assert_eq!(original_pool.reserved_bytes(), reserved_before);
     drop(refused);
     assert!(initial_parameters.same_version(block.world.parameters.get()));
@@ -698,6 +724,14 @@ fn fx_usage_preparation_original_pool_refusal_refunds_and_retries_identical_inpu
     assert_eq!(
         asset_balance_or_zero(&retry, &receiver),
         Quantity::from(760_u32)
+    );
+    drop(retry);
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    drop(block);
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        registration.poll_wait(release, &mut context),
+        Poll::Ready(())
     );
 }
 

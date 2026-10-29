@@ -6331,7 +6331,7 @@
       },
       "BridgeFinalityAttestationTipMismatchV1": {
         "additionalProperties": false,
-        "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
+        "description": "Unsigned, selector-bound HTTP 503 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
         "properties": {
           "applied_height": {
             "description": "Applied immutable state-view tip.",

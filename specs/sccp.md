@@ -1110,11 +1110,13 @@ execution re-checks every derived group, including live multisig approvals. The
 other SCCP instructions keep their own rules.
 
 Contract-originated SCCP sends (Kotodama) are not part of v1: Kotodama has no
-SCCP builtin, and the ABI v1 syscall `0xA0` defines the single operation tag
-`1=SubmitBallot`. The IVM hosts reject every other tag, and every instruction
-other than `SubmitBallot`, with `PermissionDenied`, so an encoded
-`RecordSccpMessage` fails under any tag (§11). The post-execution commitment
-(§4.5) would support contract-originated sends safely later.
+SCCP builtin. The ABI v1 syscall `0xA0` defines `1=SubmitBallot` and
+`2=SubmitPrivacyZkX509CertificateV1`; neither operation records an SCCP message.
+Each tag accepts only its named instruction, and the X.509 operation retains
+its original signed attachment custody. With admitted decoding resources, an
+encoded `RecordSccpMessage` fails with `PermissionDenied` under either defined
+tag or any unknown tag (§11). The post-execution commitment (§4.5) would support
+contract-originated sends safely later.
 
 ### 4.5 Block commitment, history and finality header (post-execution)
 
@@ -6438,8 +6440,9 @@ because only `iroha_crypto` produces that transcript.
 - **ABI goldens:** the syscall `0xA0` argument text in
   `crates/ivm/spec/syscalls.toml`, the generated
   `crates/ivm_abi/src/syscalls_doc_gen.rs` and `crates/ivm/docs/syscalls.md`
-  name only the `1=SubmitBallot` operation tag (§4.4), and `ivm_abi` defines no
-  tag-2 constant. The ABI v1 hash golden in
+  name the `1=SubmitBallot` and `2=SubmitPrivacyZkX509CertificateV1` operation
+  tags (§4.4); `ivm_abi` defines tag 2 as `SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509`.
+  The ABI v1 hash golden in
   `crates/ivm/tests/abi_hash_versions.rs` and every committed `.to` fixture and
   manifest carry the hash of that surface. Syscall numbering and
   `abi_syscall_list_golden.rs` are unchanged.

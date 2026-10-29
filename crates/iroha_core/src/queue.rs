@@ -6338,7 +6338,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -6623,10 +6623,7 @@ pub mod tests {
             state,
             authority_id,
             authority_keypair,
-        } = nexus_routing_fixture_with_nexus(
-            nexus.clone(),
-            iroha_config::parameters::defaults::nexus::fees::genesis_policy(),
-        );
+        } = nexus_routing_fixture_with_nexus(nexus.clone(), zero_rate_routing_fees());
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: retired_lane,
@@ -6842,7 +6839,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
@@ -7005,7 +7002,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
@@ -7117,7 +7114,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut initial_lane_1 = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -7932,6 +7929,8 @@ pub mod tests {
     fn materialized_manifest_refresh_updates_local_diagnostics_without_state_publication() {
         use iroha_config::parameters::actual::LaneRegistry;
 
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),

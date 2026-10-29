@@ -203,6 +203,9 @@ mod tests {
 
     #[test]
     fn retained_pause_consumers_borrow_at_full_pool_without_clone_or_refund() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let state = blank_state();
         let budget = state.view().execution_budget();
         let mut block = state.block(header(5));

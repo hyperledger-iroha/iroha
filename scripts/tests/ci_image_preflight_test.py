@@ -110,7 +110,11 @@ def test_image_recipe_uses_current_pinned_tools_without_a_remote_installer() -> 
     assert "sha256sum --check --strict" in source
     assert "--only-binary=:all: --require-hashes -r /tmp/ci_image_poetry.lock" in source
     assert "sys.version_info[:2] == (3, 14)" in source
-    assert "poetry==2.5.1" in (ROOT / "scripts/ci_image_poetry.lock").read_text()
+    poetry_lock = (ROOT / "scripts/ci_image_poetry.lock").read_text()
+    assert "poetry==2.5.1" in poetry_lock
+    assert "--python-platform linux" in poetry_lock
+    assert "httpx2-jsfetch" not in poetry_lock
+    assert "emscripten" not in poetry_lock
     publish = (WORKFLOWS / "ci_image.yml").read_text()
     assert "tags: hyperledger/iroha2-ci:sha-${{ github.sha }}" in publish
     assert "provenance: mode=max" in publish

@@ -26,6 +26,9 @@ fn busy(state: &State) -> ReleaseWait {
 
 #[test]
 fn nonblocking_state_view_retains_exact_header_and_configuration_release_sources() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&budget);
@@ -233,6 +236,9 @@ fn snapshot_runtime_adapters_preserve_original_decoder_refusal() {
 fn generated_world_held_release_slots_keep_exact_sources_beyond_state_fences() {
     use iroha_allocation::release::ReleaseRegistration;
     for unwind in [false, true] {
+        // Retain unrelated constructor EBR generations while measuring only the
+        // original reader/capture owners and their exact synchronous refunds.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let state = state();
         let budget = state.ivm_execution_budget();
         let mut registrations: [ReleaseRegistration; 8] =

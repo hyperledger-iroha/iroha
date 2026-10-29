@@ -521,6 +521,9 @@ fn prepared_record_cannot_change_execution_clock_between_verification_and_conver
 
 #[test]
 fn genuine_prepared_publication_late_map_refusal_discards_first_offence_and_max() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     // This is a deliberately split private-publication component, not injected Network
     // execution: the genuine prepared owner provides every key and record. The same
     // first insertion used by publish completes before a real second insertion refuses.

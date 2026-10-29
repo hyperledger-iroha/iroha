@@ -1,14 +1,18 @@
-// Single-path tests of the `SubmitPrivacyProofV1` handler for every Exact12 role.
+// Dispatch and transport-boundary tests for every Exact12 action role.
 // Included in `privacy::tests`.
 //
 // The role samples are structurally valid envelopes with placeholder proofs and a canonical
-// profile that admits them. They are never accepted by a native verifier, so every test here
-// ends in a rejection and checks which part of the one handler produced it and that no privacy
-// State was written.
+// profile that admits them structurally. Those profiles do not match compiled native profiles.
+// Every test ends in a rejection and checks which part of the one handler produced it and
+// that no privacy State was written. X.509 requires its canonical signed-attachment instruction,
+// so the generic envelope entry rejects it before role resolution.
 
 use iroha_core_privacy::{
     privacy_dispatch::{
         PRIVACY_ROLE_DISPATCH_TABLE_V1, PrivacyRoleVerificationV1, PrivacyUnsupportedOperationV1,
+    },
+    privacy_profiles::{
+        CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_profile_v1,
     },
     privacy_verifier::PrivacyEffectRoleMismatchFailureV1,
 };
@@ -19,6 +23,97 @@ use iroha_data_model::{
 
 fn action_role_samples() -> Vec<PrivacyActionRoleSampleV1> {
     privacy_action_role_samples_v1().expect("Exact12 role samples")
+}
+
+const X509_ATTACHMENT_REQUIRED: &str =
+    "X.509 presentations require the canonical signed-attachment instruction";
+
+/// Check the exact error class and rejection boundary for a placeholder on blank State.
+fn role_sample_rejection_message(role: PrivacyActionRoleV1, error: &Error) -> &str {
+    use PrivacyActionRoleV1 as Role;
+    let expected = match role {
+        Role::ZkAceAuthorization => "ZK-ACE authoritative policy is not registered",
+        Role::AnonymousPgcPayment => "trusted Anonymous PGC pool state failed validation",
+        Role::ZkAmsBatchAdmission | Role::ZkAmsProvisionAccount => {
+            "trusted ZK-AMS registry state failed validation"
+        }
+        Role::ZkX509CertificatePresentation => X509_ATTACHMENT_REQUIRED,
+        Role::BootleLanternPresentation => {
+            "Bootle/Lantern authoritative issuer policy is not registered"
+        }
+        Role::OrchardActions => "trusted Orchard pool state failed validation",
+        Role::FcmpTransfer | Role::IvmPrivateNoteTransition | Role::PqMaspTransition => {
+            "trusted proof-managed pool state failed validation"
+        }
+        Role::VeRangeRange | Role::VegaCredentialPresentation | Role::JindoBatchedEvaluation => {
+            "privacy proof admission rejected"
+        }
+    };
+    let message: &str = match (role, error) {
+        (
+            Role::AnonymousPgcPayment
+            | Role::ZkAmsBatchAdmission
+            | Role::ZkAmsProvisionAccount
+            | Role::OrchardActions
+            | Role::FcmpTransfer
+            | Role::IvmPrivateNoteTransition
+            | Role::PqMaspTransition,
+            Error::InvariantViolation(message),
+        ) => message,
+        (
+            Role::ZkAceAuthorization
+            | Role::VeRangeRange
+            | Role::VegaCredentialPresentation
+            | Role::ZkX509CertificatePresentation
+            | Role::JindoBatchedEvaluation
+            | Role::BootleLanternPresentation,
+            Error::InvalidParameter(InvalidParameterError::SmartContract(message)),
+        ) => message,
+        _ => panic!("{role}: unexpected role rejection class: {error:?}"),
+    };
+    assert!(message.starts_with(expected), "{role}: {message}");
+    message
+}
+
+/// Direct structural-profile dispatch must retain the verifier's exact profile rejection.
+fn structural_role_sample_rejection_message<'a>(
+    sample: &PrivacyActionRoleSampleV1,
+    error: &'a Error,
+) -> &'a str {
+    use CompiledPrivacyProfileValidationErrorV1 as ProfileError;
+    let expected = match sample.role {
+        PrivacyActionRoleV1::VeRangeRange | PrivacyActionRoleV1::JindoBatchedEvaluation => {
+            ProfileError::ParameterIdMismatch
+        }
+        PrivacyActionRoleV1::VegaCredentialPresentation => {
+            ProfileError::Profile(CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: sample.role.protocol_id(),
+            })
+        }
+        _ => return role_sample_rejection_message(sample.role, error),
+    };
+    assert_eq!(
+        validate_compiled_privacy_profile_v1(&sample.profile),
+        Err(expected),
+        "{}: the structural profile has this exact native mismatch",
+        sample.role
+    );
+    let Error::InvariantViolation(message) = error else {
+        panic!(
+            "{}: unexpected structural-profile rejection class: {error:?}",
+            sample.role
+        );
+    };
+    let message: &str = message;
+    assert_eq!(
+        message,
+        format!(
+            "privacy proof admission rejected: privacy profile does not match the compiled native profile: {expected}"
+        ),
+        "{}",
+        sample.role
+    );
+    message
 }
 
 /// A blank State on the network the role samples bind, with one committed block hash.
@@ -115,8 +210,8 @@ fn substituted_envelopes(
 }
 
 /// An envelope whose protocol, statement and proof name different roles is refused by the
-/// single role resolver, before any trusted state of either role is read and whatever
-/// canonical profile is offered.
+/// single role resolver, or by the earlier mandatory X.509 attachment boundary, before
+/// trusted state of either role is read and whatever canonical profile is offered.
 #[test]
 fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_roles() {
     let samples = action_role_samples();
@@ -131,6 +226,10 @@ fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_ro
             for (what, envelope) in substituted_envelopes(own, other) {
                 for profile in [own.profile, other.profile] {
                     let case = format!("{} with the {what} of {}", own.role, other.role);
+                    assert!(
+                        envelope.action_role_v1().is_err(),
+                        "{case}: substitution must not resolve to an action role"
+                    );
                     let error = execute_action_role_sample(
                         SubmitPrivacyProofV1::new(envelope.clone()),
                         profile,
@@ -138,10 +237,14 @@ fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_ro
                     )
                     .expect_err("a substituted envelope is never executed");
                     let message = smart_contract_parameter_message(&error);
-                    assert!(
-                        message.starts_with("privacy envelope does not select one action role"),
-                        "{case}: {message}"
-                    );
+                    if envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+                        assert_eq!(message, X509_ATTACHMENT_REQUIRED, "{case}");
+                    } else {
+                        assert!(
+                            message.starts_with("privacy envelope does not select one action role"),
+                            "{case}: {message}"
+                        );
+                    }
                     assert_no_privacy_state(&transaction, &case);
                 }
             }
@@ -149,62 +252,17 @@ fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_ro
     }
 }
 
-/// Every role enters the one handler and is stopped by the trusted-state requirement of its
-/// own role or, where a blank State satisfies that, by the single verifier dispatch.
+/// Every role reaches its own trusted-state requirement or exact native-profile rejection;
+/// X.509 instead requires its canonical attachment entry before generic dispatch.
 #[test]
 fn every_role_enters_its_own_branch_of_the_single_handler() {
-    use PrivacyActionRoleV1 as Role;
-    const VERIFIER: &str = "privacy proof admission rejected";
-    let expected = [
-        (
-            Role::ZkAceAuthorization,
-            "ZK-ACE authoritative policy is not registered",
-        ),
-        (
-            Role::AnonymousPgcPayment,
-            "trusted Anonymous PGC pool state failed validation",
-        ),
-        (Role::VeRangeRange, VERIFIER),
-        (
-            Role::ZkAmsBatchAdmission,
-            "trusted ZK-AMS registry state failed validation",
-        ),
-        (
-            Role::ZkAmsProvisionAccount,
-            "trusted ZK-AMS registry state failed validation",
-        ),
-        (Role::VegaCredentialPresentation, VERIFIER),
-        (
-            Role::ZkX509CertificatePresentation,
-            "X.509 certificate proof must be submitted by its bound wallet account",
-        ),
-        (Role::JindoBatchedEvaluation, VERIFIER),
-        (
-            Role::BootleLanternPresentation,
-            "Bootle/Lantern authoritative issuer policy is not registered",
-        ),
-        (
-            Role::OrchardActions,
-            "trusted Orchard pool state failed validation",
-        ),
-        (
-            Role::FcmpTransfer,
-            "trusted proof-managed pool state failed validation",
-        ),
-        (
-            Role::IvmPrivateNoteTransition,
-            "trusted proof-managed pool state failed validation",
-        ),
-        (
-            Role::PqMaspTransition,
-            "trusted proof-managed pool state failed validation",
-        ),
-    ];
     let samples = action_role_samples();
-    assert_eq!(expected.map(|(role, _)| role), Role::ALL);
+    assert_eq!(
+        samples.iter().map(|sample| sample.role).collect::<Vec<_>>(),
+        PrivacyActionRoleV1::ALL
+    );
     let state = action_role_sample_state(&samples);
-    for (sample, (role, needle)) in samples.iter().zip(expected) {
-        assert_eq!(sample.role, role);
+    for sample in &samples {
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         let error = execute_action_role_sample(
@@ -213,9 +271,8 @@ fn every_role_enters_its_own_branch_of_the_single_handler() {
             &mut transaction,
         )
         .expect_err("a placeholder proof on a blank State is never applied");
-        let text = format!("{error:?}");
-        assert!(text.contains(needle), "{role}: {text}");
-        assert_no_privacy_state(&transaction, role.canonical_label());
+        structural_role_sample_rejection_message(sample, &error);
+        assert_no_privacy_state(&transaction, sample.role.canonical_label());
     }
 }
 
@@ -261,14 +318,26 @@ fn typed_handler_and_registry_dispatch_are_one_entry_for_every_role() {
             "{}",
             sample.role
         );
-        let message = smart_contract_parameter_message(&typed);
+        let message = if sample.role == PrivacyActionRoleV1::ZkX509CertificatePresentation {
+            // The generic envelope must not become an alternate X.509 transport,
+            // even when the selected implementation is locally unavailable.
+            let message = role_sample_rejection_message(sample.role, &typed);
+            assert_eq!(message, X509_ATTACHMENT_REQUIRED);
+            message
+        } else {
+            match compiled_privacy_profile_v1(sample.role.protocol_id()) {
+                Ok(_) => role_sample_rejection_message(sample.role, &typed),
+                Err(unavailable) => {
+                    let message = smart_contract_parameter_message(&typed);
+                    assert!(message.contains(&unavailable.to_string()), "{message}");
+                    message
+                }
+            }
+        };
         assert!(
             !message.contains("qualification") && !message.contains("activation"),
             "{message}"
         );
-        if let Err(unavailable) = compiled_privacy_profile_v1(sample.role.protocol_id()) {
-            assert!(message.contains(&unavailable.to_string()), "{message}");
-        }
     }
 }
 

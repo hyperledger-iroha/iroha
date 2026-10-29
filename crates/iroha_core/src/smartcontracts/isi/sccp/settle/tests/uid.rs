@@ -146,6 +146,7 @@ fn uid_recipient_holding_refusal_is_pending_and_retries_without_movement() {
 #[test]
 fn uid_shared_recipient_fee_cap_holds_before_either_credit_and_retries() {
     let state = state();
+    set_original_fee_sink(&state, &authority(63));
     let mut block = state.block(header(5));
     let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-uid-shared-fee"));
     install(&mut tx);
@@ -188,6 +189,7 @@ fn uid_shared_recipient_fee_cap_holds_before_either_credit_and_retries() {
 fn uid_source_activity_prefix_holds_both_ceilings_without_consuming_usage() {
     for outgoing_only in [false, true] {
         let state = state();
+        set_original_fee_sink(&state, &authority(65));
         let mut block = state.block(header(5));
         let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-uid-source-activity"));
         install(&mut tx);

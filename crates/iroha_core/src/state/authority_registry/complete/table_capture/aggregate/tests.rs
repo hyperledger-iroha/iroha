@@ -158,6 +158,9 @@ fn backing_bytes() -> usize {
 
 #[test]
 fn exact_outer_backing_is_admitted_before_first_reader_and_retained_until_final_owner() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -194,6 +197,9 @@ fn exact_outer_backing_is_admitted_before_first_reader_and_retained_until_final_
 
 #[test]
 fn empty_catalog_uses_zero_backing_and_catalog_errors_precede_pool_refusal() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();
@@ -258,6 +264,9 @@ impl Wake for Wakes {
 
 #[test]
 fn occupied_original_pool_preserves_exact_refusal_wake_and_retry() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let mut registration = crate::unit_test_support::release_registration(&budget);
@@ -349,6 +358,9 @@ fn generation_changed_second(
 
 #[test]
 fn partial_child_failure_identity_mismatch_and_both_generation_retries_release_all_backing() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let cases: [(Reader, Option<TableCaptureError>); 4] = [
         (
             rejected_second,
@@ -415,6 +427,9 @@ fn panic_second(
 
 #[test]
 fn aggregate_row_failure_and_reader_unwind_release_completed_nodes_and_outer_backing() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let budget = state.ivm_execution_budget();
     let before = budget.reserved_bytes();

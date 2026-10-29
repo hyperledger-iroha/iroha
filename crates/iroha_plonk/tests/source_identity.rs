@@ -775,10 +775,10 @@ fn target_support_is_separate_and_unknown_or_inconsistent_backends_deny_builtin(
     for (arch, os, width, endian) in [
         ("aarch64", "android", "32", "little"),
         ("arm", "android", "32", "big"),
-        ("wasm32", "unknown", "32", "little"),
         ("riscv64", "linux", "64", "little"),
         ("arm", "unknown", "32", "little"),
     ] {
         assert!(!supported_target(arch, os, width, endian));
     }
+    assert!(!supported_target("wasm32", "unknown", "32", "little"));
 }

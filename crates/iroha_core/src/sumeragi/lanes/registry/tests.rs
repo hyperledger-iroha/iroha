@@ -1474,6 +1474,9 @@ impl crate::sumeragi::driver::traits::Net for RetirementNoFrames {
 
 #[test]
 fn original_runtime_retirement_refunds_after_registry_and_runner_unlock() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use crate::{
         state::{World, WorldReadOnly},
         sumeragi::{

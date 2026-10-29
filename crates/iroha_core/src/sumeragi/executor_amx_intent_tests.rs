@@ -167,6 +167,9 @@ fn rejected_paid_prepare_overlay_never_publishes_outbound_intent() {
 
 #[test]
 fn original_paid_intent_capacity_refusal_retains_completed_context_and_same_pool_retry() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_paid_worker(|chain, instruction, customer, worker, _blocks| {
         let block = publication_tests::proposal_with_transaction(chain, worker, |chain, time| {
             chain.sign(&customer, [instruction], time)
@@ -292,6 +295,9 @@ fn original_paid_intent_namespace_refusal_retains_both_buffers_and_exact_commit_
 #[test]
 fn original_paid_intent_commit_repetition_and_archive_reopen_are_create_only_and_zero_new_pool_bytes()
  {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use std::os::unix::fs::MetadataExt as _;
     with_paid_worker(|chain, instruction, customer, worker, blocks| {
         let (block, qc) = paid_block(chain, worker, instruction, &customer, false);

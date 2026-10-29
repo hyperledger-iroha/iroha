@@ -27,7 +27,7 @@ field and the `TriggerId`/`Json` newtype fields; transaction metadata uses that 
 
 ## Requirements
 
-- .NET SDK 10.0.402, as pinned by `global.json`; consumers require .NET 10 or newer
+- .NET SDK 10.0.403, as pinned by `global.json`; consumers require .NET 10 or newer
 - A Torii endpoint
 - The exact genesis-derived `NetworkId` for authenticated requests
 - A canonical, domainless I105 account ID and its 32-byte Ed25519 seed for signing

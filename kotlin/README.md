@@ -1603,7 +1603,7 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 | Dependency | Version | Used By | Risk |
 |-----------|---------|---------|------|
 | `org.bouncycastle:bcprov-jdk18on` | 1.86 | `core-jvm` crypto, connect, and deterministic key export | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that force a different BC version may hit linkage errors at runtime. The SDK links the pinned provider directly and fails clearly when the mandatory implementation is broken; it never probes BouncyCastle through reflection. |
-| `com.github.luben:zstd-jni` | 1.5.7-24 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |
+| `com.github.luben:zstd-jni` | 1.5.7-25 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression requires the native library to be available. |
 
 
 `KagemushaWalletEnrollmentV1` is the thin Android E2–E6 handle registered by trusted

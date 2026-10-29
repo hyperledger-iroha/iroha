@@ -74,10 +74,7 @@ fn queue_backlog_reports_available_lane_headroom() {
     nexus.routing_policy.default_lane = test_lane;
     nexus.routing_policy.default_dataspace = test_dataspace;
     let state = new_queue_test_state_with_telemetry(
-        world_with_explicit_queue_fees(
-            world_with_test_domains(),
-            iroha_config::parameters::defaults::nexus::fees::genesis_policy(),
-        ),
+        world_with_explicit_queue_fees(world_with_test_domains(), zero_rate_routing_fees()),
         nexus,
         query_handle,
         telemetry.clone(),

@@ -855,10 +855,10 @@ fn flattened_memberships_and_counts_do_not_change_world_authority() {
     assert_eq!(parent.apply_block(&block).unwrap().root(), parent.root());
 }
 
-/// These are the single canonical schema and empty predecessor already committed by Taira.
-/// Updating the constants to accept a divergent ledger is not a continuity correction.
+/// Pin the current first-release schema after retiring qualification/activation tables.
+/// A changed canonical owner requires an explicit review of both golden digests.
 #[test]
-fn retained_taira_world_schema_and_empty_predecessor_are_unchanged() {
+fn current_world_schema_and_empty_predecessor_match_the_canonical_inventory() {
     let index = field_index().as_ref().unwrap();
     assert_eq!(
         crate::state::State::native_world_schema_hash_v1().unwrap(),
@@ -866,11 +866,11 @@ fn retained_taira_world_schema_and_empty_predecessor_are_unchanged() {
     );
     assert_eq!(
         hex::encode_upper(index.schema.as_ref()),
-        "E2CC3531F5544E26DBDAE571E921CBABF9764BF128AF0ED761A01A9679C0B547"
+        "BB4845784FE28030C258D91F05CDB15A31B5D4D51F806EEF2D200FC8FF0E8DB3"
     );
     assert_eq!(
         hex::encode_upper(WorldStateAccumulator::empty().root().unwrap().as_ref()),
-        "D3026F30932BBC181F5243B72C9FC2E4FC6C729C718BBCC55BD2554C527341AD"
+        "E6BA7718E8DD3E7366BF2A109EAE464586E991B36EAC8F8F7D199398668E8EA1"
     );
 }
 
@@ -923,10 +923,10 @@ fn canonical_merge_cell_deltas_preserve_nonempty_history_and_exact_undo() {
     );
 }
 
-/// Original public retained carrier, not a generated genesis or a projected World snapshot.
-/// Structural result binding is not native re-execution or successor-finality qualification.
+/// Keep the historical signed bytes as a negative schema-binding control.
+/// Decoding a carrier cannot make its retired predecessor a current World root.
 #[test]
-fn retained_taira_certified_genesis_decodes_and_binds_the_same_empty_world() {
+fn retired_schema_genesis_does_not_bind_the_current_empty_world() {
     use iroha_data_model::{
         block::decode_framed_signed_block,
         sumeragi_finality::{CertifiedResultScope, CertifiedResultV1},
@@ -938,7 +938,7 @@ fn retained_taira_certified_genesis_decodes_and_binds_the_same_empty_world() {
         hex::encode(Sha256::digest(wire)),
         "35565d5b041ee144cc5922451423544037f82d2259788c3a9bc2009fc80e8f5c"
     );
-    let genesis = decode_framed_signed_block(wire).expect("exact original current native frame");
+    let genesis = decode_framed_signed_block(wire).expect("exact historical native frame");
     assert!(genesis.header().is_genesis());
     let certificate = genesis
         .commit_certificate()
@@ -953,12 +953,51 @@ fn retained_taira_certified_genesis_decodes_and_binds_the_same_empty_world() {
     .expect("original typed certified result preimage");
     assert_eq!(retained.commitment().height, 1);
     assert_eq!(
+        hex::encode_upper(
+            retained
+                .commitment()
+                .execution
+                .parent_world_state_root
+                .as_ref()
+        ),
+        "D3026F30932BBC181F5243B72C9FC2E4FC6C729C718BBCC55BD2554C527341AD",
+        "the original signature binds its original predecessor; the fixture is never rewritten"
+    );
+    assert_ne!(
         retained.commitment().execution.parent_world_state_root,
-        WorldStateAccumulator::empty().root().unwrap()
+        WorldStateAccumulator::empty().root().unwrap(),
+        "retired privacy-table layouts cannot establish a current first-release predecessor"
     );
     assert_eq!(
         genesis.encode_wire().unwrap().as_slice(),
         wire.as_slice(),
         "no carrier conversion or re-signing"
+    );
+}
+
+/// Genuine genesis binds the reviewed schema; its successor binds the finalized World.
+#[test]
+fn current_certified_genesis_binds_the_current_empty_world() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
+        .expect("current signed genesis executes and authenticates");
+    let genesis = chain.committed(1);
+    assert_eq!(genesis.commitment().height, 1);
+    assert_eq!(
+        genesis.commitment().execution.parent_world_state_root,
+        WorldStateAccumulator::empty().root().unwrap()
+    );
+    // Finalization publishes certificate-dependent state after the execution root.
+    // The next certified result binds that complete published World as its parent.
+    let finalized = chain.state().verify_world_state_accumulator().unwrap();
+    chain.commit(Vec::new());
+    assert_eq!(
+        chain
+            .committed(2)
+            .commitment()
+            .execution
+            .parent_world_state_root,
+        finalized
     );
 }

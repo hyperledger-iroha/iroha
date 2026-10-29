@@ -98,9 +98,8 @@ pub const CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1: usize = 64 * 1024;
 const CANONICAL_REQUEST_MAX_METHOD_BYTES_V1: usize = 32;
 /// Maximum percent-encoded path bytes covered by one canonical V1 request.
 ///
-/// Network listeners impose a finite HTTP-head envelope, but `http::Uri` can also be constructed
-/// directly from an arbitrarily large `PathAndQuery`. This explicit protocol ceiling protects
-/// in-process verifier callers before the canonical message destination is allocated.
+/// This protocol ceiling is independent of the HTTP library's smaller URI bound. The shared
+/// path validator checks it before allocating the canonical message destination.
 const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
 /// Maximum bytes in a canonical account identity or alias carried by V1 auth.
 ///
@@ -318,12 +317,18 @@ fn validate_canonical_request_target(method: &Method, uri: &Uri) -> Result<(), c
             "canonical request method exceeds the V1 limit of {CANONICAL_REQUEST_MAX_METHOD_BYTES_V1} bytes"
         ))));
     }
-    if uri.path().len() > CANONICAL_REQUEST_MAX_PATH_BYTES_V1 {
+    validate_canonical_request_path(uri.path())?;
+    validate_canonical_request_query(uri)
+}
+
+/// Enforce the canonical path ceiling independently of the transport URI representation.
+fn validate_canonical_request_path(path: &str) -> Result<(), crate::Error> {
+    if path.len() > CANONICAL_REQUEST_MAX_PATH_BYTES_V1 {
         return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
             "canonical request path exceeds the V1 limit of {CANONICAL_REQUEST_MAX_PATH_BYTES_V1} bytes"
         ))));
     }
-    validate_canonical_request_query(uri)
+    Ok(())
 }
 
 fn validate_canonical_request_raw_query(raw: &str) -> Result<(), crate::Error> {
@@ -2904,15 +2909,10 @@ mod tests {
         let exact = "x".repeat(CANONICAL_REQUEST_MAX_RAW_QUERY_BYTES_V1);
         validate_canonical_request_raw_query(&exact)
             .expect("the exact V1 raw-query byte limit must be accepted");
-        let exact_uri = Uri::builder()
-            .path_and_query(
-                http::uri::PathAndQuery::try_from(format!("/v1/test?{exact}"))
-                    .expect("exact path-and-query"),
-            )
-            .build()
-            .expect("exact URI");
-        canonical_request_message(&Method::GET, &exact_uri, &[])
-            .expect("the public builder accepts the exact raw-query limit");
+        assert_eq!(
+            canonical_query_string(Some(&exact)).unwrap(),
+            format!("{exact}=")
+        );
 
         let excessive = format!("{exact}x");
         let error = validate_canonical_request_raw_query(&excessive)
@@ -2922,14 +2922,21 @@ mod tests {
             crate::Error::Query(ValidationFail::NotPermitted(message))
                 if message.contains("65536 raw bytes")
         ));
-        let excessive_uri = Uri::builder()
-            .path_and_query(
-                http::uri::PathAndQuery::try_from(format!("/v1/test?{excessive}"))
-                    .expect("plus-one path-and-query"),
-            )
-            .build()
-            .expect("plus-one URI");
-        assert!(canonical_request_message(&Method::GET, &excessive_uri, &[]).is_err());
+        assert!(canonical_query_string(Some(&excessive)).is_err());
+
+        // http bounds the entire URI below the protocol's independent raw-query ceiling.
+        let transport_max = usize::from(u16::MAX) - 1;
+        let path_and_query = format!("/v1/test?{}", "x".repeat(transport_max - "/v1/test?".len()));
+        let uri: Uri = path_and_query.parse().expect("exact HTTP URI boundary");
+        let network_id = test_network_id(0x7d);
+        canonical_request_message(&Method::GET, &uri, &[]).expect("bounded public request");
+        canonical_network_request_message(&network_id, &Method::GET, &uri, &[])
+            .expect("bounded public network request");
+        canonical_network_request_hash(&network_id, &Method::GET, &uri, &[])
+            .expect("bounded public request hash");
+        assert!(http::uri::PathAndQuery::try_from(format!("{path_and_query}x")).is_err());
+        assert!(http::uri::PathAndQuery::try_from(format!("/v1/test?{exact}")).is_err());
+        assert!(http::uri::PathAndQuery::try_from(format!("/v1/test?{excessive}")).is_err());
     }
 
     #[test]
@@ -2958,33 +2965,35 @@ mod tests {
     fn canonical_path_limit_accepts_exact_and_rejects_programmatic_plus_one() {
         use axum::http::uri::PathAndQuery;
 
-        fn uri_with_path_bytes(bytes: usize) -> Uri {
-            let path = format!("/{}", "x".repeat(bytes - 1));
-            Uri::builder()
-                .path_and_query(PathAndQuery::try_from(path).expect("valid path and query"))
-                .build()
-                .expect("programmatic URI")
-        }
-
-        let method = Method::GET;
-        let exact = uri_with_path_bytes(CANONICAL_REQUEST_MAX_PATH_BYTES_V1);
-        validate_canonical_request_target(&method, &exact)
-            .expect("the exact V1 path limit must be accepted");
-        canonical_request_message(&method, &exact, &[])
-            .expect("the public builder accepts the exact path limit");
-
-        let excessive = uri_with_path_bytes(CANONICAL_REQUEST_MAX_PATH_BYTES_V1 + 1);
-        let error = validate_canonical_request_target(&method, &excessive)
-            .expect_err("one programmatic path byte beyond the V1 limit must be rejected");
+        let exact = format!("/{}", "x".repeat(CANONICAL_REQUEST_MAX_PATH_BYTES_V1 - 1));
+        validate_canonical_request_path(&exact).expect("the exact V1 path limit must be accepted");
+        let excessive = format!("{exact}x");
+        let error = validate_canonical_request_path(&excessive)
+            .expect_err("one path byte beyond the V1 limit must be rejected");
         assert!(matches!(
             error,
             crate::Error::Query(ValidationFail::NotPermitted(message))
                 if message.contains("65536 bytes")
         ));
+
+        // The actual URI representation rejects oversized input before a public builder runs.
+        let transport_max = usize::from(u16::MAX) - 1;
+        let transport_path = format!("/{}", "x".repeat(transport_max - 1));
+        let uri = Uri::builder()
+            .path_and_query(PathAndQuery::try_from(transport_path.clone()).unwrap())
+            .build()
+            .expect("exact HTTP path boundary");
+        let method = Method::GET;
         let network_id = test_network_id(0x7c);
-        assert!(canonical_request_message(&method, &excessive, &[]).is_err());
-        assert!(canonical_network_request_message(&network_id, &method, &excessive, &[]).is_err());
-        assert!(canonical_network_request_hash(&network_id, &method, &excessive, &[]).is_err());
+        validate_canonical_request_target(&method, &uri).expect("bounded canonical target");
+        canonical_request_message(&method, &uri, &[]).expect("bounded public request");
+        canonical_network_request_message(&network_id, &method, &uri, &[])
+            .expect("bounded public network request");
+        canonical_network_request_hash(&network_id, &method, &uri, &[])
+            .expect("bounded public request hash");
+        assert!(PathAndQuery::try_from(format!("{transport_path}x")).is_err());
+        assert!(PathAndQuery::try_from(exact).is_err());
+        assert!(PathAndQuery::try_from(excessive).is_err());
     }
 
     #[test]

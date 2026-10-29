@@ -5,4 +5,11 @@ Upstream: halo2curves 0.10.0, crates.io archive SHA-256
 
 Replace the unmaintained paste procedural macro with maintained pastey 0.2.3. The dependency keeps its upstream import name; runtime arithmetic and algorithms are unchanged.
 
-The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the unmodified upstream manifest. All other upstream source bytes are retained. Remove this patch when an upstream release carries this dependency change.
+The crate always links Rust `std`. The retired no-std crate attribute,
+no-std/WebAssembly CI jobs and active WebAssembly-only getrandom test dependency
+are removed. The existing `std` feature still selects parallel algorithms and
+I/O helpers; disabling it selects native serial behavior, not another runtime.
+
+The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the
+unmodified upstream manifest. Remove the macro dependency patch when an upstream
+release carries it; retain the repository's native-only build policy.

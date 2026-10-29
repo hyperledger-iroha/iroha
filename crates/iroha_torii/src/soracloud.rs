@@ -11050,7 +11050,7 @@ mod tests {
     #[tokio::test]
     async fn health_compliance_report_rate_limit_keys_transport_remote_when_internal_header_missing()
      {
-        let mut app = mk_app_state_for_tests_with_world(iroha_core::state::World::default());
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .rate_limiter = crate::limits::RateLimiter::new(Some(1), Some(1));

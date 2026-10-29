@@ -990,6 +990,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_refuses_substituted_original_parent_and_resumes_same_paid_wire() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         struct OriginalJournal {
             path: std::path::PathBuf,
             saved: std::path::PathBuf,
@@ -1036,6 +1039,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_preserves_actual_reader_release_and_native_capacity_refusal() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         use std::{
             future::Future,
             task::{Context, Poll, Waker},
@@ -1243,6 +1249,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_idle_expiry_wakes_original_commit_with_live_execution() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         use crate::sumeragi::driver::{
             exec::{ExecDone, ExecOp, ExecSched, ExecutionRegistrations},
             persist::Backoff,
@@ -1406,6 +1415,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_cannot_adopt_same_hash_readmission_as_its_original_selection() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (queue, clock, time) = attach_queue(chain, worker);
             let (_pointer, hash) = stage_original_partial(worker, &queue);
@@ -1462,6 +1474,9 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_rechecks_actual_mandatory_lane_growth_and_mixed_queue_withdrawal() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         lanes::merge::with_original_lane_merge_fixture(
             |chain, lane_blocks, certify, [first, second]| {
                 super::super::publication_tests::with_worker_chain(
@@ -2145,6 +2160,9 @@ mod tests {
 
     #[test]
     fn completed_original_payload_refund_callback_follows_the_original_build_source_and_fences() {
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         use std::{
             future::Future,
             sync::{

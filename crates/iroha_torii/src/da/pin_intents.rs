@@ -983,6 +983,9 @@ mod tests {
     }
     #[tokio::test]
     async fn original_pin_history_capacity_is_retryable_for_prove_and_verify() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use axum::response::IntoResponse as _;
         let app = app_with_pin_intent_bundle(vec![sample_intent(1, 1, 1)]);
         let request = DaPinIntentQueryRequest {

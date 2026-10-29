@@ -9282,6 +9282,8 @@ mod tests {
     }
     #[tokio::test]
     async fn uptime_since_genesis_reads_the_genesis_body_once() {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let sut = SystemUnderTest::new_native();
         let genesis = NonZeroUsize::MIN;
         let genesis_time = sut
