@@ -1400,6 +1400,14 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         ],
     },
     OtherDomains {
+        usage: Use::Record,
+        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3). Each hashes one canonical descriptor or selection record; neither commits to State content, and the State commitment remains the World root",
+        literals: &[
+            r"iroha:runtime:definition:v1\0",
+            r"iroha:runtime:selection:v1\0",
+        ],
+    },
+    OtherDomains {
         usage: Use::Test,
         reason: "Exact retired-backend aliases and an unadmitted PIPA-R vote circuit supplied only by negative world instruction controls: execution must reject these identities; this listing grants no circuit or backend admission",
         literals: &[
