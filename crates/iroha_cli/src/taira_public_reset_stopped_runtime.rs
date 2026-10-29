@@ -195,7 +195,7 @@ fn stopped_owner_deadline(deadline: Instant) -> Result<()> {
 #[cfg(any(target_os = "linux", all(test, unix)))]
 fn stopped_cgroup_custody(path: &Path) -> Result<()> {
     require_root_directory(path, false, "stopped Inrou cgroup")?;
-    if u64::from(rustix::fs::statfs(path)?.f_type) != 0x6367_7270 {
+    if u64::try_from(rustix::fs::statfs(path)?.f_type).ok() != Some(0x6367_7270) {
         return Err(eyre!(
             "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
         ));
@@ -935,6 +935,18 @@ fn reconcile_firewall_with(
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
+
+    #[test]
+    fn stopped_cgroup_custody_rejects_an_ordinary_root_owned_filesystem() -> Result<()> {
+        let directory = Path::new("/usr");
+        require_root_directory(directory, false, "ordinary root-owned directory")?;
+        let error = stopped_cgroup_custody(directory).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
+        );
+        Ok(())
+    }
 
     fn custody(path: &Path) -> Result<()> {
         let metadata = fs::symlink_metadata(path)?;

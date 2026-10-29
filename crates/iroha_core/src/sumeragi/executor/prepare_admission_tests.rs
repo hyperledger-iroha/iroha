@@ -308,6 +308,9 @@ fn ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source() {
 
 #[test]
 fn ct5_admission_capacity_wait_keeps_encoded_original_then_rechecks_freshness() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_paid_begin(|worker, block, hash, _fee_asset, clock, block_time_ms| {
         let lag = worker
             .state

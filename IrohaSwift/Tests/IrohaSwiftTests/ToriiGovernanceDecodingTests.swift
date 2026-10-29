@@ -539,20 +539,15 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let removeStaged = Self.sccpRemoveStagedAction
         let blsValidator = "ea0130" + String(repeating: "A1", count: 48)
 
-        // Only the envelope is checked here; whether `base_revisions` lists exactly the
-        // subjects the actions touch stays with Torii until typed action decoding lands.
         for accepted in [
             sccpProposalBody(),
-            sccpProposalBody(subject: #"{"subject":"route_control","key":{"network":"ethereum_mainnet","profile":null}}"#),
-            sccpProposalBody(subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#),
-            sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#, revision: "0"),
-            sccpProposalBody(subject: #"{"subject":"forgery_hold","key":{"network":"bsc_mainnet","profile":null}}"#),
             sccpProposalBody(actions: "[" + Array(repeating: removeStaged, count: 16).joined(separator: ",") + "]"),
         ] {
             XCTAssertNoThrow(try decodeSccpRouteProposal(accepted), accepted)
         }
         let tonLightClient = sccpProposalBody(
-            subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#
+            subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#,
+            actions: #"[{"action":"freeze_light_client","payload":{"network":{"network":"ton_mainnet","profile":null}}}]"#
         )
         XCTAssertNoThrow(
             try ToriiParliamentProposalV1(
@@ -564,6 +559,10 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         )
 
         for rejected in [
+            sccpProposalBody(subject: #"{"subject":"route_control","key":{"network":"ethereum_mainnet","profile":null}}"#),
+            sccpProposalBody(subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#),
+            sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#, revision: "0"),
+            sccpProposalBody(subject: #"{"subject":"forgery_hold","key":{"network":"bsc_mainnet","profile":null}}"#),
             "{}",
             sccpProposalBody(extra: ",\"memo\":null"),
             sccpProposalBody(networkId: "\"sora\""),
@@ -597,8 +596,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
     }
 
     func testSccpCurrentGovernanceEnvelopeTagsAndSubjectCoordinates() throws {
-        // This is the declared SDK envelope contract. Native typed action bodies and
-        // exact action-to-subject coverage still have their independent validation owner.
+        // Every known tag still requires its exact action body and touched subjects.
         let actions = [
             "register_route", "activate_revision", "switch_revision", "deactivate_outbound",
             "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
@@ -609,8 +607,8 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         ]
         for action in actions {
             let body = sccpProposalBody(actions: "[{\"action\":\"\(action)\",\"payload\":{}}]")
-            XCTAssertNoThrow(try decodeSccpRouteProposal(body), action)
-            XCTAssertNoThrow(
+            XCTAssertThrowsError(try decodeSccpRouteProposal(body), action)
+            XCTAssertThrowsError(
                 try ToriiParliamentProposalV1(
                     validating: proposalKindJSON(
                         kind: "SccpRouteGovernance", payload: "{\"proposal\":\(body)}"
@@ -636,7 +634,11 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         for subject in ["route", "route_control", "light_client", "forgery_hold", "fast_hold", "fast_pause_control"] {
             for network in ["ethereum_mainnet", "bsc_mainnet", "ton_mainnet"] {
                 let coordinate = "{\"subject\":\"\(subject)\",\"key\":{\"network\":\"\(network)\",\"profile\":null}}"
-                XCTAssertNoThrow(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
+                if subject == "route" && network == "bsc_mainnet" {
+                    XCTAssertNoThrow(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
+                } else {
+                    XCTAssertThrowsError(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
+                }
             }
             for key in [
                 "null", "\"ea0130\"", "{}",
@@ -656,7 +658,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
                 XCTAssertThrowsError(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
             }
         }
-        XCTAssertNoThrow(try decodeSccpRouteProposal(sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#)))
+        XCTAssertThrowsError(try decodeSccpRouteProposal(sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#)))
         for subject in [
             #"{"subject":"forgery_hold"}"#,
             #"{"subject":"fast_hold","key":{"network":"bsc_mainnet","profile":null},"extra":0}"#,

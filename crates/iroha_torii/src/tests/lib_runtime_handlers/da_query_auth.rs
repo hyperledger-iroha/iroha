@@ -18,16 +18,11 @@ mod da_query_auth {
     };
     use norito::json;
 
-    fn fixture(account: &AccountId) -> RuntimeApiRouterFixture {
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(IrohaState::new_with_chain_and_network_id_for_testing(
-            world_with_account(account),
-            kura.clone(),
-            LiveQueryStore::start_test(),
-            ChainId::from("da-query-auth"),
-            crate::signed_query_test_network_id(),
-        ));
-        RuntimeApiRouterFixture::with_runtime(
+    fn fixture(account: &AccountId) -> (RuntimeApiRouterFixture, NetworkId) {
+        let (kura, state) =
+            RuntimeApiRouterFixture::native_state("da-query-auth", world_with_account(account));
+        let network_id = *state.network_id_ref();
+        let fixture = RuntimeApiRouterFixture::with_runtime(
             "da-query-auth",
             kura,
             state,
@@ -35,7 +30,8 @@ mod da_query_auth {
                 crate::build_identity_test_fixture::build_identity(),
                 routing::MaybeTelemetry::disabled(),
             ),
-        )
+        );
+        (fixture, network_id)
     }
 
     fn request(path: &str, body: &[u8], headers: HeaderMap) -> Request<Body> {
@@ -85,7 +81,7 @@ mod da_query_auth {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let signer = checked_torii_test_ed25519_keypair(0xB1, "DA proof request signer");
         let account = AccountId::new(signer.public_key().clone());
-        let fixture = fixture(&account);
+        let (fixture, network_id) = fixture(&account);
         let router: &axum::Router = &fixture.router;
         let uri: Uri = path.parse().expect("DA proof URI");
         assert_rejected(
@@ -97,7 +93,8 @@ mod da_query_auth {
         )
         .await;
 
-        let mut partial = signed_app_headers(&account, &signer, &Method::POST, &uri, &body);
+        let mut partial =
+            signed_network_app_headers(&network_id, &account, &signer, &Method::POST, &uri, &body);
         partial.remove(crate::HEADER_NONCE);
         assert_rejected(
             router,
@@ -128,7 +125,8 @@ mod da_query_auth {
         )
         .await;
 
-        let headers = signed_app_headers(&account, &signer, &Method::POST, &uri, &body);
+        let headers =
+            signed_network_app_headers(&network_id, &account, &signer, &Method::POST, &uri, &body);
         let mut changed_body = body.clone();
         changed_body.push(b' ');
         assert_rejected(
@@ -142,7 +140,8 @@ mod da_query_auth {
 
         let unregistered = checked_torii_test_ed25519_keypair(0xB3, "unregistered DA proof signer");
         let unregistered_account = AccountId::new(unregistered.public_key().clone());
-        let headers = signed_app_headers(
+        let headers = signed_network_app_headers(
+            &network_id,
             &unregistered_account,
             &unregistered,
             &Method::POST,
@@ -158,7 +157,8 @@ mod da_query_auth {
         )
         .await;
 
-        let signed_payload = signed_app_headers(&account, &signer, &Method::POST, &uri, &body);
+        let signed_payload =
+            signed_network_app_headers(&network_id, &account, &signer, &Method::POST, &uri, &body);
         let response = router
             .clone()
             .oneshot(request(path, &body, signed_payload.clone()))
@@ -225,7 +225,7 @@ mod da_query_auth {
                 .expect("fixture acknowledgement"),
         );
         let proof =
-            iroha_core::da::build_da_commitment_proof(&DaCommitmentBundle::new(vec![record]), 1, 0)
+            iroha_core::da::build_da_commitment_proof(&DaCommitmentBundle::new(vec![record]), 2, 0)
                 .expect("canonical commitment proof");
         json::to_vec(&proof).expect("commitment proof JSON")
     }
@@ -258,7 +258,7 @@ mod da_query_auth {
             DaPinScopeAuthorizationV1::try_sign(scope, &signer).expect("fixture pin authorization");
         let bundle =
             DaPinIntentBundle::new(vec![DaPinIntent::new(authorization, scope_authorization)]);
-        let proof = iroha_core::da::build_da_pin_intent_proof(&bundle, 1, 0)
+        let proof = iroha_core::da::build_da_pin_intent_proof(&bundle, 2, 0)
             .expect("canonical pin-intent proof");
         json::to_vec(&proof).expect("pin-intent proof JSON")
     }

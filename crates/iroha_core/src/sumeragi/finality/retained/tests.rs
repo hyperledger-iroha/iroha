@@ -331,12 +331,17 @@ fn concurrent_current_attestations_share_one_retained_authority() {
     let state = Arc::clone(chain.state());
     let status = status_at(&chain, 12);
     std::thread::scope(|scope| {
-        for index in 0..32_u8 {
+        // Every caller supplies a distinct nonzero challenge admitted by the signed-body contract.
+        for index in 1..=32_u8 {
             let state = &state;
             let status = status.clone();
             scope.spawn(move || {
                 let view = state.view();
-                attest(&view, status, 12, [index; 32]).unwrap();
+                let attestation = attest(&view, status, 12, [index; 32]).unwrap();
+                assert_eq!(attestation.body.challenge, [index; 32]);
+                attestation
+                    .verify(CertifiedResultScope::TairaGlobal)
+                    .unwrap();
             });
         }
     });

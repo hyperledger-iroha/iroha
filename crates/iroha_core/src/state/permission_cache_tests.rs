@@ -363,9 +363,10 @@ fn permission_cache_rebuilds_after_restart_impl() {
             &trigger_id,
             expected,
         );
-        // A projection cannot install authenticated native history. Restart from
-        // the original signed genesis and replay the exact certified carriers
-        // into a fresh State whose permission summaries were never warmed.
+        // This final-tip projection has no certified successor to authenticate
+        // its World. Restart from the original signed genesis and replay the
+        // exact certified carriers into a fresh State whose permission summaries
+        // were never warmed.
         let live = fixture.state();
         let captured = crate::snapshot::CapturedStateSnapshot::capture(live).unwrap();
         let projected = super::deserialize::KuraSeed {
@@ -377,10 +378,15 @@ fn permission_cache_rebuilds_after_restart_impl() {
             telemetry: crate::telemetry::StateTelemetry::default(),
         }
         .into_state_from_json_str_with_configured_nexus(captured.as_json(), live.nexus_snapshot());
-        assert!(matches!(
-            projected,
-            Err(super::deserialize::StateRestoreError::NativeExecutionReplayRequired)
-        ));
+        assert!(
+            matches!(
+                projected.as_ref(),
+                Err(super::deserialize::StateRestoreError::SuccessorRequired { height })
+                    if *height == fixture.height()
+            ),
+            "{label} final-tip projection must require its exact successor: {:?}",
+            projected.as_ref().err()
+        );
         let mut replayed =
             CertifiedTestChain::start(config()).expect("restart original permission genesis");
         replayed

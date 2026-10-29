@@ -55,10 +55,12 @@ use crate::{
     },
     pointer_abi::PointerType,
     pointer_literals::{self, decode_hex_or_raw_bytes},
+    semantic::trigger_literals::{
+        DECODE_FAILURE_REASON as HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE,
+        id_from_json as trigger_id_from_json,
+    },
     syscalls,
 };
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexSet;
 use iroha_crypto as _; // for Hash types in new APIs
 use iroha_data_model::{
@@ -80,7 +82,7 @@ use iroha_data_model::{
         AccessSetHints, DynamicAccessHint, EntryPointKind, EntrypointParamDescriptor,
         StateDescriptor, TriggerCallback, TriggerDescriptor,
     },
-    trigger::{Trigger, TriggerId},
+    trigger::TriggerId,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::{name::Name, state_path::StatePath};
@@ -130,8 +132,6 @@ fn multiply_defined_temps(program: &ir::Program) -> HashSet<(usize, ir::Temp)> {
     }
     multiple
 }
-const HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE: &str =
-    "literal create_trigger spec could not be decoded for access metadata";
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
@@ -8966,10 +8966,11 @@ impl Compiler {
         let optimized = self.optimize_ssa_program(ssa)?;
         let codegen = self.destroy_ssa_program(optimized)?;
         // Direct and declared-constant identifier, ballot, and AXT payload literals are
-        // validated during semantic analysis, as are pointer constructors and inline ballots
-        // fed directly by external parameters. Remaining codegen failures carry no fabricated span.
+        // validated during semantic analysis, as are direct trigger-registration JSON literals
+        // and pointer constructors and inline ballots fed directly by external parameters.
+        // Remaining codegen failures carry no fabricated span.
         // TODO: move remaining literal-only requirements and validation after local/private-call
-        // specialization, and `E_ACCESS_INCOMPLETE`
+        // specialization (including trigger specifications), and other access-completeness checks
         // into the shared frontend; K3099 can then describe compiler defects only.
         let artifacts = self.compile_codegen(codegen).map_err(|message| {
             let unit = source_name.map_or_else(String::new, |name| format!(" for `{name}`"));
@@ -11290,21 +11291,6 @@ fn permission_name_from_json(raw: &str) -> Option<String> {
     let map = value.as_object()?;
     let kind = map.get("type").and_then(norito::json::Value::as_str)?;
     Some(permission_name_from_literal(kind))
-}
-fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
-    let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
-    match value {
-        json::Value::String(encoded) => {
-            let bytes = STANDARD.decode(encoded.as_bytes()).ok()?;
-            let trigger: Trigger = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
-            Some(trigger.id().clone())
-        }
-        json::Value::Object(map) => {
-            let id = map.get("id")?.as_str()?;
-            id.parse().ok()
-        }
-        _ => None,
-    }
 }
 fn key_account(id: &AccountId) -> String {
     format!("account:{id}")

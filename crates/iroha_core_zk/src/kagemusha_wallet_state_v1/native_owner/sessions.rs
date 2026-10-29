@@ -80,6 +80,9 @@ fn retain_plan<A: ObjectStore>(
     id: [u8; 32],
     plan: &Plan,
 ) -> Result<IndexRoot, Error> {
+    if id == [0; 32] {
+        return Err(Error::Invalid("setup identity"));
+    }
     plan.require()?;
     index.set(store, id, &archive::encode(plan)?)
 }
@@ -374,6 +377,39 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
 }
 
 #[cfg(test)]
+pub(in crate::kagemusha_wallet_state_v1) fn retain_request_session_fixture(
+    wallet: &mut crate::kagemusha_wallet_state_v1::tests::Wallet,
+    id: [u8; 32],
+) -> Vec<u8> {
+    let (root, mut manifest) = wallet.sync_manifest().unwrap();
+    let source = wallet
+        .indexed_step(&manifest, manifest.indexed.unwrap())
+        .unwrap();
+    wallet.source_custody(&manifest, &source).unwrap();
+    assert_eq!(
+        source.frozen.capsule.body().successor_state.core.lifecycle,
+        KagemushaWalletLifecycleV1::Active
+    );
+    let action = action_bytes(&Action::Request {
+        amount: 7,
+        fee: None,
+    })
+    .unwrap();
+    // The mock fixture must be stable across pilot and exact-object cut runs.
+    // Use the sole Plan writer and publication barrier; production retains nonce().
+    let plan = Plan {
+        source: manifest.capsule,
+        action: wallet.archive.write_object(&action, ACTION_MAX).unwrap(),
+        nonce: [73; 32],
+        output: None,
+    };
+    let bytes = archive::encode(&plan).unwrap();
+    manifest.sessions = retain_plan(&mut wallet.archive, manifest.sessions, id, &plan).unwrap();
+    wallet.publish_manifest(root, &manifest).unwrap();
+    bytes
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::kagemusha_wallet_state_v1::tests::{
@@ -424,6 +460,56 @@ mod tests {
         assert!(read_plan(&mut store, bad, &id, &action).is_err());
         assert!(read_plan(&mut store, root, &id, &action).is_ok());
     }
+    #[test]
+    fn setup_writer_reserves_zero_and_preserves_selected_deferred_metadata() {
+        let mut store = MemoryArchive::new();
+        let metadata = archive::encode(
+            &crate::kagemusha_wallet_state_v1::deferred_archive::DeferredIndex::default(),
+        )
+        .unwrap();
+        let root = IndexRoot::default()
+            .set(&mut store, [0; 32], &metadata)
+            .unwrap();
+        let action = action_bytes(&Action::Request {
+            amount: 7,
+            fee: None,
+        })
+        .unwrap();
+        let plan = Plan {
+            source: [1; 32],
+            action: store.write_object(&action, ACTION_MAX).unwrap(),
+            nonce: [2; 32],
+            output: Some(store.write_object(b"exact setup output", 64).unwrap()),
+        };
+        let before = store.records.lock().unwrap().clone();
+        assert!(matches!(
+            retain_plan(&mut store, root, [0; 32], &plan),
+            Err(Error::Invalid("setup identity"))
+        ));
+        assert_eq!(*store.records.lock().unwrap(), before);
+        let next = retain_plan(&mut store, root, [4; 32], &plan).unwrap();
+        assert_eq!(next.get(&mut store, &[0; 32]).unwrap(), Some(metadata));
+        let restored = read_plan(&mut store, next, &[4; 32], &action)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            archive::encode(&restored).unwrap(),
+            archive::encode(&plan).unwrap()
+        );
+        assert_eq!(root.get(&mut store, &[4; 32]).unwrap(), None);
+        let mut wallet = wallet();
+        assert!(matches!(
+            wallet.setup(
+                [0; 32],
+                &Action::Request {
+                    amount: 7,
+                    fee: None
+                }
+            ),
+            Err(Error::Invalid("setup identity"))
+        ));
+    }
+
     #[test]
     fn setup_plan_rejects_unbound_values_and_keeps_exact_output_reference() {
         let mut plan = Plan {
@@ -612,6 +698,119 @@ mod tests {
                 Err(Error::WitnessLost(_))
             ));
         }
+    }
+
+    #[test]
+    fn selected_deferred_queue_survives_later_setup_and_exact_request_completion() {
+        let (mut wallet, send, original) =
+            crate::kagemusha_wallet_state_v1::tests::deferred_archive_completing_fixture();
+        let receipt = wallet.retain_deferred_credited(&send, &original).unwrap();
+        wallet.verify_deferred_credited(&receipt).unwrap();
+        let entry = wallet.deferred_archive_summary().unwrap().oldest.unwrap();
+        let (_, manifest) = wallet.manifest().unwrap();
+        let queue = archive::encode(&wallet.deferred_archive_index(&manifest).unwrap()).unwrap();
+        let prior = manifest
+            .sessions
+            .get(&mut wallet.archive, &[197; 32])
+            .unwrap()
+            .unwrap();
+        let source = wallet
+            .indexed_step(&manifest, manifest.indexed.unwrap())
+            .unwrap();
+        let mut request = setup_quote(&source.frozen);
+        let action = Action::Request {
+            amount: 7,
+            fee: None,
+        };
+        let id = [198; 32];
+        let mut plan = wallet.setup(id, &action).unwrap();
+        request.body.nonce = plan.nonce;
+        let signature: Signature =
+            signer(&request.receiver_credential).sign(&request.body.signing_message());
+        request.signature =
+            KagemushaDeviceSignatureV1::from_raw_bytes(&signature.normalize_s().to_bytes())
+                .unwrap();
+        request
+            .verify_open(&fixture("KagemushaWalletSchemeV1"))
+            .unwrap();
+        let output = archive::encode(&request).unwrap();
+        wallet
+            .finish_setup(id, &action, &mut plan, &output, Some(&request))
+            .unwrap();
+        let (_, manifest) = wallet.manifest().unwrap();
+        assert_eq!(
+            archive::encode(&wallet.deferred_archive_index(&manifest).unwrap()).unwrap(),
+            queue
+        );
+        assert_eq!(
+            manifest
+                .sessions
+                .get(&mut wallet.archive, &[197; 32])
+                .unwrap(),
+            Some(prior.clone())
+        );
+        assert_eq!(
+            wallet.deferred_archive_summary().unwrap().oldest,
+            Some(entry.clone())
+        );
+        assert_eq!(wallet.deferred_archive_summary().unwrap().count, 1);
+        assert_eq!(wallet.issued_setup_request(&request).unwrap(), output);
+        let mut wallet = Coordinator::new(
+            wallet.custody,
+            wallet.archive,
+            wallet.proofs,
+            wallet.scheme_id,
+            wallet.wallet_id,
+        )
+        .unwrap();
+        let (_, manifest) = wallet.manifest().unwrap();
+        assert_eq!(
+            archive::encode(&wallet.deferred_archive_index(&manifest).unwrap()).unwrap(),
+            queue
+        );
+        assert_eq!(
+            manifest
+                .sessions
+                .get(&mut wallet.archive, &[197; 32])
+                .unwrap(),
+            Some(prior)
+        );
+        assert_eq!(
+            wallet.deferred_archive_summary().unwrap().oldest,
+            Some(entry.clone())
+        );
+        assert_eq!(wallet.deferred_archive_summary().unwrap().count, 1);
+        assert_eq!(wallet.issued_setup_request(&request).unwrap(), output);
+        let retained = wallet.setup(id, &action).unwrap();
+        assert_eq!(retained.nonce, plan.nonce);
+        assert_eq!(retained.output, plan.output);
+        let completed_plan = archive::encode(&retained).unwrap();
+        assert!(matches!(
+            wallet.reconcile_deferred_archive(&entry).unwrap(),
+            RequestStatusV1::Outcome(Completion::Complete(_))
+        ));
+        assert_eq!(wallet.deferred_archive_summary().unwrap().count, 0);
+        let (_, manifest) = wallet.manifest().unwrap();
+        assert_eq!(
+            manifest.sessions.get(&mut wallet.archive, &id).unwrap(),
+            Some(completed_plan.clone())
+        );
+        assert_eq!(wallet.issued_setup_request(&request).unwrap(), output);
+        let mut wallet = Coordinator::new(
+            wallet.custody,
+            wallet.archive,
+            wallet.proofs,
+            wallet.scheme_id,
+            wallet.wallet_id,
+        )
+        .unwrap();
+        assert_eq!(wallet.deferred_archive_summary().unwrap().count, 0);
+        let (_, manifest) = wallet.manifest().unwrap();
+        assert_eq!(
+            manifest.sessions.get(&mut wallet.archive, &id).unwrap(),
+            Some(completed_plan)
+        );
+        assert_eq!(wallet.issued_setup_request(&request).unwrap(), output);
     }
 
     #[test]

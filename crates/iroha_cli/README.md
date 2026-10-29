@@ -93,9 +93,13 @@ available. Generic proof and verifying-key registry commands remain available.
 
 Use `iroha taira doctor` for read-only public-testnet diagnostics. Both scopes
 require `/readyz` to return HTTP 200 with the exact plain-text `Ready` response;
-unavailable readiness fails the report with a bounded machine error code. Authorized
-public reset writes belong to the durable `iroha taira public-reset apply`
-coordinator. Retry the same apply command with the same inventory and authorization;
+unavailable readiness fails the report with a bounded machine error code.
+`--parliament` additionally reads public governance readiness, reports peer-observed body
+sizes, and fails missing or mismatched beacon/roster state. It warns about closed launch
+gates and unverified citizen census, remaining seating policy, and attempt progress;
+these diagnostics do not authorize launch. Authorized public reset writes belong to the
+durable `iroha taira public-reset apply` coordinator. Retry the same apply command with
+the same inventory and authorization;
 the durable journal selects recovery inputs for the interrupted phase. Its low-level `write-canary` child accepts exactly one ordered
 operation and one prepare, retained-envelope submit, or read-only recovery
 action; it is not a one-shot operator command. Keep onboarding tokens and all

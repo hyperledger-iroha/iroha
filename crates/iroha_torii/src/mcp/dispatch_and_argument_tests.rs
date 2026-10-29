@@ -1251,7 +1251,7 @@ async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
 }
 #[tokio::test]
 async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _router_owner = install_api_token_probe_router(&mut app, &[]);
     let result = dispatch_route(
         &app,
@@ -1269,7 +1269,7 @@ async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured()
 }
 #[tokio::test]
 async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _router_owner = install_api_token_probe_router(&mut app, &["configured-token"]);
     let extra_headers = norito::json!({
         "x-api-token": "configured-token"

@@ -221,10 +221,13 @@ pub fn enact(
             timestamp_ms: 0,
         }
     };
+    // `ReleaseStranded` moves escrow value; every enactment must stay a balanced entry (§4.15).
+    let guard = super::conservation::ValueGuard::capture(&*state_transaction.world)?;
     for (index, action) in proposal.actions.iter().enumerate() {
         apply_action(state_transaction, action, proposal_id, cause, s0)
             .map_err(|error| refuse(format_args!("action {index}: {error}")))?;
     }
+    guard.verify(&*state_transaction.world)?;
     let subjects = proposal.subjects();
     for subject in &subjects {
         let next = store::governance_revision(&*state_transaction.world, subject)
@@ -366,8 +369,15 @@ fn register_route(
         .ok_or_else(|| refuse("SCCP does not exist on this network"))?;
     let route = store::routes::get(world, &network)
         .ok_or_else(|| refuse(format_args!("no route to {}", network.profile_key())))?;
-    let expected_revision = route
-        .latest_revision()
+    // `latest` is the highest revision ever registered, removed ones included: the never-freed
+    // destination words remember them. A number is never reused, so no per-revision record
+    // (reconciliation window, control, pending count) left by a removed revision can price or
+    // shadow a new deployment.
+    let latest = store::destination_words::iter(world)
+        .filter(|(_, (word_network, _))| *word_network == network)
+        .map(|(_, (_, revision))| *revision)
+        .fold(route.latest_revision(), u32::max);
+    let expected_revision = latest
         .checked_add(1)
         .ok_or_else(|| refuse("the revision counter is exhausted"))?;
     if register.revision != expected_revision {
@@ -538,6 +548,23 @@ fn remove_staged(
     if !removable {
         return Err(refuse(format_args!(
             "revision {} is not a never-activated Staged revision",
+            action.revision
+        )));
+    }
+    // A quarantine and its reconciliation window never end (§4.10): removing the revision
+    // would orphan the window, whose block-start close needs the revision's liability.
+    if route
+        .revisions
+        .get(&action.revision)
+        .is_some_and(|record| record.quarantine.is_some())
+        || super::reconciliation_store::get(
+            &*state_transaction.world,
+            &(action.network, action.revision),
+        )
+        .is_some()
+    {
+        return Err(refuse(format_args!(
+            "revision {} is quarantined or has a reconciliation window",
             action.revision
         )));
     }
@@ -1035,6 +1062,112 @@ mod tests {
             S0,
         )
         .expect_err("live revisions cannot be removed");
+    }
+
+    #[test]
+    fn remove_staged_refuses_a_quarantined_or_reconciling_revision() {
+        use iroha_data_model::sccp::{
+            native::SccpQuarantineV1, reconciliation::SccpReconciliationStateV1,
+        };
+        let state = blank_state();
+        let mut block = state.block(header(5));
+        let mut stx = block.transaction();
+        setup(&mut stx);
+        existing_staged(&mut stx, 1, 7);
+        let remove = SccpGovernanceActionV1::RemoveStaged(SccpRouteRevisionActionV1 {
+            network: NETWORK,
+            revision: 1,
+        });
+        let set_quarantine = |stx: &mut StateTransaction<'_, '_>, quarantine| {
+            let mut route = store::routes::get(&*stx.world, &NETWORK)
+                .cloned()
+                .expect("route");
+            route.revisions.get_mut(&1).expect("revision").quarantine = quarantine;
+            store::routes::insert(stx, NETWORK, route).expect("route");
+        };
+
+        set_quarantine(
+            &mut stx,
+            Some(SccpQuarantineV1 {
+                certificate_id: [0x81; 32],
+                since_height: 1,
+            }),
+        );
+        let error = apply_action(
+            &mut stx,
+            &remove,
+            [6; 32],
+            controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+            S0,
+        )
+        .expect_err("a quarantine never ends");
+        assert!(error.to_string().contains("quarantined"), "{error}");
+
+        // A reconciliation window alone also keeps the revision: its block-start close
+        // reads the revision's liability.
+        set_quarantine(&mut stx, None);
+        super::super::reconciliation_store::put(
+            &mut stx,
+            (NETWORK, 1),
+            SccpReconciliationStateV1 {
+                opened_at_ms: 0,
+                closes_at_ms: 10,
+                forged_supply: 0,
+                rho: None,
+                settled_face: 0,
+            },
+        )
+        .expect("window");
+        apply_action(
+            &mut stx,
+            &remove,
+            [6; 32],
+            controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+            S0,
+        )
+        .expect_err("a reconciliation window never ends");
+        assert_eq!(activation(&stx, 1), Some(SccpRouteActivationV1::Staged));
+    }
+
+    #[test]
+    fn register_route_never_reuses_a_removed_revision_number() {
+        let state = blank_state();
+        let mut block = state.block(header(5));
+        let mut stx = block.transaction();
+        setup(&mut stx);
+        existing_staged(&mut stx, 1, 7);
+        existing_staged(&mut stx, 2, 8);
+        apply_action(
+            &mut stx,
+            &SccpGovernanceActionV1::RemoveStaged(SccpRouteRevisionActionV1 {
+                network: NETWORK,
+                revision: 2,
+            }),
+            [6; 32],
+            controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]),
+            S0,
+        )
+        .expect("remove");
+        assert_eq!(
+            store::routes::get(&*stx.world, &NETWORK)
+                .expect("route")
+                .latest_revision(),
+            1
+        );
+        let cause = controls::ControlCauseV1::for_test([0x43; 32], [0x45; 32]);
+        let error = with_launch_gates((true, true), || {
+            apply_action(&mut stx, &register(2, 9), [7; 32], cause, S0)
+        })
+        .expect_err("the removed number stays retired");
+        assert!(
+            error.to_string().contains("is not the next revision 3"),
+            "{error}"
+        );
+        let error = with_launch_gates((true, true), || {
+            apply_action(&mut stx, &register(3, 9), [7; 32], cause, S0)
+        })
+        .expect_err("this fixture has no authenticated native pin");
+        assert!(!error.to_string().contains("next revision"), "{error}");
     }
 
     #[test]

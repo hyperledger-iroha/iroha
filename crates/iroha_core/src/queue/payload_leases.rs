@@ -869,6 +869,8 @@ mod tests {
 
     #[test]
     fn pending_payload_lease_preserves_original_capacity_refusal_and_refuses_generation_wrap() {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let configuration = TestChainConfig::new(World::new(), 1_000);
         let key = configuration.genesis_key.clone();
         let chain = CertifiedTestChain::start(configuration).unwrap();

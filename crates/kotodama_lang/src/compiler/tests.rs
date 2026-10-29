@@ -6780,12 +6780,43 @@ fn production_accepts_dynamic_state_path_access_fallback() {
 #[test]
 fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
     let src = include_str!("fixtures/v1/c165.ko");
-    let compiler = Compiler::new();
-    let err = compiler
-        .compile_source_with_manifest(src)
+    let session = crate::session::CompilerSession::default();
+    let request = crate::session::CompileRequest {
+        source: src,
+        source_name: Some("invalid_trigger.ko"),
+    };
+    let built = session
+        .build(request)
         .expect_err("production should reject undecodable literal trigger specs");
-    assert!(err.contains("E_ACCESS_INCOMPLETE"));
-    assert!(err.contains(HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE));
+    let checked = session.check(request);
+    assert!(
+        checked.is_err(),
+        "check accepted a source rejected by build: {built:?}"
+    );
+    assert_eq!(checked.unwrap_err(), built);
+    assert_eq!(built.diagnostics.len(), 1);
+    let diagnostic = &built.diagnostics[0];
+    assert_eq!(diagnostic.code, "E_ACCESS_INCOMPLETE");
+    assert_eq!(
+        diagnostic.phase,
+        crate::diagnostic::DiagnosticPhase::Semantic
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains(HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE)
+    );
+    assert!(diagnostic.help.is_some());
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("trigger argument span");
+    assert_eq!(span.source.as_deref(), Some("invalid_trigger.ko"));
+    let range = span.byte_range.expect("exact argument range");
+    assert_eq!(
+        &src[range.start as usize..range.end as usize],
+        r#"Json::parse("{\"name\":\"t1\"}")"#
+    );
 }
 #[test]
 fn production_rejects_raw_call_contract_surface() {

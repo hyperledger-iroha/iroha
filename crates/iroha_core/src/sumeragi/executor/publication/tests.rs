@@ -192,6 +192,9 @@ fn state_publication_lock_refusals_reach_scheduler_with_original_execution_and_r
 
 #[test]
 fn state_execution_and_membership_refusals_preserve_actual_release_owners() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     publication_tests::with_worker(|chain, _worker, _blocks, _events| {
         let budget = chain.state().ivm_execution_budget();
         let mut registration = crate::unit_test_support::release_registration(&budget);

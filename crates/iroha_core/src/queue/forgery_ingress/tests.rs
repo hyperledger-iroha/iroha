@@ -7,13 +7,16 @@ use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use std::{alloc::Layout, sync::Arc, time::Duration};
 
-fn triple(index: u64) -> Triple {
+const REMOTE: SubmissionOrigin = SubmissionOrigin::Remote;
+
+fn triple(index: u64) -> IngressKey {
     let mut message = [0; 32];
     message[..8].copy_from_slice(&index.to_be_bytes());
-    Triple {
+    IngressKey {
         generation: 1,
         message,
         signers: 7,
+        signature: [0; 32],
     }
 }
 
@@ -88,46 +91,60 @@ fn backward_clock_never_refills_or_rewinds_the_bucket() {
 }
 
 #[test]
-fn lru_keeps_refused_triples_and_touches_repeats_before_eviction() {
+fn rate_refusals_are_never_remembered() {
     let pool = AllocationBudget::new(1 << 20);
     let now = Instant::now();
     let mut state = ForgeryIngressState::new(&pool, now).unwrap();
-    for index in 0..CACHE_CAPACITY as u64 {
-        let _ = state.observe(triple(index), now);
+    for index in 0..32 {
+        state.observe(triple(index), now).unwrap();
     }
-    assert_eq!(state.seen.as_slice().len(), CACHE_CAPACITY);
-    let credit = state.credit_ns;
+    for _ in 0..2 {
+        assert!(
+            matches!(
+                state.observe(triple(32), now),
+                Err(ForgeryIngressError::RateLimited)
+            ),
+            "a rate-refused submission must stay unseen"
+        );
+    }
+    state
+        .observe(triple(32), now + Duration::from_nanos(TOKEN_NS))
+        .expect("a rate-refused submission reaches the pairing once a token refills");
     assert!(matches!(
-        state.observe(triple(0), now),
+        state.observe(triple(32), now + Duration::from_secs(5)),
         Err(ForgeryIngressError::Seen)
     ));
-    assert_eq!(state.credit_ns, credit);
-    assert!(matches!(
-        state.observe(triple(CACHE_CAPACITY as u64), now),
-        Err(ForgeryIngressError::RateLimited)
-    ));
-    assert!(matches!(
-        state.observe(triple(0), now),
-        Err(ForgeryIngressError::Seen)
-    ));
-    assert!(
-        matches!(
-            state.observe(triple(1), now),
-            Err(ForgeryIngressError::RateLimited)
-        ),
-        "untouched oldest triple was evicted"
-    );
-    assert!(
-        matches!(
-            state.observe(triple(1), now + Duration::from_secs(5)),
-            Err(ForgeryIngressError::Seen)
-        ),
-        "rate refusal was retained even after refill time"
-    );
 }
 
 #[test]
-fn cache_key_includes_generation_digest_and_signers_exactly() {
+fn lru_touches_repeats_before_eviction() {
+    let pool = AllocationBudget::new(1 << 20);
+    let now = Instant::now();
+    let at = |index: u64| now + Duration::from_nanos(TOKEN_NS * index);
+    let mut state = ForgeryIngressState::new(&pool, now).unwrap();
+    for index in 0..CACHE_CAPACITY as u64 {
+        state.observe(triple(index), at(index)).unwrap();
+    }
+    assert_eq!(state.seen.as_slice().len(), CACHE_CAPACITY);
+    let full = at(CACHE_CAPACITY as u64);
+    let credit = state.credit_ns;
+    assert!(matches!(
+        state.observe(triple(0), full),
+        Err(ForgeryIngressError::Seen)
+    ));
+    assert_eq!(state.credit_ns, credit, "a repeat consumes no token");
+    state.observe(triple(CACHE_CAPACITY as u64), full).unwrap();
+    assert!(matches!(
+        state.observe(triple(0), full),
+        Err(ForgeryIngressError::Seen)
+    ));
+    state
+        .observe(triple(1), full)
+        .expect("the untouched oldest key was evicted");
+}
+
+#[test]
+fn cache_key_includes_generation_digest_signers_and_signature_exactly() {
     let pool = AllocationBudget::new(1 << 20);
     let now = Instant::now();
     let mut state = ForgeryIngressState::new(&pool, now).unwrap();
@@ -138,10 +155,12 @@ fn cache_key_includes_generation_digest_and_signers_exactly() {
     digest.message[31] = 1;
     let mut signers = original;
     signers.signers = 11;
-    for key in [original, generation, digest, signers] {
+    let mut signature = original;
+    signature.signature[0] = 1;
+    for key in [original, generation, digest, signers, signature] {
         state.observe(key, now).unwrap();
     }
-    for key in [original, generation, digest, signers] {
+    for key in [original, generation, digest, signers, signature] {
         assert!(matches!(
             state.observe(key, now),
             Err(ForgeryIngressError::Seen)
@@ -157,7 +176,7 @@ fn queue_handles_share_cache_and_original_pool_until_last_drop() {
     let second_handle = queue.clone();
     let now = Instant::now();
     queue.observe_forgery(triple(1), &pool, now).unwrap();
-    let backing = Layout::array::<Triple>(CACHE_CAPACITY).unwrap().size();
+    let backing = Layout::array::<IngressKey>(CACHE_CAPACITY).unwrap().size();
     assert_eq!(pool.reserved_bytes(), backing);
     assert!(matches!(
         second_handle.observe_forgery(triple(1), &pool, now),
@@ -206,7 +225,7 @@ fn concurrent_shared_queue_observations_cannot_double_spend_a_token_or_triple() 
 
 #[test]
 fn original_cache_capacity_refusal_is_typed_and_does_not_install_seen_state() {
-    let backing = Layout::array::<Triple>(CACHE_CAPACITY).unwrap().size();
+    let backing = Layout::array::<IngressKey>(CACHE_CAPACITY).unwrap().size();
     let pool = AllocationBudget::new(backing);
     let occupied = pool.try_reserve_bytes(1).unwrap();
     let queue = queue();
@@ -292,7 +311,7 @@ fn actual_view_admission_verifies_native_evidence_and_never_publishes_it() {
     assert_eq!(store::forgery_max_generation(view.world()), None);
     assert_eq!(
         pool.reserved_bytes(),
-        baseline + Layout::array::<Triple>(CACHE_CAPACITY).unwrap().size()
+        baseline + Layout::array::<IngressKey>(CACHE_CAPACITY).unwrap().size()
     );
     drop(queue);
     assert_eq!(pool.reserved_bytes(), baseline);
@@ -327,7 +346,7 @@ fn genuine_and_cheaply_invalid_sources_never_install_seen_state() {
     let queue = queue();
     for evidence in [genuine, foreign] {
         assert!(matches!(
-            queue.admit_forgery(&view, &signed_evidence(&view, evidence)),
+            queue.admit_forgery(&view, &signed_evidence(&view, evidence), REMOTE),
             Err(Error::SccpForgeryIngress(
                 ForgeryIngressError::Verification(ForgeryVerificationError::NotEvidence)
             ))
@@ -373,14 +392,14 @@ fn no_new_slashable_g6_member_is_duplicate_before_lru_and_pairing() {
     let view = chain.state().view();
     let queue = queue();
     assert!(matches!(
-        queue.admit_forgery(&view, &transaction),
+        queue.admit_forgery(&view, &transaction, REMOTE),
         Err(Error::SccpForgeryIngress(ForgeryIngressError::Duplicate))
     ));
     assert!(queue.forgery_ingress.lock().is_none());
 }
 
 #[test]
-fn refused_pairing_stays_seen_without_an_offence_or_queue_record() {
+fn refused_signature_never_shadows_the_genuine_certificate() {
     use crate::state::WorldReadOnly;
     use forgery::tests::{active_member_chain, future};
     let (chain, keys) = active_member_chain();
@@ -390,25 +409,32 @@ fn refused_pairing_stays_seen_without_an_offence_or_queue_record() {
     let view = chain.state().view();
     let queue = queue();
     assert!(matches!(
-        queue.admit_forgery(&view, &signed_evidence(&view, invalid)),
+        queue.admit_forgery(&view, &signed_evidence(&view, invalid.clone()), REMOTE),
         Err(Error::SccpForgeryIngress(
             ForgeryIngressError::Verification(ForgeryVerificationError::BadSignature)
         ))
     ));
+    assert!(matches!(
+        queue.admit_forgery(&view, &signed_evidence(&view, invalid), REMOTE),
+        Err(Error::SccpForgeryIngress(ForgeryIngressError::Seen))
+    ));
     assert!(
-        matches!(
-            queue.admit_forgery(&view, &signed_evidence(&view, valid)),
-            Err(Error::SccpForgeryIngress(ForgeryIngressError::Seen))
-        ),
-        "LRU key excludes signature bytes exactly as specified"
+        queue
+            .admit_forgery(&view, &signed_evidence(&view, valid.clone()), REMOTE)
+            .is_ok(),
+        "a refused signature must not shadow the genuine certificate of the same triple"
     );
+    assert!(matches!(
+        queue.admit_forgery(&view, &signed_evidence(&view, valid), REMOTE),
+        Err(Error::SccpForgeryIngress(ForgeryIngressError::Seen))
+    ));
     assert!(view.world().sccp_forgery_offences().is_empty());
     assert_eq!(store::forgery_max_generation(view.world()), None);
     assert_eq!(queue.active_len(), 0);
 }
 
 #[test]
-fn post_insertion_original_scratch_refusal_stays_seen_and_preserves_release_owner() {
+fn post_insertion_original_scratch_refusal_is_forgotten_and_preserves_release_owner() {
     use forgery::tests::{active_member_chain, future};
     use iroha_crypto::bls::consensus::ConsensusAggregateScratch;
     let _retirement_pin = crossbeam_epoch::pin();
@@ -434,7 +460,9 @@ fn post_insertion_original_scratch_refusal_stays_seen_and_preserves_release_owne
     let occupied = budget
         .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes() - (scratch - 1))
         .unwrap();
-    let error = queue.admit_forgery(&view, &transaction).unwrap_err();
+    let error = queue
+        .admit_forgery(&view, &transaction, REMOTE)
+        .unwrap_err();
     let Error::Deferred(owner) = error else {
         panic!("exact original scratch capacity owner: {error:?}")
     };
@@ -443,11 +471,8 @@ fn post_insertion_original_scratch_refusal_stays_seen_and_preserves_release_owne
     );
     drop(occupied);
     assert!(
-        matches!(
-            queue.admit_forgery(&view, &transaction),
-            Err(Error::SccpForgeryIngress(ForgeryIngressError::Seen))
-        ),
-        "local refusal after insertion stays cached even when capacity returns"
+        queue.admit_forgery(&view, &transaction, REMOTE).is_ok(),
+        "a local refusal is no verdict: the retry reaches the pairing once capacity returns"
     );
     assert_eq!(queue.active_len(), 0);
 }
@@ -472,4 +497,129 @@ fn non_retryable_original_allocation_errors_keep_their_typed_category() {
         ForgeryIngressError::Allocator { bytes: 17 }.into_queue(),
         Error::SccpForgeryIngress(ForgeryIngressError::Allocator { bytes: 17 })
     ));
+}
+
+#[test]
+fn drained_pairing_bucket_refuses_remote_evidence_but_admits_the_local_keeper() {
+    use crate::tx::AcceptedTransaction;
+    use forgery::tests::{active_member_chain, future};
+    let _retirement_pin = crossbeam_epoch::pin();
+    let (chain, keys) = active_member_chain();
+    let evidence = future(&chain, &keys);
+    let state = chain.state();
+    let (_, time) = TimeSource::new_mock(Duration::from_millis(3_000));
+    let queue = Queue::test(iroha_config::parameters::actual::Queue::default(), &time);
+    let mut forged = evidence.clone();
+    forged.aggregate_signature = [0; 96];
+    let (genuine, forged) = {
+        let view = state.view();
+        // A distributed flood of fabricated evidence keeps the node-wide bucket empty. Its
+        // last observation lies ahead of the wall clock, so no token refills meanwhile.
+        let flood = Instant::now() + Duration::from_secs(3_600);
+        for index in 0..32 {
+            queue
+                .observe_forgery(triple(index), &view.execution_budget(), flood)
+                .unwrap();
+        }
+        let parameters = state.transaction_admission_parameters();
+        let accept = |evidence| {
+            AcceptedTransaction::accept_with_time_source(
+                signed_evidence(&view, evidence),
+                state.network_id_ref(),
+                parameters.sumeragi().max_clock_drift(),
+                parameters.transaction(),
+                parameters.require_crypto_policy().unwrap(),
+                &time,
+            )
+            .unwrap()
+        };
+        (accept(evidence), accept(forged))
+    };
+    let remote = queue
+        .push_with_lane_with_state(genuine.clone(), state)
+        .unwrap_err();
+    assert!(
+        matches!(
+            remote.err,
+            Error::SccpForgeryIngress(ForgeryIngressError::RateLimited)
+        ),
+        "{:?}",
+        remote.err
+    );
+    // The keeper still pays the full pairing: a refused signature stays refused.
+    let refused = queue
+        .push_local_keeper_with_state(forged, state)
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused.err,
+            Error::SccpForgeryIngress(ForgeryIngressError::Verification(
+                ForgeryVerificationError::BadSignature
+            ))
+        ),
+        "{:?}",
+        refused.err
+    );
+    queue
+        .push_local_keeper_with_state(genuine, state)
+        .expect("the keeper's genuine evidence must not wait behind a remote flood");
+    assert_eq!(queue.active_len(), 1);
+    // Neither keeper submission took a token or entered the remote repeat cache.
+    let ingress = queue.forgery_ingress.lock();
+    let ingress = ingress.as_ref().unwrap();
+    assert_eq!(ingress.credit_ns, 0);
+    assert_eq!(ingress.seen.as_slice().len(), 32);
+}
+
+#[test]
+fn unresolved_signers_reach_the_pairing_until_their_generation_is_recorded() {
+    use crate::state::WorldReadOnly as _;
+    use forgery::tests::unresolved_member_chain;
+    use iroha_data_model::block::consensus::EvidencePenaltyStatus;
+    let (mut chain, _, ordinary, evidence) = unresolved_member_chain();
+    let created_ms = |chain: &crate::sumeragi::test_chain::CertifiedTestChain| {
+        chain
+            .state()
+            .view()
+            .native_execution_tip()
+            .unwrap()
+            .creation_time_ms()
+            + 1
+    };
+    {
+        // No signer is slashable and no record names generation 1: not a duplicate.
+        let transaction = chain.sign(&ordinary, [evidence.clone().into()], created_ms(&chain));
+        let view = chain.state().view();
+        assert!(queue().admit_forgery(&view, &transaction, REMOTE).is_ok());
+    }
+    let signed = chain.sign(&ordinary, [evidence.clone().into()], created_ms(&chain));
+    assert_eq!(chain.commit(vec![signed]), [true]);
+    let recorded_at = chain.height();
+    {
+        let view = chain.state().view();
+        assert_eq!(store::forgery_max_generation(view.world()), Some(1));
+        assert!(view.world().sccp_forgery_offences().is_empty());
+        let (_, record) = view.world().consensus_evidence().iter().next().unwrap();
+        assert_eq!(record.attribution.offenders, []);
+        assert_eq!(record.penalty_status, EvidencePenaltyStatus::Pending);
+        // The recorded generation makes a resubmission cheap Duplicate, before LRU and pairing.
+        let transaction = chain.sign(&ordinary, [evidence.into()], created_ms(&chain));
+        let queue = queue();
+        assert!(matches!(
+            queue.admit_forgery(&view, &transaction, REMOTE),
+            Err(Error::SccpForgeryIngress(ForgeryIngressError::Duplicate))
+        ));
+        assert!(queue.forgery_ingress.lock().is_none());
+    }
+    // The penalty pipeline marks the record without offenders Applied and slashes nothing.
+    chain.commit(Vec::new());
+    chain.commit(Vec::new());
+    let view = chain.state().view();
+    let (_, record) = view.world().consensus_evidence().iter().next().unwrap();
+    assert_eq!(
+        record.penalty_status,
+        EvidencePenaltyStatus::Applied {
+            height: recorded_at + 2
+        }
+    );
 }

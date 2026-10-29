@@ -14,6 +14,9 @@
 
 #include "internal/platform/implementation/shared/file.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include <cstddef>
 #include <ios>
 #include <memory>
@@ -26,6 +29,7 @@
 #include "internal/base/file_path.h"
 #include "internal/base/files.h"
 #include "internal/platform/exception.h"
+#include "internal/platform/logging.h"
 
 namespace nearby {
 namespace shared {
@@ -100,12 +104,25 @@ Exception IOFile::Write(absl::string_view data) {
 }
 
 absl::Time IOFile::GetLastModifiedTime() const {
-  // TODO(ftsui): Implement this method.
-  return absl::Now();
+  struct stat metadata {};
+  if (stat(path_.c_str(), &metadata) != 0) {
+    PLOG(ERROR) << "Failed to read file modification time";
+    return absl::UnixEpoch();
+  }
+#if defined(__APPLE__)
+  return absl::TimeFromTimespec(metadata.st_mtimespec);
+#else
+  return absl::TimeFromTimespec(metadata.st_mtim);
+#endif
 }
 
 void IOFile::SetLastModifiedTime(absl::Time last_modified_time) {
-  // TODO(ftsui): Implement this method.
+  // Preserve access time and use integer nanoseconds, including pre-epoch times.
+  const struct timespec times[2] = {
+      {0, UTIME_OMIT}, absl::ToTimespec(last_modified_time)};
+  if (utimensat(AT_FDCWD, path_.c_str(), times, 0) != 0) {
+    PLOG(ERROR) << "Failed to set file modification time";
+  }
 }
 
 }  // namespace shared

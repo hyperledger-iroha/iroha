@@ -494,6 +494,14 @@ get fun `test init rejects a configuration or pin that cannot be deployed`() {
     config = canonicalDefault().config.load();
     config.maxSupply = 0;
     cases.push(withConfig(canonicalDefault(), config));
+    // a cap of 2^96 or more, which `RegisterRoute` refuses for TON (§3.2)
+    config = canonicalDefault().config.load();
+    config.maxSupply = SCCP_TON_AMOUNT_LIMIT;
+    cases.push(withConfig(canonicalDefault(), config));
+    config = canonicalDefault().config.load();
+    // the largest `Coins`
+    config.maxSupply = (1 << 120) - 1;
+    cases.push(withConfig(canonicalDefault(), config));
     // a pin of generation 0, with a zero root, or starting at height 0
     var pin = defaultPin(committee);
     pin.generation = 0;
@@ -519,7 +527,13 @@ get fun `test init rejects a configuration or pin that cannot be deployed`() {
         expect(code).toEqual(SccpErrors.BadConfig as int);
         i += 1;
     }
-    expect(i).toEqual(7);
+    expect(i).toEqual(9);
+    // the largest cap
+    config = canonicalDefault().config.load();
+    config.maxSupply = SCCP_TON_AMOUNT_LIMIT - 1;
+    val largest = deployUninitialized(withConfig(canonicalDefault(), config));
+    expectOutcome(sendInit(largest), 0);
+    expect(largest.getSccpState().maxSupply).toEqual(SCCP_TON_AMOUNT_LIMIT - 1);
     // the smallest pin: generation 1 from height 1
     pin = defaultPin(committee);
     pin.generation = 1;

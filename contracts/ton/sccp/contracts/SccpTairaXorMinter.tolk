@@ -188,8 +188,9 @@ fun returnExcess(response: address, queryId: int) {
         body: ReturnExcessesBack { queryId },
     });
     // SAFETY: every caller reserves the minter's floor or its prior balance
-    // first (`sccpReserveMinterFloor`, `sccpReservePriorBalance`), so the
-    // balance carried here is only the unspent part of the incoming value.
+    // first (`sccpReserveMinterFloor`, `sccpReservePriorBalance`,
+    // `sccpReserveBouncePriorBalance`), so the balance carried here is only the
+    // unspent part of the incoming value.
     excess.send(SEND_MODE_CARRY_ALL_BALANCE | SEND_MODE_IGNORE_ERRORS);
 }
 
@@ -318,20 +319,25 @@ fun requireActiveOrNewBucket(book: RecoveryBook, index: int, deployed: int) {
 
 /// Prepared ACKs retain the row while deleting the destination receipt.
 /// Dropped ACKs alone advance successful effects or free their reservation.
+/// An ACK that advances nothing (its row completed or moved on, as after a
+/// racing `sccp_retry`) returns its value to its own `response`.
 fun handleRecoveryAck(sender: address, incoming: coins, msg: SccpRecoveryAck) {
     var st = MinterStorage.load();
     var book = st.recovery.load();
+    // An ACK never pays toward the floor: its value funds only its own step.
+    sccpReservePriorBalance(incoming);
     val found = book.operations.get(msg.operationId);
     if (!found.isFound) {
+        returnExcess(msg.response, msg.queryId);
         return;
     }
     var operation = found.loadValue().load();
     if (!operation.matches(msg.stage, msg.attempt)) {
+        returnExcess(msg.response, msg.queryId);
         return;
     }
     val config = st.config.load();
     assert (sender == recoveryDestination(operation, config)) throw SccpErrors.BadRecovery;
-    sccpReservePriorBalance(incoming);
     if (msg.result == SCCP_RECEIPT_MISSING) {
         // Absence is not proof of failure after possible rent deletion. Never
         // remint, clear a replay bit or release a slot from an absent receipt.
@@ -355,6 +361,7 @@ fun handleRecoveryAck(sender: address, incoming: coins, msg: SccpRecoveryAck) {
         return;
     }
     if (operation.phase != SCCP_RECOVERY_DROP) {
+        returnExcess(msg.response, msg.queryId);
         return;
     }
     if (msg.result != SCCP_RECEIPT_DROPPED) {
@@ -372,7 +379,12 @@ fun handleRecoveryAck(sender: address, incoming: coins, msg: SccpRecoveryAck) {
         if (tail.kind == SCCP_CONSUME_KIND_MINT) {
             st.pendingSupply -= operation.amount;
             if (operation.result == SCCP_RECEIPT_APPLIED) {
-                if (st.equivocated) {
+                // §5.1.4: the cap binds here, the only place the supply
+                // grows, once the bucket gave this row the nonce. A rejected
+                // duplicate never gets here, so it never holds headroom; a
+                // mint the cap cannot take clears its flag again, as after a
+                // latch.
+                if (st.equivocated | (st.totalSupply + operation.amount > config.maxSupply)) {
                     operation.stage = SCCP_RECOVERY_UNCONSUME;
                 } else {
                     st.totalSupply += operation.amount;
@@ -460,10 +472,11 @@ fun handleRecoveryAck(sender: address, incoming: coins, msg: SccpRecoveryAck) {
 ///    void);
 /// 9. the leaf path (`BadSnake`, `BadProof`);
 /// 10. void only: `nonceArgument` is the payload nonce (`BadNonce`);
-/// 11. mint only: the supply cap with the pending supply
-///     (`SupplyCapExceeded`).
+/// 11. mint only: the supply cap against the completed supply alone
+///     (`SupplyCapExceeded`), an early refusal; the cap binds when the
+///     consume is applied.
 ///
-/// The step then reserves the pending supply of a mint, stores what an inline
+/// The step then adds a mint to the pending supply, stores what an inline
 /// certificate changed, activates the missing buckets and sends
 /// `sccp_consume` to the bucket of the nonce. The bucket's reply completes or
 /// reports its retained applied or rejected result.
@@ -539,9 +552,10 @@ fun handleConsumeRequest(
     var recipient: address? = null;
     if (isMint) {
         amount = payload.amount;
-        assert (
-            st.totalSupply + st.pendingSupply + amount <= config.maxSupply
-        ) throw SccpErrors.SupplyCapExceeded;
+        // Early refusal against completed supply only: the binding check is
+        // at the applied consume (`handleRecoveryAck`). `pending_supply` is
+        // not counted, so in-flight duplicates cannot hold headroom.
+        assert (st.totalSupply + amount <= config.maxSupply) throw SccpErrors.SupplyCapExceeded;
         st.pendingSupply += amount;
         recipient = address.fromWorkchainAndHash(SCCP_WORKCHAIN, payload.recipientHash);
     }
@@ -1117,13 +1131,16 @@ fun onInternalMessage(in: InMessage) {
                 Checkpoints.isCanonicalEmpty(st.checkpoints) &
                 (st.recovery.hash() == RecoveryBook.empty().toCell().hash())
             ) throw SccpErrors.BadConfig;
-            // A deployable configuration and pin (§5.1.1).
+            // A deployable configuration and pin (§5.1.1). The cap is below
+            // 2^96, as `RegisterRoute` requires: supply never leaves the TON
+            // amount range (§3.2).
             val config = st.config.load();
             val pin = config.initial.load();
             assert (
                 (config.tairaNetworkId != 0) & (config.consensusInstance != 0) &
                 (config.routeRevision != 0) &
                 (config.maxSupply != 0) &
+                (config.maxSupply < SCCP_TON_AMOUNT_LIMIT) &
                 (pin.generation >= 1) &
                 (pin.root != 0) &
                 (pin.start >= 1)
@@ -1186,12 +1203,20 @@ fun onInternalMessage(in: InMessage) {
 }
 
 /// An original bounce proves the destination transaction did not apply its
-/// effect. This bounded handler sends nothing and allocates no new row; its
-/// gas is prepaid before dispatch. Confirmation/Drop bounces retain phase.
+/// effect. This bounded handler allocates no new row; its gas is prepaid
+/// before dispatch. Confirmation/Drop bounces retain phase.
+///
+/// A bounce of a dispatch, confirmation or deletion whose operation is still
+/// retained then returns its value, above the prior balance, to that
+/// operation's `response`: 256 bounced bits cannot carry the `response` of the
+/// exchange itself. The return ignores errors, so custody never depends on it.
+/// Any other bounce keeps its value.
 fun onBouncedMessage(in: InMessageBounced) {
     setGasLimitToMaximum();
     in.bouncedBody.skipBouncedPrefix();
-    if (in.bouncedBody.loadUint(32) != 0x53435241) {
+    val opcode = in.bouncedBody.loadUint(32);
+    // dispatch, confirmation and deletion share their first 168 bits
+    if ((opcode != 0x53435241) & (opcode != 0x53435242) & (opcode != 0x53435243)) {
         return;
     }
     val operationId = in.bouncedBody.loadUint(64);
@@ -1204,35 +1229,36 @@ fun onBouncedMessage(in: InMessageBounced) {
         return;
     }
     var operation = found.loadValue().load();
-    if (!operation.matches(stage, attempt) | (operation.phase != SCCP_RECOVERY_WAIT)) {
-        return;
-    }
-    assert (
-        in.senderAddress == recoveryDestination(operation, st.config.load())
-    ) throw SccpErrors.BadRecovery;
-    if ((stage == SCCP_RECOVERY_CONSUME) | (stage == SCCP_RECOVERY_RANGE)) {
-        // This authenticated original failure applied no replay flag. Release
-        // the pending claim and its slot; a new public proof may try again.
-        if (
-            (stage == SCCP_RECOVERY_CONSUME) &
-            (operation.tail.load().kind == SCCP_CONSUME_KIND_MINT)
-        ) {
-            st.pendingSupply -= operation.amount;
+    val tail = operation.tail.load();
+    if (
+        (opcode == 0x53435241) & operation.matches(stage, attempt) &
+        (operation.phase == SCCP_RECOVERY_WAIT)
+    ) {
+        assert (
+            in.senderAddress == recoveryDestination(operation, st.config.load())
+        ) throw SccpErrors.BadRecovery;
+        if ((stage == SCCP_RECOVERY_CONSUME) | (stage == SCCP_RECOVERY_RANGE)) {
+            // This authenticated original failure applied no replay flag.
+            // Release the pending claim and its slot; a new public proof may
+            // try again.
+            if ((stage == SCCP_RECOVERY_CONSUME) & (tail.kind == SCCP_CONSUME_KIND_MINT)) {
+                st.pendingSupply -= operation.amount;
+            }
+            book.complete(operationId);
+        } else {
+            if (stage == SCCP_RECOVERY_MINT) {
+                st.totalSupply -= operation.amount;
+                operation.stage = SCCP_RECOVERY_UNCONSUME;
+                operation.attempt = 0;
+            }
+            operation.phase = SCCP_RECOVERY_FAILED;
+            book.operations.set(operationId, operation.toCell());
         }
-        book.complete(operationId);
         st.recovery = book.toCell();
         st.save();
-        return;
     }
-    if (stage == SCCP_RECOVERY_MINT) {
-        st.totalSupply -= operation.amount;
-        operation.stage = SCCP_RECOVERY_UNCONSUME;
-        operation.attempt = 0;
-    }
-    operation.phase = SCCP_RECOVERY_FAILED;
-    book.operations.set(operationId, operation.toCell());
-    st.recovery = book.toCell();
-    st.save();
+    sccpReserveBouncePriorBalance(in.valueCoins);
+    returnExcess(tail.response, operation.queryId);
 }
 
 // ---------------------------------------------------------------------------

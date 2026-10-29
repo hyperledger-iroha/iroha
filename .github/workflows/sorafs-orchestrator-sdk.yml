@@ -417,7 +417,7 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 10.0.402
+          dotnet-version: 10.0.403
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           target: x86_64-unknown-linux-gnu

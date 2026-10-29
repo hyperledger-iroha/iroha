@@ -7,9 +7,9 @@ use super::{
     AnchorStorage, CommitteeStorage, LightClientSetStorage, RetainedSccpAnchors,
     sccp_forgery_custody, sccp_reconciliation_store,
 };
-use crate::sumeragi::amx::RetainedNativeAmx;
+use crate::{pipeline_gas_policy::RetainedStateParameters, sumeragi::amx::RetainedNativeAmx};
 
-/// All live empty-World owners, excluding generations retired during construction.
+/// Empty-World controls, excluding retained parameter graphs and retired generations.
 pub(super) fn world_live_bytes() -> usize {
     let maps = [
         sccp_reconciliation_store::Records::initial_allocation_demand(),
@@ -30,6 +30,7 @@ pub(super) fn world_live_bytes() -> usize {
         + initialized_cell_bytes::<Option<u64>>()
         + initialized_cell_bytes::<RetainedSccpAnchors>()
         + initialized_cell_bytes::<RetainedNativeAmx>()
+        + initialized_cell_bytes::<RetainedStateParameters>()
 }
 
 fn initialized_cell_bytes<T: mv::Value>() -> usize {
@@ -39,13 +40,14 @@ fn initialized_cell_bytes<T: mv::Value>() -> usize {
         .sum()
 }
 
-/// Empty-World cell generations retained by an epoch pin after World drops.
+/// Empty-World cell shells retained by an epoch pin, excluding their parameter graphs.
 pub(super) fn world_retired_bytes() -> usize {
     3 * retired_cell_bytes::<u64>()
         + retired_cell_bytes::<u32>()
         + retired_cell_bytes::<Option<u64>>()
         + retired_cell_bytes::<RetainedSccpAnchors>()
         + retired_cell_bytes::<RetainedNativeAmx>()
+        + retired_cell_bytes::<RetainedStateParameters>()
 }
 
 fn retired_cell_bytes<T: mv::Value>() -> usize {
@@ -53,6 +55,40 @@ fn retired_cell_bytes<T: mv::Value>() -> usize {
         .into_iter()
         .map(|layout| layout.size())
         .sum()
+}
+
+/// Fresh State readmits AMX and publishes the explicit free-fee parameter fixture.
+pub(super) fn fresh_state_constructor_retired_bytes() -> usize {
+    retired_cell_bytes::<RetainedNativeAmx>() + retired_cell_bytes::<RetainedStateParameters>()
+}
+
+/// Restore replaces these initialized SCCP shells with the admitted snapshot cut.
+pub(super) fn restored_state_constructor_retired_bytes() -> usize {
+    2 * retired_cell_bytes::<u64>()
+        + retired_cell_bytes::<u32>()
+        + retired_cell_bytes::<Option<u64>>()
+        + retired_cell_bytes::<RetainedSccpAnchors>()
+}
+
+/// Retain the exact original graph owners independently of their current/undo cells.
+pub(super) fn retain_parameter_graphs(
+    world: &super::World,
+) -> (RetainedStateParameters, Option<RetainedStateParameters>) {
+    let current = world.parameters.view();
+    let previous = world.parameters.predecessor_view();
+    let graphs = (current.get().clone(), previous.get().clone());
+    let budget = world.sccp_committee_generations.allocation_budget();
+    assert!(graphs.0.same_version(current.get()));
+    assert!(graphs.0.belongs_to(budget));
+    match (&graphs.1, previous.get()) {
+        (Some(retained), Some(original)) => {
+            assert!(retained.same_version(original));
+            assert!(retained.belongs_to(budget));
+        }
+        (None, None) => {}
+        _ => panic!("retaining the original predecessor cannot change its presence"),
+    }
+    graphs
 }
 
 /// Drain constructor/replacement generations before asserting exact live custody.

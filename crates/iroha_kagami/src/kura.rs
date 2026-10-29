@@ -62,6 +62,17 @@ enum Command {
         #[clap(short = 'o', long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
     },
+    /// Rewrite a stopped node's canonical native context records in packed form
+    PackNativeContexts {
+        /// Kura store root of the stopped node (its configured `kura.store_dir`)
+        store_root: PathBuf,
+        /// Report the space packing would recover without writing anything
+        #[clap(long)]
+        dry_run: bool,
+        /// Restore packed records to canonical form for a release that cannot read them
+        #[clap(long, conflicts_with = "dry_run")]
+        unpack: bool,
+    },
     /// Print the pipeline recovery sidecar JSON for a given height
     Sidecar {
         /// Exact lane directory containing the canonical block journals
@@ -131,6 +142,44 @@ impl<T: Write> RunArgs<T> for Args {
                     .wrap_err("failed to print blockchain")
                 })?;
                 tui::success("Block inspection complete");
+                Ok(())
+            }
+            Command::PackNativeContexts {
+                store_root,
+                dry_run,
+                unpack,
+            } => {
+                use iroha_core::query::native_context_archive::{PackMode, pack_existing_records};
+                let mode = match (dry_run, unpack) {
+                    (true, _) => PackMode::Measure,
+                    (false, false) => PackMode::Pack,
+                    (false, true) => PackMode::Unpack,
+                };
+                tui::status("Rewriting native context records");
+                let report = pack_existing_records(&store_root, mode).wrap_err_with(|| {
+                    format!(
+                        "failed to rewrite native context records in {}",
+                        store_root.display()
+                    )
+                })?;
+                if unpack {
+                    writeln!(
+                        writer,
+                        "{} records: {} packed bytes -> {} canonical bytes, shared pieces removed",
+                        report.records, report.stored_bytes, report.canonical_bytes,
+                    )?;
+                } else {
+                    writeln!(
+                        writer,
+                        "{} records, {} packed{}: {} canonical bytes -> {} bytes plus shared pieces",
+                        report.records,
+                        report.packed,
+                        if dry_run { " (dry run)" } else { "" },
+                        report.canonical_bytes,
+                        report.stored_bytes,
+                    )?;
+                }
+                tui::success("Native context records done");
                 Ok(())
             }
             Command::Sidecar {

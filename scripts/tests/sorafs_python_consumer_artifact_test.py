@@ -53,7 +53,7 @@ def report():
         deps.append({"module": owner, "root": root, "loaded_modules": [{**identity(root+suffix), "name": owner, "loader": "SourceFileLoader"}]})
     return {"schema": artifact.SCHEMA, "input_sha256": INPUT, "source_files": sorted(sources,key=lambda x:x['path']),
             "python": {**identity("/runtime/python3.12"), "version": "3.12.14"},
-            "pytest": {**identity("/work/venv/site-packages/pytest/__init__.py"), "version": "9.0.3"},
+            "pytest": {**identity("/work/venv/site-packages/pytest/__init__.py"), "version": "9.2.0"},
             "wheels": wheels, "dependencies": deps,
             "cases": [{"nodeid": name, "phases": [{"phase": phase,"outcome":"passed"} for phase in ("setup","call","teardown")]} for name in expected_node_ids(TEST_SOURCE)],
             "captured_output": {"bytes":len(PAYLOAD),"sha256":hashlib.sha256(PAYLOAD).hexdigest()}}

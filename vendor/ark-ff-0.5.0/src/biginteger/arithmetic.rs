@@ -85,23 +85,7 @@ pub fn sbb_for_sub_with_borrow(a: &mut u64, b: u64, borrow: u8) -> u8 {
 #[inline(always)]
 #[doc(hidden)]
 pub const fn widening_mul(a: u64, b: u64) -> u128 {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        a as u128 * b as u128
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        let a_lo = a as u32 as u64;
-        let a_hi = a >> 32;
-        let b_lo = b as u32 as u64;
-        let b_hi = b >> 32;
-
-        let lolo = (a_lo * b_lo) as u128;
-        let lohi = ((a_lo * b_hi) as u128) << 32;
-        let hilo = ((a_hi * b_lo) as u128) << 32;
-        let hihi = ((a_hi * b_hi) as u128) << 64;
-        (lolo | hihi) + (lohi + hilo)
-    }
+    a as u128 * b as u128
 }
 
 /// Calculate a + b * c, returning the lower 64 bits of the result and setting

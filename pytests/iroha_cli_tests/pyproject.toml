@@ -14,7 +14,7 @@ python-dotenv = "^1.2.4"
 tomlkit = "^0.15.2"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^9.1.1"
+pytest = "^9.2.0"
 allure-pytest = "^2.16.2"
 pytest-xdist = "^3.8.0"
 mypy = "^2.4.0"

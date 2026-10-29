@@ -26,7 +26,8 @@ use iroha_data_model::sccp::deployment::{SccpCommitteePinV1, SccpTonCodeRefV1};
 use super::{
     committee::{committee_root, is_canonical_order, is_valid_committee_size},
     constants::{
-        MAX_TAIRA_ACCOUNT_BYTES, TON_HASH_CHUNK_HASHES, TON_KEY_CHUNK_KEYS, TON_SNAKE_CHUNK_BYTES,
+        MAX_TAIRA_ACCOUNT_BYTES, TON_AMOUNT_BOUND, TON_HASH_CHUNK_HASHES, TON_KEY_CHUNK_KEYS,
+        TON_SNAKE_CHUNK_BYTES,
     },
 };
 
@@ -48,9 +49,9 @@ pub const fn locked_code_refs() -> [SccpTonCodeRefV1; 3] {
     [
         SccpTonCodeRefV1 {
             hash: [
-                0x88, 0xd0, 0xc0, 0xb1, 0x33, 0xb7, 0xe6, 0xbd, 0xac, 0x95, 0xe3, 0xc2, 0x23, 0x2a,
-                0xe7, 0x9d, 0xd3, 0xd9, 0x95, 0x9f, 0x8d, 0xf6, 0x33, 0x76, 0x00, 0x5e, 0xe4, 0x9b,
-                0xbe, 0x5e, 0xb2, 0x72,
+                0x97, 0xcf, 0xc2, 0xef, 0x55, 0xe2, 0x23, 0x75, 0xb5, 0x13, 0x0f, 0xbb, 0x5a, 0xe8,
+                0x91, 0x67, 0xed, 0x97, 0x7f, 0xc5, 0xb7, 0xb7, 0xde, 0x13, 0x5f, 0x6b, 0x85, 0x84,
+                0xfb, 0x86, 0x2f, 0xc8,
             ],
             depth: 14,
         },
@@ -665,7 +666,8 @@ pub struct TonMinterInitV1 {
     pub consensus_instance: [u8; 32],
     /// Route revision.
     pub route_revision: u32,
-    /// Supply cap in token units (`Coins`, below `2^120`).
+    /// Supply cap in token units, `1 ..< 2^96` like every TON amount (§3.2): `sccp_init`
+    /// refuses any other cap.
     pub max_supply: u128,
     /// The initial native generation; its root must match `keys`.
     pub pin: SccpCommitteePinV1,
@@ -704,8 +706,8 @@ pub struct TonMinterDataV1 {
 /// authenticate the pin or check its deadline against a destination clock.
 ///
 /// # Errors
-/// Returns [`TonCellError::BadConfig`], [`TonCellError::BadCommittee`] or
-/// [`TonCellError::CoinsTooLarge`] for malformed inputs.
+/// Returns [`TonCellError::BadConfig`] (including a cap of `2^96` or more, which `sccp_init`
+/// refuses) or [`TonCellError::BadCommittee`] for malformed inputs.
 pub fn minter_initial_data(init: &TonMinterInitV1) -> Result<TonMinterDataV1, TonCellError> {
     minter_initial_data_with_code(init, init.wallet_code.into(), init.bucket_code.into())
 }
@@ -742,6 +744,7 @@ fn minter_initial_data_with_code(
         || init.consensus_instance == [0; 32]
         || init.route_revision == 0
         || init.max_supply == 0
+        || init.max_supply >= TON_AMOUNT_BOUND
         || !init.pin.is_well_formed()
     {
         return Err(TonCellError::BadConfig);
@@ -1632,12 +1635,18 @@ mod tests {
                 TonCellError::BadConfig
             );
         }
+        // A cap is a TON amount: `sccp_init` refuses `2^96` and above, as `RegisterRoute` does.
+        for cap in [TON_AMOUNT_BOUND, COINS_BOUND - 1, COINS_BOUND] {
+            let mut init = valid.clone();
+            init.max_supply = cap;
+            assert_eq!(
+                minter_initial_data(&init).unwrap_err(),
+                TonCellError::BadConfig
+            );
+        }
         let mut init = valid.clone();
-        init.max_supply = COINS_BOUND;
-        assert_eq!(
-            minter_initial_data(&init).unwrap_err(),
-            TonCellError::CoinsTooLarge
-        );
+        init.max_supply = TON_AMOUNT_BOUND - 1;
+        assert!(minter_initial_data(&init).is_ok());
         let mut init = valid;
         init.pin.start_height = 1;
         assert!(minter_initial_data(&init).is_ok());

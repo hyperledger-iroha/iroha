@@ -479,6 +479,15 @@ mod tests {
         let block_hash = chain.committed(2).block_hash();
         app.state = chain.state().clone();
         app.kura = chain.kura().clone();
+        app.signed_query_admission = Arc::new(
+            crate::routing::SignedQueryAdmission::new(
+                chain.network_id(),
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(120),
+                std::num::NonZeroUsize::new(1_024).unwrap(),
+            )
+            .expect("deployment authentication retains the original signed genesis network"),
+        );
         app.local_peer_id = Some(chain.validators()[0].0.clone());
         assert_eq!(app.state.view().latest_block_hash(), Some(block_hash));
         block_hash

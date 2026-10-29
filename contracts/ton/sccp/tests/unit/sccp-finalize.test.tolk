@@ -289,7 +289,7 @@ get fun `test inline finalize records the checkpoint, mints, emits and consumes 
 get fun `test the Taira to TON payload vector of the fixture mints under its message id`() {
     // `directions` of `payload_v1.json` holds one payload of this lane
     var replayed = 0;
-    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT);
+    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT - 1);
     val payload = snakeFromPieces(vecInboundPayloadPieces());
     // the contract reads the fixture's fields from the bytes
     val parsed = sccpParseInboundPayload(
@@ -908,7 +908,7 @@ get fun `test a certified history entry that breaks the block rules proves nothi
 /// history of 2^32 blocks (32 siblings), a 1024-byte sender, the largest
 /// amount, and four bucket activations.
 fun finalizeLargestProofs(n: int, label: string) {
-    val env = setupEnvWith(n, SCCP_TON_AMOUNT_LIMIT * 4);
+    val env = setupEnvWith(n, SCCP_TON_AMOUNT_LIMIT - 1);
     val alice = testing.treasury("alice").address;
     val nonce = 3 * 512 + 7;
     val payload = inboundPayloadWithSender(
@@ -2024,10 +2024,9 @@ get fun `test duplicate finalize is rejected by the bucket and releases pending 
     expect(env.minter.getSccpState().pendingSupply).toEqual(0);
 }
 
-get fun `test parallel duplicate finalizes reserve pending supply until the bucket rejects one`() {
-    // cap admits one mint of 1000 plus nothing else
-    val env = setupEnvWith(4, 1500);
-    val alice = testing.treasury("alice").address;
+/// Deploys bucket 0 through `sccp_deploy_buckets`, so a finalize of a nonce
+/// below 512 sends its consume at once.
+fun deployFirstBucket(env: Env) {
     expect(
         env
             .minter
@@ -2039,25 +2038,134 @@ get fun `test parallel duplicate finalizes reserve pending supply until the buck
                 { value: env.minter.deployBucketsRequiredValue(1), bounce: true },
             ),
     ).toHaveAllSuccessfulTxs();
+}
+
+get fun `test parallel duplicate finalizes mint once and hold no cap headroom`() {
+    // the cap admits one mint of 1000 plus nothing else
+    val env = setupEnvWith(4, 1500);
+    val alice = testing.treasury("alice").address;
+    deployFirstBucket(env);
     val d = deliverDefault(env, 0, 1000, alice);
     val value = finalizeValue(env, 0);
     val first = testing.processSingleTraceStep(env.deployer, finalizeMessage(env, d, value));
     expect(env.minter.getSccpState().pendingSupply).toEqual(1000);
-    // the duplicate is refused by the cap while the first is pending
+    // The early refusal counts completed supply only (§5.1.4), so the
+    // duplicate is admitted while the first is pending. Its consume reaches
+    // the bucket first and mints.
     val second = sendFinalize(env, env.deployer, d, value);
-    expect(second).toHaveFailedTx<SccpFinalize>({
-        to: env.minter.address,
-        exitCode: SccpErrors.SupplyCapExceeded as int,
-    });
-    // The first step sent its two events, the activation of bucket 0 and the
-    // consume. Deliver the last two; the mint completes.
+    expect(second).toHaveAllSuccessfulTxs();
+    expectEvents(second, [eventFinalized(d.messageId, 0)]);
+    expect(env.minter.getSccpState().totalSupply).toEqual(1000);
+    expect(env.minter.getSccpState().pendingSupply).toEqual(1000);
+    // The first step sent its two events and the consume, which the bucket
+    // now rejects: no second mint, and the excess returns.
     val outs = first.outMessages.size();
     expect(outs).toEqual(3);
-    net.send(env.minter.address, forwardOut(first, outs - 1));
+    val rejected = net.send(env.minter.address, forwardOut(first, outs - 1));
+    expect(recoveryStageCount(rejected, SCCP_RECOVERY_MINT)).toEqual(0);
+    expectEvents(rejected, []);
+    expect(rejected).toHaveSuccessfulTx<ReturnExcessesBack>({ to: env.deployer });
     val state = env.minter.getSccpState();
     expect(state.pendingSupply).toEqual(0);
     expect(state.totalSupply).toEqual(1000);
+    expect(state.opCount).toEqual(1);
     expect(jettonBalanceOf(env, alice)).toEqual(1000);
+    expect(minterStorage(env).recovery.load().count).toEqual(0);
+}
+
+get fun `test a duplicate of a minted message in flight cannot block an honest mint at the cap`() {
+    // The cap equals the honest amount A. A message of A was minted and
+    // burned, so the full cap is free again, and its still unexpired proof
+    // is replayed: the duplicate is in flight while the honest finalize runs.
+    val amount = 1000;
+    val env = setupEnvWith(4, amount);
+    val alice = testing.treasury("alice").address;
+    val bob = testing.treasury("bob").address;
+    finalizeOk(env, 0, amount, alice);
+    expect(
+        sendBurn(env, alice, amount, snakeOfLength(8), burnValue(env, alice)),
+    ).toHaveSuccessfulTx<BurnNotificationForMinter>({ to: env.minter.address });
+    expect(env.minter.getSccpState().totalSupply).toEqual(0);
+    val minted = deliverDefault(env, 0, amount, alice);
+    val duplicate = testing.processSingleTraceStep(
+        env.deployer,
+        finalizeMessage(env, minted, finalizeValue(env, 0)),
+    );
+    // the stored block takes the cheap path: the consume is the only message
+    expect(duplicate.outMessages.size()).toEqual(1);
+    expect(env.minter.getSccpState().pendingSupply).toEqual(amount);
+    // Before §5.1.4 bound the cap at the applied consume, the pending
+    // duplicate held the whole cap and this finalize threw `SupplyCapExceeded`.
+    val honest = finalizeOk(env, 1, amount, bob);
+    expect(recoveryStageCount(honest, SCCP_RECOVERY_UNCONSUME)).toEqual(0);
+    expect(env.minter.getSccpState().totalSupply).toEqual(amount);
+    // the bucket rejects the duplicate, which never touched the cap
+    val rejected = net.send(env.minter.address, forwardOut(duplicate, 0));
+    expect(recoveryStageCount(rejected, SCCP_RECOVERY_MINT)).toEqual(0);
+    expectEvents(rejected, []);
+    val state = env.minter.getSccpState();
+    expect(state.totalSupply).toEqual(amount);
+    expect(state.maxSupply).toEqual(amount);
+    expect(state.pendingSupply).toEqual(0);
+    // two finalizations and the burn
+    expect(state.opCount).toEqual(3);
+    expect(jettonBalanceOf(env, alice)).toEqual(0);
+    expect(jettonBalanceOf(env, bob)).toEqual(amount);
+    expect(minterStorage(env).recovery.load().count).toEqual(0);
+}
+
+get fun `test a consume the cap cannot take when applied clears its flag and finalizes later`() {
+    // two honest messages of 600 under a cap of 1000: each passes the early
+    // refusal, and the second to be applied finds the cap taken
+    val env = setupEnvWith(4, 1000);
+    val alice = testing.treasury("alice").address;
+    val bob = testing.treasury("bob").address;
+    deployFirstBucket(env);
+    val first = deliverDefault(env, 0, 600, alice);
+    val second = deliverDefault(env, 1, 600, bob);
+    val firstStep = testing.processSingleTraceStep(
+        env.deployer,
+        finalizeMessage(env, first, finalizeValue(env, 0)),
+    );
+    val secondStep = testing.processSingleTraceStep(
+        env.deployer,
+        finalizeMessage(env, second, finalizeValue(env, 1)),
+    );
+    expect(env.minter.getSccpState().pendingSupply).toEqual(1200);
+    val mintedFirst = net.send(
+        env.minter.address,
+        forwardOut(firstStep, firstStep.outMessages.size() - 1),
+    );
+    expectEvents(mintedFirst, [eventFinalized(first.messageId, 0)]);
+    expect(env.minter.getSccpState().totalSupply).toEqual(600);
+    // The second consume is applied, then undone: no mint, no event, and the
+    // excess returns to its caller.
+    val undone = net.send(
+        env.minter.address,
+        forwardOut(secondStep, secondStep.outMessages.size() - 1),
+    );
+    expect(undone).toHaveAllSuccessfulTxs();
+    expect(recoveryStageCount(undone, SCCP_RECOVERY_CONSUME)).toEqual(1);
+    expect(recoveryStageCount(undone, SCCP_RECOVERY_UNCONSUME)).toEqual(1);
+    expect(recoveryStageCount(undone, SCCP_RECOVERY_MINT)).toEqual(0);
+    expectEvents(undone, []);
+    expect(undone).toHaveSuccessfulTx<ReturnExcessesBack>({ to: env.deployer });
+    var state = env.minter.getSccpState();
+    expect(state.totalSupply).toEqual(600);
+    expect(state.pendingSupply).toEqual(0);
+    expect(state.opCount).toEqual(1);
+    expect(isConsumedAt(env, 1)).toBeFalse();
+    expect(jettonBalanceOf(env, bob)).toEqual(0);
+    expect(minterStorage(env).recovery.load().count).toEqual(0);
+    // once a burn frees the cap, the same proof finalizes
+    expect(
+        sendBurn(env, alice, 600, snakeOfLength(8), burnValue(env, alice)),
+    ).toHaveSuccessfulTx<BurnNotificationForMinter>({ to: env.minter.address });
+    val again = finalizeOk(env, 1, 600, bob);
+    expectEvents(again, [eventFinalized(second.messageId, 1)]);
+    state = env.minter.getSccpState();
+    expect(state.totalSupply).toEqual(600);
+    expect(state.opCount).toEqual(3);
 }
 
 get fun `test two pending duplicates both reserve and only one mints`() {
@@ -2136,23 +2244,34 @@ get fun `test supply cap edges`() {
     expect(state.opCount).toEqual(2);
 }
 
-get fun `test the largest amount mints under a cap above it`() {
-    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT * 2);
+get fun `test the largest amount mints under the largest cap`() {
+    // `sccp_init` takes caps below 2^96 (§5.3.1): the largest cap is the
+    // largest amount
+    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT - 1);
     val alice = testing.treasury("alice").address;
     val bob = testing.treasury("bob").address;
-    finalizeOk(env, 0, SCCP_TON_AMOUNT_LIMIT - 1, alice);
-    finalizeOk(env, 1, SCCP_TON_AMOUNT_LIMIT - 1, bob);
-    val state = env.minter.getSccpState();
-    expect(state.totalSupply).toEqual(2 * (SCCP_TON_AMOUNT_LIMIT - 1));
-    expect(state.maxSupply).toEqual(SCCP_TON_AMOUNT_LIMIT * 2);
-    // two units are left under the cap
-    val three = deliverDefault(env, 2, 3, alice);
+    finalizeOk(env, 0, SCCP_TON_AMOUNT_LIMIT - 2, alice);
+    // one unit is left under the cap
+    val two = deliverDefault(env, 1, 2, bob);
     expectOutcome(
-        sendFinalize(env, env.deployer, three, finalizeValue(env, 2)),
+        sendFinalize(env, env.deployer, two, finalizeValue(env, 1)),
         SccpErrors.SupplyCapExceeded,
     );
-    finalizeOk(env, 3, 2, bob);
-    expect(env.minter.getSccpState().totalSupply).toEqual(SCCP_TON_AMOUNT_LIMIT * 2);
+    finalizeOk(env, 2, 1, bob);
+    var state = env.minter.getSccpState();
+    expect(state.totalSupply).toEqual(SCCP_TON_AMOUNT_LIMIT - 1);
+    expect(state.maxSupply).toEqual(SCCP_TON_AMOUNT_LIMIT - 1);
+    // once the supply is burned, the largest amount mints in one message
+    expect(
+        sendBurn(env, alice, SCCP_TON_AMOUNT_LIMIT - 2, snakeOfLength(8), burnValue(env, alice)),
+    ).toHaveSuccessfulTx<BurnNotificationForMinter>({ to: env.minter.address });
+    expect(
+        sendBurn(env, bob, 1, snakeOfLength(8), burnValue(env, bob)),
+    ).toHaveSuccessfulTx<BurnNotificationForMinter>({ to: env.minter.address });
+    finalizeOk(env, 3, SCCP_TON_AMOUNT_LIMIT - 1, alice);
+    state = env.minter.getSccpState();
+    expect(state.totalSupply).toEqual(SCCP_TON_AMOUNT_LIMIT - 1);
+    expect(state.pendingSupply).toEqual(0);
 }
 
 get fun `test deadline edges`() {
@@ -2450,6 +2569,7 @@ get fun `test failed mint retains a prepaid unconsume and the message finalizes 
     expect(transfer.amount).toEqual(500);
     expect(env.minter.getSccpState().totalSupply).toEqual(500);
     expect(isConsumedAt(env, 0)).toBeTrue();
+    val balance = testing.getAccountBalance(env.minter.address);
     val bounce = net.send(
         walletOf(env, alice).address,
         bouncedMessage(transfer, env.minter.address, grams("0.05")),
@@ -2459,6 +2579,10 @@ get fun `test failed mint retains a prepaid unconsume and the message finalizes 
         bounce.getUsedGas({ to: env.minter.address, bounced: true }),
         SCCP_GAS_MINTER_BOUNCE,
     );
+    // the bounce pays its own handling and returns the rest to the response
+    // of the operation; the minter keeps none of it
+    expect(bounce).toHaveSuccessfulTx<ReturnExcessesBack>({ to: env.deployer });
+    expect(testing.getAccountBalance(env.minter.address)).toEqual(balance);
     expectEvents(bounce, []);
     expect(env.minter.getSccpState().opCount).toEqual(0);
     expect(env.minter.getSccpState().totalSupply).toEqual(0);
@@ -2546,6 +2670,70 @@ get fun `test consume replies are accepted only from the canonical bucket`() {
     expect(minterStorage(env).toCell().hash()).toEqual(before);
     expect(env.minter.getSccpState().totalSupply).toEqual(0);
     expect(env.minter.getSccpState().pendingSupply).toEqual(50);
+}
+
+get fun `test acknowledgements that advance nothing return their value and change nothing`() {
+    val env = setupEnv();
+    val alice = testing.treasury("alice").address;
+    val probe = testing.treasury("probe").address;
+    val d = deliverDefault(env, 0, 50, alice);
+    // The minter step admits the consume (operation 1) queued behind the
+    // activation of bucket 0 (operation 2) and dispatches the activation.
+    val first = testing.processSingleTraceStep(
+        env.deployer,
+        finalizeMessage(env, d, finalizeValue(env, 0)),
+    );
+    val queued = minterStorage(env).recovery.load().operations.mustGet(1).load();
+    expect(queued.stage).toEqual(SCCP_RECOVERY_CONSUME);
+    expect(queued.phase).toEqual(SCCP_RECOVERY_QUEUED);
+    val before = minterStorage(env).toCell().hash();
+    val balance = testing.getAccountBalance(env.minter.address);
+    // A queued row, another stage and another attempt, each from the
+    // canonical bucket (white box) and each answered to its own response.
+    val acks: array<SccpRecoveryAck> = [
+        SccpRecoveryAck {
+            operationId: 1,
+            stage: SCCP_RECOVERY_CONSUME,
+            attempt: 1,
+            result: SCCP_RECEIPT_APPLIED,
+            queryId: 5,
+            response: probe,
+        },
+        SccpRecoveryAck {
+            operationId: 1,
+            stage: SCCP_RECOVERY_RANGE,
+            attempt: 1,
+            result: SCCP_RECEIPT_DROPPED,
+            queryId: 5,
+            response: probe,
+        },
+        SccpRecoveryAck {
+            operationId: 1,
+            stage: SCCP_RECOVERY_CONSUME,
+            attempt: 2,
+            result: SCCP_RECEIPT_DROPPED,
+            queryId: 5,
+            response: probe,
+        },
+    ];
+    var i = 0;
+    repeat (acks.size()) {
+        val res = sendToMinter(env, env.minter.getBucketAddress(0), acks.get(i), grams("1"));
+        expect(res).toHaveSuccessfulTx<SccpRecoveryAck>({ to: env.minter.address });
+        expect(res).toNotHaveTx<SccpRecoveryDispatch>({});
+        expect(res).toHaveSuccessfulTx<ReturnExcessesBack>({ to: probe });
+        expectEvents(res, []);
+        expect(minterStorage(env).toCell().hash()).toEqual(before);
+        expect(testing.getAccountBalance(env.minter.address)).toEqual(balance);
+        i += 1;
+    }
+    expect(i).toEqual(3);
+    // the activation and then the consume complete as before
+    expect(
+        net.send(env.minter.address, forwardOut(first, first.outMessages.size() - 1)),
+    ).toHaveAllSuccessfulTxs();
+    expect(jettonBalanceOf(env, alice)).toEqual(50);
+    expect(minterStorage(env).recovery.load().count).toEqual(0);
 }
 
 get fun `test buckets accept consume only from the minter`() {

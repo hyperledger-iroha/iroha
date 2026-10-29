@@ -11,8 +11,9 @@ or settlement readiness.
 The minter has no owner, admin, upgrade path or authority setter. Its canonical
 initial data binds the Taira NetworkId, consensus instance, route revision,
 supply cap, initial native committee pin and wallet/bucket code. Initialization
-checks the TON network, the complete canonical initial state, sorted native BLS
-keys, committee geometry/root and validity horizon.
+checks the TON network, the complete canonical initial state, a supply cap below
+`2^96` (the bound `RegisterRoute` applies), sorted native BLS keys, committee
+geometry/root and validity horizon.
 
 Every new certificate authenticates the complete 221-byte finality header `X`
 and the original result-body digest through the native Commit preimage. The
@@ -57,13 +58,20 @@ protocol width; wallet quotes and nonces must not be narrowed to signed 64 bits.
 
 ## Replay and supply accounting
 
-Nonce `k` uses bucket `k >> 9` and bit `k & 511`. Buckets accept activation and
-consumption only from their minter. Canonical deployment starts inactive, and an
+Nonce `k` uses bucket `k >> 9` and bit `k & 511`. Buckets and wallets accept
+dispatch, confirmation and deletion only from their minter (`NotMinter`), before
+they read a receipt. Canonical deployment starts inactive, and an
 already activated index is never activated again. Recreating a deleted bucket
 therefore cannot clear the authority required to replay a mint or void.
 
-Finalization reserves pending supply and one of 512 prepaid operation slots
-before dispatch; activation batches reserve every slot before the first send.
+Finalization records its amount as pending supply and reserves one of 512
+prepaid operation slots before dispatch; activation batches reserve every slot
+before the first send. The supply cap binds `total_supply` when the bucket
+applies the consume, the only point where supply grows. A mint the cap cannot
+take there is unconsumed, as a mint in flight across a latch is. The early
+refusal at admission counts completed supply alone. A duplicate finalize, which
+the bucket rejects, therefore holds a slot for one round trip but never cap
+headroom, and cannot refuse or delay an honest mint.
 Operation ids never repeat. Each destination atomically retains a bounded
 receipt with its effect. The minter advances through authenticated Prepared,
 Drop and Dropped messages, binding the canonical sender, operation, stage and
@@ -74,9 +82,18 @@ closed because a possibly successful wallet could have been deleted and
 recreated. Stale ACKs or deletion requests cannot affect a newer receipt.
 
 Mint failure burns only the unminted total supply and changes the existing row
-to retained unconsume. Original-bounce handlers perform no outgoing action or
-new allocation. A concurrent retry cannot change the original response address:
-each in-flight exchange carries its own response and query id. TON's
+to retained unconsume. Original-bounce handlers allocate nothing. After the
+custody update they return the bounce's value above the minter's prior balance
+to the operation's original response. That send ignores errors, so custody never
+depends on it. A concurrent retry cannot change the original response address:
+each in-flight exchange carries its own response and query id. An ACK that
+advances nothing (a completed row, another stage or attempt, or a row not
+awaiting deletion) returns its value to its own response. A retry that races its
+original therefore loses only its fees, unless a destination bounces its
+message: that value goes to the operation's original response. A destination
+keeps the residue of a bounced ACK, because the 256-bit bounce body cannot carry
+the response; a genuine ACK bounces only when its value cannot pay the minter's
+next action. TON's
 [ordering rules](https://ton.org/tblkch.pdf) (§§2.2.9–2.2.11) and
 [validator ordering check](https://github.com/ton-blockchain/ton/blob/master/validator/impl/validate-query.cpp)
 apply to the tested IHR-disabled headers. Safety does not infer failure from an
@@ -109,10 +126,12 @@ Current measured gas belongs in `gas-baseline.json` and must be regenerated with
 the pinned Acton toolchain after contract changes.
 
 The emulator suite covers native BLS verification and rotation, checkpoint
-retention/latching, controls, deadline/cap boundaries, canonical cells, replay,
-bounces, retry accounting, burns and required value. The Rust pure verification
-and wallet suites exercise the same certificate/proof relations and exact
-contract encodings.
+retention/latching, controls, deadline/cap boundaries (including duplicates in
+flight at the cap and a consume the cap undoes), canonical cells, replay,
+stranger dispatch/confirmation/deletion at both destinations, bounces, value
+returned by racing retries and bounces, retry accounting, burns and required
+value. The Rust pure verification and wallet suites exercise the same
+certificate/proof relations and exact contract encodings.
 
 Generated fixture tables replay every commitment-tree and history root and
 path, commitment-tree confusion negative, and applicable payload refusal. The

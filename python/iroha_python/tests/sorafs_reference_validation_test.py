@@ -601,6 +601,9 @@ def test_field_level_receipt_builder_rejects_retired_amount_fields(
         "1" * 156,
         "1" * 10_000,
     ],
+    # Keep the authenticated case inventory independent of pytest's automatic
+    # shortening of long string values.
+    ids=str,
 )
 def test_field_level_orderbook_builder_rejects_noncanonical_xor_quantities(
     price: object,

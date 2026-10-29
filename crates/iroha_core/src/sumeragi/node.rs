@@ -3008,6 +3008,9 @@ mod tests {
         );
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
         let (genesis, certificate, _) = startup::stored_genesis(&state)
             .expect("valid stored genesis projection")

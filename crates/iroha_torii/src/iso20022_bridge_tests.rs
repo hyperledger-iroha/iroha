@@ -9838,7 +9838,8 @@ fn durable_store_compacts_records_older_than_retention_window() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    config.store_retention_secs = 1;
+    // Keep new detail live until its timestamp is explicitly aged below.
+    config.store_retention_secs = 3_600;
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("cfg")
         .expect("enabled");
@@ -10061,18 +10062,18 @@ async fn external_audit_write_failure_marks_runtime_unhealthy_and_retries() {
     let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
     let worker = runtime.start_audit_persistence_worker(shutdown.clone());
     fs::remove_dir(&latest_anchor).expect("repair latest anchor path");
-    tokio::time::timeout(Duration::from_secs(1), async {
+    // The retry performs real durable writes on a blocking worker. This watchdog
+    // allows shared-disk scheduling without imposing a one-second service contract.
+    let recovered = tokio::time::timeout(Duration::from_secs(30), async {
         while !runtime.audit_persistence_is_healthy() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
-    .await
-    .expect("audit retry should recover");
+    .await;
     shutdown.send();
-    assert_eq!(
-        worker.await.expect("audit worker joins"),
-        crate::ToriiCriticalWorkerExit::StoppedByShutdown
-    );
+    let exit = worker.await.expect("audit worker joins");
+    recovered.expect("audit retry should recover");
+    assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
 }
 #[test]
 fn durable_store_exports_audit_index_matching_persisted_manifest() {
@@ -12497,7 +12498,8 @@ fn unexpired_replay_tombstone_survives_detail_pruning_and_restart() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    config.store_retention_secs = 1;
+    // Keep new detail live until its timestamp is explicitly aged below.
+    config.store_retention_secs = 3_600;
     config.dedupe_ttl_secs = 3_600;
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .expect("runtime")

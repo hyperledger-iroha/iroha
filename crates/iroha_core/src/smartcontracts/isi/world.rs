@@ -27214,6 +27214,9 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
 
         #[test]
         fn manifest_verification_preserves_original_state_capacity_for_counter_and_frame() {
+            // Keep retired fixture State generations from reopening this original pool.
+            // Only the tested admission and synchronous owner refunds may change capacity.
+            let _constructor_retirement = crossbeam_epoch::pin();
             use std::{
                 future::Future as _,
                 pin::pin,

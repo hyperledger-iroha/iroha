@@ -550,6 +550,7 @@ fn staged_sumeragi_context_hashes_from_provisional_on_bounded_stack(
         .map(|staged| staged.execution)
 }
 /// Retain every rejected output's original source identity in staging diagnostics.
+/// Diagnostics do not change lifecycle evidence or treat its presence as execution authority.
 fn staged_genesis_execution_errors(
     outputs: &[iroha_data_model::block::execution_output::ExecutionOutputV1],
 ) -> Vec<String> {
@@ -923,9 +924,9 @@ mod tests {
     fn staged_genesis_execution_errors_preserve_lifecycle_sources_and_indices() {
         use iroha_data_model::{
             block::execution_output::{
-                ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
-                PipelineEventPositionV1, PipelineInvocationV1, TimeInvocationV1,
-                TriggerLifecycleEffectsV1, TriggerUseV1,
+                EXECUTION_OUTPUT_LIMIT_REASON, ExecutionOutputV1, NetworkExecutionOutputV1,
+                NetworkExecutionOutputV2, PipelineEventPositionV1, PipelineInvocationV1,
+                TimeInvocationV1, TriggerLifecycleEffectsV1, TriggerUseV1,
             },
             events::time::{TimeEvent, TimeInterval},
             transaction::signed::TransactionResult,
@@ -982,8 +983,10 @@ mod tests {
             ExecutionOutputV1::time_lifecycle_output_limit_rejection(time),
         ];
         let reason = "LimitCheck(TransactionLimitError { reason: \"execution output exceeds consensus byte limit\" })";
+        let original_outputs = outputs.clone();
+        let diagnostics = staged_genesis_execution_errors(&outputs);
         assert_eq!(
-            staged_genesis_execution_errors(&outputs),
+            diagnostics,
             [
                 format!("transaction[17]: {reason}"),
                 format!("pipeline output[2]: {reason}"),
@@ -992,6 +995,15 @@ mod tests {
                 format!("pipeline output[6]: {reason}"),
                 format!("time output[7]: {reason}"),
             ]
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.contains(EXECUTION_OUTPUT_LIMIT_REASON))
+        );
+        assert_eq!(
+            outputs, original_outputs,
+            "diagnostics must not change lifecycle evidence"
         );
     }
 

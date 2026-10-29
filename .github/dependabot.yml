@@ -46,6 +46,9 @@ updates:
       - /crates/ivm/fuzz
       - /crates/norito/fuzz
       - /tools/soranet-handshake-harness/fuzz
+      - /scripts/native-source-snapshot
+      - /scripts/fastpq
+      - /scripts/regenerate_norito_goldens
     schedule:
       interval: "daily"
     commit-message:

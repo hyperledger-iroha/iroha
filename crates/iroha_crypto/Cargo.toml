@@ -78,7 +78,7 @@ hkdf = { version = "0.13.0", default-features = false, features = [] }
 arrayvec = { version = "0.7.6", optional = true }
 # Preserve the actual typed point-decoder diagnostic without formatting in the fixed core.
 ark-serialize = { version = "0.5.0", default-features = false, optional = true, features = ["std"] }
-w3f-bls = { version = "0.2.0", default-features = false, optional = true, features = ["std"] }
+w3f-bls = { version = "0.3.0", default-features = false, optional = true, features = ["std"] }
 rayon = { version = "1.11.0", optional = true }
 blst = { version = "=0.3.17", default-features = false, optional = true }
 blstrs = { version = "0.7.1", default-features = false, optional = true }
@@ -95,7 +95,7 @@ x25519-dalek = { version = "3.0.0", default-features = false, features = ["stati
 rand = { workspace = true, default-features = false, features = ["std_rng", "alloc", "std"] }
 rand_core = { version = "0.10.1", default-features = false, features = [] }
 rand_chacha = { version = "0.10.0", default-features = false, features = ["std"] }
-# w3f-bls 0.2 uses this upstream RNG trait family for its canonical field sampler.
+# w3f-bls 0.3 uses this upstream RNG trait family for its canonical field sampler.
 rand_chacha_03 = { package = "rand_chacha", version = "0.3.1", optional = true, default-features = false, features = ["std"] }
 once_cell = { version = "1.21.3", default-features = false, features = ["std"], optional = true }
 tempfile = { workspace = true }

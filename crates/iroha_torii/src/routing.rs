@@ -21403,11 +21403,12 @@ dataspace_catalog,
         contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
         permission_holders: &[dm::AccountId],
     ) {
+        let parent = state.latest_block_header_fast();
         let mut block = state.block(dm::BlockHeader::new(
-            NonZeroU64::new(1).expect("height"),
+            NonZeroU64::new(parent.map_or(1, |header| header.height().get() + 1)).expect("height"),
+            parent.map(|header| header.hash()),
             None,
-            None,
-            0,
+            parent.map_or(0, |header| u64::try_from(header.creation_time().as_millis()).unwrap() + 1),
             0,
         ));
         let mut stx = block.transaction();
@@ -22280,7 +22281,7 @@ None,
     #[cfg(feature = "connect")]
     routing_test! { async contract_call_detached_handler_requires_authenticated_route_authority
         let (state, queue, key, request) = public_contract_call_fixture();
-        let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
+        let (detached, _) = detached_public_contract_call(&state, &queue, &key, &request);
         let mut app = crate::mk_app_state_for_tests();
         let inner = Arc::get_mut(&mut app).expect("unique fixture AppState");
         inner.state = state;
@@ -22289,11 +22290,38 @@ None,
             axum::extract::State(app),
             axum::http::HeaderMap::new(),
             axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
+            NoritoJson(detached),
+        ).await.unwrap_or_else(axum::response::IntoResponse::into_response);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get("x-iroha-reject-code").and_then(|v| v.to_str().ok()), Some("native_root_scope_unavailable"));
+        assert_eq!(queue.active_len(), 0, "missing authenticated native root cannot acquire custody");
+
+        let account = Account::new(request.authority.clone()).build(&request.authority);
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+            World::with([], [account], []),
+        );
+        let address = iroha_data_model::smart_contract::ContractAddress::derive(
+            app.state.network_id_ref(), &request.authority, 2,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        ).expect("contract address under the exact native network");
+        install_contract_instance(app.state.as_ref(), &request.authority, &key, &address);
+        let request = ContractCallDto { contract_address: Some(address), ..request };
+        let (request, _) = detached_public_contract_call(&app.state, &app.queue, &key, &request);
+        assert!(app.state.authenticated_root_scope().is_some());
+        let route = crate::torii_all_dataspace_routes(app.as_ref())[0];
+        assert!(crate::is_local_authoritative_for_route(app.as_ref(), route), "the fixture begins with its genuine scheduled committee member");
+        let queue = Arc::clone(&app.queue);
+        Arc::get_mut(&mut app).expect("unique native fixture AppState").local_peer_id = None;
+        assert!(!crate::is_local_authoritative_for_route(app.as_ref(), route));
+        let response = crate::handler_post_contract_call(
+            axum::extract::State(app),
+            axum::http::HeaderMap::new(),
+            axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
             NoritoJson(request),
         ).await.unwrap_or_else(axum::response::IntoResponse::into_response);
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get("x-iroha-reject-code").and_then(|v| v.to_str().ok()), Some("route_unavailable"));
-        assert_eq!(queue.active_len(), 0, "missing authenticated route authority cannot acquire custody");
+        assert_eq!(queue.active_len(), 0, "genuine native authority cannot substitute for missing ingress route custody");
     }
     routing_test! { sync contract_call_detached_submission_requires_complete_retained_envelope
         let (state, queue, key, request) = public_contract_call_fixture();
@@ -40170,6 +40198,40 @@ where
                         return Some((Ok(stream_authorization_revoked_event()), state));
                     }
                     if let Some(event_box) = state.pending.pop_front() {
+                        // A grant added after admission may be revoked while a
+                        // batch is buffered without revoking the original scope.
+                        // Authorize each item at emission, before client filters.
+                        let event_box = match state.scope.filter_event(event_box) {
+                            Ok(Some(event)) => event,
+                            Ok(None) => continue,
+                            Err(error) => {
+                                state.pending.clear();
+                                state.terminal = true;
+                                let (code, message) = match error {
+                                    iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => (
+                                        "stream_history_capacity", "Event history is temporarily beyond local capacity; reconnect to retry.",
+                                    ),
+                                    iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => (
+                                        "stream_history_error", "The server could not read canonical event history.",
+                                    ),
+                                };
+                                return Some((Ok(stream_error_event(code, message, None)), state));
+                            }
+                        };
+                        if let Some(flt) = filters.as_ref()
+                            && !flt.iter().any(|filter| filter.matches(&event_box))
+                        {
+                            continue;
+                        }
+                        if !crate::proof_filters::event_matches_proof_filters(
+                            &event_box,
+                            proof_backend.as_ref(),
+                            proof_call_hash.as_ref(),
+                            proof_envelope_hash.as_ref(),
+                            proof_only,
+                        ) {
+                            continue;
+                        }
                         let json_val = event_to_json_value(&event_box);
                         let ev = match norito::json::to_json(&json_val) {
                             Ok(json) => SseEvent::default().data(json),
@@ -40190,55 +40252,12 @@ where
                         recv = state.rx.recv() => {
                             match recv {
                                 Ok(event_box) => {
-                                    if !state.scope.authorization_is_current() {
-                                        state.pending.clear();
-                                        state.terminal = true;
-                                        return Some((Ok(stream_authorization_revoked_event()), state));
-                                    }
-                                    let event_box = match state.scope.filter_event(event_box) {
-                                        Ok(Some(event)) => event,
-                                        Ok(None) => continue,
-                                        Err(error) => {
-                                            state.pending.clear();
-                                            state.terminal = true;
-                                            let (code, message) = match error {
-                                                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_) => (
-                                                    "stream_history_capacity", "Event history is temporarily beyond local capacity; reconnect to retry.",
-                                                ),
-                                                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(_) => (
-                                                    "stream_history_error", "The server could not read canonical event history.",
-                                                ),
-                                            };
-                                            return Some((Ok(stream_error_event(code, message, None)), state));
-                                        }
-                                    };
-                                    let mut consider_event = |event_box| {
-                                        if let Some(flt) = filters.as_ref() {
-                                            // Authorization scope has already been applied; this
-                                            // client expression may only narrow the visible set.
-                                            if !flt.iter().any(|f| f.matches(&event_box)) {
-                                                return;
-                                            }
-                                        }
-                                        if !crate::proof_filters::event_matches_proof_filters(
-                                            &event_box,
-                                            proof_backend.as_ref(),
-                                            proof_call_hash.as_ref(),
-                                            proof_envelope_hash.as_ref(),
-                                            proof_only,
-                                        ) {
-                                            return;
-                                        }
-                                        state.pending.push_back(event_box);
-                                    };
                                     match event_box {
                                         EventBox::PipelineBatch(events) => {
-                                            for event in events {
-                                                consider_event(EventBox::Pipeline(event));
-                                            }
+                                            state.pending.extend(events.into_iter().map(EventBox::Pipeline));
                                         }
                                         event_box => {
-                                            consider_event(event_box);
+                                            state.pending.push_back(event_box);
                                         }
                                     }
                                 }
@@ -43139,6 +43158,119 @@ mod sse_stream_tests {
             .expect("revoked SSE stream should terminate");
         assert!(terminal.is_none());
     }
+    routing_test! { async sse_pending_events_recheck_scope_after_later_grant_revocation
+        let baseline = DataSpaceId::new(1);
+        let private = DataSpaceId::new(2);
+        let admitted = DataspaceReadVisibility::new(BTreeSet::from([baseline]), false);
+        let current = Arc::new(std::sync::RwLock::new(admitted.clone()));
+        let event_scope = Arc::clone(&current);
+        let authorization_scope = Arc::clone(&current);
+        let admission_scope = admitted.clone();
+        let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+        let sse = handle_v1_events_sse_with_filter(
+            &events,
+            &EventsSseParams { filter: None },
+            move |event| {
+                let visibility = event_scope.read().expect("visibility lock");
+                let allows = |event: &PipelineEventBox| match event {
+                    PipelineEventBox::Transaction(transaction) => {
+                        visibility.allows_dataspace(transaction.dataspace_id)
+                    }
+                    _ => true,
+                };
+                match event {
+                    EventBox::PipelineBatch(mut batch) => {
+                        batch.retain(allows);
+                        Ok((!batch.is_empty()).then_some(EventBox::PipelineBatch(batch)))
+                    }
+                    EventBox::Pipeline(event) => {
+                        Ok(allows(&event).then_some(EventBox::Pipeline(event)))
+                    }
+                    event => Ok(Some(event)),
+                }
+            },
+            move || {
+                authorization_scope.read().expect("visibility lock")
+                    .retains_authorized_scope(&admission_scope)
+            },
+        ).expect("create scoped stream");
+        let mut body = sse.into_response().into_body();
+        // Model a new grant after admission; its later loss retains the baseline.
+        *current.write().expect("visibility lock") =
+            DataspaceReadVisibility::new(BTreeSet::from([baseline, private]), false);
+        let transaction = |byte, dataspace| {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(mut transaction)) =
+                queued_transaction_event(byte)
+            else {
+                unreachable!("transaction fixture")
+            };
+            transaction.dataspace_id = dataspace;
+            transaction.block_height = core::num::NonZeroU64::new(1);
+            transaction.status = TransactionStatus::Approved;
+            PipelineEventBox::Transaction(transaction)
+        };
+        events.send(EventBox::PipelineBatch(vec![
+            transaction(0x81, private),
+            transaction(0x82, private),
+        ])).expect("queue private batch during the grant");
+        let first = next_sse_chunk(&mut body).await;
+        assert!(first.contains(&Hash::prehashed([0x81; Hash::LENGTH]).to_string()));
+
+        *current.write().expect("visibility lock") = admitted;
+        events.send(EventBox::Pipeline(transaction(0x83, baseline)))
+            .expect("baseline remains authorized");
+        let next = next_sse_chunk(&mut body).await;
+        assert!(!next.contains(&Hash::prehashed([0x82; Hash::LENGTH]).to_string()),
+            "a buffered private item must not survive its grant's revocation: {next}");
+        assert!(next.contains(&Hash::prehashed([0x83; Hash::LENGTH]).to_string()),
+            "retaining the admitted scope keeps the stream open: {next}");
+    }
+    routing_test! { async sse_pending_event_history_refusals_are_terminal
+        for rejected in [false, true] {
+            let pool = iroha_core::state::AllocationBudget::new(8);
+            let _held = pool.try_reserve_bytes(8).unwrap();
+            let refusal = pool.try_reserve_bytes(1).unwrap_err();
+            let fail = Arc::new(AtomicBool::new(false));
+            let filter_fail = Arc::clone(&fail);
+            let events: EventsSender = tokio::sync::broadcast::channel(8).0;
+            let sse = handle_v1_events_sse_with_filter(
+                &events,
+                &EventsSseParams { filter: None },
+                move |event| {
+                    if filter_fail.load(Ordering::SeqCst) {
+                        use iroha_core::execution_attempt::ExecutionAttemptError;
+                        return Err(if rejected {
+                            ExecutionAttemptError::Rejected(iroha_core::kura::Error::IO(
+                                std::io::Error::other("canonical history fixture failure"),
+                                std::path::PathBuf::from("sse-history-fixture"),
+                            ))
+                        } else {
+                            ExecutionAttemptError::Deferred(refusal.clone().into())
+                        });
+                    }
+                    Ok(Some(event))
+                },
+                || true,
+            ).expect("create fallible stream");
+            let mut body = sse.into_response().into_body();
+            events.send(EventBox::PipelineBatch([0x84, 0x85].map(|byte| {
+                let EventBox::Pipeline(event) = queued_transaction_event(byte) else {
+                    unreachable!("pipeline fixture")
+                };
+                event
+            }).to_vec())).expect("queue batch");
+            let first = next_sse_chunk(&mut body).await;
+            assert!(first.contains(&Hash::prehashed([0x84; Hash::LENGTH]).to_string()));
+            fail.store(true, Ordering::SeqCst);
+            let error = next_sse_chunk(&mut body).await;
+            let code = if rejected { "stream_history_error" } else { "stream_history_capacity" };
+            assert!(error.contains("event: stream_error"), "{error}");
+            assert!(error.contains(code), "{error}");
+            assert!(!error.contains(&Hash::prehashed([0x85; Hash::LENGTH]).to_string()));
+            assert!(timeout(Duration::from_secs(1), body.frame()).await
+                .expect("history refusal terminates the stream").is_none());
+        }
+    }
     routing_test! { async explorer_stream_does_not_subscribe_to_unbounded_event_graphs
         let events: EventsSender = tokio::sync::broadcast::channel(1).0;
         let response = explorer_stream(
@@ -43701,7 +43833,7 @@ pub mod validation_fee_torii_ingress_tests {
                 .into_iter()
                 .map(|value| Account::new(value).build(user)),
         );
-        let world = World::with_assets(
+        World::with_assets(
             [
                 domain,
                 Domain::new(DomainId::try_new("contracts", "universal").unwrap()).build(user),
@@ -43710,18 +43842,7 @@ pub mod validation_fee_torii_ingress_tests {
             [asset_definition, xor_asset_definition],
             [user_asset],
             [],
-        );
-        // This permissioned fixture carries the canonical application staking policy;
-        // its signed genesis still declares the actual permissioned consensus mode.
-        let mut initial = world.block();
-        initial
-            .set_parameter_for_testing(Parameter::Custom(
-                iroha_data_model::parameter::system::SumeragiNposParameters::default()
-                    .into_custom_parameter(),
-            ))
-            .expect("install the committed NPoS fixture parameters");
-        initial.commit();
-        world
+        )
     }
     /// Execute signed fixture genesis and deploy the native payout and pool contracts.
     pub fn native_fee_fixture() -> (
@@ -43746,6 +43867,28 @@ pub mod validation_fee_torii_ingress_tests {
         let fee_asset = fee_asset_definition_id();
         let mut config = TestChainConfig::new(test_world(&user, &recipient, &fee_asset), 1_000);
         config.genesis_key = key.clone();
+        config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
+        // Election and staking parameters belong to the same signed genesis.
+        // A parent with election parameters alone is already malformed before
+        // genesis instructions can author its staking policy.
+        let election = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+        config.genesis_parameters.extend([
+            Parameter::Sumeragi(
+                iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                    election.epoch_length_blocks,
+                ),
+            ),
+            Parameter::Custom(election.clone().into_custom_parameter()),
+        ]);
+        assert!(config.world.view().parameters().staking_policy().is_none());
+        assert!(
+            config
+                .world
+                .view()
+                .sumeragi_npos_parameters()
+                .unwrap()
+                .is_none()
+        );
         let artifacts = [payout_contract_artifact(), pool_contract_artifact()];
         let signing = manifest_signing_test_support::ManifestSigningFixture::new(artifacts.len());
         for (code, manifest) in &artifacts {
@@ -43786,6 +43929,24 @@ pub mod validation_fee_torii_ingress_tests {
         let validator = prepared.validator_keys[0].clone();
         let mut chain = CertifiedTestChain::from_prepared(prepared)
             .expect("execute original signed validation-fee genesis");
+        assert!(
+            chain
+                .state()
+                .view()
+                .world()
+                .parameters()
+                .staking_policy()
+                .is_some()
+        );
+        assert_eq!(
+            chain
+                .state()
+                .view()
+                .world()
+                .sumeragi_npos_parameters()
+                .unwrap(),
+            Some(election),
+        );
         for (nonce, alias, (_, manifest)) in [
             (0, "fee-payout", &artifacts[0]),
             (1, "fee-pool", &artifacts[1]),
@@ -60126,20 +60287,22 @@ pub mod event {
                 event = events.recv() => {
                     match event {
                         Ok(event) => {
-                            let event = match authorization.as_deref_mut() {
-                                Some(authorization) => {
-                                    if !authorization.authorization_is_current() {
-                                        return Err(Error::AuthorizationRevoked);
+                            for event in authorized_event_frames(
+                                event,
+                                |event| match authorization.as_deref_mut() {
+                                    Some(authorization) => {
+                                        if !authorization.authorization_is_current() {
+                                            return Err(Error::AuthorizationRevoked);
+                                        }
+                                        authorization.filter_current_event(event).map_err(Error::History)
                                     }
-                                    let Some(event) = authorization.filter_current_event(event).map_err(Error::History)? else {
-                                        continue;
-                                    };
-                                    event
-                                }
-                                None => event,
-                            };
-                            iroha_logger::trace!(?event);
-                            consumer.consume(event).await?;
+                                    None => Ok(Some(event)),
+                                },
+                            ) {
+                                let event = event?;
+                                iroha_logger::trace!(?event);
+                                consumer.consume(event).await?;
+                            }
                         }
                         Err(err) => return Err(Error::Event(err)),
                     }
@@ -60159,9 +60322,151 @@ pub mod event {
         }
     }
 
+    /// Split before any awaited send so each frame observes current authority.
+    fn authorized_event_frames(
+        event: EventBox,
+        mut scope: impl FnMut(EventBox) -> Result<Option<EventBox>>,
+    ) -> impl Iterator<Item = Result<EventBox>> {
+        let (single, batch) = match event {
+            EventBox::PipelineBatch(events) => (None, Some(events)),
+            event => (Some(event), None),
+        };
+        single
+            .into_iter()
+            .chain(batch.into_iter().flatten().map(EventBox::Pipeline))
+            .filter_map(move |event| scope(event).transpose())
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn event_frames_skip_hidden_items_and_preserve_history_refusals() {
+            use iroha_data_model::events::pipeline::{
+                PipelineEventBox, TransactionEvent, TransactionStatus,
+            };
+            let batch = || {
+                EventBox::PipelineBatch(
+                    (1..=3)
+                        .map(|byte| {
+                            PipelineEventBox::Transaction(TransactionEvent {
+                                hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                                    [byte; Hash::LENGTH],
+                                )),
+                                block_height: core::num::NonZeroU64::new(1),
+                                lane_id: LaneId::new(1),
+                                dataspace_id: DataSpaceId::new(1),
+                                status: TransactionStatus::Approved,
+                            })
+                        })
+                        .collect(),
+                )
+            };
+            let pool = iroha_core::state::AllocationBudget::new(8);
+            let _held = pool.try_reserve_bytes(8).unwrap();
+            let refusal = pool.try_reserve_bytes(1).unwrap_err();
+            let mut checked = 0;
+            let mut frames = authorized_event_frames(batch(), |event| {
+                checked += 1;
+                match checked {
+                    1 => Ok(None),
+                    2 => Ok(Some(event)),
+                    _ => Err(Error::History(
+                        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                            refusal.clone().into(),
+                        ),
+                    )),
+                }
+            });
+            let EventBox::Pipeline(PipelineEventBox::Transaction(visible)) = frames
+                .next()
+                .expect("visible frame")
+                .expect("second item is visible")
+            else {
+                panic!("single transaction frame")
+            };
+            assert_eq!(
+                visible.hash,
+                HashOf::from_untyped_unchecked(Hash::prehashed([2; Hash::LENGTH]))
+            );
+            let Error::History(iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                owner,
+            )) = frames
+                .next()
+                .expect("third item refusal")
+                .expect_err("history refusal is preserved")
+            else {
+                panic!("original history capacity owner")
+            };
+            assert_eq!(owner.allocation_refusal(), Some(&refusal));
+        }
+
+        #[tokio::test]
+        async fn event_batch_rechecks_authorization_after_each_awaited_send() {
+            use iroha_data_model::events::pipeline::{
+                PipelineEventBox, TransactionEvent, TransactionStatus,
+            };
+            use std::sync::atomic::{AtomicBool, Ordering};
+
+            for revoke in [false, true] {
+                let authorized = AtomicBool::new(true);
+                let mut sent = Vec::new();
+                let batch = EventBox::PipelineBatch(
+                    (1..=3)
+                        .map(|byte| {
+                            PipelineEventBox::Transaction(TransactionEvent {
+                                hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                                    [byte; Hash::LENGTH],
+                                )),
+                                block_height: core::num::NonZeroU64::new(1),
+                                lane_id: LaneId::new(1),
+                                dataspace_id: DataSpaceId::new(1),
+                                status: TransactionStatus::Approved,
+                            })
+                        })
+                        .collect(),
+                );
+                let result = async {
+                    for event in authorized_event_frames(batch, |event| {
+                        if !authorized.load(Ordering::SeqCst) {
+                            return Err(Error::AuthorizationRevoked);
+                        }
+                        Ok(Some(event))
+                    }) {
+                        let EventBox::Pipeline(PipelineEventBox::Transaction(transaction)) = event?
+                        else {
+                            panic!("each send must contain exactly one event")
+                        };
+                        sent.push(transaction.hash);
+                        // A real send can wait for a slow receiver while a block
+                        // commits the revocation; the next frame must recheck it.
+                        tokio::task::yield_now().await;
+                        if revoke {
+                            authorized.store(false, Ordering::SeqCst);
+                        }
+                    }
+                    Ok::<_, Error>(())
+                }
+                .await;
+                if revoke {
+                    assert!(matches!(result, Err(Error::AuthorizationRevoked)));
+                    assert_eq!(sent.len(), 1);
+                } else {
+                    result.expect("unchanged authorization preserves all frames");
+                    assert_eq!(sent.len(), 3);
+                }
+                for (index, hash) in sent.iter().enumerate() {
+                    assert_eq!(
+                        *hash,
+                        HashOf::from_untyped_unchecked(Hash::prehashed(
+                            [u8::try_from(index + 1).unwrap(); Hash::LENGTH],
+                        )),
+                        "batch order is unchanged"
+                    );
+                }
+            }
+        }
 
         #[test]
         fn original_event_history_refusal_closes_retryably_without_visibility_fallback() {

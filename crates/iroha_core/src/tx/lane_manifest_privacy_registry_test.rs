@@ -122,6 +122,9 @@ fn transaction_privacy_admission_uses_manifest_when_cache_is_stale() {
 
 #[test]
 fn transaction_privacy_policy_refuses_original_pool_then_retries_same_input() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let (world, authority, keypair) = world_with_authority("wonderland");
     let state = State::new(
         world,
@@ -188,6 +191,9 @@ fn transaction_privacy_policy_refuses_original_pool_then_retries_same_input() {
 
 #[test]
 fn stateful_privacy_refusal_retains_original_cause_and_forbids_settlement() {
+    // Constructor-retired AMX and parameter generations must not independently
+    // refund this pool while the test observes its exact cause and wake order.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let (world, authority, keypair) = world_with_authority("wonderland");
     let state = State::new(
         world,
@@ -287,9 +293,15 @@ fn stateful_privacy_refusal_retains_original_cause_and_forbids_settlement() {
     assert!(overlay.world.tx_sequences.get(&authority).is_none());
     assert_eq!(state.state_view_generation(), generation);
     drop(occupied);
+    assert_eq!(budget.reserved_bytes(), retained);
+    assert!(
+        registration.poll_wait(release, &mut context).is_pending(),
+        "the original World owner retains refund notifications until its writers retire"
+    );
+    drop(overlay);
+    drop(block);
     assert!(registration.poll_wait(release, &mut context).is_ready());
     drop(registration);
     drop(prepaid);
     assert_eq!(waiter_pool.reserved_bytes(), 0);
-    assert_eq!(budget.reserved_bytes(), retained);
 }

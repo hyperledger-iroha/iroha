@@ -156,7 +156,7 @@ get fun `test the TON to Taira payload vector of the fixture is what a burn emit
                 VEC_NETWORK_ID,
                 VEC_CONSENSUS_INSTANCE,
                 VEC_OUTBOUND_REVISION,
-                SCCP_TON_AMOUNT_LIMIT,
+                SCCP_TON_AMOUNT_LIMIT - 1,
                 defaultPin(committee),
                 committee.keys,
             ),
@@ -480,7 +480,29 @@ get fun `test burn notifications from a non-wallet are rejected`() {
 }
 
 get fun `test a burn of 2^96 or more is refused by the minter`() {
-    val env = setupEnvWith(4, SCCP_TON_AMOUNT_LIMIT * 4);
+    // No minter that `sccp_init` accepts can supply 2^96 (its cap is below
+    // it, §5.3.1), so this one is installed with a larger cap (white box):
+    // the minter's own amount check must hold for any wallet balance.
+    testing.setNow(T0);
+    val committee = testCommittee(4, 0);
+    var storage = canonicalStorage(
+        VEC_NETWORK_ID,
+        VEC_CONSENSUS_INSTANCE,
+        TEST_REVISION,
+        SCCP_TON_AMOUNT_LIMIT * 4,
+        defaultPin(committee),
+        committee.keys,
+    );
+    storage.initialized = true;
+    val deployer = testing.treasury("deployer").address;
+    val env: Env = {
+        minter: installPinned(storage, deployer, sccpMinterFloor() + grams("10")),
+        deployer,
+        networkId: VEC_NETWORK_ID,
+        instance: VEC_CONSENSUS_INSTANCE,
+        generation: TEST_GENERATION,
+        committee,
+    };
     val alice = testing.treasury("alice").address;
     // two mints of the largest amount: the wallet holds more than one burn may carry
     finalizeOk(env, 0, SCCP_TON_AMOUNT_LIMIT - 1, alice);

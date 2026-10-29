@@ -88,6 +88,7 @@ jobs:
         with:
           cache: "false"
           target: ${{ matrix.target }}
+          build-warnings: warn
 
       - name: Preflight Windows native source manifest
         if: runner.os == 'Windows'
@@ -170,6 +171,7 @@ jobs:
         with:
           cache: "false"
           target: aarch64-unknown-linux-gnu
+          build-warnings: warn
 
       - name: Test the Linux ARM cross-build handoff contract
         run: python -I scripts/tests/csharp_linux_arm_cross_handoff_test.py
@@ -508,7 +510,7 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 10.0.402
+          dotnet-version: 10.0.403
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
@@ -624,7 +626,7 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: 10.0.402
+          dotnet-version: 10.0.403
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:

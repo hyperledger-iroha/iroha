@@ -37,7 +37,7 @@ ws = [
   "websocket-client>=1.9.2",
 ]
 dev = [
-  "pytest>=9.1.1",
+  "pytest>=9.2.0",
   "mypy>=2.4.0,<3.0",
   "ruff>=0.17.2",
   "types-requests>=2.33.0.20261006,<3",

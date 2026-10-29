@@ -237,6 +237,11 @@ export function requirePrivacyExact12CapabilityAdmissionV1(
   manifest: PrivacyExact12CapabilityManifestV1,
   protocolId: PrivacyProtocolIdV1,
 ): PrivacyExact12CapabilityAdmissionV1;
+/** @internal Authenticated original manifest bytes for a native construction owner. */
+export function privacyExact12AuthenticatedConstructionArchiveV1(
+  manifest: PrivacyExact12CapabilityManifestV1,
+  expectedNetworkId: NetworkId,
+): Uint8Array;
 
 export declare class PrivacyExact12CapabilityManifestError extends TypeError {
   readonly path: string;

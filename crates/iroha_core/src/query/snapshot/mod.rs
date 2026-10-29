@@ -1535,6 +1535,9 @@ mod tests {
         world
             .account_permissions
             .insert(BOB_ID.clone(), bob_permissions.clone());
+        // Account retirement checks both monetary-policy cuts. Author the component
+        // fixture's original policies before creating the reader's State snapshot.
+        crate::smartcontracts::isi::domain::monetary_test_support::install(&mut world);
         let store = LiveQueryStore::start_test();
         let state = State::new_with_chain(
             world,

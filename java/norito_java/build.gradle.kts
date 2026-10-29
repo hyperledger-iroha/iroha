@@ -20,7 +20,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.luben:zstd-jni:1.5.7-24")
+    implementation("com.github.luben:zstd-jni:1.5.7-25")
 }
 
 tasks.withType<JavaCompile>().configureEach {

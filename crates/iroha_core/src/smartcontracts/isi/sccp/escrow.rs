@@ -234,6 +234,19 @@ pub fn is_escrow(world: &(impl WorldReadOnly + ?Sized), account: &AccountId) -> 
     store::routes::iter(world).any(|(_, route)| route.escrow == *account)
 }
 
+/// Return whether `account` is the escrow id of one of `network_id`'s routes. Escrow ids
+/// derive from the `NetworkId` alone, so this holds before `InitializeSccpV1` creates them.
+///
+/// Parameters naming accounts that protocol custody credits or debits without the escrow
+/// guards (the staking slash sink and stake escrow, the moderation challenge custody) refuse
+/// these ids when they are set, so no penalty can move value in or out of an escrow (§4.15).
+#[must_use]
+pub fn is_route_escrow_id(network_id: &NetworkId, account: &AccountId) -> bool {
+    SCCP_ROUTE_NETWORKS_V1
+        .into_iter()
+        .any(|network| escrow_account(network_id, network).as_ref() == Some(account))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

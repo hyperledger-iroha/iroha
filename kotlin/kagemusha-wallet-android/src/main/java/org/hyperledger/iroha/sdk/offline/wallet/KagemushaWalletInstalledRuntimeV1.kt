@@ -150,7 +150,7 @@ class KagemushaWalletInstalledRuntimeV1 private constructor(
                 check(challenge.size == 32 && challenge.any { it != 0.toByte() }) { "invalid native account challenge" }
                 val signatureFuture = accountSignatureOriginal?.let {
                     CompletableFuture.completedFuture(it.copyOf())
-                } ?: signExistingAccount(challenge.copyOf())
+                } ?: WalletCallObservationsV1.shared.accountSignature { signExistingAccount(challenge.copyOf()) }
                 signatureFuture.whenComplete { signature, error ->
                     // Freeze bounded producer DATA before queueing; callbacks do no Native I/O.
                     val deliveredSignature = signature?.takeIf { it.size == 64 }?.copyOf()

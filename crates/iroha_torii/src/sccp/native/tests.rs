@@ -446,6 +446,56 @@ fn hold_selectors_are_bounded_exact_pairs_and_mutable() {
     assert!(!Selection::ForgeryHold(query).immutable());
 }
 
+async fn assert_missing_root_http_refusal(path: &str) {
+    use tower::ServiceExt as _;
+    let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    let permits = app.query_heavy_inflight.available_permits();
+    let router = axum::Router::new()
+        .route(
+            sccp::FORGERY_HOLD.path(),
+            axum::routing::get(handler_forgery_hold),
+        )
+        .route(
+            sccp::FAST_PAUSE.path(),
+            axum::routing::get(handler_fast_pause),
+        )
+        .route(
+            sccp::EVIDENCE_ANCHOR.path(),
+            axum::routing::get(handler_evidence_anchor),
+        )
+        // The production listener owns the no-store contract for pre-genesis
+        // authentication refusal, before any handler or native worker runs.
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            crate::enforce_api_token,
+        ))
+        .with_state(app.clone());
+    let response = router
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(path)
+                .header(header::ACCEPT, "application/json")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert_eq!(app.query_heavy_inflight.available_permits(), permits);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: norito::json::Value = norito::json::from_slice(&body).unwrap();
+    assert_eq!(
+        json.get("code").and_then(norito::json::Value::as_str),
+        Some("native_root_scope_unavailable")
+    );
+}
+
 #[tokio::test]
 async fn hold_handler_preserves_original_source_and_request_deadline() {
     let app = crate::tests_runtime_handlers::app_with_root_scope_for_handler_test(
@@ -477,7 +527,7 @@ async fn hold_handler_preserves_original_source_and_request_deadline() {
     .await
     .unwrap();
     assert_eq!(expired.status(), StatusCode::REQUEST_TIMEOUT);
-    let missing = handler_forgery_hold(
+    let available = handler_forgery_hold(
         State(app),
         NoritoStringQuery(ForgeryHoldQuery::default()),
         Extension(RouteExecutionDeadline(deadline)),
@@ -486,11 +536,12 @@ async fn hold_handler_preserves_original_source_and_request_deadline() {
     )
     .await
     .unwrap();
-    assert_eq!(missing.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
-        missing.headers()[header::CACHE_CONTROL],
-        "private, no-store"
+        available.status(),
+        StatusCode::OK,
+        "signed native genesis supplies the original empty hold set"
     );
+    assert_missing_root_http_refusal(sccp::FORGERY_HOLD.path()).await;
 }
 
 #[tokio::test]
@@ -503,7 +554,7 @@ async fn pause_and_anchor_handlers_reject_unknown_queries_and_preserve_source_re
     for (query, expired, expected) in [
         (Some("unknown=1"), false, StatusCode::BAD_REQUEST),
         (None, true, StatusCode::REQUEST_TIMEOUT),
-        (None, false, StatusCode::SERVICE_UNAVAILABLE),
+        (None, false, StatusCode::OK),
     ] {
         let deadline = if expired {
             Instant::now()
@@ -532,14 +583,11 @@ async fn pause_and_anchor_handlers_reject_unknown_queries_and_preserve_source_re
             .unwrap(),
         ] {
             assert_eq!(response.status(), expected);
-            if expected == StatusCode::SERVICE_UNAVAILABLE {
-                assert_eq!(
-                    response.headers()[header::CACHE_CONTROL],
-                    "private, no-store"
-                );
-            }
         }
     }
+    // A real native root can serve empty original state; a pristine fixture cannot.
+    assert_missing_root_http_refusal(sccp::FAST_PAUSE.path()).await;
+    assert_missing_root_http_refusal(&sccp::EVIDENCE_ANCHOR.path().replace("{height}", "1")).await;
     for invalid in ["0", "01", "+1", "latest", "18446744073709551616"] {
         let response = handler_evidence_anchor(
             State(app.clone()),

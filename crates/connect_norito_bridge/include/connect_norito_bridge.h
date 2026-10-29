@@ -1941,7 +1941,25 @@ typedef struct {
        103 rollback, 104 anchor mismatch, 105 completion lost;
        110 unavailable custody data (unspecified kind), 111 enrollment intent,
        112 enrollment phase, 113 committed enrollment marker,
-       114 abandoned-slot custody conflict, 120 unexpected custody entry.
+       114 abandoned-slot custody conflict, 120 unexpected custody entry;
+       130 state witness refusal (unspecified predicate),
+       131 canonical archive record, 132 provider archive authentication,
+       133 archive manifest digest, 134 archive manifest binding,
+       135 archive manifest publication, 136 manifest before Bootstrap,
+       137 manifest ahead of custody, 138 manifest head conflict,
+       139 indexed boundary, 140 indexed boundary head, 141 capsule chain,
+       142 duplicate committed operation, 143 duplicate committed Send,
+       144 duplicate committed Receive, 145 Bootstrap boundary,
+       146 selected capsule missing, 147 capsule binding,
+       148 released completion missing, 149 completion binding,
+       150 step metadata, 151 indexed sequence, 152 step index missing,
+       153 selected preparation source snapshot missing, 154 changed source custody,
+       155 index object missing, 156 index object digest, 157 index node hash,
+       158 index leaf size, 159 index branch, 160 index publication digest,
+       161 duplicate committed fee claim, 162 fee Request original missing,
+       163 earned fee originals size, 164 earned fee originals binding,
+       165 fold head binding, 166 fold index gap, 167 recorded Omega missing,
+       168 source-bound Omega identity.
        For -1: 200 ledger activation unconfirmed, 201 invalid Load request,
        202 changed Load amount, 203 inactive Load lifecycle, 204 G1 validation,
        205 archive encoding, 206 index object/value size, 207 poisoned provider handle,

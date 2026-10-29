@@ -854,10 +854,16 @@ pub mod forgery_offences {
             .sccp_forgery_offences
             .try_insert_admitted(key, evidence_id)
             .map_err(|((key, _), error)| (key, error))?;
-        let maximum = stx.world.sccp_forgery_max_generation.get_mut();
-        *maximum = Some(maximum.map_or(generation, |previous| previous.max(generation)));
+        raise_forgery_max_generation(stx, generation);
         Ok(true)
     }
+}
+
+/// Raise the recorded maximum to `generation`. Every recorded evidence names its generation,
+/// including a record without offenders, whose signers G6 left unresolved (§4.9 step 8).
+pub(crate) fn raise_forgery_max_generation(stx: &mut StateTransaction<'_, '_>, generation: u64) {
+    let maximum = stx.world.sccp_forgery_max_generation.get_mut();
+    *maximum = Some(maximum.map_or(generation, |previous| previous.max(generation)));
 }
 
 /// Highest recorded SCCP generation; this does not derive a hold release by itself.

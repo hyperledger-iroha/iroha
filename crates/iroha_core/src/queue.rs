@@ -13,6 +13,7 @@ use sumeragi_wake::SumeragiQueueReservation;
 use sumeragi_wake::SumeragiQueueWake;
 mod forgery_ingress;
 pub use forgery_ingress::ForgeryIngressError;
+use forgery_ingress::SubmissionOrigin;
 mod resident_owner;
 use resident_owner::QueueResidentLedger;
 pub(crate) use resident_owner::QueuedTransaction;
@@ -1174,6 +1175,8 @@ struct EagerAdmissionStateAccess<'view, 'state> {
     view: &'view StateView<'state>,
     next_block_height: u64,
     ledger_time_ms: u64,
+    /// Who submits the transaction; only the SCCP forgery ingress reads it.
+    origin: SubmissionOrigin,
 }
 impl EagerAdmissionStateAccess<'_, '_> {
     const fn new<'view, 'state>(
@@ -1185,7 +1188,12 @@ impl EagerAdmissionStateAccess<'_, '_> {
             view,
             next_block_height,
             ledger_time_ms,
+            origin: SubmissionOrigin::Remote,
         }
+    }
+    const fn with_origin(mut self, origin: SubmissionOrigin) -> Self {
+        self.origin = origin;
+        self
     }
 }
 impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
@@ -1280,7 +1288,9 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             ),
             Some(SccpExemptClassV1::ForgeryEvidence)
         ) {
-            return queue.admit_forgery(self.view, transaction).map(Some);
+            return queue
+                .admit_forgery(self.view, transaction, self.origin)
+                .map(Some);
         }
         crate::smartcontracts::isi::sccp::admission::classify(
             self.view.world(),
@@ -1636,7 +1646,7 @@ impl Queue {
                                 });
                             }
                         };
-                    self.admit_in_view(tx, plan, &view, retired)?;
+                    self.admit_in_view(tx, plan, &view, retired, SubmissionOrigin::Remote)?;
                     accepted += 1;
                 }
                 Ok(accepted)
@@ -3946,13 +3956,14 @@ impl Queue {
                 });
             }
         };
-        self.admit_in_view(tx, plan, state_view, &mut retired)
+        self.admit_in_view(tx, plan, state_view, &mut retired, SubmissionOrigin::Remote)
     }
     fn push_with_lane_internal_with_state_and_routing(
         &self,
         tx: AcceptedTransaction<'static>,
         state: &State,
         routing_plan: Option<RoutingPlan>,
+        origin: SubmissionOrigin,
     ) -> Result<RoutingDecision, Failure> {
         let mut retired = QueuePrivacyRetirements::default();
         state
@@ -3995,7 +4006,7 @@ impl Queue {
                         });
                     }
                 };
-                self.admit_in_view(tx, plan, &view, &mut retired)
+                self.admit_in_view(tx, plan, &view, &mut retired, origin)
             })
     }
     fn admit_in_view(
@@ -4004,6 +4015,7 @@ impl Queue {
         routing_plan: RoutingPlan,
         view: &StateView<'_>,
         retired: &mut QueuePrivacyRetirements,
+        origin: SubmissionOrigin,
     ) -> Result<RoutingDecision, Failure> {
         // Preacceptance belongs to the original signed security domain. It cannot
         // authorize another State's queue, fee reservations, indexes or gossip.
@@ -4046,7 +4058,8 @@ impl Queue {
                 checked,
             ));
         };
-        let mut access = EagerAdmissionStateAccess::new(view, height, view.query_ledger_time_ms());
+        let mut access = EagerAdmissionStateAccess::new(view, height, view.query_ledger_time_ms())
+            .with_origin(origin);
         let prepared = self.prepare_checked_for_enqueue(
             checked,
             routing_plan,
@@ -4760,7 +4773,34 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state: &State,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, None)
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            None,
+            SubmissionOrigin::Remote,
+        )
+    }
+    /// Push a transaction that this node's own SCCP keeper built and signed.
+    ///
+    /// Admission is identical to [`Self::push_with_lane_with_state`] with one exception
+    /// (`specs/sccp.md` §4.9 ingress): forgery evidence skips the repeat cache and the
+    /// node-wide pairing bucket, which remote floods share, but still runs every other
+    /// check and the full pairing. Only the in-node keeper calls this; Torii, P2P gossip
+    /// and every other remote source use the throttled entrypoints.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_local_keeper_with_state(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            None,
+            SubmissionOrigin::LocalKeeper,
+        )
     }
     /// Push transaction into queue using a caller-provided full routing plan.
     ///
@@ -4772,7 +4812,12 @@ impl Queue {
         state: &State,
         routing_plan: RoutingPlan,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_plan))
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_plan),
+            SubmissionOrigin::Remote,
+        )
     }
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
     /// supplied [`StateView`].
@@ -6338,7 +6383,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
         let mut nexus = state.nexus_snapshot();
@@ -6623,10 +6668,7 @@ pub mod tests {
             state,
             authority_id,
             authority_keypair,
-        } = nexus_routing_fixture_with_nexus(
-            nexus.clone(),
-            iroha_config::parameters::defaults::nexus::fees::genesis_policy(),
-        );
+        } = nexus_routing_fixture_with_nexus(nexus.clone(), zero_rate_routing_fees());
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: retired_lane,
@@ -6842,7 +6884,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
@@ -7005,7 +7047,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
@@ -7117,7 +7159,7 @@ pub mod tests {
             authority_id,
             authority_keypair,
             ..
-        } = nexus_routing_fixture();
+        } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
         let mut initial_lane_1 = LaneConfig {
             id: LaneId::new(1),
             alias: "elastic-lane-1".to_string(),
@@ -7932,6 +7974,8 @@ pub mod tests {
     fn materialized_manifest_refresh_updates_local_diagnostics_without_state_publication() {
         use iroha_config::parameters::actual::LaneRegistry;
 
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),

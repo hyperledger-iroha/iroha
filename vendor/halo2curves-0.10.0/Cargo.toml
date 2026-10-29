@@ -197,10 +197,6 @@ version = "0.3"
 [dev-dependencies.serde_json]
 version = "1.0.105"
 
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies.getrandom]
-version = "0.2"
-features = ["js"]
-
 [profile.bench]
 opt-level = 3
 lto = true

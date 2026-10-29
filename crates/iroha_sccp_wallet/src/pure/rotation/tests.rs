@@ -295,3 +295,52 @@ fn trust_horizon_rejects_overflow_without_shortening_the_requested_interval() {
         }
     }
 }
+
+#[test]
+fn a_lagging_destination_head_is_refused_and_never_extends_trust() {
+    let wall = 10 * MAX_DESTINATION_HEAD_LAG_MS;
+    assert_eq!(
+        destination_times(wall - MAX_DESTINATION_HEAD_LAG_MS, wall),
+        Ok(DestinationTimesV1 {
+            horizon_ms: wall,
+            pause_ms: wall - MAX_DESTINATION_HEAD_LAG_MS,
+        }),
+        "a head within the bound is judged at this machine's later clock"
+    );
+    assert_eq!(
+        destination_times(wall - MAX_DESTINATION_HEAD_LAG_MS - 1, wall),
+        Err(StaleDestinationHead {
+            head_ms: wall - MAX_DESTINATION_HEAD_LAG_MS - 1,
+            wall_ms: wall,
+        }),
+        "a halted chain or a stale endpoint must not look live"
+    );
+    assert_eq!(
+        destination_times(wall + 1, wall),
+        Ok(DestinationTimesV1 {
+            horizon_ms: wall + 1,
+            pause_ms: wall,
+        }),
+        "a head ahead of this machine's clock is judged at the head for trust"
+    );
+    assert!(destination_times(0, u64::MAX).is_err());
+    assert!(destination_times(u64::MAX, 0).is_ok());
+}
+
+#[test]
+fn a_committee_expiring_between_a_stale_head_and_now_is_refused() {
+    let fixture = Fixture::new();
+    let context = context(&fixture, DestinationFlavor::Evm);
+    let plan = verify_rotation_steps(&[], &context, fixture.state.generation).expect("no catch-up");
+    // The destination committee looks live with a full horizon at the head time, but this
+    // machine's clock is later: the horizon is judged at the later time.
+    let head = fixture.state.until_ms - 1_000;
+    let wall = head + MAX_DESTINATION_HEAD_LAG_MS;
+    let times = destination_times(head, wall).expect("within the lag bound");
+    check_committee_horizon(&fixture.state, &plan, head, 0, 0)
+        .expect("the stale head alone would accept the record");
+    assert!(
+        check_committee_horizon(&fixture.state, &plan, times.horizon_ms, 0, 0).is_err(),
+        "the later clock sees the committee expired"
+    );
+}

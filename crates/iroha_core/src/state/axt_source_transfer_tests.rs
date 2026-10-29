@@ -296,6 +296,8 @@ fn finalized_source_capacity_refusal_retains_original_owner_and_exact_claim() {
         task::{Context, Poll, Waker},
     };
 
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let fixture = finalized_fixture(false, true);
     let state = source_state(&fixture);
     let claim = source_claim(fixture.target());

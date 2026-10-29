@@ -1,9 +1,15 @@
 # BoringSSL source package for Nearby
 
 This Swift package supplies Nearby's `openssl_grpc` product from unmodified
-[BoringSSL revision `90c6b370770adce64ff435789bfd1940067df415`](https://boringssl.googlesource.com/boringssl/+/90c6b370770adce64ff435789bfd1940067df415),
-dated 2026-10-22. `UPSTREAM.json` records the Git tree and SHA-256 of every copied
+[BoringSSL revision `3769c110eab4ddbc0c159fadb4f1d0d98b2cf0cc`](https://boringssl.googlesource.com/boringssl/+/3769c110eab4ddbc0c159fadb4f1d0d98b2cf0cc),
+dated 2026-10-27. `UPSTREAM.json` records the Git tree and SHA-256 of every copied
 upstream file. BoringSSL's Apache license and Fiat's license are retained.
+
+This refresh changes eight retained upstream files: MD5 state APIs, HPKE
+internal layout cleanup and TLS server group preference behavior. The generated
+source/assembly census and package build options are unchanged. BoringSSL
+[recommends updating to the latest untagged revision](https://boringssl.googlesource.com/boringssl/+/refs/heads/main/INCORPORATING.md);
+its release tags are snapshots, not supported stable branches.
 
 Run `python3 vendor/boringssl-swiftpm/verify_source.py` from the repository root
 to validate every hash, the exact generated source closure, normalized paths,
@@ -53,3 +59,13 @@ identity, and test P256 UKEY2 handshakes, fresh session keys, authenticated bina
 roundtrips, tampering, replay, and malformed messages using the linked objects.
 Finally run the repository's canonical `python3.12 scripts/test_swift_local.py`.
 These component checks do not replace physical-device qualification.
+
+The 2026-10-28 refresh passed the 671-file upstream byte comparison, error-table
+regeneration and 23 source-custody tests. On Apple arm64, upstream accelerated
+crypto passed 1,939 tests, portable crypto passed 1,899, and SSL passed 484.
+Each crypto configuration skipped two upstream tests and reported four disabled
+tests. The provider and actual Nearby SwiftPM products built successfully;
+linked UKEY2 checks passed 80 handshakes with fresh sessions, authenticated binary
+roundtrips, tamper refusals and replay refusals, plus ten malformed-message
+refusals. These are component results; this refresh did not rerun the complete
+native-bridge-backed Swift SDK suite or physical-device tests.

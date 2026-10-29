@@ -1770,6 +1770,9 @@ mod tests {
     }
     #[test]
     fn original_pool_capacity_refusal_preserves_job_and_can_retry_after_release() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let calls = Arc::new(std::sync::Mutex::new(0));
         let engine: Arc<dyn FastpqProofEngine> = Arc::new(MockEngine {
             calls: Arc::clone(&calls),

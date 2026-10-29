@@ -360,6 +360,8 @@ async fn cold_status_history_refusal_retains_original_pool_and_unpublished_count
         task::{Context, Waker},
     };
 
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let sut = SystemUnderTest::new_native();
     sut.commit_block(sut.create_block());
     let original_wire = sut
@@ -474,6 +476,8 @@ async fn cold_status_history_refusal_retains_original_pool_and_unpublished_count
 async fn cold_genesis_read_refusal_is_deferred_until_genesis_time_is_cached() {
     use iroha_data_model::block::SharedSignedBlock;
 
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let sut = SystemUnderTest::new_native();
     // No status sync has read genesis yet: its first history read is refused.
     sut.kura
@@ -599,6 +603,16 @@ async fn hold_original_status_publication(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_prelude_refuses_original_publication_before_service_deadline() {
+    // Keep the real 500ms service deadline in an exact test process with its
+    // own runtime cache and logger.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "telemetry::tests::classified_status_tests::status_prelude_refuses_original_publication_before_service_deadline",
+    ) {
+        return;
+    }
+    // The exact byte checks measure status work, not unrelated retired genesis
+    // generations collected by an actor thread while the publisher is held.
+    let _original_retirement = crossbeam_epoch::pin();
     let sut = SystemUnderTest::new_native();
     // Complete actual actor startup and canonical classification before contention.
     let (warm, warm_height) = sut
@@ -658,6 +672,16 @@ async fn status_prelude_refuses_original_publication_before_service_deadline() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_final_world_sample_refuses_publication_after_verified_chunk() {
+    // Keep the real 500ms service deadline in an exact test process with its
+    // own runtime cache and logger.
+    if crate::unit_test_support::run_in_isolated_harness(
+        "telemetry::tests::classified_status_tests::status_final_world_sample_refuses_publication_after_verified_chunk",
+    ) {
+        return;
+    }
+    // The exact byte checks measure status work, not unrelated retired genesis
+    // generations collected by an actor thread while the publisher is held.
+    let _original_retirement = crossbeam_epoch::pin();
     let sut = SystemUnderTest::new_native();
     sut.telemetry
         .status_snapshot(&BuildStatus::default())

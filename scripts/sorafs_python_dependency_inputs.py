@@ -2,7 +2,8 @@
 
 Library only; no download, archive parser, installation or process execution.
 Fifteen ordinary dependency artifacts serve POSIX CPython 3.12. Existing privacy
-CI's pytest 8.4.2 lock is not silently repurposed for the fixed pytest 9.0.3 child.
+CI and the fixed child share current dependency versions; each still authenticates
+its own exact original artifacts.
 Pinned pip owns future installation; the parent/adapter must still establish
 complete installed-file and loaded-module joins from these actual artifacts.
 """
@@ -23,8 +24,8 @@ MAX_WHEELS_BYTES = 1024 * 1024 * 1024
 MODULES = ("blake3", "certifi", "cffi", "charset-normalizer", "cryptography", "idna",
            "iniconfig", "packaging", "pip", "pluggy", "pycparser", "pygments", "pytest",
            "requests", "urllib3")
-DIRECT_VERSIONS = {"blake3": "1.0.9", "cffi": "2.1.1", "cryptography": "50.0.1",
-                   "pycparser": "3.0", "pytest": "9.0.3", "requests": "2.33.0"}
+DIRECT_VERSIONS = {"blake3": "1.0.11", "cffi": "2.1.1", "cryptography": "50.0.2",
+                   "pycparser": "3.12", "pytest": "9.2.0", "requests": "2.34.2"}
 
 
 @dataclass(frozen=True)
