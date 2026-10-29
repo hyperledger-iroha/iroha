@@ -1605,26 +1605,36 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
 - **Ingress** (Torii and P2P) checks, in this order: exact lengths and parsing
   (step 1); the record lookup and E0 (steps 2–3); step 5 without the signature
   (the E1/E2 classification or the anchor lookup and witness path);
-  deduplication against state (step 7); an LRU of the last 4 096 submissions
-  that reached the pairing, keyed by `(g, m, signers, SHA-256(σ))`, which drops
-  exact repeats; a node-wide token bucket of 8 pairings per second with a
-  burst of 32; and only then the pairing (step 4). A submission enters the LRU
-  only once it holds a pairing token, and leaves it again when the pairing
-  meets a local refusal (allocation, cancellation, deadline or unavailable
-  source). A refused signature therefore never shadows the genuine certificate
-  of the same `(g, m, signers)`, and neither a rate refusal nor a local
-  failure can deny a later genuine retry: the forgers themselves must not be
-  able to suppress the evidence of their forgery. Refused submissions never
-  reach the queue. Per-peer rate limits stay.
+  deduplication against state (step 7); deduplication against the queue: a
+  queued transaction that carries the same `(g, m, signers)` holds its pending
+  claim (§4.19), so the submission is refused whatever its signature; an LRU
+  of up to 4 096 submissions whose pairing is running or refused the
+  signature, keyed by `(g, m, signers, SHA-256(σ))`, which drops exact
+  repeats; a node-wide token bucket of 8 pairings per second with a burst of
+  32; and only then the pairing (step 4). A submission enters the LRU only
+  once it holds a pairing token, and leaves it again when the pairing meets a
+  local refusal (allocation, cancellation, deadline or unavailable source) or
+  verifies the signature. Genuine evidence is thus remembered only by state
+  that lasts exactly as long as its reason: the pending claim while a
+  transaction carrying it is queued, and step 7 once that transaction
+  commits. A transaction that leaves the queue uncommitted (expiry, eviction,
+  or a refusal after the pairing) leaves nothing behind, so the next
+  submission reaches the pairing again however often anyone repeated the
+  evidence meanwhile. A refused signature never shadows the genuine
+  certificate of the same `(g, m, signers)`, and neither a rate refusal nor a
+  local failure can deny a later genuine retry: the forgers themselves must
+  not be able to suppress the evidence of their forgery. Refused submissions
+  never reach the queue. Per-peer rate limits stay.
 - **The node's own keeper is not throttled.** The LRU and the bucket are
   shared by every remote submitter, so a distributed flood of fabricated
   evidence that passes the cheap checks could keep the bucket empty and delay
   genuine evidence. Submissions of the node's in-node keeper (§4.13.4,
   `Queue::push_local_keeper_with_state`) therefore skip both and still run
-  every other ingress check and the full pairing. The keeper verifies each
-  discovered certificate before it submits it and is paced by its bounded
-  destination watch; it retires a certificate that step 7 finds duplicate.
-  Torii, P2P gossip and every other source keep the throttled path.
+  every other ingress check, including the queue deduplication, and the full
+  pairing. The keeper verifies each discovered certificate before it submits
+  it and is paced by its bounded destination watch; it retires a certificate
+  that step 7 finds duplicate. Torii, P2P gossip and every other source keep
+  the throttled path.
 - **R-EX.** A block that contains a `ForgeryEvidence` transaction that fails at
   execution is `Invalid`. The verdict is deterministic, from the signed content
   and the parent state. An honest builder runs steps 1–7 against the certified

@@ -444,7 +444,8 @@ pub struct Queue {
     /// Admission keys of every queued fee-exempt SCCP transaction (`specs/sccp.md` §4.19),
     /// maintained atomically with `txs` under `push_remove_lock`.
     pending_sccp_exempt: parking_lot::Mutex<SccpPendingIndexV1>,
-    /// Node-wide SCCP seen triples and pairing bucket, shared by every ingress handle.
+    /// Node-wide SCCP forgery repeat cache (pairings in flight and refused signatures) and
+    /// pairing bucket, shared by every ingress handle.
     forgery_ingress: parking_lot::Mutex<Option<forgery_ingress::ForgeryIngressState>>,
     /// Authoritative cached routing plan per entrypoint hash.
     routing_plans: DashMap<EntrypointHash, RoutingPlan>,
