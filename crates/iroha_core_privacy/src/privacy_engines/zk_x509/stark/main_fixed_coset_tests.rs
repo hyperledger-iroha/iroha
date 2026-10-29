@@ -256,3 +256,90 @@ fn independent_full_quotient_coefficients_and_chunk_bytes_survive_fixed_matrix_r
         );
     }
 }
+
+#[test]
+fn retained_fixed_prefix_matches_every_horner_value_and_skips_only_its_recovery() {
+    use crate::privacy_engines::zk_x509::private_table::{PrivateTableV1, zeroize_fields_v1};
+    use crate::privacy_engines::zk_x509::prover_observation::ObservationV1;
+    for (native_log, stripe_log, full_log) in [(3, 3, 5), (3, 4, 6)] {
+        let original = (0..11)
+            .map(|column| {
+                (0..1usize << native_log)
+                    .map(|row| F((column * 17 + row * row + 3) as u64))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for count in [0, 1, 7, 8, 9, 11] {
+            let prefix = original[..count]
+                .iter()
+                .map(|column| PrivateTableV1::new(column.clone(), zeroize_fields_v1))
+                .collect::<Vec<_>>();
+            let mut owner = MainFixedCosetV1::new_v1(native_log, original.clone())
+                .unwrap()
+                .with_coefficient_prefix_v1(&prefix)
+                .unwrap();
+            let observation = ObservationV1::begin_v1();
+            for ordinal in 0..4 {
+                let stripe = stripe(native_log, stripe_log, full_log, ordinal);
+                let values = owner.evaluate_v1(stripe).unwrap();
+                for (column, actual) in original.iter().zip(values) {
+                    assert_eq!(&**actual, &*stripe.evaluate_v1(column).unwrap());
+                    for (row, value) in actual.iter().enumerate() {
+                        let x = stripe.shift.mul(stripe.root.pow(row as u128));
+                        assert_eq!(
+                            *value,
+                            column
+                                .iter()
+                                .rev()
+                                .fold(F::ZERO, |sum, coefficient| sum.mul(x).add(*coefficient))
+                        );
+                    }
+                }
+            }
+            let receipt = observation.finish_v1().public_text_v1();
+            assert!(receipt.contains("fixed_coset_forward_columns=44"));
+            assert!(receipt.contains(&format!(
+                "fixed_coset_recovery_inverse_columns={}",
+                3 * (11 - count)
+            )));
+            assert!(receipt.contains(&format!(
+                "fixed_coset_cpu_inverse_columns={}",
+                3 * (11 - count)
+            )));
+        }
+    }
+}
+
+#[test]
+fn retained_fixed_prefix_requires_exact_original_coefficients_before_first_stripe() {
+    use crate::privacy_engines::zk_x509::private_table::{PrivateTableV1, zeroize_fields_v1};
+    for mutation in 0..3 {
+        let original = vec![vec![F(7); 8]; 3];
+        let mut prefix = original[..2].to_vec();
+        match mutation {
+            0 => prefix[0][0] = F(8),
+            1 => {
+                prefix[0].pop();
+            }
+            _ => prefix.extend(original.clone()),
+        }
+        let prefix = prefix
+            .into_iter()
+            .map(|column| PrivateTableV1::new(column, zeroize_fields_v1))
+            .collect::<Vec<_>>();
+        assert!(
+            MainFixedCosetV1::new_v1(3, original)
+                .unwrap()
+                .with_coefficient_prefix_v1(&prefix)
+                .is_err()
+        );
+    }
+    let original = vec![vec![F(7); 8]; 3];
+    let prefix = original[..1]
+        .iter()
+        .map(|column| PrivateTableV1::new(column.clone(), zeroize_fields_v1))
+        .collect::<Vec<_>>();
+    let mut owner = MainFixedCosetV1::new_v1(3, original).unwrap();
+    owner.evaluate_v1(stripe(3, 4, 6, 0)).unwrap();
+    assert!(owner.with_coefficient_prefix_v1(&prefix).is_err());
+}

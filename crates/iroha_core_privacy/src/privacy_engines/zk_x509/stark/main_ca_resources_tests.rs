@@ -3,6 +3,42 @@
 use super::*;
 
 #[test]
+fn late_replay_subphases_keep_exact_payload_and_phase_boundaries() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(plan.common.replay_batch, 310_494_720);
+    for phase in [
+        MainCaBufferPhaseV1::PrivateLinks,
+        MainCaBufferPhaseV1::Finalization,
+    ] {
+        plan.check_replay_subphase_v1(phase, plan.common.replay_batch)
+            .unwrap();
+        for oversized in [plan.common.replay_batch + 1, usize::MAX] {
+            assert_eq!(
+                plan.check_replay_subphase_v1(phase, oversized),
+                Err(ZkX509StarkErrorV1::ProofTooLarge)
+            );
+        }
+        let mut bad = plan;
+        bad.common.maximum_live_buffers = plan.required_v1(phase).unwrap() - 1;
+        assert_eq!(
+            bad.check_replay_subphase_v1(phase, 0),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        );
+    }
+    for phase in [
+        MainCaBufferPhaseV1::OriginalCommitments,
+        MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
+    ] {
+        assert_eq!(
+            plan.check_replay_subphase_v1(phase, 0),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        );
+    }
+}
+
+#[test]
 fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
@@ -53,6 +89,7 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -81,6 +118,7 @@ fn joint_phase_forecasts_precede_admission_and_retain_two_cache_batches() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -108,7 +146,14 @@ fn joint_phase_forecasts_precede_admission_and_retain_two_cache_batches() {
         cache.base_columns + cache.aux_columns,
         2 * aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
     );
-    assert!(plan.common.check_before_sources_v1(421_806_624).is_ok());
+    // The complete maximum assembly is built and admitted by the resource
+    // fixture test. Here exercise this forecast's exact allocation boundary.
+    let assembly_limit = (12_usize << 30) - plan.common.check_before_sources_v1(0).unwrap();
+    assert!(plan.common.check_before_sources_v1(assembly_limit).is_ok());
+    assert_eq!(
+        plan.common.check_before_sources_v1(assembly_limit + 1),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
 }
 
 #[test]
@@ -159,6 +204,7 @@ fn joint_phase_arithmetic_fails_closed_on_overflow_and_oversized_owners() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -192,6 +238,7 @@ fn phase_ownership_requires_actual_capacity_and_disallows_early_main24() {
     for phase in [
         MainCaBufferPhaseV1::OriginalCommitments,
         MainCaBufferPhaseV1::Registration,
+        MainCaBufferPhaseV1::ShaUnion,
         MainCaBufferPhaseV1::PrivateLinks,
         MainCaBufferPhaseV1::Finalization,
     ] {
@@ -235,7 +282,7 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
         plan.common.maximum_live_buffers,
         super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
-    assert_eq!(plan.common.retained_cuts, 25_165_984);
+    assert_eq!(plan.common.retained_cuts, 201_326_752);
     // Independent floor arithmetic is constant throughout this inline-owner
     // interval. The native type must remain in that interval for these pins.
     assert!(core::mem::size_of::<CaAwaitingMainAuxiliaryV1>() <= 65_536);
@@ -315,4 +362,69 @@ fn complete_joint_ordinary_registration_work_counts_original_ca_reservations() {
     assert_eq!(cached_columns, 3_434);
     assert_eq!(native_iffts, 7_478);
     assert_eq!(native_butterflies, 28_301_242_880);
+}
+
+#[test]
+fn sha_union_admits_measured_maximum_assembly_with_all_original_joint_owners() {
+    use super::super::main_sha_union::MainShaUnionPlanV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let phase = MainCaBufferPhaseV1::ShaUnion;
+    let expected = plan.common.masks
+        + plan.common.retained_cuts
+        + plan.ca_originals
+        + plan.metadata
+        + plan.common.composition
+        + plan.common.replay_batch
+        + MainShaUnionPlanV1::private_owner_charge_v1();
+    assert_eq!(plan.required_v1(phase).unwrap(), expected);
+    assert!(expected < plan.required_v1(MainCaBufferPhaseV1::Registration).unwrap());
+    assert_eq!(
+        plan.common.maximum_live_buffers,
+        super::super::main_resources::CURRENT_FULL_PROFILE_PEAK_V1
+    );
+    let measured_assembly = 215_244_730;
+    let admitted = plan
+        .common
+        .check_before_sources_v1(measured_assembly)
+        .unwrap();
+    let ceiling = 12_usize << 30;
+    assert!(admitted <= ceiling);
+    // Device slack is outside the complete global arithmetic peak. No union
+    // or CA owner is discharged from the6GiB/1GiB/1GiB source/scratch/runtime
+    // reservation, and no registration cache survives into this phase.
+    let phase_total = admitted - plan.common.maximum_live_buffers + expected;
+    assert!(phase_total + (ceiling - admitted) <= ceiling);
+    plan.check_original_payloads_v1(phase, plan.ca_originals, None)
+        .unwrap();
+    assert!(
+        plan.check_original_payloads_v1(phase, plan.ca_originals, Some(plan.main_originals))
+            .is_err()
+    );
+    assert!(
+        plan.check_original_payloads_v1(phase, plan.ca_originals + 1, None)
+            .is_err()
+    );
+    let mut exact = plan;
+    exact.common.maximum_live_buffers = expected;
+    assert_eq!(exact.required_v1(phase).unwrap(), expected);
+    exact.common.maximum_live_buffers -= 1;
+    assert_eq!(
+        exact.required_v1(phase),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
+    for oversized in [usize::MAX, plan.common.maximum_live_buffers] {
+        let mut bad = plan;
+        bad.common.composition = oversized;
+        assert!(bad.required_v1(phase).is_err());
+        let mut bad = plan;
+        bad.common.replay_batch = oversized;
+        assert!(bad.required_v1(phase).is_err());
+    }
+    let assembly_limit = ceiling - plan.common.check_before_sources_v1(0).unwrap();
+    assert!(plan.common.check_before_sources_v1(assembly_limit).is_ok());
+    assert_eq!(
+        plan.common.check_before_sources_v1(assembly_limit + 1),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
 }

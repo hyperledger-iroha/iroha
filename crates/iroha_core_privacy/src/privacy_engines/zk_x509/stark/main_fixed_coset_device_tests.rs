@@ -216,6 +216,105 @@ fn completed_owner_cannot_replace_its_original_admission() {
 }
 
 #[test]
+fn retained_prefix_mixed_device_batches_keep_values_poison_failures_and_clear_owners() {
+    use crate::privacy_engines::zk_x509::private_table::{PrivateTableV1, zeroize_fields_v1};
+    let original = coefficients(3, 5);
+    for failing in [None, Some(0), Some(1), Some(2), Some(3)] {
+        for unwind in [false, true] {
+            let (_, erased) = inspection::observe_v1(|| {
+                let prefix = original[..3]
+                    .iter()
+                    .map(|column| PrivateTableV1::new(column.clone(), zeroize_fields_v1))
+                    .collect::<Vec<_>>();
+                let mut owner = MainFixedCosetV1::new_v1(3, original.clone())
+                    .unwrap()
+                    .with_transform_policy_v1(MainBoundedTransformPolicyV1::for_test_v1(16, 2))
+                    .unwrap()
+                    .with_coefficient_prefix_v1(&prefix)
+                    .unwrap();
+                owner
+                    .evaluate_with_v1(
+                        stripe(3, 4, 6, 0),
+                        |words, root, direction| {
+                            transform_goldilocks_columns_v1(
+                                words,
+                                root,
+                                direction,
+                                fastpq_prover::ExecutionMode::Cpu,
+                            )
+                        },
+                        || false,
+                    )
+                    .unwrap();
+                let coordinates = stripe(3, 4, 6, 1);
+                let mut calls = 0;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    owner
+                        .evaluate_with_v1(
+                            coordinates,
+                            |words, root, direction| {
+                                let call = calls;
+                                calls += 1;
+                                if Some(call) == failing {
+                                    words[0][0] = 99;
+                                    assert!(!unwind, "retained fixed prefix dispatch unwind");
+                                    return Err(TransformError::DeviceUnavailable);
+                                }
+                                transform_preserving_caller_allocation(
+                                    words,
+                                    root,
+                                    direction,
+                                    fastpq_prover::ExecutionMode::Cpu,
+                                )
+                            },
+                            || false,
+                        )
+                        .map(|_| ())
+                }));
+                if failing.is_some() {
+                    if unwind {
+                        assert!(result.is_err());
+                    } else {
+                        assert!(result.unwrap().is_err());
+                    }
+                    assert!(owner.poisoned);
+                    assert!(owner.evaluate_v1(coordinates).is_err());
+                } else {
+                    result.unwrap().unwrap();
+                    assert_eq!(
+                        calls, 4,
+                        "two prefix forwards and one suffix inverse/forward pair"
+                    );
+                    for (actual, coefficients) in owner.columns.iter().zip(&original) {
+                        for (row, value) in actual.iter().enumerate() {
+                            let x = coordinates.shift.mul(coordinates.root.pow(row as u128));
+                            assert_eq!(
+                                *value,
+                                coefficients
+                                    .iter()
+                                    .rev()
+                                    .fold(F::ZERO, |sum, c| sum.mul(x).add(*c))
+                            );
+                        }
+                    }
+                }
+            });
+            assert!(
+                erased
+                    .iter()
+                    .any(|entry| entry.cells == 8 && entry.nonzero_before > 0)
+            );
+            assert!(
+                erased
+                    .iter()
+                    .any(|entry| entry.cells == 16 && entry.nonzero_before > 0)
+            );
+            assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires actual Metal and full native19 repeated fixed stripes; absence is a failure"]
 fn required_metal_repeated_native19_fixed_stripes_match_every_cpu_byte() {
     use fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1;

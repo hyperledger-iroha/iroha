@@ -18,6 +18,8 @@ mod main_bounded_transform;
 pub(super) mod main_ca_links;
 #[path = "main_ca_resources.rs"]
 mod main_ca_resources;
+#[path = "main_composition_mix.rs"]
+mod main_composition_mix;
 #[cfg(test)]
 #[path = "main_composition_ownership_tests.rs"]
 mod main_composition_ownership_tests;
@@ -377,6 +379,11 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRng>(
     let source_timer = PhaseTimerV1::start_v1(PhaseV1::BaseSources);
     let p256 = P256MainBaseSourceV1::new_v1(assembly)?;
     let sha = main_log19_sha_base_sources_v1(&assembly.sha_schedule, &assembly.sha_witnesses)?;
+    let sha_payload =
+        core::mem::size_of_val(&sha).saturating_add(super::super::allocation_payload::sum_v1(
+            sha.iter()
+                .map(ZkX509ShaBatchSegmentBaseSourceV1::retained_base_heap_bytes_v1),
+        ));
     let projection = MainProjectionTraceGroupSourceV1::for_main_v1(
         &layout,
         statement,
@@ -387,7 +394,7 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRng>(
         assembly.allocated_payload_bytes_v1(),
         &[
             p256.allocated_payload_bytes_v1(),
-            core::mem::size_of_val(&sha),
+            sha_payload,
             projection.allocated_payload_bytes_v1(),
             io.allocated_payload_bytes_v1(),
         ],
@@ -415,7 +422,7 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRng>(
             assembly.allocated_payload_bytes_v1(),
             &[
                 p256.allocated_payload_bytes_v1(),
-                core::mem::size_of_val(&sha),
+                sha_payload,
                 projection.allocated_payload_bytes_v1(),
                 io.allocated_payload_bytes_v1(),
                 source.allocated_payload_bytes_v1(),
@@ -1156,13 +1163,7 @@ impl MainProverConstraintProviderV1<'_, '_> {
         if residues.len() != registration.segment.constraint_count {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        Ok(residues
-            .iter()
-            .zip(alphas)
-            .fold(E::ZERO, |sum, (residue, alpha)| {
-                sum.add(alpha.mul_base(*residue))
-            })
-            .mul_base(inverse))
+        Ok(main_composition_mix::mix_residues_v1(&residues, alphas).mul_base(inverse))
     }
 }
 struct ZeroizingMainFixedPolynomialSetV1 {
@@ -1180,11 +1181,13 @@ impl Drop for ZeroizingMainFixedPolynomialSetV1 {
 }
 fn stream_main_fixed_polynomial_sets_v1(
     provider: &MainProverConstraintProviderV1<'_, '_>,
+    transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
     mut consume: impl FnMut(&mut ZeroizingMainFixedPolynomialSetV1) -> Result<(), ZkX509StarkErrorV1>,
 ) -> Result<(), ZkX509StarkErrorV1> {
     if let MainProverConstraintProviderV1::Log19(source) = provider {
         for registration in source.source.registrations.iter().copied() {
-            let mut completed = main_log19_fixed_polynomial_set_v1(source, registration)?;
+            let mut completed =
+                main_log19_fixed_polynomial_set_v1(source, registration, transform_policy)?;
             consume(&mut completed)?;
         }
         return Ok(());
@@ -1237,13 +1240,18 @@ fn stream_main_fixed_polynomial_sets_v1(
 }
 /// Construct the existing final fixed matrix directly, avoiding a second
 /// pending copy. Each public SHA or arithmetic row fills all its admitted columns
-/// once. SHA inverse transforms retain their column order; arithmetic transforms
-/// retain their bounded eight-column batches.
+/// once. All initial inverse transforms retain canonical column order and use
+/// the existing admitted inverse adapter in batches of at most eight columns.
 fn main_log19_fixed_polynomial_set_v1(
     source: &MainLog19ProverConstraintSourceV1<'_, '_>,
     registration: RegisteredSegmentLayoutV1,
+    transform_policy: main_bounded_transform::MainBoundedTransformPolicyV1,
 ) -> Result<ZeroizingMainFixedPolynomialSetV1, ZkX509StarkErrorV1> {
     let index = source.source.registration_index_v1(registration)?;
+    let transform_policy = transform_policy.for_quotient_layout_v1(
+        registration.segment.base_width,
+        registration.segment.aux_width,
+    )?;
     let root = goldilocks_primitive_root_v1(registration.segment.trace_log2)
         .map_err(map_transparent_error_v1)?;
     let mut set = ZeroizingMainFixedPolynomialSetV1 {
@@ -1271,7 +1279,9 @@ fn main_log19_fixed_polynomial_set_v1(
     if (2..=5).contains(&index) {
         // These final public columns were already retained together by the old
         // per-column path. Construct each complete SHA row once into that same
-        // charged matrix, then preserve the original column-wise IFFT order.
+        // charged matrix before bounded interpolation in its original order.
+        #[cfg(test)]
+        let rows_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionShaFixedRows);
         for _ in 0..registration.segment.fixed_width {
             set.columns.push(
                 zeroed_main_trace_column_v1(registration.segment.trace_size())?.into_vec_v1(),
@@ -1282,9 +1292,8 @@ fn main_log19_fixed_polynomial_set_v1(
             .sha_fixed
             .fill_fixed_matrix_v1(index - 2, &mut set.columns)
             .map_err(map_main_sha_source_error_v1)?;
-        for column in &mut set.columns {
-            goldilocks_ifft_v1(column, root).map_err(map_transparent_error_v1)?;
-        }
+        #[cfg(test)]
+        rows_timer.complete_v1();
     } else if let Some(binding) = arithmetic {
         for _ in 0..registration.segment.fixed_width {
             set.columns.push(
@@ -1299,27 +1308,81 @@ fn main_log19_fixed_polynomial_set_v1(
             .fill_arithmetic_fixed_matrix_v1(binding, &mut set.columns)?;
         #[cfg(test)]
         rows_timer.complete_v1();
-        #[cfg(test)]
-        let inverse_timer =
-            PhaseTimerV1::start_v1(PhaseV1::CompositionArithmeticFixedInverseTransform);
-        for batch in set
-            .columns
-            .chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1)
-        {
-            batch.par_iter_mut().try_for_each(|column| {
-                goldilocks_ifft_v1(column, root).map_err(map_transparent_error_v1)
-            })?;
-        }
-        #[cfg(test)]
-        inverse_timer.complete_v1();
     } else {
         for column in 0..registration.segment.fixed_width {
-            let mut values = source.source.native_fixed_column_v1(registration, column)?;
-            goldilocks_ifft_v1(&mut values, root).map_err(map_transparent_error_v1)?;
+            let values = source.source.native_fixed_column_v1(registration, column)?;
             set.columns.push(values.into_vec_v1());
         }
     }
+    #[cfg(test)]
+    let inverse_timer = if (2..=5).contains(&index) {
+        Some(PhaseTimerV1::start_v1(
+            PhaseV1::CompositionShaFixedInverseTransform,
+        ))
+    } else if arithmetic.is_some() {
+        Some(PhaseTimerV1::start_v1(
+            PhaseV1::CompositionArithmeticFixedInverseTransform,
+        ))
+    } else {
+        None
+    };
+    main_initial_fixed_coefficients_with_v1(
+        &mut set.columns,
+        root,
+        transform_policy,
+        |words, root, direction| {
+            fastpq_prover::goldilocks_transform::transform_goldilocks_columns_v1(
+                words,
+                root,
+                direction,
+                fastpq_prover::ExecutionMode::Auto,
+            )
+        },
+        fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1,
+    )?;
+    #[cfg(test)]
+    if let Some(timer) = inverse_timer {
+        timer.complete_v1();
+    }
     Ok(set)
+}
+
+/// Interpolate the already owned final fixed matrix without a second matrix.
+/// Validate every column before the first transform can mutate any prefix.
+fn main_initial_fixed_coefficients_with_v1(
+    columns: &mut [Vec<F>],
+    root: F,
+    policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+    mut transform: impl FnMut(
+        &mut [Vec<u64>],
+        u64,
+        fastpq_prover::goldilocks_transform::GoldilocksTransformDirectionV1,
+    ) -> Result<
+        fastpq_prover::goldilocks_transform::GoldilocksTransformBackendV1,
+        fastpq_prover::goldilocks_transform::GoldilocksTransformErrorV1,
+    >,
+    mut uncertain: impl FnMut() -> bool,
+) -> Result<(), ZkX509StarkErrorV1> {
+    main_bounded_transform::check_completion_v1(uncertain())?;
+    let rows = columns.first().map_or(0, Vec::len);
+    if rows < 2
+        || !rows.is_power_of_two()
+        || rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+        || columns.iter().any(|column| column.len() != rows)
+        || F::canonical(root.0).is_none()
+        || root.pow(rows as u128) != F::ONE
+        || root.pow((rows / 2) as u128) == F::ONE
+        || columns
+            .iter()
+            .flatten()
+            .any(|value| F::canonical(value.0).is_none())
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    for batch in columns.chunks_mut(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        policy.inverse_with_v1(batch, root, &mut transform, &mut uncertain)?;
+    }
+    Ok(())
 }
 fn canonical_main_registration_index_v1(
     layout: &AggregateProofLayoutV1,
@@ -1499,11 +1562,6 @@ fn main_registration_composition_coefficient_chunks_v1(
         registration.segment.base_width,
         registration.segment.aux_width,
     )?;
-    let mut fixed_coset = main_fixed_coset::MainFixedCosetV1::new_v1(
-        registration.segment.trace_log2,
-        core::mem::take(&mut fixed.columns),
-    )?
-    .with_transform_policy_v1(transform_policy)?;
     let cache_plan = match joint_buffers {
         Some(plan) => plan.quotient_cache_plan_v1(layout, registration)?,
         None => main_resources::MainProverBufferPlanV1::new_v1(layout)?
@@ -1527,7 +1585,18 @@ fn main_registration_composition_coefficient_chunks_v1(
                 transform_policy,
             )
         },
+    )?
+    .with_fixed_coefficients_v1(
+        &fixed.columns,
+        registration.segment.trace_size(),
+        first_stripe.count,
     )?;
+    let mut fixed_coset = main_fixed_coset::MainFixedCosetV1::new_v1(
+        registration.segment.trace_log2,
+        core::mem::take(&mut fixed.columns),
+    )?
+    .with_transform_policy_v1(transform_policy)?
+    .with_coefficient_prefix_v1(cache.fixed_coefficients_v1())?;
     #[cfg(test)]
     cache_timer.complete_v1();
     let mut quotients = (0..SECURITY_LANES)
@@ -1661,8 +1730,8 @@ fn main_registration_composition_coefficient_chunks_v1(
         residue_timer.complete_v1();
     }
     // Coefficients are no longer needed once all original quotient rows exist.
-    drop(cache);
     drop(fixed_coset);
+    drop(cache);
     let mut coefficient_chunks =
         ZeroizingExtensionLanesV1::new(Vec::new(), zeroize_extension_lanes_v1);
     coefficient_chunks
@@ -1919,7 +1988,7 @@ fn main_composition_material_with_ca_v1<R: TryRng>(
             .filter(|registration| registration.trace_group == group_index)
             .collect::<Vec<_>>();
         let mut seen_in_group = 0_usize;
-        stream_main_fixed_polynomial_sets_v1(provider, |fixed| {
+        stream_main_fixed_polynomial_sets_v1(provider, bounded_transform, |fixed| {
             if expected.get(seen_in_group).copied() != Some(fixed.registration) {
                 return Err(ZkX509StarkErrorV1::ProfileMismatch);
             }
@@ -1999,6 +2068,13 @@ fn main_composition_material_with_ca_v1<R: TryRng>(
     #[cfg(test)]
     key_timer.complete_v1();
 
+    if let Some(ca) = ca.as_ref() {
+        ca.buffers.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::ShaUnion,
+            ca.original,
+            None,
+        )?;
+    }
     #[cfg(test)]
     let union_timer = PhaseTimerV1::start_v1(PhaseV1::CompositionShaUnion);
     sha_union_plan.accumulate_v1(
@@ -2262,11 +2338,11 @@ fn main_fri_bases_from_polynomials_v1(
     )?;
     if let Some(ca) = ca {
         ca.plan.accumulate_deep_v1(
+            layout,
             ca.original,
             deep_point,
             ca.values,
             ca.mixes,
-            key_policy,
             &mut accumulators
                 .get_mut(0)
                 .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?

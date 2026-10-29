@@ -57,13 +57,15 @@ fn canonical_source_shape_forecasts_fit_the_preconstruction_allowances() {
     let sha_scratch = ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(sha_shape).unwrap();
     let rfc_coefficients = main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(&layout).unwrap();
     let sha_aux = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
+    let sha_base = ZkX509ShaBatchSegmentBaseSourceV1::native_base_cache_forecast_all_v1().unwrap();
+    assert_eq!(sha_base, 134_217_728); // Four full native segments, 64 bytes per original row.
     assert!(sha_aux > 1_375_731_712); // Four full 524288 x 82 field matrices plus terminals.
-    let retained = small + p256 + sha_fixed + rfc_coefficients + sha_aux;
+    let retained = small + p256 + sha_fixed + rfc_coefficients + sha_aux + sha_base;
     assert!(retained <= main_resources::MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1);
     let serial_scratch = small_scratch.max(sha_scratch).max(p256_scratch);
     assert!(serial_scratch <= main_resources::MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1);
     eprintln!(
-        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, sha_aux={sha_aux}, retained_rfc={rfc_coefficients}, serial_scratch={serial_scratch}"
+        "MAIN source shape forecasts: retained={retained}, small={small}, p256={p256}, sha_fixed={sha_fixed}, sha_aux={sha_aux}, sha_base={sha_base}, retained_rfc={rfc_coefficients}, serial_scratch={serial_scratch}"
     );
     // These construction bounds do not materialize or qualify the separately
     // borrowed maximum-profile assembly, nor measure allocator/process RSS.
@@ -143,12 +145,59 @@ fn native_source_budget_is_reserved_before_construction_and_rechecked_after_bind
         plan.check_native_sources_v1(0, &[source_limit - sha_aux + 1, sha_aux]),
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
+    let sha_base = ZkX509ShaBatchSegmentBaseSourceV1::native_base_cache_forecast_all_v1().unwrap();
+    let other_sources = source_limit - sha_aux - sha_base;
+    assert_eq!(
+        plan.check_native_sources_v1(assembly_limit, &[other_sources, sha_aux, sha_base])
+            .unwrap(),
+        plan.check_before_sources_v1(assembly_limit).unwrap()
+    );
+    assert!(matches!(
+        plan.check_native_sources_v1(0, &[other_sources + 1, sha_aux, sha_base]),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
     // The source transition reuses the same retained assembly charge, rather
     // than treating a borrowed assembly as already freed after base commitment.
     assert!(matches!(
         plan.check_native_sources_v1(assembly_limit + 1, &[source_limit]),
         Err(ZkX509StarkErrorV1::ProofTooLarge)
     ));
+}
+
+#[test]
+fn joined_transform_admission_reuses_only_absent_registration_owners() {
+    use main_ca_resources::MainCaBufferPhaseV1;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let original = joint
+        .required_v1(MainCaBufferPhaseV1::OriginalCommitments)
+        .unwrap();
+    let finalization = joint
+        .required_v1(MainCaBufferPhaseV1::Finalization)
+        .unwrap();
+    let assembly = 215_244_730;
+    let global = plan.check_before_sources_v1(assembly).unwrap();
+    let admitted = plan.joined_transform_admission_v1(assembly).unwrap();
+    assert_eq!(
+        admitted,
+        global - plan.maximum_live_buffers + original.max(finalization)
+    );
+    for phase in [original, finalization] {
+        assert!(admitted >= global - plan.maximum_live_buffers + phase);
+    }
+    assert!(admitted < global);
+    let cap = 12_usize << 30;
+    let assembly_limit = cap - plan.check_before_sources_v1(0).unwrap();
+    assert!(plan.joined_transform_admission_v1(assembly_limit).is_ok());
+    assert_eq!(
+        plan.joined_transform_admission_v1(assembly_limit + 1),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
+    assert!(plan.joined_transform_admission_v1(usize::MAX).is_err());
+    let mut corrupted = plan;
+    corrupted.retained_cuts = usize::MAX;
+    assert!(corrupted.joined_transform_admission_v1(0).is_err());
 }
 
 #[test]
@@ -165,9 +214,9 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
         core::mem::size_of::<aggregate::retained_commitment::RetainedMerkleCutV1>(),
         80
     );
-    assert_eq!(cut_payload, 12_582_912 + 80);
+    assert_eq!(cut_payload, 100_663_296 + 80);
     assert_eq!(plan.retained_cuts, 2 * cut_payload);
-    assert_eq!(plan.retained_cuts, 25_165_984);
+    assert_eq!(plan.retained_cuts, 201_326_752);
     let total_width = layout
         .trace_groups
         .iter()
@@ -213,7 +262,7 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
             >()
     );
     let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
-    assert_eq!(plan.quotient_cache_reserve, 67_341_864);
+    assert_eq!(plan.quotient_cache_reserve, 67_341_896);
     assert_eq!(
         plan.maximum_live_buffers,
         joint
@@ -678,11 +727,17 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         // accumulation each replay every original masked trace polynomial.
         other_native_butterflies += 4 * width * (n / 2) * u64::from(segment.trace_log2);
         fixed_native_butterflies += fixed * (n / 2) * u64::from(segment.trace_log2);
-        // Later stripes recover the shifted public coefficients in place.
-        // Count these real extra transforms separately from native interpolation.
-        fixed_recovery_iffts += fixed * (stripes - 1);
-        fixed_recovery_butterflies +=
-            fixed * (stripes - 1) * (stripe_rows / 2) * u64::from(stripe_rows.ilog2());
+        // The private cache keeps its complete original allocation. Only the
+        // unspent remainder retains a public fixed coefficient prefix; later
+        // stripes recover the remaining suffix in place.
+        let retained_fixed = cache
+            .fixed_prefix_columns_v1(n as usize, fixed as usize, stripes as usize)
+            .unwrap() as u64;
+        fixed_recovery_iffts += (fixed - retained_fixed) * (stripes - 1);
+        fixed_recovery_butterflies += (fixed - retained_fixed)
+            * (stripes - 1)
+            * (stripe_rows / 2)
+            * u64::from(stripe_rows.ilog2());
     }
     eprintln!(
         "MAIN current work before original pins: columns={columns}, native_cells={native_cells}, masked_cells={masked_cells}, quotient_rows={quotient_rows}, residues={residues}, cached_columns={cached_columns}, quotient_native_iffts={quotient_native_iffts}, quotient_native_butterflies={quotient_native_butterflies}, quotient_forward_butterflies={quotient_forward_butterflies}, quotient_fp4_inverse_butterflies={quotient_fp4_inverse_butterflies}, other_native_butterflies={other_native_butterflies}, fixed_native_butterflies={fixed_native_butterflies}, fixed_recovery_iffts={fixed_recovery_iffts}, fixed_recovery_butterflies={fixed_recovery_butterflies}"
@@ -737,8 +792,8 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
     assert_eq!(other_native_butterflies, 80_391_882_752);
     assert_eq!(fixed_native_butterflies, 8_827_312_576);
-    assert_eq!(fixed_recovery_iffts, 7_202);
-    assert_eq!(fixed_recovery_butterflies, 35_871_260_672);
+    assert_eq!(fixed_recovery_iffts, 1_896);
+    assert_eq!(fixed_recovery_butterflies, 9_443_475_456);
     let commitment_forward_butterflies =
         2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
     assert_eq!(commitment_forward_butterflies, 538_053_705_728);
@@ -848,6 +903,49 @@ fn grouped_deep_replay_fits_existing_buffers_and_eliminates_per_column_division(
 }
 
 #[test]
+fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let buffers = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let mut original_recoveries = 0;
+    let mut retained_recoveries = 0;
+    for registration in &layout.registered_segments {
+        let segment = registration.segment;
+        let plan = registered_retained_prover_plan_v1(segment, layout.common_lde_log2).unwrap();
+        let stripe_rows = plan.quotient_coset_rows.min(1 << 19);
+        let stripes = plan.quotient_coset_rows / stripe_rows;
+        let cache = buffers
+            .quotient_cache_plan_v1(&layout, *registration)
+            .unwrap();
+        let fixed = cache
+            .fixed_prefix_columns_v1(segment.trace_size(), segment.fixed_width, stripes)
+            .unwrap();
+        original_recoveries += segment.fixed_width * (stripes - 1);
+        retained_recoveries += (segment.fixed_width - fixed) * (stripes - 1);
+        match segment.adapter {
+            SegmentAdapterIdV1::Sha256CallBus => {
+                assert_eq!(
+                    (cache.base_columns, cache.aux_columns, fixed),
+                    (89, 82, 137)
+                );
+            }
+            SegmentAdapterIdV1::P256Arithmetic => {
+                assert_eq!(
+                    (cache.base_columns, cache.aux_columns, fixed),
+                    (211, 72, 27)
+                );
+            }
+            SegmentAdapterIdV1::Rfc5280 => {
+                assert_eq!((cache.base_columns, cache.aux_columns, fixed), (16, 0, 0));
+            }
+            _ => (),
+        }
+    }
+    assert_eq!(original_recoveries, 7_202);
+    assert_eq!(retained_recoveries, 2_046);
+    assert_eq!(original_recoveries - retained_recoveries, 5_156);
+}
+
+#[test]
 fn registration_quotient_phase_ledger_retains_originals_chunks_and_growth() {
     use main_resources::MainRegistrationQuotientPayloadV1;
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
@@ -949,6 +1047,7 @@ fn current_registration_resource_owner_plan_diagnostic() {
     for phase in [
         main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
         main_ca_resources::MainCaBufferPhaseV1::Registration,
+        main_ca_resources::MainCaBufferPhaseV1::ShaUnion,
         main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
         main_ca_resources::MainCaBufferPhaseV1::Finalization,
     ] {

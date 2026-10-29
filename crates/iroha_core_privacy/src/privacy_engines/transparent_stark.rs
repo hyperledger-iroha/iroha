@@ -176,6 +176,7 @@ pub struct TransparentStarkWorkSecurityV1 {
     pub(crate) max_random_oracle_query_log2: u16,
 }
 /// Canonical Goldilocks field element.
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GoldilocksFieldV1(pub(crate) u64);
 impl zeroize::Zeroize for GoldilocksFieldV1 {

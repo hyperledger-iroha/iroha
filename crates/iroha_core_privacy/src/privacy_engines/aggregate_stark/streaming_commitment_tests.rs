@@ -145,6 +145,44 @@ fn malformed_alignment_missing_duplicate_and_trailing_frontiers_fail_closed() {
 }
 
 #[test]
+fn retained_subtree_tiles_preserve_nonzero_tree_levels_and_reject_bad_spans() {
+    let values = leaves(2 * TILE_ROWS);
+    let tree = PrivacyOuterMerkleTreeV1::from_leaves(values.clone(), context(), NODE).unwrap();
+    for level in [0, 1, 2, 4] {
+        let mut acc = accumulator(values.len(), &[]);
+        let mut roots = Vec::new();
+        for (index, chunk) in values.chunks(1 << level).enumerate() {
+            let mut nodes = chunk.to_vec();
+            assert_eq!(
+                reduce_tile_at_level_v1(&mut acc, &mut nodes, index << level, 0, None).unwrap(),
+                level
+            );
+            roots.push(nodes[0]);
+        }
+        append_retained_subtrees_v1(&mut acc, &roots, level).unwrap();
+        assert_eq!(acc.finish().unwrap().root, tree.root());
+    }
+    for (first, level, count) in [
+        (1, 1, 2),
+        (0, usize::BITS as usize, 1),
+        (8, 1, 1),
+        (0, 1, 3),
+    ] {
+        let mut acc = accumulator(8, &[]);
+        let mut nodes = values[..count].to_vec();
+        let before = nodes.clone();
+        assert!(reduce_tile_at_level_v1(&mut acc, &mut nodes, first, level, None).is_err());
+        assert_eq!(nodes, before);
+        assert_eq!(acc.next_leaf, 0);
+    }
+    for count in [0, 3] {
+        assert!(
+            append_retained_subtrees_v1(&mut accumulator(8, &[]), &values[..count], 1).is_err()
+        );
+    }
+}
+
+#[test]
 fn digest_tile_clears_success_early_error_and_unwind_and_rejects_nested_census() {
     let census = Census::begin();
     {

@@ -52,7 +52,10 @@ fn native_aux_cache_exact_forecast_and_all_column_batch_projections() {
     let all = ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1().unwrap();
     assert_eq!(
         all,
-        1_308_622_848 + 4 * 13 * core::mem::size_of::<ZkX509ShaCallBoundaryTerminalV1>()
+        ZK_X509_SHA_SEGMENT_COUNT_V1
+            * (ZK_X509_SHA_SEGMENT_ROWS_V1 * core::mem::size_of::<Row>()
+                + ZK_X509_SHA_CA_CALL_COUNT_V1
+                    * core::mem::size_of::<ZkX509ShaCallBoundaryTerminalV1>())
     );
     for segment in 0..4 {
         let cache = cache(9, segment);

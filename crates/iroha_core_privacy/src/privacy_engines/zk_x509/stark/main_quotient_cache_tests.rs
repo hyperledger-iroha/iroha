@@ -139,6 +139,119 @@ fn cache_admission_uses_public_capacity_and_rejects_overflow_or_bad_replay() {
 }
 
 #[test]
+fn fixed_prefix_deducts_actual_private_capacities_and_respects_exact_byte_boundary() {
+    const NATIVE: usize = 8;
+    const MASKED: usize = 37;
+    let fixed = vec![vec![F(7); NATIVE]; 5];
+    let per_fixed = NATIVE * core::mem::size_of::<F>() + core::mem::size_of::<PrivateTableV1<F>>();
+    let exact = budget(2, MASKED) + 3 * per_fixed;
+    for (allowance, expected) in [(exact - 1, 2), (exact, 3), (exact + 1, 3)] {
+        let plan = MainQuotientCachePlanV1::from_budget_v1(2, 0, MASKED, 4, allowance).unwrap();
+        assert_eq!(
+            plan.fixed_prefix_columns_v1(NATIVE, fixed.len(), 4)
+                .unwrap(),
+            expected
+        );
+        let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+            Ok(replay(kind, range, MASKED))
+        })
+        .unwrap()
+        .with_fixed_coefficients_v1(&fixed, NATIVE, 4)
+        .unwrap();
+        assert_eq!(cache.fixed_coefficients_v1().len(), expected);
+        assert_eq!(
+            cache.allocated_payload_v1().unwrap(),
+            budget(2, MASKED) + expected * per_fixed
+        );
+        assert!(cache.allocated_payload_v1().unwrap() <= allowance);
+        for column in cache.fixed_coefficients_v1() {
+            assert_eq!(&**column, &fixed[0]);
+        }
+    }
+    let plan = MainQuotientCachePlanV1::from_budget_v1(2, 0, MASKED, 4, exact).unwrap();
+    let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |_, range| {
+        Ok(range
+            .map(|_| {
+                let mut column = Vec::with_capacity(MASKED + 1);
+                column.resize(MASKED, F::ONE);
+                ZeroizingMainTraceColumnV1(column)
+            })
+            .collect())
+    })
+    .unwrap()
+    .with_fixed_coefficients_v1(&fixed, NATIVE, 4)
+    .unwrap();
+    assert_eq!(
+        cache.fixed_coefficients_v1().len(),
+        2,
+        "actual spare capacity is not spent twice"
+    );
+    let mut cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+        Ok(replay(kind, range, MASKED))
+    })
+    .unwrap();
+    cache.payload_limit = cache.allocated_payload_v1().unwrap() - 1;
+    assert!(cache.with_fixed_coefficients_v1(&fixed, NATIVE, 4).is_err());
+    let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+        Ok(replay(kind, range, MASKED))
+    })
+    .unwrap()
+    .with_fixed_coefficients_v1(&fixed, NATIVE, 1)
+    .unwrap();
+    assert!(cache.fixed_coefficients_v1().is_empty());
+}
+
+#[test]
+fn fixed_prefix_refuses_malformed_fields_and_clears_both_owners_on_unwind() {
+    for malformed in 0..4 {
+        let plan = MainQuotientCachePlanV1::from_budget_v1(2, 0, 37, 4, budget(8, 37)).unwrap();
+        let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+            Ok(replay(kind, range, 37))
+        })
+        .unwrap();
+        let mut fixed = vec![vec![F(7); 8]; 3];
+        let mut stripes = 4;
+        match malformed {
+            0 => fixed.clear(),
+            1 => {
+                fixed[1].pop();
+            }
+            2 => fixed[1][0] = F(u64::MAX),
+            _ => stripes = 3,
+        }
+        assert!(
+            cache
+                .with_fixed_coefficients_v1(&fixed, 8, stripes)
+                .is_err()
+        );
+    }
+    let (result, erased) = inspection::observe_v1(|| {
+        std::panic::catch_unwind(|| {
+            let plan = MainQuotientCachePlanV1::from_budget_v1(2, 0, 37, 4, budget(8, 37)).unwrap();
+            let _cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+                Ok(replay(kind, range, 37))
+            })
+            .unwrap()
+            .with_fixed_coefficients_v1(&vec![vec![F(7); 8]; 3], 8, 4)
+            .unwrap();
+            panic!("fixed/private cache unwind");
+        })
+    });
+    assert!(result.is_err());
+    assert!(
+        erased
+            .iter()
+            .any(|entry| entry.cells == 37 && entry.nonzero_before > 0)
+    );
+    assert!(
+        erased
+            .iter()
+            .any(|entry| entry.cells == 8 && entry.nonzero_before > 0)
+    );
+    assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+}
+
+#[test]
 fn cached_private_cells_clear_after_source_error_unwind_and_success() {
     for failure in [0, 1, 2] {
         let plan = MainQuotientCachePlanV1::from_budget_v1(9, 0, 8, 4, budget(9, 8)).unwrap();

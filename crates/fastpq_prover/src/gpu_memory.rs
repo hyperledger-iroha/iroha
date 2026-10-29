@@ -4,7 +4,7 @@
 pub const METAL_PAGE_BYTES: usize = 16 * 1024;
 /// Maximum pages retained across every idle pooled allocation.
 pub const METAL_POOL_MAX_CACHED_PAGES: usize = 4096;
-/// Covers idle pages and oversized retained pages reused for a smaller request.
+/// Covers all idle pages independently of exact-capacity live pooled allocations.
 pub const METAL_POOL_MAX_CACHED_BYTES: usize = METAL_PAGE_BYTES * METAL_POOL_MAX_CACHED_PAGES;
 
 /// One shared cache holds both stage-only and factorized exact-root tables.

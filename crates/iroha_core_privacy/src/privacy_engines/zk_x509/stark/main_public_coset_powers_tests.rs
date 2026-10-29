@@ -200,3 +200,81 @@ fn shared_coset_preparation_matches_original_products_at_native19_width8() {
         reused_elapsed.as_nanos()
     );
 }
+
+#[test]
+#[ignore = "isolated real Metal four/eight-column joined batching comparison; component evidence only"]
+fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
+    use crate::privacy_engines::transparent_stark::masked_trace_coefficients_with_mask_v1;
+    use fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1;
+    use std::time::Instant;
+
+    assert_eq!(
+        fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
+        Some(Backend::Metal),
+    );
+    let common = 22;
+    let rows = 1usize << common;
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+    let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
+    assert!(metal_goldilocks_transform_extra_payload_v1(rows, 8).unwrap() <= available);
+    for native in [5, 19] {
+        let columns = (0..8)
+            .map(|column| {
+                let values = (0..1usize << native)
+                    .map(|row| F((17 * row + 13 * column + 1) as u64))
+                    .collect::<Vec<_>>();
+                let mask = (0..MASK_DEGREE + 1)
+                    .map(|degree| F((29 * degree + 7 * column + 3) as u64))
+                    .collect::<Vec<_>>();
+                Column::from_vec_v1(
+                    masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = columns
+            .iter()
+            .map(|column| {
+                Column::from_vec_v1(
+                    masked_trace_coefficients_on_coset_v1(column, native, common).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut evaluator = MainTraceCosetEvaluatorV1::new_v1(&layout, 288_345_698).unwrap();
+        assert!(evaluator.coset_powers.is_some());
+        for round in 0..3 {
+            for device_columns in if round % 2 == 0 { [4, 8] } else { [8, 4] } {
+                // Test only: both shapes passed the exact joined admission above.
+                evaluator.device_columns = device_columns;
+                let started = Instant::now();
+                let before = evaluator.receipt.metal_columns;
+                let output = evaluator
+                    .evaluate_with_v1(&columns, native, common, |words, root| {
+                        let backend = transform_goldilocks_columns_v1(
+                            words,
+                            root,
+                            Direction::Forward,
+                            fastpq_prover::ExecutionMode::Gpu,
+                        )
+                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+                        assert_eq!(backend, Backend::Metal);
+                        Ok(backend)
+                    })
+                    .unwrap();
+                let transform_ns = started.elapsed().as_nanos();
+                assert_eq!(evaluator.receipt.metal_columns - before, 8);
+                for (actual, expected) in output.iter().zip(&expected) {
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+                }
+                let clear_started = Instant::now();
+                drop(output);
+                let clear_ns = clear_started.elapsed().as_nanos();
+                println!(
+                    "x509_joined_device_batch native_log={native} common_log={common} width=8 device_columns={device_columns} workers={} round={round} transform_gather_scratch_clear_ns={transform_ns} output_clear_ns={clear_ns} parity=exact",
+                    rayon::current_num_threads(),
+                );
+            }
+        }
+    }
+}
