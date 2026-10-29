@@ -458,6 +458,12 @@ def test_minter_initial_data_layout() -> None:
             builder.minter_initial_data(network, instance, 1, 1, generation, start, 1234, keys, wallet, bucket)
     with pytest.raises(builder.TonBuilderError):
         builder.minter_initial_data(network, instance, 1, 1, 7, 7000, 1234, keys[:3], wallet, bucket)
+    # the cap is a TON amount: `sccp_init` refuses 0 and 2^96 or more
+    for cap in (0, 1 << 96, (1 << 120) - 1):
+        with pytest.raises(builder.TonBuilderError):
+            builder.minter_initial_data(network, instance, 1, cap, 7, 7000, 1234, keys, wallet, bucket)
+    largest = builder.minter_initial_data(network, instance, 1, (1 << 96) - 1, 7, 7000, 1234, keys, wallet, bucket)
+    assert len(largest["config"].bits) == 544 + 4 + 12 * 8
 
 
 def test_bucket_initial_data_layout() -> None:

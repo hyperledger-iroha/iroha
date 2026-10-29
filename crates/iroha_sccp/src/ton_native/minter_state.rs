@@ -44,11 +44,12 @@ pub struct TonMinterStateV1 {
     pub committee: CommitteeStateV1,
     /// At most three retained certified checkpoint commitments, in height order.
     pub checkpoints: Vec<(u64, H256)>,
-    /// Completed circulating supply.
+    /// Circulating supply, including mints dispatched to wallets; never above `max_supply`.
     pub total_supply: u128,
-    /// Reserved supply awaiting asynchronous completion.
+    /// Mint amounts admitted and awaiting their bucket's verdict, duplicates included. The
+    /// cap binds only when a consume is applied, so this is not part of it.
     pub pending_supply: u128,
-    /// Immutable maximum combined supply.
+    /// Immutable cap on `total_supply`, below `2^96`.
     pub max_supply: u128,
     /// Next outbound burn nonce.
     pub outbound_nonce: u64,
@@ -346,7 +347,8 @@ fn parse(cells: &TonAccountCells) -> Option<TonMinterStateV1> {
         || revision == 0
         || max_supply == 0
         || max_supply >= (1_u128 << 96)
-        || total_supply.checked_add(pending_supply)? > max_supply
+        // In-flight duplicates may push `total + pending` past the cap; the supply cannot.
+        || total_supply > max_supply
     {
         return None;
     }

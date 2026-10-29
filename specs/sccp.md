@@ -4069,6 +4069,10 @@ changed no state reverts `NothingToDo`.
 
 `maxWrappedSupply` is immutable and is set at construction to Taira's
 `max_wrapped_supply` (same units). Mint reverts if it would be exceeded.
+TON consumes nonces asynchronously: a finalize is refused early against the
+completed supply, and the cap binds when the bucket applies the consume, where
+a mint the cap cannot take is undone and its nonce cleared (§5.3.4). A TON cap
+is below `2^96`.
 
 #### 5.1.5 Block and message proofs, and finalization
 
@@ -4511,8 +4515,12 @@ construction.
 ascending (`SDLEXCMP`), the keccak committee root of the stored keys equal to
 `committee.root = initial.root`, the remaining committee fields equal to
 `initial`, and `now_ms < until_ms ≤ now_ms + MAX_VALIDITY_MS +
-MAX_INIT_SLACK_MS` (§5.2.1 explains the slack). It then sets `initialized =
-true`. Every other operation throws until then.
+MAX_INIT_SLACK_MS` (§5.2.1 explains the slack). The configuration must be
+deployable: nonzero `NetworkId`, `I` and revision, a pin of generation ≥ 1
+with a nonzero root and a start ≥ 1, and a cap `0 < max_supply < 2^96`, the
+TON amount bound of §3.2 that `RegisterRoute` also applies (`BadConfig`
+otherwise). It then sets `initialized = true`. Every other operation throws
+until then.
 
 #### 5.3.2 Cell formats
 
@@ -4574,7 +4582,9 @@ Internal recovery messages (bounceable; IHR disabled):
 Stages are activation 1, consume 2, mint 3, unconsume 4 and range 5. Results
 are missing 0, applied 1, rejected 2 and deletion confirmed 3. A bucket accepts
 activation only for its own index, and the other bucket stages only after
-activation. A wallet accepts only mint dispatches from its minter. Ordinary
+activation. A wallet accepts only mint dispatches from its minter. Both
+destinations refuse a dispatch, confirmation or deletion from any other
+sender (`NotMinter`) before they read a receipt. Ordinary
 TEP-74 wallet-to-wallet transfers require the authenticated peer wallet address.
 Anyone may top up either child.
 
@@ -4686,8 +4696,11 @@ and bounces the inbound message, so no step completes without its event.
    Admit capacity for every activation plus the consume before verification or
    storage mutation. Check attached value including the floor deficit before
    signatures, then authenticate `X`, `Live`, pause, block reference, deadline
-   and leaf path in the specified order. Check `total_supply + pending_supply
-   + amount ≤ max_supply`, reserve pending supply and retain the immutable row.
+   and leaf path in the specified order. Refuse early when `total_supply +
+   amount > max_supply` (`SupplyCapExceeded`). `pending_supply` is not
+   counted: the cap binds at receipt completion (step 4), so mints still in
+   flight, duplicates included, hold no headroom. Add the amount to
+   `pending_supply` and retain the immutable row.
 2. **Activation.** A finalize/void can reserve up to four new buckets; an
    explicit `sccp_deploy_buckets` call can reserve 1..16. `deployed_buckets`
    advances when the whole chain is reserved. `activated_buckets` advances
@@ -4706,9 +4719,13 @@ and bounces the inbound message, so no step completes without its event.
    from `WAIT` to `DROP`, retaining the result, and sends receipt deletion.
    Only authenticated deletion confirmation advances or releases the row.
    A consume rejection releases its pending amount. An applied mint consume
-   releases pending supply, reserves the amount in total supply, and changes
-   the same reserved row to wallet mint.
-   If equivocation latched before this point, change it to unconsume instead.
+   releases its pending amount, and here the cap binds: when `total_supply +
+   amount ≤ max_supply`, it reserves the amount in total supply and changes
+   the same reserved row to wallet mint. If equivocation latched before this
+   point, or the cap cannot take the amount, it changes the row to unconsume
+   instead: the flag clears and nothing is minted or emitted, so the message
+   can finalize again once the cap allows, or be voided after its deadline.
+   `total_supply` grows only here, so it never exceeds `max_supply`.
    Only authenticated wallet receipt deletion completion increments `op_count`,
    emits `sccp_finalized` and releases the slot. Thus Finalized proofs attest an
    actual wallet credit, never a tentative dispatch that can still bounce.
@@ -4719,8 +4736,14 @@ and bounces the inbound message, so no step completes without its event.
    are mandatory. A consume/range failure frees its row (and mint pending
    supply). A failed wallet mint removes its unminted total supply and changes
    the existing row to `FAILED` unconsume. Activation/unconsume failure keeps
-   that row `FAILED`. These handlers send no new messages and allocate no new
-   rows, so a low-value bounce cannot lose the recovery instruction.
+   that row `FAILED`. These handlers allocate no new rows. After the custody
+   update, the bounce returns its value above the minter's prior balance to
+   the operation's original `response`; the send ignores errors, so a
+   low-value bounce cannot lose the recovery instruction. A confirmation or
+   deletion bounce of a retained operation changes no custody and returns its
+   value the same way. A bounce of a completed operation keeps its value.
+   256 bounced bits cannot carry the `response` of a retry's own exchange, so
+   a retry's bounced value also goes to the original `response`.
    `op_count` stays monotone and saturates at `2^64 − 1`.
 
 **Retry.** Anyone can fund `sccp_retry{operation_id}`. A `FAILED` row alone may
@@ -4732,6 +4755,13 @@ is idempotent, and stale operation/stage/attempt messages cannot touch a newer
 receipt or a reused capacity slot. Missing receipt is observational only: it
 cannot prove original failure after possible destination deletion/recreation,
 so it retains the row without reminting or clearing a replay flag.
+An ACK that advances nothing returns its value to the ACK's own `response`
+and the minter keeps none of it. That covers an ACK whose row has completed,
+has moved to another stage or attempt, or is not awaiting deletion, as when a
+retry races its original. A premature retry therefore gets back all but the
+fees of its own messages. Only a destination's bounce of its message, which
+cannot name its `response`, sends that value to the operation's original
+`response` instead (finalize step 5).
 
 TON validates same-source/destination order with IHR disabled (whitepaper
 §§2.2.9–2.2.11; `ValidateQuery::check_message_processing_order`, including
@@ -4810,10 +4840,19 @@ value returns to `response`.
   caller's value, but never from the part the step needs. Storage the caller
   did not pay for stays a deficit for the next caller. Anyone may add to the
   floor with `top_up`.
-- **Burns and replies.** Burns and recovery ACKs reserve the minter's prior
-  balance rather than charging its floor deficit. Original-bounce handlers
-  update existing custody without sending or allocating. Their bounded gas is
-  paid from the minter balance when the bounce carries little value.
+- **Burns and replies.** Burns, recovery ACKs and bounces reserve the
+  minter's prior balance rather than charging its floor deficit, so the minter
+  keeps none of their value. Every unused nanoton of an ACK returns to the
+  ACK's `response`, including an ACK that advances nothing. The unused value
+  of a bounce returns to the operation's original `response` (§5.3.4
+  finalize step 5).
+  Original-bounce handlers update existing custody without allocating. Their
+  return ignores send errors, and their bounded gas is paid from the minter
+  balance when the bounce carries little value. A destination keeps the residue
+  of a bounced ACK with its receipt, because 256 bounced bits cannot carry the
+  `response`. The minter bounces a genuine ACK only when the ACK's value cannot
+  pay the step it advances, as after a price increase. A funded retry then
+  completes the operation.
 - **Quotes.** The `*_required_value` get methods return `step + max(0,
   MINTER_FLOOR − balance) + grace`, where a get method's balance is exactly
   `stored`, so a quote does not go stale as time passes. `grace` is
@@ -4835,9 +4874,16 @@ value returns to `response`.
   someone unfreezes it with its exact public state. Anyone can redeploy its
   canonical `StateInit`, but that bucket is not activated and accepts nothing
   (§5.3.4 step 2), so already-minted nonces never become voidable.
-- **Duplicate finalizes.** Parallel duplicate finalizes of one message each
-  reserve `pending_supply` until the bucket rejects them. Near the cap this can
-  delay honest mints by one round trip; this is accepted.
+- **Duplicate finalizes.** The minter does not track nonces, so a duplicate
+  finalize of an unexpired message passes its checks and the bucket rejects
+  it. Until then it holds one prepaid recovery slot and adds its amount to
+  `pending_supply`, but it holds no cap headroom. The cap binds `total_supply`
+  only when a consume is applied (§5.3.4 finalize step 4), and the early
+  refusal counts completed supply alone, so no number of duplicates in flight
+  can refuse or delay an honest mint. Two honest messages that each fit can
+  both be admitted. If the cap cannot take the second when it is applied, that
+  message is unconsumed and can finalize again later, at the cost of one
+  consume round trip.
 
 #### 5.3.6 Get methods
 
@@ -4846,7 +4892,10 @@ value returns to `response`.
   consensus_instance, route_revision, initial pin…, root, until_ms, start,
   high, generation, outbound_nonce, op_count, parliament_paused,
   fast_pause_until_ms, effective_paused, control_nonce, total_supply,
-  pending_supply, max_supply, deployed_buckets)`.
+  pending_supply, max_supply, deployed_buckets)`. `total_supply ≤ max_supply`
+  always holds. `pending_supply` sums the mint amounts admitted and awaiting
+  their bucket, duplicates included, so `total_supply + pending_supply` can
+  exceed the cap.
 - `get_sccp_committee()`, `get_sccp_checkpoints()` and
   `get_bucket_address(index)`.
 - Quotes (§5.3.5): `checkpoint_required_value()`,
@@ -4967,11 +5016,11 @@ genuinely signed checkpoints overtake it, for committees of 4, 7 and 31.
 Zero through two overtakes finalize once; three or four return
 `UnknownCheckpoint` without changing minter state or allocating child custody.
 One funded inline retry then finalizes once. The measured minter gas is
-50,170–50,455 for the retained reference, 18,749 for eviction refusal, and
-127,265 / 134,369 / 191,345 for inline recovery at `n = 4 / 7 / 31`.
+50,126–50,411 for the retained reference, 18,749 for eviction refusal, and
+127,221 / 134,325 / 191,301 for inline recovery at `n = 4 / 7 / 31`.
 After the original generation retires, its inline certificate is refused
 (20,974 gas); a current-generation signed history proof recovers the message
-(200,067 gas at `n = 31`). Duplicate recovery cannot mint again. Each row
+(200,023 gas at `n = 31`). Duplicate recovery cannot mint again. Each row
 records the full trace's gas, transaction fees and returned value; durable
 contract reserves are not transaction fees. These deterministic orderings
 measure the two/three-overtake boundary and recovery cost. They establish no

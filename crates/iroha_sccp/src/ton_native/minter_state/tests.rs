@@ -187,6 +187,17 @@ fn root(
     initialized: bool,
     total: u128,
 ) -> Cell {
+    root_with(data, book, checkpoints, initialized, total, 0)
+}
+
+fn root_with(
+    data: &TonMinterDataV1,
+    book: Cell,
+    checkpoints: Cell,
+    initialized: bool,
+    total: u128,
+    pending: u128,
+) -> Cell {
     CellBuilder::new()
         .store_bit(initialized)
         .unwrap()
@@ -194,7 +205,7 @@ fn root(
         .unwrap()
         .store_coins(total)
         .unwrap()
-        .store_coins(0)
+        .store_coins(pending)
         .unwrap()
         .store_uint(0, 64)
         .unwrap()
@@ -363,6 +374,30 @@ fn minter_storage_opens_exact_original_account_and_locked_code_references() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn cap_binds_total_supply_while_in_flight_duplicates_stay_pending() {
+    let data = minter_initial_data(&init()).unwrap();
+    let open_supplies = |total, pending| {
+        open(
+            root_with(
+                &data,
+                data.recovery.clone(),
+                data.checkpoints.clone(),
+                true,
+                total,
+                pending,
+            ),
+            locked_code_refs()[0],
+        )
+    };
+    // Under the cap of 1000, 600 is minted and two claims of 600 await their bucket: the
+    // contract admits both and lets the cap decide when one is applied (§5.1.4).
+    let state = open_supplies(600, 1200).unwrap();
+    assert_eq!((state.total_supply, state.pending_supply), (600, 1200));
+    assert!(open_supplies(1000, 1000).is_ok());
+    assert!(open_supplies(1001, 0).is_err());
 }
 
 #[test]
