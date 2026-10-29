@@ -5,6 +5,9 @@ buildscript {
         // Jackson 2.22.3+ fixes parser/number/forward-reference/type-ID DoS advisories.
         classpath(platform("com.fasterxml.jackson:jackson-bom:2.22.4"))
         constraints {
+            add("classpath", "com.google.guava:guava:33.7.2-jre") {
+                because("GHSA-xxph-c9ww-hj94: bound native deserialization allocations")
+            }
             add("classpath", "org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.21") {
                 because("GHSA-r937-wjx7-w2jp: align AGP tooling with the current Kotlin plugin")
             }
@@ -61,6 +64,9 @@ allprojects {
 allprojects {
     configurations.configureEach {
         if (name == "androidLintTool") {
+            project.dependencies.constraints.add(name, "com.google.guava:guava:33.7.2-jre") {
+                because("GHSA-xxph-c9ww-hj94: bound native deserialization allocations")
+            }
             project.dependencies.constraints.add(name, "org.apache.commons:commons-lang3:3.21.0") {
                 because("GHSA-j288-q9x7-2f5v: reject recursive-input denial of service")
             }

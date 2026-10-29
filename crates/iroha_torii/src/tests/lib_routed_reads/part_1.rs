@@ -3361,7 +3361,11 @@ async fn signed_accounts_get_grows_owner_for_valid_large_multisig_witness() {
     )
     .expect("48-member policy");
     let authority = AccountId::new_multisig(policy);
-    let app = canonical_accounts_portal_app_for_test(&authority);
+    let mut app = canonical_accounts_portal_app_for_test(&authority);
+    // Fail-fast admission keeps all memory limits while letting the 48-signature
+    // owner-growth and replay assertions run independently of debug-build scheduling.
+    // `owner_escalation_does_not_restart_the_http_deadline` covers the deadline itself.
+    Arc::get_mut(&mut app).unwrap().query_queue_timeout = Duration::ZERO;
     let owners = Arc::new(std::sync::Mutex::new(Vec::new()));
     let router = canonical_accounts_get_router_for_test(app.clone(), owners.clone());
     let uri: Uri = CANONICAL_ACCOUNTS_PORTAL_URI.parse().unwrap();
@@ -3414,12 +3418,28 @@ async fn signed_accounts_get_grows_owner_for_valid_large_multisig_witness() {
         .await
         .expect("large witness response");
     let status = response.status();
-    let body = response_json(response).await;
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .cloned();
+    let reject_code = response.headers().get("x-iroha-reject-code").cloned();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("large witness response body is readable");
     assert_eq!(
         status,
         StatusCode::OK,
-        "valid large witness must grow its owner: {body:?}"
+        "valid large witness must grow its owner: content_type={content_type:?}, reject_code={reject_code:?}, native_error={:?}, body_prefix={:?}, owners={:?}",
+        norito::decode_from_bytes::<ErrorEnvelope>(&bytes),
+        &bytes[..bytes.len().min(128)],
+        owners.lock().unwrap()
     );
+    let body: Value = norito::json::from_slice(&bytes).unwrap_or_else(|error| {
+        panic!(
+            "large witness success must be JSON: {error:?}, content_type={content_type:?}, body_prefix={:?}",
+            &bytes[..bytes.len().min(128)]
+        )
+    });
     assert!(
         body["items"]
             .as_array()

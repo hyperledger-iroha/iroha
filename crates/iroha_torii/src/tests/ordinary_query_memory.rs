@@ -90,12 +90,17 @@ mod ordinary_query_memory_tests {
             bridge,
         };
         let world = tests_runtime_handlers::world_with_account(&authority);
-        let app = tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
+        let app = tests_runtime_handlers::mk_native_app_state_for_tests_with_world(world);
+
+        let genesis = app
+            .state
+            .latest_block_header_fast()
+            .expect("native genesis header");
         let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero proof fixture height"),
+            NonZeroU64::new(2).expect("nonzero proof fixture height"),
+            Some(genesis.hash()),
             None,
-            None,
-            0,
+            u64::try_from(genesis.creation_time().as_millis()).unwrap() + 1,
             0,
         );
         let mut block = app.state.block(header);
@@ -109,7 +114,8 @@ mod ordinary_query_memory_tests {
         block
             .commit_world_overlay_for_testing()
             .expect("commit bounded proof fixture");
-        let signed = authorize_query_for_test(
+        let signed = tests_runtime_handlers::authorize_native_query_for_fixture(
+            *app.state.network_id_ref(),
             QueryRequest::Singular(SingularQueryBox::FindProofRecordById(FindProofRecordById {
                 id,
             })),

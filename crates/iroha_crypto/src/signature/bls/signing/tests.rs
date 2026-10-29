@@ -15,10 +15,12 @@ fn key<C: BlsConfiguration>(seed: u8) -> super::super::implementation::ManagedSe
 
 fn upstream_once<C: BlsConfiguration>(bytes: &[u8], message: &[u8]) -> Vec<u8> {
     let mut key = SecretKey::<C::Engine>::from_bytes(bytes).unwrap();
-    key.sign_once(&w3f_bls::Message::new(
-        super::super::implementation::MESSAGE_CONTEXT,
-        message,
-    ))
+    // Upstream now requires its split-key blinding path; the resulting BLS
+    // signature is independent of the fixture's blinding randomness.
+    key.sign(
+        &w3f_bls::Message::new(super::super::implementation::MESSAGE_CONTEXT, message),
+        crate::rng::bls_rng_from_seed_slice(b"upstream signature relation fixture"),
+    )
     .to_bytes()
 }
 

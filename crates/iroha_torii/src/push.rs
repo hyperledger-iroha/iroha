@@ -3008,6 +3008,9 @@ mod tests {
 
     #[tokio::test]
     async fn push_worker_genesis_bootstrap_waits_for_authenticated_successor_and_shutdown() {
+        // Retain unrelated constructor EBR generations while measuring only the
+        // original reader/capture owners and their exact synchronous refunds.
+        let _constructor_retirement = crossbeam_epoch::pin();
         use iroha_core::sumeragi::test_chain::CertifiedTestChain;
         for restarted in [false, true] {
             for publish_successor in [false, true] {
@@ -3618,6 +3621,9 @@ mod tests {
     }
     #[tokio::test]
     async fn original_push_history_capacity_preserves_cursor_queue_and_pool_release() {
+        // Keep retired fixture State generations from reopening this original pool.
+        // Only the tested admission and synchronous owner refunds may change capacity.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         let state = chain.state();
         let pool = state.ivm_execution_budget();
@@ -3662,6 +3668,9 @@ mod tests {
             future::Future,
             task::{Context, Poll},
         };
+        // Keep retired fixture World versions from refunding this exact pool
+        // while checking original replay owners and their synchronous refunds.
+        let _epoch = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         let state = chain.state();
         let pool = state.ivm_execution_budget();
@@ -4034,6 +4043,9 @@ mod tests {
             future::Future,
             task::{Context, Poll},
         };
+        // Keep retired fixture World versions from refunding this exact pool
+        // while checking original replay owners and their synchronous refunds.
+        let _epoch = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         let state = chain.state();
         let pool = state.ivm_execution_budget();
@@ -4121,6 +4133,9 @@ mod tests {
 
     #[test]
     fn push_replay_cursor_receipt_is_operation_local_and_rejects_rebound_state() {
+        // Keep retired fixture World versions from refunding this exact pool
+        // while checking original replay owners and their synchronous refunds.
+        let _epoch = crossbeam_epoch::pin();
         let chain = native_push_chain(false);
         // Authenticate the replacement before exhausting the original pool: reading
         // certified history itself requires that pool's allocation authority.
@@ -4219,6 +4234,9 @@ mod tests {
 
     #[tokio::test]
     async fn push_worker_admits_original_retry_control_before_startup_and_refunds_after_shutdown() {
+        // Retain unrelated constructor EBR generations while measuring only the
+        // original reader/capture owners and their exact synchronous refunds.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let state = pristine_push_state(Kura::blank_kura_for_testing());
         let pool = state.ivm_execution_budget();
         let baseline = pool.reserved_bytes();

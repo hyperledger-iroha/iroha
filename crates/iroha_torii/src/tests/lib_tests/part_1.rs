@@ -2003,9 +2003,6 @@ fn seed_proof_record_at_height(
         .expect("seed proof block commit should succeed");
     id.to_string()
 }
-fn seed_proof_record(app: &SharedAppState, backend: &str, proof_hash: [u8; 32]) -> String {
-    seed_proof_record_at_height(app, backend, proof_hash, 1)
-}
 fn current_block_height(app: &SharedAppState) -> u64 {
     app.state
         .transactions_latest_height_for_testing()

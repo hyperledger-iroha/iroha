@@ -729,15 +729,23 @@ fn runtime_catalog_merge_validation_owns_its_captured_policy() {
 
         // These physical caches are no longer this carrier's predecessor.
         state.nexus.write().fees.base_fee = Quantity::from(99_u32);
+        state.nexus.write().hf_shared_leases.drain_grace =
+            original_nexus.hf_shared_leases.drain_grace + std::time::Duration::from_secs(1);
         *state.lane_manifests.write() = Arc::new(LaneManifestRegistry::empty());
         block
             .validate_owned_runtime_catalog_overlay()
             .expect("captured policy and original journals own the accepted transition");
         block.nexus.fees.base_fee = Quantity::from(99_u32);
+        block
+            .validate_owned_runtime_catalog_overlay()
+            .expect("local fee recipes cannot replace the original committed monetary policy");
+        block.nexus.hf_shared_leases.drain_grace =
+            state.nexus_snapshot().hf_shared_leases.drain_grace;
         assert!(
             block.validate_owned_runtime_catalog_overlay().is_err(),
             "matching a later physical cache cannot authorize policy substitution"
         );
+        block.nexus.hf_shared_leases.drain_grace = original_nexus.hf_shared_leases.drain_grace;
         block.nexus.fees.base_fee = original_nexus.fees.base_fee.clone();
         block.validate_owned_runtime_catalog_overlay().unwrap();
         block.zk.pipa_r.enabled = !block.zk.pipa_r.enabled;
@@ -941,7 +949,13 @@ fn runtime_catalog_owned_validation_binds_policy_without_a_staged_transition() {
         block.validate_owned_runtime_catalog_overlay().unwrap();
         let original_fee = block.nexus.fees.base_fee.clone();
         block.nexus.fees.base_fee = Quantity::from(99_u32);
+        block
+            .validate_owned_runtime_catalog_overlay()
+            .expect("the local fee recipe does not author captured monetary policy");
+        let original_grace = block.nexus.hf_shared_leases.drain_grace;
+        block.nexus.hf_shared_leases.drain_grace += std::time::Duration::from_secs(1);
         assert!(block.validate_owned_runtime_catalog_overlay().is_err());
+        block.nexus.hf_shared_leases.drain_grace = original_grace;
         block.nexus.fees.base_fee = original_fee;
         block.validate_owned_runtime_catalog_overlay().unwrap();
         block.zk.pipa_r.enabled = !block.zk.pipa_r.enabled;

@@ -940,7 +940,9 @@ fn fixed_capacity_norito_writer_refuses_growth_past_preflight() {
 #[tokio::test]
 async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
     let authority = routed_read_test_account(0xd7);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
     for content_type in [Some("text/plain"), None] {
@@ -985,9 +987,14 @@ async fn bounded_json_signed_query_remains_supported() {
         "derive JSON signed-query fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let signed_query =
-        crate::tests_runtime_handlers::signed_find_triggers_query_for_test(authority, &key_pair);
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
+    let signed_query = crate::tests_runtime_handlers::signed_native_find_triggers_query_for_fixture(
+        *app.state.network_id_ref(),
+        authority,
+        &key_pair,
+    );
     let body = norito::json::to_json(
         &iroha_data_model::query::json_wrappers::SignedQueryJson::from(&signed_query),
     )
@@ -1013,7 +1020,9 @@ async fn bounded_json_signed_query_remains_supported() {
 #[tokio::test]
 async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
     let authority = routed_read_test_account(0xd8);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
     let mut request = axum::extract::Request::builder()
@@ -1056,7 +1065,9 @@ async fn duplicate_signed_query_content_type_is_rejected_before_body_poll() {
 #[tokio::test]
 async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
     let authority = routed_read_test_account(0xd9);
-    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
     let ingress_before = app.query_ingress_inflight.available_permits();
     let fanout_before = app.query_fanout_inflight.available_permits();
     let mut request = axum::extract::Request::builder()
@@ -1094,12 +1105,15 @@ async fn slow_signed_query_body_does_not_occupy_fanout_execution_memory() {
 #[tokio::test]
 async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
     let authority = routed_read_test_account(0xea);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
+        world_with_account(&authority),
+    );
+    let network = *app.state.network_id_ref();
     Arc::get_mut(&mut app)
         .expect("test app state has one owner")
         .signed_query_admission = Arc::new(
         routing::SignedQueryAdmission::new(
-            signed_query_test_network_id(),
+            network,
             Duration::ZERO,
             Duration::from_millis(5),
             NonZeroUsize::new(1).expect("nonzero replay capacity"),

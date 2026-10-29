@@ -389,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_inspection_http_bounds_media_and_keeps_responses_private() {
-        let app = crate::mk_app_state_for_tests();
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let request_body = body(app.state.network_id_ref(), &account(0xc5).to_string());
         for (media, bytes, status) in [
             ("application/json", request_body, StatusCode::OK),

@@ -260,9 +260,10 @@ fn unregister_domain_checks_original_pending_and_sibling_currencies_before_any_m
             .unwrap();
             let asset = AssetId::new(definition.clone(), ALICE_ID.clone());
             let quantity = Quantity::from(7_u32);
-            let (_, value) = Asset::new(asset.clone(), quantity.clone()).into_key_value();
-            registration.world.assets.insert(asset.clone(), value);
-            registration.world.track_asset_holder(&asset);
+            registration
+                .world
+                .asset_or_insert_exact(&asset, quantity.clone())
+                .expect("fixture balance retains every holder index");
             registration
                 .world
                 .increase_asset_total_amount(&definition, &quantity)
@@ -363,11 +364,41 @@ fn transaction_local_monetary_initialization_cannot_replace_missing_original_pol
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    // Isolate the missing original fee policy: the independent staking guard
+    // must have its own original policy before this negative component probe.
+    state
+        .world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            super::monetary_test_support::staking()
+                .into_custom_parameter()
+                .unwrap(),
+        ))
+        .unwrap();
+    // The general State fixture explicitly authors a zero-rate fee policy.
+    // Remove it through the funded owner to construct this malformed predecessor.
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+        let mut missing = parameters.get().get().clone();
+        missing
+            .remove_custom_parameter(
+                &iroha_data_model::block::consensus::RootFeePolicy::parameter_id(),
+            )
+            .unwrap()
+            .expect("the ordinary fixture originally authors root fees");
+        *parameters.get_mut() =
+            crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+                &missing,
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("retain the exact original with no fee policy");
+        parameters.commit();
+    }
+    assert!(state.world.parameters.view().root_fees().is_none());
     let domain = DomainId::try_new("missing-monetary", "world").unwrap();
     seed_domain(&mut state, &domain, &ALICE_ID);
     let target = AccountId::new(checked_keypair().public_key().clone());
     seed_account(&mut state, &target, &domain);
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut tx = block.transaction();
     tx.world
         .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
@@ -383,6 +414,12 @@ fn transaction_local_monetary_initialization_cannot_replace_missing_original_pol
                 .unwrap(),
         ))
         .unwrap();
+    assert!(tx.world.parameters().root_fees().is_some());
+    assert_eq!(
+        tx.root_fee_policy(),
+        Err("original committed root fee policy is absent"),
+        "pending initialization cannot change the original parameter cut"
+    );
     let before = tx.world.accounts.get(&target).cloned();
     let events_before = tx.world.internal_event_buf.clone();
     let error = Unregister::account(target.clone())

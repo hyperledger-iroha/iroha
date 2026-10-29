@@ -2124,13 +2124,32 @@
    "gates": "The complete root monetary schedule, exact currency, sink, sponsor custody and Global claim exemptions.",
    "decided_by": "The mandatory root_fees_v1 parameter, validated and atomically projected by StateParameters. Each block freezes its predecessor projection; restore rebuilds it from original canonical Parameters. H1 authors exactly one original policy and retains both signed policy digest checks. Currency and sponsor custody are immutable after H1; other authorized terms apply next block. Node fee and fee-relay worker configuration are removed.",
    "attribution": "read",
-   "open_reason": "The moved execution readers now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Three remaining detector rows retain fee projection consumers in SoraCloud and Torii. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
+   "open_reason": "The moved execution readers, including SoraCloud fee currency and sink resolution, now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Two remaining detector rows retain fee projection consumers in Torii. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
    "sites": [
-    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "fees", 2],
     ["crates/iroha_torii/src/game.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/lib.rs", "node_policy_read", "fees", 2]
    ],
    "tests": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+     "name": "soracloud_fee_destinations_keep_original_policy_across_local_and_sibling_changes"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+     "name": "soracloud_fee_destinations_refuse_missing_original_despite_local_and_pending_policy"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+     "name": "soracloud_uploaded_model_charge_uses_original_currency_and_sink"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+     "name": "soracloud_shared_lease_genesis_charge_uses_authored_fee_sink"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs",
+     "name": "renew_hf_shared_lease_active_window_queues_next_window"
+    },
     {
      "path": "crates/iroha_core/src/executor/settlement_replay_tests.rs",
      "name": "committed_global_fee_policy_prevents_local_schedule_rejecting_payment"
@@ -6648,7 +6667,7 @@
  },
  "summary": {
   "entries": 232,
-  "sites": 1503,
+  "sites": 1502,
   "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

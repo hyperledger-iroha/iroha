@@ -10,7 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 
-METADATA_SHA256 = "8a096b96b512f2c45e20b55d8b88e3d67554f1b9212b73e3511a56daafa135c9"
+METADATA_SHA256 = "fc65a265149b30dfa4f58e73c8ea0ebe45960820d8d5ebd8f368a9475fbdf6a3"
 MANIFEST_SHA256 = "1225bebd04024daf79062f7a012ec0094c97d4d26d6946222208f9745b11cebf"
 OWNED_FILES = {"Package.swift", "UPSTREAM.json", "IROHA-PATCH.md", "verify_source.py"}
 LOCAL_BUILD_DIRECTORIES = {".build", ".swiftpm", "__pycache__"}

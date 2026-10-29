@@ -12,8 +12,8 @@
 [package]
 edition = "2024"
 rust-version = "1.87"
-name = "accesskit_atspi_common"
-version = "0.21.0"
+name = "accesskit_unix"
+version = "0.24.1"
 authors = ["The AccessKit contributors"]
 build = false
 autolib = false
@@ -21,7 +21,7 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "AccessKit UI accessibility infrastructure: core AT-SPI translation layer"
+description = "AccessKit UI accessibility infrastructure: Linux adapter"
 readme = "README.md"
 keywords = [
     "gui",
@@ -33,31 +33,69 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/AccessKit/accesskit"
 
 [features]
-simplified-api = []
+async-io = [
+    "dep:async-channel",
+    "dep:futures-util",
+]
+default = ["async-io"]
+tokio = [
+    "zbus/tokio",
+    "dep:tokio",
+    "dep:tokio-stream",
+]
 
 [lib]
-name = "accesskit_atspi_common"
+name = "accesskit_unix"
 path = "src/lib.rs"
 
 [dependencies.accesskit]
-version = "0.25.1"
+version = "0.25.2"
 
-[dependencies.accesskit_consumer]
-version = "0.39.1"
+[dependencies.accesskit_atspi_common]
+version = "0.21.1"
 
-[dependencies.atspi-common]
-version = "0.14"
+[dependencies.async-channel]
+version = "2.1.1"
+optional = true
+
+[dependencies.atspi]
+version = "0.30"
+features = ["proxies"]
 default-features = false
 
-[dependencies.phf]
-version = "0.14.0"
-features = ["macros"]
+[dependencies.futures-lite]
+version = "2.3"
+
+[dependencies.futures-util]
+version = "0.3.27"
+optional = true
 
 [dependencies.serde]
 version = "1.0"
 
+[dependencies.tokio]
+version = "1.54.1"
+features = [
+    "macros",
+    "net",
+    "rt",
+    "sync",
+    "time",
+]
+optional = true
+
+[dependencies.tokio-stream]
+version = "0.1.19"
+optional = true
+
 [dependencies.zbus]
 version = "6.1.0"
+features = ["default-rt", "proxy", "service"]
+default-features = false
+
+[dev-dependencies.zbus]
+version = "6.1.0"
+features = ["p2p"]
 default-features = false
 
 [workspace]

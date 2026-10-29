@@ -12,7 +12,7 @@
 blake3==1.0.11
 cryptography==50.0.2
 maturin==1.15.0
-pytest==9.1.1
+pytest==9.2.0
 requests==2.34.2
 certifi==2026.10.23
 urllib3==2.8.0

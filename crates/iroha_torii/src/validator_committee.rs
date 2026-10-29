@@ -510,8 +510,9 @@ mod tests {
 
     #[test]
     fn validator_committee_status_large_signed_source_fits_its_reserved_envelope() {
-        // This genuine source exceeds one generic decode unit while leaving room
-        // for both complete source decodes, RS16 scratch and the final artifact.
+        // This genuine source reaches artifact materialization with one generic
+        // decode unit, then exhausts it. The full committee envelope retains room
+        // for the complete source work and final artifact together.
         let chain = committee_source_with_logs(256 * 1024);
         let envelope = CommitteeMemoryEnvelope::new(48 * 1024 * 1024).unwrap();
         let legacy = QueryFanoutMemoryEnvelope::new(48 * 1024 * 1024, 0).unwrap();
@@ -525,14 +526,18 @@ mod tests {
             allocated_bytes: legacy.decode_allocated_bytes,
             ..envelope.limits
         };
+        let refused_result = read(refused);
         assert!(
             matches!(
-                read(refused),
+                &refused_result,
                 Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::CapacityLimit
+                    QueryExecutionFail::GasBudgetExceeded
                 )))
             ),
-            "the former generic decode unit cannot admit this genuine finalized source"
+            "the generic decode unit cannot finish the source's final artifact: {:?}",
+            refused_result
+                .as_ref()
+                .map(|status| status.latest_finality.block_wire.len()),
         );
         let observed = read(envelope.limits)
             .expect("same source fits the complete acquired committee envelope");
@@ -552,12 +557,15 @@ mod tests {
             let observed = read(envelope.limits).unwrap();
             let refused = crate::utils::respond_with_format_bounded(&(observed), format, 1)
                 .map_err(|value| response_error(&value));
-            assert!(matches!(
-                refused,
-                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::GasBudgetExceeded
-                )))
-            ));
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        QueryExecutionFail::GasBudgetExceeded
+                    )))
+                ),
+                "bounded response must retain its exact capacity refusal: {refused:?}"
+            );
         }
         assert!(matches!(
             response_error(&(crate::utils::BoundedResponseEncodeError::Serialization)),
@@ -581,23 +589,37 @@ mod tests {
 
     #[test]
     fn validator_committee_status_oversized_signed_source_refuses_without_poisoning() {
-        // Measured independently with one diagnostic cumulative scope: this
-        // source needs over 48 MiB of admitted work, so it must never be admitted
-        // by reallocating phases within the 48 MiB total request reservation.
-        let chain = committee_source_with_logs(1024 * 1024);
+        // Each original frame fits its source ceiling, but the complete cold
+        // reads exceed this request's cumulative decode allowance. The larger
+        // payload keeps this refusal meaningful after source-copy reductions.
+        let chain = committee_source_with_logs(3 * 1024 * 1024);
         let envelope = CommitteeMemoryEnvelope::new(48 * 1024 * 1024).unwrap();
+        let lengths =
+            [1, 3, 2].map(|height| chain.committed(height).block().encode_wire().unwrap().len());
+        assert!(
+            lengths
+                .iter()
+                .all(|length| *length <= envelope.limits.block_bytes)
+        );
+        assert!(lengths.iter().sum::<usize>() <= envelope.limits.journal_bytes);
         let view = chain.state().view();
         for _ in 0..2 {
             let refused = norito::core::with_decode_limits_scope(
                 envelope.limits.decode_limits().unwrap(),
                 || load(&view, None, envelope.limits),
             );
-            assert!(matches!(
-                refused,
-                Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    QueryExecutionFail::CapacityLimit
-                )))
-            ));
+            assert!(
+                matches!(
+                    &refused,
+                    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        QueryExecutionFail::CapacityLimit
+                    )))
+                ),
+                "oversized signed source must retain its exact capacity refusal: {:?}",
+                refused
+                    .as_ref()
+                    .map(|status| status.latest_finality.block_wire.len()),
+            );
         }
         assert_eq!(view.height(), 3);
         assert_eq!(chain.kura().blocks_count(), 3);

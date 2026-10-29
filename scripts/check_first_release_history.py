@@ -1488,11 +1488,12 @@ def contract_section(contract: str, heading: str) -> str | None:
 
 
 def check_checkpoint_rule(root: Path, inventory: dict) -> list[str]:
-    """The contract still states the future-checkpoint rule, and restore is still marked open.
+    """Pin current World-checked resume and the unfinished complete-State checkpoint rule.
 
     The section is pinned by the digest of its text with whitespace collapsed, so any
-    edit of the rule is a change of the inventory too. This preserves a stated
-    constraint on future work; it does not show that a checkpoint exists or verifies.
+    edit of the rule is a change of the inventory too. Source anchors cover implemented
+    restore checks and their authority limits; they do not prove a complete-State
+    checkpoint exists or verifies.
     """
     rule = inventory["future_checkpoint_rule"]
     contract_path = inventory["contract"]

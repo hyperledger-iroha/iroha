@@ -263,6 +263,9 @@ fn world_root_verification_preserves_original_writer_refusal_and_exact_retry() {
 
 #[test]
 fn world_root_verification_preserves_original_capacity_refusal_and_exact_retry() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use crate::{
         state::WorldStateVerificationError,
         sumeragi::node::{NodeError, ReplayError},

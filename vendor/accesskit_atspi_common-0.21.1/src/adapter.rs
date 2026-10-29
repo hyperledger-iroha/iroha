@@ -697,6 +697,39 @@ mod tests {
     }
 
     #[test]
+    fn reversed_adapter_creation_preserves_lookup_and_removal() {
+        let app_context = AppContext::new(None);
+        let create = |id| {
+            Adapter::with_id(
+                id,
+                &app_context,
+                CapturingCallback {
+                    ops: Arc::new(Mutex::new(Vec::new())),
+                },
+                initial_tree(),
+                false,
+                WindowBounds::default(),
+                NoOpActionHandler,
+            )
+        };
+        let high = create(20);
+        let low = create(10);
+        let middle = create(15);
+        {
+            let context = app_context.read().unwrap();
+            assert_eq!(context.adapter_index(10), Ok(0));
+            assert_eq!(context.adapter_index(15), Ok(1));
+            assert_eq!(context.adapter_index(20), Ok(2));
+        }
+        drop(middle);
+        assert_eq!(app_context.read().unwrap().adapter_index(20), Ok(1));
+        drop(low);
+        assert_eq!(app_context.read().unwrap().adapter_index(20), Ok(0));
+        drop(high);
+        assert!(app_context.read().unwrap().adapters.is_empty());
+    }
+
+    #[test]
     fn no_cache_events_on_construction() {
         let (_adapter, ops) = build(initial_tree());
         assert!(ops.lock().unwrap().is_empty());

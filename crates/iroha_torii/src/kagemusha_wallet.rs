@@ -586,15 +586,15 @@ mod tests {
     #[tokio::test]
     async fn load_original_http_requires_exact_network_auth_binary_accept_and_finality() {
         use crate::tests_runtime_handlers::{
-            app_auth_test_guard, mk_app_state_for_tests_with_world, signed_network_app_headers,
-            world_with_account,
+            app_auth_test_guard, mk_native_app_state_for_tests_with_world,
+            signed_network_app_headers, world_with_account,
         };
         use tower::ServiceExt as _;
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key =
             iroha_crypto::KeyPair::from_seed(vec![0x73; 32], iroha_crypto::Algorithm::Ed25519);
         let payer = AccountId::new(key.public_key().clone());
-        let app = mk_app_state_for_tests_with_world(world_with_account(&payer));
+        let app = mk_native_app_state_for_tests_with_world(world_with_account(&payer));
         let router = read_router(app.clone());
         for suffix in ["", "/finality", "/epochs/2"] {
             let uri: axum::http::Uri = format!(
@@ -643,8 +643,8 @@ mod tests {
     #[tokio::test]
     async fn finality_routes_require_empty_exact_network_signed_get_and_binary_accept() {
         use crate::tests_runtime_handlers::{
-            app_auth_test_guard, mk_app_state_for_tests_with_world, signed_network_app_headers,
-            world_with_account,
+            app_auth_test_guard, mk_native_app_state_for_tests_with_world,
+            signed_network_app_headers, world_with_account,
         };
         use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
         use iroha_data_model::{NetworkId, block::BlockHeader};
@@ -652,7 +652,7 @@ mod tests {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key = KeyPair::from_seed(vec![0x74; 32], Algorithm::Ed25519);
         let payer = AccountId::new(key.public_key().clone());
-        let app = mk_app_state_for_tests_with_world(world_with_account(&payer));
+        let app = mk_native_app_state_for_tests_with_world(world_with_account(&payer));
         let router = read_router(app.clone());
         for suffix in ["finality", "epochs/2"] {
             let uri: axum::http::Uri = format!(

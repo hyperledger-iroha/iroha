@@ -123,6 +123,9 @@ fn real_populated_current_and_predecessor_use_the_exact_original_bytecode_projec
 }
 #[test]
 fn executing_partial_foreign_and_released_state_set_never_admit_a_counter() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = new_state(World::new());
     let foreign = new_state(World::new());
     let pool = state.ivm_execution_budget();
@@ -145,6 +148,9 @@ fn executing_partial_foreign_and_released_state_set_never_admit_a_counter() {
 }
 #[test]
 fn frozen_relation_work_and_encoding_failures_return_without_partial_roots_or_leaked_charge() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = new_state(populated());
     let pool = state.ivm_execution_budget();
     let mut block = state.block(header());
@@ -178,6 +184,9 @@ fn frozen_relation_work_and_encoding_failures_return_without_partial_roots_or_le
 }
 #[test]
 fn frozen_state_uses_the_original_pool_and_refuses_a_full_counter_before_leaf_encoding() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = new_state(populated());
     let pool = state.ivm_execution_budget();
     let mut block = state.block(header());
@@ -204,6 +213,9 @@ fn frozen_state_uses_the_original_pool_and_refuses_a_full_counter_before_leaf_en
 }
 #[test]
 fn original_state_generation_fence_defers_without_encoding_during_publication() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = new_state(populated());
     let pool = state.ivm_execution_budget();
     let mut block = state.block(header());

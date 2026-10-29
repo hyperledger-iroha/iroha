@@ -456,6 +456,9 @@ fn committed_archive_index_refusal_retains_original_release_and_exact_publicatio
 
 #[test]
 fn committed_archive_cold_history_refusal_retains_original_pool_and_exact_publication() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     run(|| {
         use iroha_allocation::AllocationBudget;
         use std::task::{Context, Waker};

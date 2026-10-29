@@ -347,7 +347,7 @@ mod app_routed_read_http_admission_tests {
 
     #[tokio::test]
     async fn account_inspection_real_handler_inherits_outer_http_owner() {
-        let app = mk_app_state_for_tests();
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let before = app.query_fanout_inflight.available_bytes();
         let descriptor = route_catalog::application_api::ACCOUNTS_INSPECT_POST;
         let account = AccountId::new(

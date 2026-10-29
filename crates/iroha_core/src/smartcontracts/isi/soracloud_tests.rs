@@ -17173,6 +17173,307 @@ fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), 
     Ok(())
 }
 #[test]
+fn soracloud_fee_destinations_keep_original_policy_across_local_and_sibling_changes()
+-> Result<(), eyre::Report> {
+    initial_permissioned_soracloud_state!(kura, state);
+    let original = state.world.parameters.view().root_fees().unwrap().clone();
+    let mut replacement = original.clone();
+    replacement.fee_asset_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("different", "universal")?,
+        "fee".parse()?,
+    );
+    replacement.fee_sink_account_id = BOB_ID.clone();
+    assert_ne!(original.fee_asset_id, replacement.fee_asset_id);
+    assert_ne!(
+        original.fee_sink_account_id,
+        replacement.fee_sink_account_id
+    );
+    let header = initial_soracloud_header(&state, 2);
+    let mut block = state.block(header);
+    {
+        let mut transaction = block.transaction();
+        assert!(!crate::executor::is_initial_genesis_context(&transaction));
+        transaction.nexus.fees = replacement.clone();
+        assert_eq!(
+            resolve_fee_asset_definition_id(&transaction)?,
+            original.fee_asset_id
+        );
+        assert_eq!(
+            resolve_fee_sink_account(&transaction)?,
+            original.fee_sink_account_id
+        );
+        // Deliberately bypass ordinary currency-immutability admission: even a
+        // substituted current projection cannot replace predecessor custody.
+        transaction.world.set_parameter_for_testing(
+            iroha_data_model::parameter::Parameter::Custom(
+                replacement.clone().into_custom_parameter()?,
+            ),
+        )?;
+        assert_eq!(
+            transaction.world.parameters().root_fees(),
+            Some(&replacement)
+        );
+        assert_eq!(
+            resolve_fee_asset_definition_id(&transaction)?,
+            original.fee_asset_id
+        );
+        assert_eq!(
+            resolve_fee_sink_account(&transaction)?,
+            original.fee_sink_account_id
+        );
+        transaction.apply();
+    }
+    let mut sibling = block.transaction();
+    sibling.nexus.fees = replacement.clone();
+    assert_eq!(sibling.world.parameters().root_fees(), Some(&replacement));
+    assert_eq!(
+        resolve_fee_asset_definition_id(&sibling)?,
+        original.fee_asset_id
+    );
+    assert_eq!(
+        resolve_fee_sink_account(&sibling)?,
+        original.fee_sink_account_id
+    );
+    Ok(())
+}
+
+#[test]
+fn soracloud_fee_destinations_refuse_missing_original_despite_local_and_pending_policy()
+-> Result<(), eyre::Report> {
+    initial_permissioned_soracloud_state!(kura, state);
+    let original = state.world.parameters.view().root_fees().unwrap().clone();
+    {
+        let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
+            .expect("funded malformed-original fixture");
+        let mut absent = parameters.get().get().clone();
+        absent
+            .remove_custom_parameter(
+                &iroha_data_model::block::consensus::RootFeePolicy::parameter_id(),
+            )?
+            .expect("fixture originally authors root fees");
+        *parameters.get_mut() =
+            crate::pipeline_gas_policy::RetainedStateParameters::try_copy_for_testing(
+                &absent,
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .expect("retain exact original with absent fee policy");
+        parameters.commit();
+    }
+    let header = initial_soracloud_header(&state, 2);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    assert!(!crate::executor::is_initial_genesis_context(&transaction));
+    transaction.nexus.fees = original.clone();
+    for with_pending in [false, true] {
+        if with_pending {
+            transaction.world.set_parameter_for_testing(
+                iroha_data_model::parameter::Parameter::Custom(
+                    original.clone().into_custom_parameter()?,
+                ),
+            )?;
+            assert_eq!(transaction.world.parameters().root_fees(), Some(&original));
+        }
+        for error in [
+            resolve_fee_asset_definition_id(&transaction).unwrap_err(),
+            resolve_fee_sink_account(&transaction).unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvariantViolation(ref message)
+                    if message.as_ref() == "original committed root fee policy is absent"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn soracloud_uploaded_model_charge_uses_original_currency_and_sink() -> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let mut state = state_with_initial_soracloud_permission(&kura)?;
+    let mut original = state.world.parameters.view().root_fees().unwrap().clone();
+    original.fee_sink_account_id = BOB_ID.clone();
+    Arc::get_mut(&mut state)
+        .expect("fixture exclusively retains original State")
+        .world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            original.clone().into_custom_parameter()?,
+        ))?;
+    let alternative = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "alternative_fee".parse()?,
+    );
+    assert_ne!(original.fee_asset_id, alternative);
+    let header = initial_soracloud_header(&state, 2);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction_for_fastpq_testing(Hash::new(b"uploaded-model-fee"));
+    assert!(!crate::executor::is_initial_genesis_context(&transaction));
+    set_current_transaction_hash(&mut transaction, b"uploaded-model-fee");
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut transaction)?;
+    for (definition, name) in [
+        (&original.fee_asset_id, "original_fee"),
+        (&alternative, "alternative_fee"),
+    ] {
+        Register::asset_definition(AssetDefinition::numeric(
+            definition.clone(),
+            name.to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut transaction)?;
+        Mint::asset_quantity(
+            Quantity::from(100_u32),
+            AssetId::new(definition.clone(), ALICE_ID.clone()),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut transaction)?;
+    }
+    let mut replacement = original.clone();
+    replacement.fee_asset_id = alternative.clone();
+    replacement.fee_sink_account_id = ALICE_ID.clone();
+    transaction.nexus.fees = replacement.clone();
+    transaction
+        .world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            replacement.into_custom_parameter()?,
+        ))?;
+    transfer_uploaded_model_amount(&ALICE_ID, &Quantity::from(7_u32), &mut transaction)?;
+    assert_eq!(
+        transaction
+            .world
+            .assets
+            .get(&AssetId::new(
+                original.fee_asset_id.clone(),
+                ALICE_ID.clone()
+            ))
+            .unwrap()
+            .0,
+        Quantity::from(93_u32),
+    );
+    assert_eq!(
+        transaction
+            .world
+            .assets
+            .get(&AssetId::new(original.fee_asset_id, BOB_ID.clone()))
+            .unwrap()
+            .0,
+        Quantity::from(7_u32),
+    );
+    assert_eq!(
+        transaction
+            .world
+            .assets
+            .get(&AssetId::new(alternative.clone(), ALICE_ID.clone()))
+            .unwrap()
+            .0,
+        Quantity::from(100_u32),
+    );
+    assert!(
+        transaction
+            .world
+            .assets
+            .get(&AssetId::new(alternative, BOB_ID.clone()))
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn soracloud_shared_lease_genesis_charge_uses_authored_fee_sink() -> Result<(), eyre::Report> {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.fee_sink_account_id = BOB_ID.clone();
+    let currency = fees.fee_asset_id.clone();
+    let service_name: Name = "genesis_shared_model".parse()?;
+    let repo_id = "openai/gpt-oss";
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+    let charge = Quantity::from(7_u32);
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.genesis_key = ALICE_KEYPAIR.clone();
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            fees.clone().into_custom_parameter()?,
+        ));
+    config.genesis_instructions.extend([
+        Register::account(Account::new(BOB_ID.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            currency.clone(),
+            "genesis_storage_fee".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+        Mint::asset_quantity(
+            Quantity::from(100_u32),
+            AssetId::new(currency.clone(), ALICE_ID.clone()),
+        )
+        .into(),
+        Grant::account_permission(
+            Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
+            ALICE_ID.clone(),
+        )
+        .into(),
+        isi::JoinSoracloudHfSharedLease {
+            repo_id: repo_id.to_owned(),
+            resolved_revision: revision.to_owned(),
+            service_name: service_name.clone(),
+            apartment_name: None,
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 60_000,
+            lease_asset_definition_id: currency.clone(),
+            base_fee: charge.clone(),
+            provenance: hf_shared_lease_join_provenance_for(
+                &ALICE_KEYPAIR,
+                repo_id,
+                revision,
+                &service_name,
+                None,
+                StorageClass::Warm,
+                60_000,
+                &currency,
+                &charge,
+            ),
+        }
+        .into(),
+    ]);
+    let prepared = CertifiedTestChain::prepare(config).map_err(|failure| failure.error)?;
+    assert!(prepared.state.world.parameters.view().root_fees().is_none());
+    let chain = CertifiedTestChain::from_prepared(prepared).map_err(|failure| failure.error)?;
+    assert_eq!(chain.height(), 1);
+    let view = chain.state().view();
+    assert_eq!(view.world().parameters().root_fees(), Some(&fees));
+    assert_eq!(
+        view.world()
+            .assets()
+            .get(&AssetId::new(currency.clone(), ALICE_ID.clone()))
+            .unwrap()
+            .0,
+        Quantity::from(93_u32),
+    );
+    assert_eq!(
+        view.world()
+            .assets()
+            .get(&AssetId::new(currency, BOB_ID.clone()))
+            .unwrap()
+            .0,
+        charge,
+    );
+    let pool =
+        hf_shared_lease_pool_id(hf_source_id(repo_id, revision)?, StorageClass::Warm, 60_000)?;
+    assert_eq!(
+        view.world()
+            .soracloud_hf_shared_lease_members()
+            .get(&(pool.to_string(), ALICE_ID.to_string()))
+            .unwrap()
+            .total_paid,
+        charge,
+    );
+    Ok(())
+}
+
+#[test]
 fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     {

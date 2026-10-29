@@ -81,7 +81,7 @@ mod tests {
 """
 NODE = """\
 //! Startup replay.
-// Restoring a snapshot is not implemented (TODO(S9)); startup replays from genesis.
+// World-checked snapshot resume does not authenticate complete State.
 #[cfg(test)]
 mod tests {
     /// Cold restart.
@@ -424,7 +424,7 @@ def inventory() -> dict:
                 "It cannot retroactively validate discarded history.",
             ],
             "section_sha256": hashlib.sha256(CHECKPOINT_SECTION.encode("utf-8")).hexdigest(),
-            "anchors": [{"path": NODE_RS, "contains": "is not implemented (TODO(S9))"}],
+            "anchors": [{"path": NODE_RS, "contains": "does not authenticate complete State"}],
             "owner": "outside-zk-plan:consensus",
             "summary": "no checkpoint exists",
         },
@@ -879,10 +879,21 @@ def test_current_inventory_pins_the_future_checkpoint_rule() -> None:
         "cannot retroactively validate discarded history" in statement
         for statement in rule["statements"]
     )
+    assert any(
+        "Authenticated complete-State checkpoint restoration remains unfinished." in statement
+        for statement in rule["statements"]
+    )
     assert [anchor["path"] for anchor in rule["anchors"]] == [
-        "crates/iroha_core/src/sumeragi/node.rs"
+        "crates/iroha_core/src/sumeragi/node.rs",
+        "crates/iroha_core/src/state/deserialize_core.rs",
+        "crates/iroha_core/src/state/native_execution_tip.rs",
+        "crates/iroha_core/src/state/world_projection.rs",
+        "crates/iroha_core/src/state/native_execution_tip/finalized_world.rs",
     ]
-    assert all("TODO(S9)" in anchor["contains"] for anchor in rule["anchors"])
+    assert any("authenticate_restored_world" in anchor["contains"] for anchor in rule["anchors"])
+    assert any("GenesisReplayRequired" in anchor["contains"] for anchor in rule["anchors"])
+    assert any("TODO(S9)" in anchor["contains"] for anchor in rule["anchors"])
+    assert any("World-only receipt" in anchor["contains"] for anchor in rule["anchors"])
     contract = (ROOT / data["contract"]).read_text(encoding="utf-8")
     section = GUARD.contract_section(contract, rule["section"])
     assert section is not None
@@ -932,8 +943,8 @@ def test_reflowing_the_checkpoint_section_is_not_a_change(tree: Path) -> None:
     assert GUARD.check(tree) == ()
 
 
-def test_the_unimplemented_restore_marker_is_part_of_the_checkpoint_rule(tree: Path) -> None:
-    edit(tree, NODE_RS, "is not implemented (TODO(S9))", "is implemented")
+def test_the_restore_authority_limit_is_part_of_the_checkpoint_rule(tree: Path) -> None:
+    edit(tree, NODE_RS, "does not authenticate complete State", "authenticates complete State")
     assert_single(GUARD.check(tree), NODE_RS, "future-checkpoint anchor", "is missing")
 
 

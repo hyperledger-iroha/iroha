@@ -82,6 +82,15 @@ pub(super) fn fixture() -> Fixture {
             .account_permissions
             .insert(account.clone(), permissions);
     }
+    // Native account retirement checks both monetary policies from the block's
+    // original cut. Author this component input before any custody transaction.
+    world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            crate::smartcontracts::isi::domain::monetary_test_support::staking()
+                .into_custom_parameter()
+                .expect("explicit component staking policy"),
+        ))
+        .expect("retain original component staking policy");
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),

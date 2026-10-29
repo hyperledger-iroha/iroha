@@ -31,6 +31,14 @@ immutable after H1. Authorized changes of rates, sink and Global claim exemption
 apply from the next block. Signed fee limits, sponsor authorization, rejection
 charging and conservation rules remain mandatory.
 
+Nonzero SoraCloud uploaded-model charges resolve both currency and sink through
+the shared execution-custody policy: authenticated H1 uses its already-authored
+policy and ordinary blocks use the frozen predecessor. HF shared leases retain
+their explicit lease currency and use that same sink. Local recipe copies and
+ordinary pending or applied sibling parameter updates cannot redirect either
+charge. Missing required policy is refused; a zero uploaded-model storage price
+requires no monetary transfer or policy lookup.
+
 Node configuration has no monetary fee table or settlement-mode switch. Genesis
 recipes explicitly author the intended defaults. Mainnet source-template
 materialization binds the operator's accepted canonical XOR into both NPoS and fee

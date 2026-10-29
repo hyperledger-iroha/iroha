@@ -4,6 +4,9 @@ use super::*;
 
 #[test]
 fn original_paid_amx_post_decode_refusal_retains_worker_leg_and_exact_retry() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     crate::sumeragi::threads::sumeragi_thread_builder("amx-worker-retry-test")
         .spawn(|| crate::sumeragi::amx::with_paid_prepare_retry_fixture(|chain, instruction, customer| {
             publication_tests::with_worker_chain(chain, ConsensusMode::Permissioned,
@@ -272,6 +275,9 @@ fn restored_same_content_source(
 
 #[test]
 fn completed_amx_worker_bank_preserves_equal_occurrences_and_metadata_refusal() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_original_paid_bank(true, |original, source, pool, _crypto| {
         use iroha_data_model::{isi::sumeragi_amx::PrepareAmxV1, transaction::Executable};
         let input = &original.external_entrypoints_slice()[0];
@@ -365,6 +371,9 @@ fn completed_amx_worker_bank_preserves_equal_occurrences_and_metadata_refusal() 
 
 #[test]
 fn original_paid_amx_worker_retry_reauthenticates_changed_native_parent() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     crate::sumeragi::threads::sumeragi_thread_builder("amx-worker-parent-retry-test")
         .spawn(|| crate::sumeragi::amx::with_paid_prepare_retry_fixture(|chain, instruction, customer| {
             publication_tests::with_worker_chain(chain, ConsensusMode::Permissioned,
@@ -417,6 +426,9 @@ fn original_paid_amx_worker_retry_reauthenticates_changed_native_parent() {
 
 #[test]
 fn partial_amx_worker_leg_refusal_retains_original_controls_and_release_wait() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_original_paid_bank(false, |original, source, pool, _crypto| {
         use iroha_allocation::{AllocationRefusal, ChargedBufferError};
         use iroha_data_model::{
@@ -604,6 +616,9 @@ fn with_original_paid_multisig_bank(
 
 #[test]
 fn partial_amx_worker_leg_refusal_retains_completed_source_prefix_without_reallocation() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_original_paid_bank(false, |original, source, pool, _crypto| {
         assert_original_partial_leg_prefix(original, source, pool, false);
     });
@@ -611,6 +626,9 @@ fn partial_amx_worker_leg_refusal_retains_completed_source_prefix_without_reallo
 
 #[test]
 fn partial_amx_worker_leg_refusal_retains_original_multisig_member_prefix_without_reallocation() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_original_paid_multisig_bank(|original, source, pool, _crypto| {
         assert_original_partial_leg_prefix(original, source, pool, true);
     });

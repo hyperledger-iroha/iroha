@@ -123,7 +123,7 @@ fn atomic_state_in_scope_with_source_delta_limit(
         });
     }
     movements.sort_by(|a, b| (&a.source, &a.recipient).cmp(&(&b.source, &b.recipient)));
-    let world = World::with_assets(
+    let mut world = World::with_assets(
         [Domain::new(domain_id.clone()).build(&CARPENTER_ID)],
         accounts,
         [AssetDefinition::numeric(
@@ -136,6 +136,9 @@ fn atomic_state_in_scope_with_source_delta_limit(
         assets,
         [],
     );
+    // Retirement probes require original monetary guards before they can
+    // observe the settlement receipt references retained by these movements.
+    crate::smartcontracts::isi::domain::monetary_test_support::install(&mut world);
     // The 255-payment corpus exceeds the sixteen-delta bootstrap profile.
     // Install its finite complete-frame bound before State freezes the source
     // quota. This component policy grants no Network or publication authority.

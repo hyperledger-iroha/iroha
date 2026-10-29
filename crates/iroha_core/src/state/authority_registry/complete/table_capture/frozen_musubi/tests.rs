@@ -106,6 +106,8 @@ fn all_three_cardinalities_and_policy_are_admitted_before_any_tree_backing() {
 
 #[test]
 fn semantic_gate_never_treats_unvalidated_original_maps_as_empty_tables() {
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let (state, proposal) = fixture();
     let mut block = pending(&state, proposal.header(), false);
     start(&mut block, &state.ivm_execution_budget());
@@ -133,6 +135,8 @@ fn actual_frozen_three_table_roots_match_independent_borrowed_source_in_both_mod
             .unwrap();
     let expected = TABLES.map(|table| source.capture_table(table, limits()[0]).unwrap());
     for replacement in [false, true] {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let (state, proposal) = fixture();
         if replacement {
             staged_block(&state, proposal.header(), false, true)
@@ -168,6 +172,8 @@ fn actual_frozen_three_table_roots_match_independent_borrowed_source_in_both_mod
 
 #[test]
 fn original_pool_refusal_preserves_materializer_owner_and_policy_until_retry() {
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let (state, proposal) = fixture();
     let mut block = pending(&state, proposal.header(), false);
     prepare(&mut block);

@@ -155,15 +155,93 @@ fn actual_worker_persists_complete_tape_and_recovers_historical_source_after_nex
 
 #[test]
 fn actual_certified_final_tip_replay_recreates_tapes_without_successor() {
-    let (mut original, asset) = fixture();
+    use crate::sumeragi::{node::NativeReplaySeed, test_chain::PreparedTestChainConfig};
+    use iroha_config::{
+        kura::{FsyncMode, InitMode},
+        parameters::{actual, defaults},
+    };
+    use std::time::{Duration, Instant};
+
+    fn prepared() -> (PreparedTestChainConfig, AssetId, AccountId) {
+        // Isolated recovery starts from the original signed genesis, so every
+        // business row must come from its instructions rather than fixture prestate.
+        let mut config = TestChainConfig::new(World::new(), 1_000);
+        config.clock_bootstrap_in_genesis = true;
+        let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+        let domain = DomainId::try_new("fastpq-durable", "universal").unwrap();
+        let definition =
+            AssetDefinitionId::derive_from_components(domain.clone(), "principal".parse().unwrap());
+        let asset = AssetId::new(definition.clone(), ALICE_ID.clone());
+        config.genesis_instructions = vec![
+            Register::account(Account::new(ALICE_ID.clone())).into(),
+            Register::account(Account::new(BOB_ID.clone())).into(),
+            Register::domain(Domain::new(domain)).into(),
+            Register::asset_definition(AssetDefinition::new(
+                definition.clone(),
+                "Durable source principal",
+                NumericSpec::default(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            ))
+            .into(),
+            Mint::asset_quantity(100_u32, asset.clone()).into(),
+            Mint::asset_quantity(10_u32, AssetId::new(definition, BOB_ID.clone())).into(),
+        ];
+        (
+            CertifiedTestChain::prepare(config).unwrap(),
+            asset,
+            genesis_account,
+        )
+    }
+
+    let (original, asset, _) = prepared();
+    let mut original = CertifiedTestChain::from_prepared(original).unwrap();
     transfer(&mut original, &asset, 2_000);
-    let (mut restarted, _) = fixture();
+    let (restarted, _, genesis_account) = prepared();
+    let store = actual::Kura {
+        init_mode: InitMode::Strict,
+        store_dir: iroha_config_base::WithOrigin::inline(restarted.kura.store_root()),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        native_context_archive_max_bytes: defaults::kura::NATIVE_CONTEXT_ARCHIVE_MAX_BYTES,
+        blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+        history_checkpoint_cache_capacity: defaults::kura::HISTORY_CHECKPOINT_CACHE_CAPACITY,
+        block_hash_history_bytes: defaults::kura::BLOCK_HASH_HISTORY_BYTES,
+        transaction_history_bytes: defaults::kura::TRANSACTION_HISTORY_BYTES,
+        membership_storage: defaults::kura::MEMBERSHIP_STORAGE_POLICY,
+        fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        debug_output_new_blocks: false,
+        fsync_mode: FsyncMode::Batched,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
+    };
+    let seed = NativeReplaySeed::capture(
+        &restarted.state,
+        store,
+        genesis_account,
+        iroha_data_model::parameter::system::ConsensusMode::Permissioned,
+    )
+    .unwrap();
+    let mut restarted = CertifiedTestChain::from_prepared(restarted).unwrap();
     assert_eq!(original.network_id(), restarted.network_id());
     restarted.replay_from(&original).unwrap();
     let hash = original.committed(2).block_hash();
     drop(original);
     let pool = AllocationBudget::new(16 * 1024 * 1024);
-    let source = complete(&mut reader(&restarted, 2, &pool)).unwrap();
+    let mut read = reader(&restarted, 2, &pool);
+    // Ordinary startup replay restores certified State but does not regenerate
+    // optional FASTPQ transport. Recover that exact final source in isolation.
+    assert!(matches!(
+        complete(&mut read),
+        Err(SourceReadError::Archive(NativeContextArchiveError::Io(ref error)))
+            if error.kind() == io::ErrorKind::NotFound
+    ));
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut replay = seed.begin(read.native().unwrap(), deadline).unwrap();
+    let transport = replay
+        .advance(read.native().unwrap(), deadline, 64)
+        .unwrap()
+        .expect("the exact certified final tip completes without a successor");
+    read.use_replayed_transport(transport).unwrap();
+    let source = complete(&mut read).unwrap();
     assert_eq!(source.native().committed().block_hash(), hash);
     assert_eq!(source.entry(0).unwrap().0.context.source.height, 2);
     assert_eq!(

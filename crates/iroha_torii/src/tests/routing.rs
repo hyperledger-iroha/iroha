@@ -1161,7 +1161,7 @@ mod tests {
 
         #[tokio::test]
         async fn finality_attestation_handler_distinguishes_absent_driver_and_foreign_signer() {
-            let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+            let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
             assert_failure(&app, 1, [0x41; 32], Reason::ConsensusUninitialized).await;
             let mut fixture = ReadinessNode::start();
             Arc::get_mut(&mut fixture.app)
@@ -1174,13 +1174,12 @@ mod tests {
         #[tokio::test]
         async fn finality_attestation_handler_rejects_missing_and_corrupt_embedded_certificate() {
             use iroha_core::{
-                kura::Kura,
-                query::store::LiveQueryStore,
-                state::{State, StateReadOnly, World},
+                state::{StateReadOnly, World},
+                sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
             };
             use iroha_data_model::block::CommitCertificate;
             for corrupt in [false, true] {
-                let mut fixture = ReadinessNode::start();
+                let mut fixture = ReadinessNode::start_at_tip(true);
                 let view = fixture.app.state.view();
                 let block = view
                     .latest_block()
@@ -1199,16 +1198,21 @@ mod tests {
                 let header = block.header();
                 let hash = block.hash();
                 drop(view);
-                let kura = Kura::blank_kura_for_testing();
-                let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-                    World::default(),
-                    Arc::clone(&kura),
-                    LiveQueryStore::start_test(),
-                    fixture.app.state.chain_id_ref().clone(),
-                    *fixture.app.state.network_id_ref(),
-                ));
-                // Provision authenticated primary storage while it is empty,
-                // then inject only the deliberate certificate defect.
+                assert_eq!(header.height().get(), 2);
+                let chain =
+                    CertifiedTestChain::start(TestChainConfig::new(World::default(), 10_000))
+                        .expect(
+                            "execute the original signed genesis before injecting the H2 defect",
+                        );
+                let state = Arc::clone(chain.state());
+                let kura = Arc::clone(chain.kura());
+                assert_eq!(state.network_id_ref(), fixture.app.state.network_id_ref());
+                assert_eq!(chain.genesis().hash(), header.prev_block_hash().unwrap());
+                let original_scope = state
+                    .authenticated_root_scope()
+                    .expect("genuine executed genesis scope");
+                // Keep genuine H1 and its native authority. Only H2's source certificate
+                // and corresponding visible history are damaged; no native execution is claimed.
                 kura.store_block(
                     iroha_data_model::block::SharedSignedBlock::try_new(
                         block,
@@ -1221,12 +1225,14 @@ mod tests {
                 hashes.push_for_tests(hash);
                 hashes.commit_for_tests();
                 state.update_latest_block_header_cache_for_tests(header);
+                assert_eq!(state.authenticated_root_scope(), Some(original_scope));
+                assert_eq!(state.view().height(), 2);
                 let app = Arc::get_mut(&mut fixture.app).unwrap();
                 app.state = state;
                 app.kura = kura;
                 assert_failure(
                     &fixture.app,
-                    1,
+                    2,
                     [0x51; 32],
                     if corrupt {
                         Reason::ConflictingState
@@ -1242,7 +1248,7 @@ mod tests {
         async fn finality_attestation_handler_rejects_auth_challenge_and_admission_before_startup()
         {
             for case in 0..3 {
-                let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+                let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
                 let app_mut = Arc::get_mut(&mut app).unwrap();
                 if case == 0 {
                     app_mut.require_api_token = true;

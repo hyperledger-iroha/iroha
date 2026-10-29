@@ -1719,6 +1719,9 @@ fn state_busy_retry_retains_original_metadata_snapshot_certificate_and_pool_cust
 
 #[test]
 fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -1818,6 +1821,9 @@ fn context_proof_capacity_retry_retains_original_witness_inputs_and_execution() 
 
 #[test]
 fn result_encoding_capacity_retry_keeps_original_execution_and_allocation_custody() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -1964,6 +1970,9 @@ fn assert_certificate_allocation_retry(
     make_chain: fn() -> CertifiedTestChain,
     consensus_mode: ConsensusMode,
 ) {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker_from(
         make_chain,
         consensus_mode,
@@ -2659,6 +2668,9 @@ fn boundary_certificate_refusals_retain_original_preimage_authority_and_exact_qu
 
 #[test]
 fn boundary_certificate_read_refusal_retains_original_source_and_availability_until_publication() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker_from(
         CertifiedTestChain::npos_boundary_fixture,
         ConsensusMode::Npos,
@@ -3312,6 +3324,9 @@ fn native_context_archive_corrupt_commitment_remains_sticky_recovery() {
 
 #[test]
 fn native_context_archive_capacity_retry_retains_original_overlay_and_result() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, blocks, events| {
         let block = proposal(chain, worker);
         let block_hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -3835,6 +3850,9 @@ fn original_lane_policy_proposal_refusal_retains_worker_owner_and_exact_queued_r
 
 #[test]
 fn beacon_startup_retains_original_capacity_through_worker_channel_and_node() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, _, _| {
         use crate::sumeragi::node::NodeError;
         use iroha_allocation::AllocationRefusal;

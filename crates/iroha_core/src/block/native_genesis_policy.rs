@@ -542,7 +542,9 @@ mod native_genesis_policy_tests {
                 Err((_, error)) => error,
             };
             let expected = if copies == 0 {
-                "signed genesis omits its root fee policy"
+                // Schedule finalization validates the executed policy before the
+                // later original-instruction cardinality check can run.
+                "invalid native epoch: executed genesis fee policy is invalid: committed root fee policy is absent"
             } else {
                 "signed genesis must execute exactly one original root fee policy"
             };

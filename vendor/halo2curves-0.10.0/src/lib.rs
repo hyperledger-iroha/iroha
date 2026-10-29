@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+//! Native elliptic-curve implementations for Iroha's standard-library builds.
 
 mod arithmetic;
 mod curve;

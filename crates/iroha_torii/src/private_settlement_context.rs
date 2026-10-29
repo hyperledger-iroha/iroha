@@ -369,7 +369,7 @@ mod tests {
     async fn private_context_authentication_refuses_invalid_and_replay_but_preserves_capacity() {
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
         use std::sync::mpsc;
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
         );
         let uri: Uri = "/v1/nexus/private-settlements/context/2".parse().unwrap();

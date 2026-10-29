@@ -203,15 +203,20 @@ async fn process_adapter_message(
             deactivation_handler,
             state,
         } => {
-            adapters.push(AdapterEntry {
-                id,
-                activation_handler,
-                deactivation_handler,
-                state,
-            });
+            let index = adapters
+                .binary_search_by(|entry| entry.id.cmp(&id))
+                .unwrap_or_else(|index| index);
+            adapters.insert(
+                index,
+                AdapterEntry {
+                    id,
+                    activation_handler,
+                    deactivation_handler,
+                    state,
+                },
+            );
             if atspi_bus.is_some() {
-                let entry = adapters.last_mut().unwrap();
-                activate_adapter(entry);
+                activate_adapter(&mut adapters[index]);
             }
         }
         Message::RemoveAdapter { id } => {
@@ -284,4 +289,57 @@ async fn process_adapter_message(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use accesskit::{ActionRequest, TreeUpdate};
+    use accesskit_atspi_common::{ActionHandlerNoMut, WindowBounds};
+
+    struct Handler;
+    impl ActivationHandler for Handler {
+        fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+            None
+        }
+    }
+    impl DeactivationHandler for Handler {
+        fn deactivate_accessibility(&mut self) {}
+    }
+    impl ActionHandlerNoMut for Handler {
+        fn do_action(&self, _: ActionRequest) {}
+    }
+
+    #[test]
+    fn out_of_order_adapter_messages_remain_removable() {
+        block_on(async {
+            let mut adapters = Vec::new();
+            for id in [20, 10, 15] {
+                let message = Message::AddAdapter {
+                    id,
+                    activation_handler: Box::new(Handler),
+                    deactivation_handler: Box::new(Handler),
+                    state: Arc::new(Mutex::new(AdapterState::Inactive {
+                        is_window_focused: false,
+                        root_window_bounds: WindowBounds::default(),
+                        action_handler: Arc::new(Handler),
+                    })),
+                };
+                process_adapter_message(&None, &mut adapters, message)
+                    .await
+                    .unwrap();
+            }
+            assert_eq!(
+                adapters.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+                [10, 15, 20]
+            );
+            for id in [15, 10, 20] {
+                process_adapter_message(&None, &mut adapters, Message::RemoveAdapter { id })
+                    .await
+                    .unwrap();
+                assert!(!adapters.iter().any(|entry| entry.id == id));
+            }
+            assert!(adapters.is_empty());
+        });
+    }
 }

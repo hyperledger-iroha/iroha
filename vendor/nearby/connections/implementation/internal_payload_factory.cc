@@ -143,7 +143,7 @@ class OutgoingStreamInternalPayload : public OutgoingInternalPayload {
   }
 
   std::int64_t GetTotalSize() const override {
-    return InternalPayload::kIndeterminateSize;
+    return kPayloadIndeterminateSize;
   }
 
   ByteArray DetachNextChunk(int chunk_size) override {
@@ -211,7 +211,7 @@ class IncomingStreamInternalPayload : public IncomingInternalPayload {
   }
 
   std::int64_t GetTotalSize() const override {
-    return InternalPayload::kIndeterminateSize;
+    return kPayloadIndeterminateSize;
   }
 
   Exception AttachNextChunk(absl::string_view chunk) override {
@@ -488,6 +488,9 @@ ErrorOr<std::unique_ptr<IncomingInternalPayload>> CreateIncomingInternalPayload(
         LOG(ERROR) << "Output file payload path is not valid: " << file_path;
         return {Error(OperationResultCode::IO_FILE_OPENING_ERROR)};
       }
+      // Payload caches its metadata on construction. Seed the received time
+      // before opening the input file; completion restores it after writes.
+      output_file.SetLastModifiedTime(last_modified_time);
       return {std::make_unique<IncomingFileInternalPayload>(
           Payload(payload_id, parent_folder, file_name,
                   InputFile(file_path)),
