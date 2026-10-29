@@ -25716,7 +25716,7 @@ async fn handler_bridge_finality_attestation_inner(
     if api_token_principal.is_some() {
         crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/attestation");
     }
-    let mut response = routing::handle_v1_bridge_finality_attestation(
+    let (response, release) = routing::handle_v1_bridge_finality_attestation(
         app.state.clone(),
         (status, identity, build_fingerprint),
         height,
@@ -25725,8 +25725,8 @@ async fn handler_bridge_finality_attestation_inner(
         format,
         query_permit,
     )
-    .await?
-    .into_response();
+    .await?;
+    let mut response = response.into_response();
     protect_bridge_finality_attestation_response(&mut response);
     let mut response = proof_response_with_exact_egress(
         app.as_ref(),
@@ -25738,6 +25738,18 @@ async fn handler_bridge_finality_attestation_inner(
     )
     .await?;
     protect_bridge_finality_attestation_response(&mut response);
+    // The authority this statement was proved under must still hold as it leaves.
+    if let Some(release) = release
+        && !iroha_core::sumeragi::finality::retained_attestation_releasable(&app.state, &release)
+    {
+        return Ok(bridge_attestation::failure_response(
+            iroha_torii_shared::bridge_attestation::FinalityAttestationFailureReason::FinalityUnavailable,
+            challenge,
+            release.height(),
+            None,
+            format,
+        ));
+    }
     Ok(response)
 }
 async fn handler_bridge_finality_bundle(

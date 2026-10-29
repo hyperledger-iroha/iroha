@@ -6001,7 +6001,8 @@ where
 /// same immutable view that produces the proof (at least 1, so an empty ledger
 /// still reports a valid selector), so it never names a height it did not sign.
 /// Exact requested/applied/status height races return a selector-bound HTTP 503;
-/// missing or corrupt proofs remain fixed failures.
+/// missing or corrupt proofs remain fixed failures. A signed statement comes back with
+/// its release, which the caller checks immediately before the response leaves.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
     state: Arc<CoreState>,
@@ -6015,7 +6016,10 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
     signer: KeyPair,
     format: crate::utils::ResponseFormat,
     admission: crate::QueryAdmissionPermit,
-) -> Result<Response> {
+) -> Result<(
+    Response,
+    Option<iroha_core::sumeragi::finality::AttestationRelease>,
+)> {
     run_admitted_blocking(
         admission,
         "bridge finality attestation worker failed",
@@ -6026,32 +6030,39 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
             let status_height = status.committed_height;
             let network_id = *view.network_id();
             let node_id = identity.node_id.clone();
-            let attestation = match iroha_core::sumeragi::finality::build_attestation(
-                &view,
-                status,
-                &identity,
-                build_fingerprint,
-                height,
-                challenge,
-                &signer,
-            ) {
-                Ok(attestation) => attestation,
-                Err(err) => {
-                    return Ok(bridge_finality_attestation_error_response(
-                        err,
-                        height,
-                        status_height,
-                        challenge,
-                        node_id,
-                        network_id,
-                        format,
-                    ));
-                }
-            };
+            let (attestation, release) =
+                match iroha_core::sumeragi::finality::build_attestation_with_release(
+                    &view,
+                    status,
+                    &identity,
+                    build_fingerprint,
+                    height,
+                    challenge,
+                    &signer,
+                ) {
+                    Ok(signed) => signed,
+                    Err(err) => {
+                        return Ok((
+                            bridge_finality_attestation_error_response(
+                                err,
+                                height,
+                                status_height,
+                                challenge,
+                                node_id,
+                                network_id,
+                                format,
+                            ),
+                            None,
+                        ));
+                    }
+                };
             if matches!(format, crate::utils::ResponseFormat::Norito) {
-                return Ok(crate::NoritoBody(attestation).into_response());
+                return Ok((
+                    crate::NoritoBody(attestation).into_response(),
+                    Some(release),
+                ));
             }
-            pretty_json_response(&attestation)
+            Ok((pretty_json_response(&attestation)?, Some(release)))
         },
     )
     .await

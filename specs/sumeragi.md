@@ -3435,16 +3435,27 @@ generation and a coverage expiry `MAX_COVERAGE_AGE` (30 minutes) after the start
 complete reread.
 - **What a request still checks.** It reads and verifies its own target and parent (exact BLS
   quorum under the parent's schedule) and its genesis frame, which must equal the retained genesis
-  decision. Its view must contain the retained tip at most 16 heights below its height, or be one
-  of the 64 most recent retained heights.
-- **Refusals and poison.** It refuses while the authority is unminted, revoked, lagging or past
-  its coverage expiry, and the authority is rechecked immediately before signing. A contradiction
-  found by the producer, or a genesis frame that differs from the retained decision, poisons the
-  authority until restart; later commits never clear it.
-- **The changed guarantee.** Every attestation is signed within `MAX_COVERAGE_AGE` of the start
-  of a complete reread of every frame up to the retained tip (newer frames were each read once
-  when the tip advanced). Corruption of an older local frame is therefore detected by the next
-  reread, not by the next challenge, and attestations already issued cannot be retracted.
+  decision. Its view's execution tip must equal, by full native identity (height, Iroha hash, core
+  hash, `R`), the retained tip or one of the 64 most recent retained heights; or it may lead the
+  retained tip by at most 16 heights, and the request then reads each of those newer frames back
+  to the retained tip's full identity.
+- **Admission through release.** The request carries its admission, the retained generation it
+  was proved under, through signing and to the route's response egress, where it is checked again
+  immediately before the encoded statement leaves the node. A withdrawn, replaced, detached or
+  expired authority refuses the request at either point; a complete-walk admission (no attached
+  producer, H1/H2, or an enclosing full-prefix caller) needs no retained authority.
+- **Refusals and poison.** It refuses while the authority is unminted, withdrawn, lagging or past
+  its coverage expiry; these are temporary, and routes answer them as `finality_unavailable` (HTTP
+  503). A walk the producer finds refused withdraws the authority at once; the producer's next step
+  then classifies it on a fresh durable view: a replaced tip is minted again, while a contradiction
+  of the retained history, or a request's genesis frame that differs from the retained decision,
+  poisons the authority until restart (`conflicting_state`, HTTP 409); later commits never clear
+  it.
+- **The changed guarantee.** Every attestation is signed and released within `MAX_COVERAGE_AGE`
+  of the start of a complete reread of every frame up to the retained tip (newer frames were each
+  read once when the tip advanced, or by the request itself). Corruption of an older local frame
+  is therefore detected by the next reread, not by the next challenge, and attestations already
+  released cannot be retracted.
 - **What is unchanged.** Signed bodies are byte-identical to those of the complete walk, except
   for the fresh clock. Without an attached producer, current attestations keep the complete
   per-challenge walk. Consensus, deterministic execution, Strict replay and independent portable

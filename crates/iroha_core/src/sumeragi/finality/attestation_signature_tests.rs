@@ -71,6 +71,7 @@ fn finish_selected(
         genesis_block_hash: original.body.genesis_block_hash,
         tip: original.body.finality_proof.clone(),
         genesis: original.body.genesis_finality_proof.clone(),
+        admission: RetainedAdmission::CompleteWalk,
     };
     if prior_recipe {
         original_finish_attestation(
