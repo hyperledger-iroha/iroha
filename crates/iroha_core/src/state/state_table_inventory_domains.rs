@@ -1408,6 +1408,18 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         ],
     },
     OtherDomains {
+        usage: Use::Record,
+        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets, validator support attestations and the committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record; none commits to State content",
+        literals: &[
+            r"iroha:runtime:adoption:v1\0",
+            r"iroha:runtime:change-set:v1\0",
+            r"iroha:runtime:committee:v1\0",
+            r"iroha:runtime:containment-endorsement:v1\0",
+            r"iroha:runtime:containment:v1\0",
+            r"iroha:runtime:support-attestation:v1\0",
+        ],
+    },
+    OtherDomains {
         usage: Use::Test,
         reason: "Exact retired-backend aliases and an unadmitted PIPA-R vote circuit supplied only by negative world instruction controls: execution must reject these identities; this listing grants no circuit or backend admission",
         literals: &[

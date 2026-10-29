@@ -31,6 +31,33 @@ pub(super) fn default_encoding_entry(
 ) -> Option<super::InstructionEncodingEntry> {
     wire_ids::encoding_entry(type_name)
 }
+/// Wire identity and declared payload schema of one built-in instruction.
+#[derive(Clone, Copy)]
+pub struct BuiltInInstructionSchema {
+    /// Canonical wire ID.
+    pub wire_id: &'static str,
+    /// Declared Norito nominal identity of the payload type.
+    pub payload: fn() -> std::borrow::Cow<'static, str>,
+}
+
+impl core::fmt::Debug for BuiltInInstructionSchema {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BuiltInInstructionSchema")
+            .field("wire_id", &self.wire_id)
+            .field("payload", &(self.payload)())
+            .finish()
+    }
+}
+
+/// Every built-in instruction of this release, in registry order. The live-upgrade baseline
+/// publishes one interface definition for each (`specs/live_runtime_upgrades.md` §3.1).
+pub fn built_in_instruction_schemas() -> impl Iterator<Item = BuiltInInstructionSchema> {
+    wire_ids::ALL.iter().map(|entry| BuiltInInstructionSchema {
+        wire_id: entry.wire_id,
+        payload: entry.payload,
+    })
+}
+
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
 /// Sponsor-program revision validation uses this fail-closed lookup before an

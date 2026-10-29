@@ -4,8 +4,10 @@
 //! Types here are used by instructions (ISIs) and events to coordinate
 //! deterministic activation of the fixed ABI v1 runtime without downtime.
 //! [`definition`] holds the definitions and root selections of the live-upgrade
-//! design (`specs/live_runtime_upgrades.md`).
+//! design (`specs/live_runtime_upgrades.md`); [`lifecycle`] holds its change sets,
+//! validator attestations, obligations, emergency containment and stable rejections.
 pub mod definition;
+pub mod lifecycle;
 
 use crate::smart_contract::manifest::ManifestProvenance;
 use iroha_crypto::{Error as CryptoError, Hash, KeyPair, Signature};

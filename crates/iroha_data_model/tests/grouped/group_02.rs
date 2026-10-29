@@ -60,6 +60,8 @@ mod registry_decode_roundtrip;
 mod registry_excludes_signatory_quorum;
 #[path = "../runtime_definition.rs"]
 mod runtime_definition;
+#[path = "../runtime_lifecycle.rs"]
+mod runtime_lifecycle;
 #[path = "../runtime_doc_sync.rs"]
 mod runtime_doc_sync;
 #[path = "../signed_block_roundtrip.rs"]

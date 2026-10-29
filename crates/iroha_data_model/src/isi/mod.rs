@@ -2312,6 +2312,8 @@ pub mod error {
             ///
             /// i.e. you can't burn last key
             InvariantViolation(Box<str>),
+            /// The root's selection does not admit the instruction: {0}
+            Runtime(#[source] crate::runtime::lifecycle::RuntimeRejectionV1),
         }
         /// Typed asset-transfer policy failure.
         ///

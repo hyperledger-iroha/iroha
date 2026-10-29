@@ -25,7 +25,10 @@ pub const DEFINITION_FORMAT_VERSION: u8 = 1;
 /// Maximum UTF-8 length of a name, wire ID, namespace or codec in a descriptor.
 pub const MAX_DEFINITION_TEXT_BYTES: usize = 192;
 /// Maximum number of identities one descriptor list may reference.
-pub const MAX_DEFINITION_REFERENCES: usize = 256;
+///
+/// The bound admits the baseline bundle, which answers every interface of the engine it
+/// registers and depends on all of its storage (`live_runtime_upgrades.md` §3.1).
+pub const MAX_DEFINITION_REFERENCES: usize = 4096;
 /// Maximum number of nodes in a [`CarrierSchemaV1`].
 pub const MAX_CARRIER_NODES: usize = 256;
 /// Maximum nesting depth of a [`CarrierSchemaV1`].
@@ -54,6 +57,35 @@ pub const MAX_INITIAL_BYTES: usize = 64 * 1024;
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::DefinitionId")]
 pub struct DefinitionId(pub [u8; 32]);
+
+/// Hex string form shared by both identities.
+macro_rules! hex_identity_json {
+    ($identity:ty) => {
+        impl norito::json::JsonSerialize for $identity {
+            fn json_serialize(&self, out: &mut String) {
+                crate::json_helpers::fixed_bytes_hex::serialize(&self.0, out);
+            }
+
+            fn json_serialize_to(
+                &self,
+                out: &mut dyn norito::json::JsonWriteSink,
+            ) -> Result<(), norito::json::BoundedJsonError> {
+                crate::json_helpers::fixed_bytes_hex::serialize_bounded(&self.0, out)
+            }
+        }
+
+        impl norito::json::JsonDeserialize for $identity {
+            fn json_deserialize(
+                parser: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                crate::json_helpers::fixed_bytes_hex::deserialize(parser).map(Self)
+            }
+        }
+    };
+}
+
+hex_identity_json!(DefinitionId);
+hex_identity_json!(SelectionId);
 
 impl core::fmt::Display for DefinitionId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -134,9 +166,19 @@ impl DefinitionKind {
 
 /// Schema of a payload, storage value, key, event or parameter.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::SchemaV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum SchemaV1 {
     /// A native Norito type, written as in `sumeragi.md` §16.1:
     /// `norito:<nominal name>@<major>.<minor>.<flags>` or `semantic:<identity>@<major>.<minor>.<flags>`.
@@ -150,7 +192,16 @@ pub enum SchemaV1 {
 /// Nodes are listed children first: a node refers only to nodes before it, and the last node
 /// is the root. The list is therefore acyclic by construction.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::CarrierSchemaV1")]
 pub struct CarrierSchemaV1 {
@@ -160,9 +211,19 @@ pub struct CarrierSchemaV1 {
 
 /// One node of a [`CarrierSchemaV1`]. Indices refer to earlier nodes of the same schema.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::CarrierNodeV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum CarrierNodeV1 {
     /// The empty value.
     Unit,
@@ -231,7 +292,16 @@ pub enum CarrierNodeV1 {
 
 /// One field of a carrier struct.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::CarrierFieldV1")]
 pub struct CarrierFieldV1 {
@@ -243,7 +313,16 @@ pub struct CarrierFieldV1 {
 
 /// One variant of a carrier enum.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::CarrierVariantV1")]
 pub struct CarrierVariantV1 {
@@ -257,7 +336,16 @@ pub struct CarrierVariantV1 {
 
 /// One instruction wire ID: payload schema and behavioural contract.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::InterfaceDescriptorV1")]
 pub struct InterfaceDescriptorV1 {
@@ -272,25 +360,38 @@ pub struct InterfaceDescriptorV1 {
     /// Metering class every implementation is charged under.
     pub metering_class: String,
     /// Digest of the archived normative statement of observable behaviour.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub contract_statement: [u8; 32],
 }
 
 /// Where an implementation's code comes from.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ImplementationCodeV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum ImplementationCodeV1 {
     /// Native code compiled into releases.
     Native {
         /// Stable module name.
         module: String,
         /// Digest of the archived reference-source closure.
+        #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
         reference_closure: [u8; 32],
     },
     /// IVM bytecode.
     Ivm {
         /// Hash of the `.to` artifact.
+        #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
         code_hash: [u8; 32],
         /// Entrypoint inside the artifact.
         entrypoint: String,
@@ -299,12 +400,23 @@ pub enum ImplementationCodeV1 {
 
 /// What an implementation answers.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::EntrypointV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum EntrypointV1 {
-    /// The instruction of an interface definition.
-    Instruction(DefinitionId),
+    /// The instructions of interface definitions, sorted and unique. One implementation answers
+    /// several only as a bundle whose handlers cannot yet be separated, such as the baseline.
+    Instructions(Vec<DefinitionId>),
     /// A named hook of the services profile.
     Hook(String),
     /// A named query.
@@ -322,6 +434,8 @@ pub enum EntrypointV1 {
     Decode,
     iroha_schema::IntoSchema,
     norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ResourceLimitsV1")]
 pub struct ResourceLimitsV1 {
@@ -335,7 +449,16 @@ pub struct ResourceLimitsV1 {
 
 /// The semantics of one execution entrypoint and everything it relies on.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ImplementationDescriptorV1")]
 pub struct ImplementationDescriptorV1 {
@@ -367,9 +490,19 @@ pub struct ImplementationDescriptorV1 {
 
 /// Shape of a storage namespace.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::StorageShapeV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum StorageShapeV1 {
     /// Keyed entries in canonical key order.
     Table {
@@ -382,9 +515,19 @@ pub enum StorageShapeV1 {
 
 /// How storage values enter the State commitment.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ProjectionV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum ProjectionV1 {
     /// The bare canonical Norito value.
     BareNorito,
@@ -394,7 +537,16 @@ pub enum ProjectionV1 {
 
 /// One canonical logical storage namespace.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::StorageDescriptorV1")]
 pub struct StorageDescriptorV1 {
@@ -404,9 +556,13 @@ pub struct StorageDescriptorV1 {
     pub shape: StorageShapeV1,
     /// Value schema.
     pub value: SchemaV1,
-    /// Initial value bytes of a cell; empty for a table.
-    pub initial: Vec<u8>,
+    /// Initial value bytes a cell's installation writes. `None` for a table, which starts
+    /// empty, and for a cell populated by the act that founds its root (a genesis or an
+    /// adoption); a change set cannot install such a cell.
+    #[norito(json = "crate::json_helpers::base64_vec::option")]
+    pub initial: Option<Vec<u8>>,
     /// Digest of the archived invariant statement.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub invariants: [u8; 32],
     /// Commitment projection.
     pub projection: ProjectionV1,
@@ -414,7 +570,16 @@ pub struct StorageDescriptorV1 {
 
 /// One event identity and schema.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::EventDescriptorV1")]
 pub struct EventDescriptorV1 {
@@ -426,7 +591,16 @@ pub struct EventDescriptorV1 {
 
 /// One permission name and payload schema.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::PermissionDescriptorV1")]
 pub struct PermissionDescriptorV1 {
@@ -438,7 +612,16 @@ pub struct PermissionDescriptorV1 {
 
 /// One parameter identity, schema and initial value.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ParameterDescriptorV1")]
 pub struct ParameterDescriptorV1 {
@@ -447,6 +630,7 @@ pub struct ParameterDescriptorV1 {
     /// Parameter schema.
     pub schema: SchemaV1,
     /// Initial value bytes.
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub initial: Vec<u8>,
 }
 
@@ -461,32 +645,55 @@ pub struct ParameterDescriptorV1 {
     Decode,
     iroha_schema::IntoSchema,
     norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::HostProfileDescriptorV1")]
 pub struct HostProfileDescriptorV1 {
     /// ABI version contracts declare.
     pub abi_version: u16,
     /// Hash of the complete ABI descriptor (`ivm::syscalls::compute_abi_hash`).
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub abi_hash: [u8; 32],
     /// Hash of the metering schedule.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub metering: [u8; 32],
 }
 
 /// One named root-wide service and its reference closure.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ServiceEntryV1")]
 pub struct ServiceEntryV1 {
     /// Service name.
     pub name: String,
     /// Digest of the archived reference-source closure.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub reference_closure: [u8; 32],
 }
 
 /// Root-wide behaviour no single instruction owns.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::ServicesProfileDescriptorV1")]
 pub struct ServicesProfileDescriptorV1 {
@@ -496,31 +703,60 @@ pub struct ServicesProfileDescriptorV1 {
 
 /// How State is committed.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::CommitmentProfileDescriptorV1")]
 pub struct CommitmentProfileDescriptorV1 {
     /// Commitment scheme identity.
     pub scheme: String,
     /// Digest of the scheme's fixed parameters.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub parameters: [u8; 32],
 }
 
 /// Sequencing, framing, atomic publication and restricted recovery.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::KernelDescriptorV1")]
 pub struct KernelDescriptorV1 {
     /// Kernel name.
     pub name: String,
     /// Digest of the archived reference-source closure.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub reference_closure: [u8; 32],
 }
 
 /// A bounded transform between storage definitions.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::MigrationDescriptorV1")]
 pub struct MigrationDescriptorV1 {
@@ -542,9 +778,19 @@ pub struct MigrationDescriptorV1 {
 
 /// The canonical descriptor of one definition.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::DefinitionDescriptorV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum DefinitionDescriptorV1 {
     /// An interface.
     Interface(InterfaceDescriptorV1),
@@ -660,8 +906,8 @@ impl DefinitionDescriptorV1 {
         match self {
             Self::Interface(interface) => push(DefinitionKind::Event, &interface.events),
             Self::Implementation(implementation) => {
-                if let EntrypointV1::Instruction(interface) = &implementation.entrypoint {
-                    push(DefinitionKind::Interface, core::slice::from_ref(interface));
+                if let EntrypointV1::Instructions(interfaces) = &implementation.entrypoint {
+                    push(DefinitionKind::Interface, interfaces);
                 }
                 push(DefinitionKind::Storage, &implementation.reads);
                 push(DefinitionKind::Storage, &implementation.writes);
@@ -716,7 +962,14 @@ impl DefinitionDescriptorV1 {
             }
             Self::Implementation(implementation) => {
                 match &implementation.entrypoint {
-                    EntrypointV1::Instruction(_) => {}
+                    EntrypointV1::Instructions(interfaces) => {
+                        if interfaces.is_empty() {
+                            return Err(DefinitionError::NonCanonicalList {
+                                field: "entrypoint",
+                            });
+                        }
+                        check_ids("entrypoint", interfaces)?;
+                    }
                     EntrypointV1::Hook(name) | EntrypointV1::Query(name) => {
                         check_name("entrypoint", name)?;
                     }
@@ -733,15 +986,15 @@ impl DefinitionDescriptorV1 {
             }
             Self::Storage(storage) => {
                 check_name("namespace", &storage.namespace)?;
-                if let StorageShapeV1::Table { key } = &storage.shape {
-                    check_schema(key)?;
-                    if !storage.initial.is_empty() {
+                match (&storage.shape, &storage.initial) {
+                    (StorageShapeV1::Table { key }, None) => check_schema(key)?,
+                    (StorageShapeV1::Table { .. }, Some(_)) => {
                         return Err(DefinitionError::InvalidInitial(
                             "a table starts empty and has no initial bytes",
                         ));
                     }
-                } else {
-                    check_initial(&storage.initial)?;
+                    (StorageShapeV1::Cell, Some(initial)) => check_initial(initial)?,
+                    (StorageShapeV1::Cell, None) => {}
                 }
                 check_schema(&storage.value)?;
                 if let ProjectionV1::Semantic(identity) = &storage.projection {
@@ -1032,12 +1285,23 @@ impl DefinitionLookup for BTreeMap<DefinitionId, DefinitionDescriptorV1> {
 
 /// Binding of one active interface's wire ID to its implementation.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::BindingV1")]
 pub struct BindingV1 {
     /// Instruction wire ID.
     pub wire_id: String,
+    /// The active interface that owns the wire ID, so resolving an envelope needs no lookup.
+    pub interface: DefinitionId,
     /// Bound implementation.
     pub implementation: DefinitionId,
 }
@@ -1049,12 +1313,17 @@ pub struct BindingV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,
     norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::RestrictionV1")]
+#[norito(tag = "kind", content = "content")]
 pub enum RestrictionV1 {
     /// No new deployments, bindings or dependents since the height.
     Deprecated(u64),
@@ -1077,6 +1346,8 @@ pub enum RestrictionV1 {
     Decode,
     iroha_schema::IntoSchema,
     norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::RestrictionEntryV1")]
 pub struct RestrictionEntryV1 {
@@ -1088,11 +1359,21 @@ pub struct RestrictionEntryV1 {
 
 /// Definitions a live obligation needs to complete (`live_runtime_upgrades.md` §7.2).
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::CompletionClosureV1")]
 pub struct CompletionClosureV1 {
     /// Identity of the obligation registered through the kernel.
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub obligation: [u8; 32],
     /// Definitions its completion needs, sorted and unique.
     pub definitions: Vec<DefinitionId>,
@@ -1100,7 +1381,16 @@ pub struct CompletionClosureV1 {
 
 /// The one resolved selection an execution root executes at a height.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema, norito::NoritoSchema,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::runtime::definition::RootSelectionV1")]
 pub struct RootSelectionV1 {
@@ -1157,6 +1447,9 @@ pub enum SelectionError {
     /// Two active interfaces share a wire ID.
     #[error("two active interfaces share wire ID {0}")]
     DuplicateWireId(String),
+    /// Two installed storage definitions share a namespace.
+    #[error("two installed storage definitions share namespace {0}")]
+    DuplicateNamespace(String),
     /// An active interface has no binding.
     #[error("active interface {0} has no binding")]
     Unbound(String),
@@ -1233,8 +1526,16 @@ impl RootSelectionV1 {
         typed(&self.kernel, DefinitionKind::Kernel)?;
         typed(&self.commitment_profile, DefinitionKind::CommitmentProfile)?;
         typed(&self.services_profile, DefinitionKind::ServicesProfile)?;
+        let mut namespaces = BTreeSet::new();
         for storage in &self.installed_storage {
-            typed(storage, DefinitionKind::Storage)?;
+            if let DefinitionDescriptorV1::Storage(descriptor) =
+                typed(storage, DefinitionKind::Storage)?
+                && !namespaces.insert(descriptor.namespace.as_str())
+            {
+                return Err(SelectionError::DuplicateNamespace(
+                    descriptor.namespace.clone(),
+                ));
+            }
         }
 
         let installed: BTreeSet<&DefinitionId> = self.installed_storage.iter().collect();
@@ -1287,13 +1588,14 @@ impl RootSelectionV1 {
             let interface = interfaces
                 .get(binding.wire_id.as_str())
                 .ok_or_else(|| SelectionError::BadBinding(binding.wire_id.clone()))?;
-            let resolves = active.contains(&binding.implementation)
+            let resolves = binding.interface == *interface
+                && active.contains(&binding.implementation)
                 && matches!(
                     lookup.definition(&binding.implementation),
                     Some(DefinitionDescriptorV1::Implementation(ImplementationDescriptorV1 {
-                        entrypoint: EntrypointV1::Instruction(target),
+                        entrypoint: EntrypointV1::Instructions(targets),
                         ..
-                    })) if target == interface
+                    })) if targets.binary_search(interface).is_ok()
                 );
             if !resolves {
                 return Err(SelectionError::BadBinding(binding.wire_id.clone()));

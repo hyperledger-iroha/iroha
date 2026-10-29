@@ -58,7 +58,7 @@ fn bonds_table() -> DefinitionDescriptorV1 {
             key: codec("iroha_data_model::asset::id::AssetDefinitionId"),
         },
         value: codec("iroha_data_model::bond::BondRecord"),
-        initial: Vec::new(),
+        initial: None,
         invariants: [5; 32],
         projection: ProjectionV1::BareNorito,
     })
@@ -69,7 +69,7 @@ fn bond_policy_cell() -> DefinitionDescriptorV1 {
         namespace: "world.bond_policy".into(),
         shape: StorageShapeV1::Cell,
         value: codec("u32"),
-        initial: vec![0, 0, 0, 0],
+        initial: Some(vec![0, 0, 0, 0]),
         invariants: [6; 32],
         projection: ProjectionV1::BareNorito,
     })
@@ -89,7 +89,7 @@ fn bond_permission() -> DefinitionDescriptorV1 {
     })
 }
 
-fn interface(wire_id: &str, event: DefinitionId) -> DefinitionDescriptorV1 {
+pub(crate) fn interface(wire_id: &str, event: DefinitionId) -> DefinitionDescriptorV1 {
     DefinitionDescriptorV1::Interface(InterfaceDescriptorV1 {
         wire_id: wire_id.into(),
         payload: codec("iroha_data_model::isi::bond::BondInstructionBox"),
@@ -100,19 +100,23 @@ fn interface(wire_id: &str, event: DefinitionId) -> DefinitionDescriptorV1 {
     })
 }
 
-struct Ids {
-    kernel: DefinitionId,
-    commitment: DefinitionId,
-    services: DefinitionId,
-    table: DefinitionId,
-    cell: DefinitionId,
-    event: DefinitionId,
-    permission: DefinitionId,
+pub(crate) struct Ids {
+    pub(crate) kernel: DefinitionId,
+    pub(crate) commitment: DefinitionId,
+    pub(crate) services: DefinitionId,
+    pub(crate) table: DefinitionId,
+    pub(crate) cell: DefinitionId,
+    pub(crate) event: DefinitionId,
+    pub(crate) permission: DefinitionId,
 }
 
-fn implementation(ids: &Ids, interface: DefinitionId, module: &str) -> DefinitionDescriptorV1 {
+pub(crate) fn implementation(
+    ids: &Ids,
+    interface: DefinitionId,
+    module: &str,
+) -> DefinitionDescriptorV1 {
     DefinitionDescriptorV1::Implementation(ImplementationDescriptorV1 {
-        entrypoint: EntrypointV1::Instruction(interface),
+        entrypoint: EntrypointV1::Instructions(vec![interface]),
         code: ImplementationCodeV1::Native {
             module: module.into(),
             reference_closure: [8; 32],
@@ -130,12 +134,12 @@ fn implementation(ids: &Ids, interface: DefinitionId, module: &str) -> Definitio
     })
 }
 
-fn sorted(mut ids: Vec<DefinitionId>) -> Vec<DefinitionId> {
+pub(crate) fn sorted(mut ids: Vec<DefinitionId>) -> Vec<DefinitionId> {
     ids.sort();
     ids
 }
 
-fn publish(
+pub(crate) fn publish(
     catalog: &mut BTreeMap<DefinitionId, DefinitionDescriptorV1>,
     descriptor: DefinitionDescriptorV1,
 ) -> DefinitionId {
@@ -145,7 +149,7 @@ fn publish(
 }
 
 /// A catalog with one bond interface, its implementation and a valid selection.
-fn bond_root() -> (
+pub(crate) fn bond_root() -> (
     BTreeMap<DefinitionId, DefinitionDescriptorV1>,
     Ids,
     RootSelectionV1,
@@ -170,6 +174,7 @@ fn bond_root() -> (
         active: sorted(vec![ids.event, ids.permission, claim, claim_impl]),
         bindings: vec![BindingV1 {
             wire_id: "iroha.bond.claim.v1".into(),
+            interface: claim,
             implementation: claim_impl,
         }],
         restrictions: Vec::new(),
@@ -215,11 +220,11 @@ const PINNED: &[(&str, &str)] = &[
     ),
     (
         "table",
-        "9c5d47375a2c4a3bf7c6f4bbf44e7248f052f41823020288801a4e491e82163f",
+        "2b8664d3c15857347c65457622d848c3b693627f41dbb5ac38b3c27f1127baad",
     ),
     (
         "cell",
-        "ac950aa1c1ebf9bf67207c0d698c9b4a5c5a41b067e5f3d2e01adccc56e743ff",
+        "d9a9a1953e32a33573c06a5830aade28cc41b8c100e23db56d5a5bf8481aee91",
     ),
     (
         "event",
@@ -231,7 +236,7 @@ const PINNED: &[(&str, &str)] = &[
     ),
     (
         "selection",
-        "198772b8de1c23f78f3f99aca0eb7c850da6bb20f5dde14ce693b5fff2d5a065",
+        "0c09eadc951a364afad42dec152dea44761bd5f55a701caf0d2dbe7f836fa471",
     ),
 ];
 
@@ -309,7 +314,7 @@ fn format_rules_reject_malformed_descriptors() {
 
     let mut table_with_initial = bonds_table();
     if let DefinitionDescriptorV1::Storage(storage) = &mut table_with_initial {
-        storage.initial = vec![1];
+        storage.initial = Some(vec![1]);
     }
     assert!(matches!(
         table_with_initial.validate(),
@@ -318,12 +323,35 @@ fn format_rules_reject_malformed_descriptors() {
 
     let mut empty_cell = bond_policy_cell();
     if let DefinitionDescriptorV1::Storage(storage) = &mut empty_cell {
-        storage.initial.clear();
+        storage.initial = Some(Vec::new());
     }
     assert!(matches!(
         empty_cell.validate(),
         Err(DefinitionError::InvalidInitial(_))
     ));
+
+    let mut founded_cell = bond_policy_cell();
+    if let DefinitionDescriptorV1::Storage(storage) = &mut founded_cell {
+        storage.initial = None;
+    }
+    assert_eq!(
+        founded_cell.validate(),
+        Ok(()),
+        "the act that founds a root populates a cell without initial bytes"
+    );
+
+    for entrypoint in [Vec::new(), vec![ids.event, ids.event]] {
+        let mut bundle = implementation(&ids, ids.event, "bond.bundle");
+        if let DefinitionDescriptorV1::Implementation(implementation) = &mut bundle {
+            implementation.entrypoint = EntrypointV1::Instructions(entrypoint);
+        }
+        assert_eq!(
+            bundle.validate(),
+            Err(DefinitionError::NonCanonicalList {
+                field: "entrypoint"
+            })
+        );
+    }
 
     let mut native_on_host = implementation(&ids, ids.event, "bond.claim");
     if let DefinitionDescriptorV1::Implementation(implementation) = &mut native_on_host {
@@ -482,6 +510,7 @@ fn adding_one_instruction_publishes_only_its_definitions() {
     successor.active = sorted([successor.active, vec![call, call_impl]].concat());
     successor.bindings.push(BindingV1 {
         wire_id: "iroha.bond.call.v1".into(),
+        interface: call,
         implementation: call_impl,
     });
     successor
@@ -637,5 +666,91 @@ fn duplicate_wire_ids_and_foreign_services_are_refused() {
     assert_eq!(
         mixed.check_closure(&catalog),
         Err(SelectionError::ForeignServices(foreign_impl))
+    );
+}
+
+#[test]
+fn a_bundle_answers_every_interface_it_lists() {
+    let (mut catalog, ids, mut selection) = bond_root();
+    let claim = selection.bindings[0].implementation;
+    let claim_interface = selection
+        .active
+        .iter()
+        .copied()
+        .find(|id| matches!(catalog[id], DefinitionDescriptorV1::Interface(_)))
+        .expect("claim interface");
+    let call = publish(&mut catalog, interface("iroha.bond.call.v1", ids.event));
+    let mut bundle = implementation(&ids, claim_interface, "bond.bundle");
+    if let DefinitionDescriptorV1::Implementation(implementation) = &mut bundle {
+        implementation.entrypoint = EntrypointV1::Instructions(sorted(vec![claim_interface, call]));
+    }
+    let bundle = publish(&mut catalog, bundle);
+
+    selection.active = sorted(
+        selection
+            .active
+            .iter()
+            .copied()
+            .filter(|id| *id != claim)
+            .chain([call, bundle])
+            .collect(),
+    );
+    selection.bindings = vec![
+        BindingV1 {
+            wire_id: "iroha.bond.call.v1".into(),
+            interface: call,
+            implementation: bundle,
+        },
+        BindingV1 {
+            wire_id: "iroha.bond.claim.v1".into(),
+            interface: claim_interface,
+            implementation: bundle,
+        },
+    ];
+    assert_eq!(selection.check_closure(&catalog), Ok(()));
+
+    let unlisted = publish(&mut catalog, interface("iroha.bond.repay.v1", ids.event));
+    selection.active = sorted([selection.active, vec![unlisted]].concat());
+    selection.bindings.push(BindingV1 {
+        wire_id: "iroha.bond.repay.v1".into(),
+        interface: unlisted,
+        implementation: bundle,
+    });
+    assert_eq!(
+        selection.check_closure(&catalog),
+        Err(SelectionError::BadBinding("iroha.bond.repay.v1".into())),
+        "a bundle answers only the interfaces it lists"
+    );
+}
+
+#[test]
+fn installed_storage_namespaces_are_unique() {
+    let (mut catalog, _, mut selection) = bond_root();
+    let mut twin = bonds_table();
+    if let DefinitionDescriptorV1::Storage(storage) = &mut twin {
+        storage.invariants = [0x44; 32];
+    }
+    let twin = publish(&mut catalog, twin);
+    selection.installed_storage = sorted([selection.installed_storage, vec![twin]].concat());
+    assert!(matches!(
+        selection.check_closure(&catalog),
+        Err(SelectionError::DuplicateNamespace(_))
+    ));
+}
+
+#[test]
+fn definitions_and_selections_round_trip_through_json() {
+    let (catalog, _, selection) = bond_root();
+    for descriptor in catalog.values() {
+        let json = norito::json::to_json(descriptor).expect("descriptor JSON");
+        let back: DefinitionDescriptorV1 = norito::json::from_str(&json).expect("descriptor");
+        assert_eq!(&back, descriptor);
+    }
+    let json = norito::json::to_json(&selection).expect("selection JSON");
+    let back: RootSelectionV1 = norito::json::from_str(&json).expect("selection");
+    assert_eq!(back, selection);
+    assert!(
+        json.contains(&selection.kernel.to_string()),
+        "identities are hex strings: {json}"
     );
 }
