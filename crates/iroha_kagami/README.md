@@ -138,7 +138,9 @@ iroha3d --config node/config.toml --check-config
 `node init` writes the validator (BLS), SoraNet transport and streaming keys to
 `node/secrets/` in the layout `iroha3d` reads through `data_dir`, and a starter
 `node/config.toml` with this node's roster entry filled in. Add the network's
-`chain`, other validators and `[genesis]`; every other setting has a default. It
+`chain`, other validators, `[genesis]` and any consensus-bound sections its reference
+config sets (for a Kagami localnet, `[nexus.fusion] exit_teu`); every other setting has
+a default. It
 prints the `public_key@host:port` entry and proof of possession to send to the
 network operator, and never replaces existing keys or config.
 

@@ -4,7 +4,9 @@
 
 A node file needs only `chain`, `public_key`, `trusted_peers`, `trusted_peers_pop`,
 `network.address`, `network.public_address`, `torii.address` and `[genesis]`, plus
-`data_dir` (`kagami node init` writes such a file). Everything else has a working
+`data_dir` (`kagami node init` writes such a file), plus any consensus-bound sections
+(`pipeline`, `nexus`, `gov`, `zk`, `content`, `settlement`, `oracle`,
+`fraud_monitoring`) the network's genesis was signed with. Everything else has a working
 default:
 
 - `data_dir` completes every state path (`kura`, `snapshot`, `tiered_state`, Torii and

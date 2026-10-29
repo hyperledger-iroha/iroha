@@ -452,6 +452,10 @@ file = "genesis.signed.nrt"
 expected_hash_file = "genesis.expected_hash"
 ```
 
+Consensus-bound sections (`pipeline`, `nexus`, `gov`, `zk`, `content`, `settlement`,
+`oracle`, `fraud_monitoring`) feed policy digests committed by the signed genesis, so copy
+any the network's reference node configuration sets (Kagami localnets set
+`[nexus.fusion] exit_teu`); otherwise startup fails with a signed genesis policy mismatch.
 Everything else defaults: Kura, snapshot, DA, SoraFS, SoraNet and Torii state paths
 derive from `data_dir`; the transport and streaming public keys derive from their
 private keys; the streaming codec uses the rANS tables compiled into `iroha3d`; and

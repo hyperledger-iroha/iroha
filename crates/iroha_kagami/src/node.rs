@@ -195,6 +195,9 @@ public_address = "{public_address}"
 address = "{api_address}"
 
 # The signed genesis block and its network identity, from whoever created the network.
+# Copy any consensus-bound sections their reference node config sets (`pipeline`, `nexus`,
+# `gov`, `zk`, `content`, `settlement`, `oracle`, `fraud_monitoring`; Kagami localnets set
+# `[nexus.fusion] exit_teu`), or startup reports a signed genesis policy mismatch.
 [genesis]
 public_key = "REPLACE_WITH_GENESIS_PUBLIC_KEY"
 file = "genesis.signed.nrt"

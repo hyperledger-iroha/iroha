@@ -1743,7 +1743,7 @@ pub enum BlockValidationError {
     SignatureVerification(#[from] SignatureVerificationError),
     /// Invalid genesis block: {0}
     InvalidGenesis(#[from] InvalidGenesisError),
-    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}
+    /// Signed genesis policy mismatch: execution {expected_execution} != {actual_execution}, Nexus {expected_nexus} != {actual_nexus}; this node's consensus-bound sections (`pipeline`, `nexus`, `gov`, `zk`, `content`, `settlement`, `oracle`, `fraud_monitoring`) differ from the configuration the genesis was signed with, so copy them from the network's reference node configuration
     #[expect(
         clippy::doc_markdown,
         reason = "displaydoc field placeholders must retain their exact format syntax"

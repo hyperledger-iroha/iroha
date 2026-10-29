@@ -23,7 +23,8 @@ These commands require no supplied TOML, prompts, source checkout, Cargo, Python
 shell scripts, or container runtime. For one node of another network,
 `kagami node init --dir DIR` writes the validator, SoraNet transport and streaming keys to
 `DIR/secrets/` and a starter `DIR/config.toml` (`data_dir = "."`) that names only
-per-network values; every other node setting has a working default. Configuration and credentials are generated
+per-network values (identity, roster, genesis and any consensus-bound sections the
+network's genesis was signed with); every other node setting has a working default. Configuration and credentials are generated
 in private managed storage outside projects. Kagami is the CLI frontend; Mochi
 is the desktop frontend to the same services.
 
