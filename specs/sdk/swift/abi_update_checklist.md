@@ -81,7 +81,7 @@ planned for v1). Examples:
 2. **Client APIs.** Verify `ToriiClient` & `TxBuilder` expose the latest `/v1/runtime/*`
    endpoints:
    - `getRuntimeMetrics`, `getRuntimeAbiActive`, `getRuntimeAbiHash`,
-     `listRuntimeUpgrades`, `proposeRuntimeUpgrade(changeSet:)`,
+     `listRuntimeUpgrades`, `proposeRuntimeUpgrade(changeSet:provenance:)`,
      `cancelRuntimeUpgrade(idHex:)`. Activation is automatic at the start of a change
      set's effective height; there is no activation request.
    - Confirm async + completion-handler variants decode and encode the new fields.

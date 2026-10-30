@@ -636,7 +636,9 @@ For higher-level walkthroughs, see:
 - **Runtime & capabilities:** `getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`,
   `getRuntimeAbiHash`, and the operator-signed change-set helpers: `listRuntimeUpgrades` returns
   the committed selection, the attesting committee and every change-set record;
-  `proposeRuntimeUpgrade` and `cancelRuntimeUpgrade` return the drafted SORA Parliament proposal.
+  `proposeRuntimeUpgrade` (with the release signers' `ToriiRuntimeChangeSetEndorsement`s the
+  committed provenance policy requires) and `cancelRuntimeUpgrade` return the drafted SORA
+  Parliament proposal.
   Change sets activate at their effective height without a client call
   (`specs/runtime_upgrades.md`).
 - **Governance:** draft typed V1 deployment proposals

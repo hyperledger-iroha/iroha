@@ -16,7 +16,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   the committed `selectionIdHex` and `selection`, the attesting `committee` and `committeeDigestHex`, and
   items typing `idHex`, `effectiveHeight`, `predecessorHex`, `successorHex`, `status` (`Scheduled`, or
   `Activated`, `Lapsed`, `Cancelled` with a height) and `notice`, with the complete record kept losslessly
-  as `record`. `proposeRuntimeUpgrade(changeSet)` posts an exact universal-root `ChangeSetV1`; it and
+  as `record`. `proposeRuntimeUpgrade(changeSet, { provenance })` posts `{ change_set, provenance }`: an exact
+  universal-root `ChangeSetV1` and the trusted release signers' `ChangeSetEndorsementV1` objects the
+  committed `runtime_provenance_policy_v1` requires (`ToriiRuntimeChangeSetEndorsement`); it and
   `cancelRuntimeUpgrade(idHex)` return exactly one `ProposeRuntimeUpgradeProposal` draft. The three calls
   sign with the client's `OperatorSigningContext`, which these operator routes require.
   `activateRuntimeUpgrade` is removed: an approved change set activates at the start of its effective

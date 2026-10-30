@@ -5457,6 +5457,19 @@ export interface ToriiRuntimeUpgradeInstruction {
   payload_hex: string;
 }
 
+/**
+ * A trusted release signer's `ChangeSetEndorsementV1` (`iroha runtime upgrade endorse` prints
+ * one): its signature over the change-set identity, which the committed provenance policy counts.
+ */
+export interface ToriiRuntimeChangeSetEndorsement {
+  /** Identity of the endorsed change set, 32 lowercase hexadecimal bytes. */
+  change_set: string;
+  /** The release signer's canonical public-key multihash. */
+  signer: string;
+  /** The signature, uppercase hexadecimal. */
+  signature: string;
+}
+
 /** Draft returned by `proposeRuntimeUpgrade` and `cancelRuntimeUpgrade`. */
 export interface ToriiRuntimeUpgradeTxResponse {
   ok: true;
@@ -10979,10 +10992,16 @@ export declare class ToriiClient {
   listRuntimeUpgrades(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiRuntimeUpgradesSnapshot>;
-  /** Operator-signed draft of the Parliament proposal that schedules `changeSet`. */
+  /**
+   * Operator-signed draft of the Parliament proposal that schedules `changeSet`, carrying the
+   * trusted release signers' endorsements the committed provenance policy requires.
+   */
   proposeRuntimeUpgrade(
     changeSet: ToriiRuntimeChangeSet,
-    options?: { signal?: AbortSignal },
+    options?: {
+      signal?: AbortSignal;
+      provenance?: ReadonlyArray<ToriiRuntimeChangeSetEndorsement>;
+    },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
   /** Operator-signed draft of the Parliament proposal that withdraws a scheduled change set. */
   cancelRuntimeUpgrade(

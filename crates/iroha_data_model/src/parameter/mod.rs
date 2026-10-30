@@ -6,6 +6,7 @@ pub mod governance_clock;
 pub mod parliament_ballot;
 pub mod parliament_lifecycle;
 pub mod runtime_emergency_panel;
+pub mod runtime_provenance_policy;
 pub mod runtime_upgrade_policy;
 pub use execution_output::ExecutionOutputPolicyV1;
 pub use fastpq_source::{
@@ -15,6 +16,7 @@ pub use governance_clock::GovernanceClockParametersV1;
 pub use parliament_ballot::ParliamentBallotParametersV1;
 pub use parliament_lifecycle::ParliamentLifecycleParametersV1;
 pub use runtime_emergency_panel::RuntimeEmergencyPanelV1;
+pub use runtime_provenance_policy::RuntimeProvenancePolicyV1;
 pub use runtime_upgrade_policy::RuntimeUpgradePolicyV1;
 pub mod system;
 pub use custom::{

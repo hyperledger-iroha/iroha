@@ -9367,7 +9367,7 @@ fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     simple_manual_raw_body_post_tool(
         "iroha.runtime.upgrades.propose",
-        "Draft the Parliament proposal that schedules a runtime change set (`/v1/runtime/upgrades/propose`); the change set is the required `body` object.",
+        "Draft the Parliament proposal that schedules a runtime change set (`/v1/runtime/upgrades/propose`); the required `body` object is `{change_set, provenance}`: the change set and the trusted release signers' endorsements the committed provenance policy requires.",
         "/v1/runtime/upgrades/propose",
         "Runtime change set to schedule.",
     )

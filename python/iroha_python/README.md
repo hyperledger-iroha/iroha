@@ -2083,11 +2083,17 @@ for item in snapshot.items:
     print(item.id_hex, item.effective_height, item.status.kind, item.status.height)
 
 # Draft the SORA Parliament proposal that schedules a change set. The change set
-# names the committed selection as its predecessor and is sent as given.
+# names the committed selection as its predecessor and is sent as given, with the
+# endorsements of the trusted release signers the committed provenance policy
+# requires (each printed by `iroha runtime upgrade endorse`; none without a policy).
 with open("change_set.json", encoding="utf-8") as handle:
     change_set = json.load(handle)
 assert change_set["predecessor"] == snapshot.selection_id_hex
-schedule = client.propose_runtime_upgrade_typed(change_set)
+endorsements = []
+for path in ("endorsement_a.json", "endorsement_b.json"):
+    with open(path, encoding="utf-8") as handle:
+        endorsements.append(json.load(handle))
+schedule = client.propose_runtime_upgrade_typed(change_set, endorsements)
 
 # Draft the proposal that withdraws a scheduled change set by its identity
 cancel = client.cancel_runtime_upgrade_typed(snapshot.items[0].id_hex)

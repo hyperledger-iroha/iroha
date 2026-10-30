@@ -38910,6 +38910,51 @@
           }
         ]
       },
+      "RuntimeChangeSetEndorsementV1": {
+        "additionalProperties": false,
+        "description": "A trusted release signer's endorsement of a change set's provenance (iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1): the signer's signature over the domain iroha:runtime:change-set-endorsement:v1 with its NUL terminator, followed by the 32-byte change-set identity. The committed runtime_provenance_policy_v1 decides which signers count.",
+        "properties": {
+          "change_set": {
+            "description": "Identity of the endorsed change set.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          }
+        },
+        "required": [
+          "change_set",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "RuntimeProposeUpgradeRequest": {
+        "additionalProperties": false,
+        "description": "The change set to schedule and the endorsements the committed runtime provenance policy requires: at most one from each trusted release signer. provenance is empty when the universal root commits no provenance policy.",
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeChangeSetEndorsementV1"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "provenance"
+        ],
+        "type": "object"
+      },
       "RwaPage": {
         "additionalProperties": false,
         "properties": {
@@ -93855,12 +93900,12 @@
     },
     "/v1/runtime/upgrades/propose": {
       "post": {
-        "description": "Draft the SORA Parliament proposal that schedules the ChangeSetV1 in the body, for local signing. Admission happens when the signed proposal executes.",
+        "description": "Draft the SORA Parliament proposal that schedules the change set in the body with its release signers' endorsements, for local signing. Admission, including the committed provenance check, happens when the signed proposal executes.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+                "$ref": "#/components/schemas/RuntimeProposeUpgradeRequest"
               }
             }
           },

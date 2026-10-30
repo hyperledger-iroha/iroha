@@ -19,6 +19,7 @@ export {
 } from "./transactionCodec.js";
 export {
   normalizeGovernanceProposalWireV1,
+  normalizeRuntimeChangeSetEndorsementsV1,
   normalizeRuntimeChangeSetV1,
 } from "./governanceProposalV1.js";
 

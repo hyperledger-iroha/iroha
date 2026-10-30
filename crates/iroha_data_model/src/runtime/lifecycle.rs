@@ -36,6 +36,8 @@ pub const CONTAINMENT_DOMAIN: &[u8] = b"iroha:runtime:containment:v1\0";
 pub const ENDORSEMENT_DOMAIN: &[u8] = b"iroha:runtime:containment-endorsement:v1\0";
 /// How long an emergency endorsement stays valid (§7.1).
 pub const ENDORSEMENT_LIFETIME_MS: u64 = 30 * 60 * 1000;
+/// Domain separator of a change-set provenance endorsement signature.
+pub const CHANGE_SET_ENDORSEMENT_DOMAIN: &[u8] = b"iroha:runtime:change-set-endorsement:v1\0";
 
 /// The execution root a lifecycle record applies to.
 #[derive(
@@ -900,6 +902,111 @@ impl ContainmentV1 {
                 need: threshold,
             })
         }
+    }
+}
+
+/// A trusted release signer's endorsement of a change set's provenance (§6, "Who governs"): the
+/// signer vouches for the build, SBOM and SLSA evidence of the definitions and artifacts the change
+/// set publishes. The committed `runtime_provenance_policy_v1` decides which signers count.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1")]
+pub struct ChangeSetEndorsementV1 {
+    /// The endorsed change set.
+    pub change_set: ChangeSetId,
+    /// The endorsing release signer.
+    pub signer: PublicKey,
+    /// Signature over the domain-separated change-set identity.
+    pub signature: Signature,
+}
+
+/// Endorsements that fall short of a provenance policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{have} of the {need} trusted signer endorsements the provenance policy requires")]
+pub struct ProvenanceShortfall {
+    /// Distinct trusted signers whose valid endorsement was found.
+    pub have: usize,
+    /// Endorsements the policy requires.
+    pub need: usize,
+}
+
+impl ChangeSetEndorsementV1 {
+    fn payload(change_set: &ChangeSetId) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(CHANGE_SET_ENDORSEMENT_DOMAIN.len() + 32);
+        payload.extend_from_slice(CHANGE_SET_ENDORSEMENT_DOMAIN);
+        payload.extend_from_slice(&change_set.0);
+        payload
+    }
+
+    /// Endorse `change_set` with a release signer's key.
+    ///
+    /// # Errors
+    /// The key cannot sign.
+    pub fn sign(
+        change_set: ChangeSetId,
+        signer: PublicKey,
+        key: &PrivateKey,
+    ) -> Result<Self, LifecycleSignatureError> {
+        let signature = Signature::try_new(key, &Self::payload(&change_set))
+            .map_err(|error| LifecycleSignatureError::Signing(error.to_string()))?;
+        Ok(Self {
+            change_set,
+            signer,
+            signature,
+        })
+    }
+
+    /// Verify the signer's signature.
+    ///
+    /// # Errors
+    /// The signature does not verify.
+    pub fn verify(&self) -> Result<(), LifecycleSignatureError> {
+        self.signature
+            .verify(&self.signer, &Self::payload(&self.change_set))
+            .map_err(|_| LifecycleSignatureError::BadSignature)
+    }
+}
+
+/// Whether `endorsements` hold valid endorsements of `change_set` from at least `threshold`
+/// distinct members of `signers`. Endorsements of another change set, from other keys or with
+/// bad signatures do not count.
+///
+/// # Errors
+/// How many trusted signers endorsed it, against how many the policy requires.
+pub fn check_change_set_provenance(
+    change_set: ChangeSetId,
+    signers: &[PublicKey],
+    threshold: usize,
+    endorsements: &[ChangeSetEndorsementV1],
+) -> Result<(), ProvenanceShortfall> {
+    let endorsed: BTreeSet<&PublicKey> = endorsements
+        .iter()
+        .filter(|endorsement| {
+            endorsement.change_set == change_set
+                && signers.contains(&endorsement.signer)
+                && endorsement.verify().is_ok()
+        })
+        .map(|endorsement| &endorsement.signer)
+        .collect();
+    if endorsed.len() >= threshold {
+        Ok(())
+    } else {
+        Err(ProvenanceShortfall {
+            have: endorsed.len(),
+            need: threshold,
+        })
     }
 }
 

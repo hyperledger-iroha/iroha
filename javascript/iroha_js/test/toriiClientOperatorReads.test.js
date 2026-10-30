@@ -174,7 +174,7 @@ test("runtime change-set drafts sign the exact POST target and body once", async
     [
       "/v1/runtime/upgrades/propose",
       (client) => client.proposeRuntimeUpgrade(changeSet),
-      Buffer.from(JSON.stringify(changeSet)),
+      Buffer.from(JSON.stringify({ change_set: changeSet, provenance: [] })),
     ],
     [cancelPath, (client) => client.cancelRuntimeUpgrade("ab".repeat(32)), Buffer.alloc(0)],
   ]) {

@@ -9990,13 +9990,49 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
+    private func runtimeChangeSetEndorsementJSON(signature: String = String(repeating: "CD", count: 64)) -> String {
+        """
+        {"change_set":"\(String(repeating: "5a", count: 32))","signer":"ed0120\(String(repeating: "AB", count: 32))","signature":"\(signature)"}
+        """
+    }
+
+    func testRuntimeChangeSetEndorsementIsExact() throws {
+        let valid = runtimeChangeSetEndorsementJSON()
+        XCTAssertNoThrow(
+            try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(valid.utf8)))
+        )
+        for json in [
+            runtimeChangeSetEndorsementJSON(signature: String(repeating: "cd", count: 64)),
+            runtimeChangeSetEndorsementJSON(signature: "ABC"),
+            valid.replacingOccurrences(of: "\"change_set\"", with: "\"changeSet\""),
+            valid.replacingOccurrences(of: "}", with: ",\"signed_at\":1}"),
+            "[\(valid)]",
+        ] {
+            XCTAssertThrowsError(
+                try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(json.utf8))),
+                json
+            ) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testProposeRuntimeUpgradeAsync() async throws {
         let changeSet = try ToriiRuntimeChangeSet(
             json: ToriiJSONValue.decodeExact(from: Data(runtimeChangeSetJSON().utf8))
         )
         XCTAssertEqual(changeSet.effectiveHeight, 4200)
-        let expectedBody = try changeSet.json.encodedData()
+        let endorsement = try ToriiRuntimeChangeSetEndorsement(
+            json: ToriiJSONValue.decodeExact(from: Data(runtimeChangeSetEndorsementJSON().utf8))
+        )
+        XCTAssertEqual(endorsement.changeSetHex, String(repeating: "5a", count: 32))
+        let expectedBody = try ToriiJSONValue.object([
+            "change_set": changeSet.json,
+            "provenance": .array([endorsement.json]),
+        ]).encodedData()
         let wireId = ToriiRuntimeUpgradeActionResponse.proposalInstructionWireId
         let expectedResponse = Data("""
         {"ok":true,"tx_instructions":[{"wire_id":"\(wireId)","payload_hex":"0a0b"}]}
@@ -10007,7 +10043,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades/propose")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(self.bodyData(from: request), expectedBody)
-            // The operator signature covers the exact change-set body.
+            // The operator signature covers the exact proposal body.
             let operatorKey = try Curve25519.Signing.PublicKey(
                 rawRepresentation: SigningKey.ed25519(privateKey: Data(repeating: 0x5A, count: 32))
                     .publicKey()
@@ -10028,7 +10064,9 @@ final class ToriiClientHeaderTests: XCTestCase {
                 Data(base64Encoded: try XCTUnwrap(request.value(forHTTPHeaderField: "X-Iroha-Operator-Signature")))
             )
             XCTAssertTrue(operatorKey.isValidSignature(signature, for: signed))
-            let json = self.bodyJSON(from: request)
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(Set(body.keys), ["change_set", "provenance"])
+            let json = try XCTUnwrap(body["change_set"] as? [String: Any])
             XCTAssertEqual(
                 Set(json.keys),
                 [
@@ -10038,11 +10076,17 @@ final class ToriiClientHeaderTests: XCTestCase {
             )
             XCTAssertEqual(json["effective_height"] as? Int, 4200)
             XCTAssertEqual(json["predecessor"] as? String, String(repeating: "1", count: 64))
+            let provenance = try XCTUnwrap(body["provenance"] as? [[String: Any]])
+            XCTAssertEqual(provenance.count, 1)
+            XCTAssertEqual(provenance.first?["signature"] as? String, String(repeating: "CD", count: 64))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, expectedResponse)
         }
 
-        let action = try await makeClient().proposeRuntimeUpgrade(changeSet: changeSet)
+        let action = try await makeClient().proposeRuntimeUpgrade(
+            changeSet: changeSet,
+            provenance: [endorsement]
+        )
         XCTAssertTrue(action.ok)
         XCTAssertEqual(action.txInstructions.count, 1)
         XCTAssertEqual(action.txInstructions.first?.wireId, wireId)

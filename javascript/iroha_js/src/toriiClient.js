@@ -5951,18 +5951,38 @@ export class ToriiClient {
 
   /**
    * Draft the SORA Parliament proposal that schedules a runtime change set
-   * (`POST /v1/runtime/upgrades/propose`). The body is the exact `ChangeSetV1` JSON object of
-   * the universal root; Torii returns the `ProposeRuntimeUpgradeProposal` instruction to sign
-   * and submit. Admission happens when the signed proposal executes, and an approved change
-   * set activates on its own at the start of its effective block. Operator-only.
+   * (`POST /v1/runtime/upgrades/propose`). The body carries the exact `ChangeSetV1` JSON object
+   * of the universal root as `change_set`, and as `provenance` the `ChangeSetEndorsementV1`
+   * objects of the trusted release signers the committed provenance policy requires (none for a
+   * root without that policy). Torii returns the `ProposeRuntimeUpgradeProposal` instruction to
+   * sign and submit. Admission, including the provenance check, happens when the signed proposal
+   * executes, and an approved change set activates on its own at the start of its effective
+   * block. Operator-only.
    * @param {ToriiRuntimeChangeSet} changeSet
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, provenance?: ReadonlyArray<ToriiRuntimeChangeSetEndorsement>}} [options]
    * @returns {Promise<ToriiRuntimeUpgradeTxResponse>}
    */
   async proposeRuntimeUpgrade(changeSet, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "proposeRuntimeUpgrade");
-    const { normalizeRuntimeChangeSetV1 } = await loadToriiOptionalModule();
-    const body = normalizeRuntimeChangeSetV1(changeSet, "proposeRuntimeUpgrade.changeSet");
+    const { signal } = normalizeSignalOption(options, "proposeRuntimeUpgrade");
+    const extras = objectKeys(options ?? {}).filter(
+      (key) => key !== "signal" && key !== "provenance",
+    );
+    if (extras.length > 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `proposeRuntimeUpgrade options contains unsupported fields: ${extras.join(", ")}`,
+        "proposeRuntimeUpgrade.options",
+      );
+    }
+    const { normalizeRuntimeChangeSetEndorsementsV1, normalizeRuntimeChangeSetV1 } =
+      await loadToriiOptionalModule();
+    const body = {
+      change_set: normalizeRuntimeChangeSetV1(changeSet, "proposeRuntimeUpgrade.changeSet"),
+      provenance: normalizeRuntimeChangeSetEndorsementsV1(
+        options?.provenance ?? [],
+        "proposeRuntimeUpgrade.options.provenance",
+      ),
+    };
     const response = await this._request("POST", "/v1/runtime/upgrades/propose", {
       headers: JSON_REQUEST_HEADERS,
       body: stringifyStrictLosslessIntegerJson(body, "proposeRuntimeUpgrade request"),

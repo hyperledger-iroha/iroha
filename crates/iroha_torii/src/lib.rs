@@ -1377,8 +1377,8 @@ pub async fn collection_query_for_bench(
     .await
 }
 pub use runtime::{
-    ProposeUpgradeResponse, handle_runtime_cancel_upgrade, handle_runtime_propose_upgrade,
-    handle_runtime_upgrades_list,
+    ProposeUpgradeResponse, RuntimeProposeUpgradeRequest, handle_runtime_cancel_upgrade,
+    handle_runtime_propose_upgrade, handle_runtime_upgrades_list,
 };
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
 #[derive(Clone)]
@@ -13279,7 +13279,7 @@ async fn handler_runtime_propose_upgrade(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
-    body: crate::utils::extractors::NoritoJson<iroha_data_model::runtime::lifecycle::ChangeSetV1>,
+    body: crate::utils::extractors::NoritoJson<crate::runtime::RuntimeProposeUpgradeRequest>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(

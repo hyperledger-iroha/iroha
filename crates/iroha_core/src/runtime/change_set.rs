@@ -14,13 +14,17 @@ use std::collections::BTreeMap;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     isi::error::InstructionExecutionError as Error,
-    parameter::runtime_upgrade_policy::RuntimeUpgradePolicyV1,
+    parameter::{
+        runtime_provenance_policy::RuntimeProvenancePolicyV1,
+        runtime_upgrade_policy::RuntimeUpgradePolicyV1,
+    },
     runtime::{
         definition::{DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1},
         lifecycle::{
-            ChangeSetId, ChangeSetRecordV1, ChangeSetStatusV1, ChangeSetV1, RootScopeV1,
-            RuntimeNoticeV1, RuntimeUpgradeActionV1, SelectionTransitionV1,
-            SignedSupportAttestationV1, committee_digest, committee_supports,
+            ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1, ChangeSetStatusV1, ChangeSetV1,
+            RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1, SelectionTransitionV1,
+            SignedSupportAttestationV1, check_change_set_provenance, committee_digest,
+            committee_supports,
         },
     },
 };
@@ -387,6 +391,70 @@ pub(crate) fn committed_policy(
         .map_err(|error| Error::InvariantViolation(error.to_string().into()))
 }
 
+/// The committed provenance policy of the universal root, if one is committed (§6, "Who
+/// governs").
+///
+/// # Errors
+/// The committed policy is malformed; it never falls back to no requirement.
+pub(crate) fn committed_provenance(
+    parameters: &iroha_data_model::parameter::Parameters,
+) -> Result<Option<RuntimeProvenancePolicyV1>, Error> {
+    parameters
+        .custom()
+        .get(RuntimeProvenancePolicyV1::parameter_id())
+        .map(|custom| {
+            RuntimeProvenancePolicyV1::from_custom_parameter(custom)
+                .map_err(|error| Error::InvariantViolation(error.to_string().into()))
+        })
+        .transpose()
+}
+
+/// Check the endorsements a runtime-upgrade proposal carries against the committed provenance
+/// policy (§6, "Who governs"). A proposal to schedule a change set needs valid endorsements of its
+/// identity from `threshold` distinct trusted release signers, and carries at most one
+/// endorsement per trusted signer. Without a committed policy, and for a cancellation, which
+/// publishes nothing, a proposal carries no endorsements.
+///
+/// # Errors
+/// The policy is malformed, the proposal carries endorsements nothing judges or more than the
+/// policy trusts signers, the change set has no identity, or the endorsements fall short.
+pub(crate) fn check_provenance(
+    action: &RuntimeUpgradeActionV1,
+    provenance: &[ChangeSetEndorsementV1],
+    parameters: &iroha_data_model::parameter::Parameters,
+) -> Result<(), Error> {
+    let (RuntimeUpgradeActionV1::Schedule(change_set), Some(policy)) =
+        (action, committed_provenance(parameters)?)
+    else {
+        return if provenance.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::InvariantViolation(
+                "endorsements accompany only a change set a committed provenance policy judges"
+                    .into(),
+            ))
+        };
+    };
+    if provenance.len() > policy.signers.len() {
+        return Err(Error::InvariantViolation(
+            format!(
+                "{} endorsements exceed the {} trusted release signers",
+                provenance.len(),
+                policy.signers.len()
+            )
+            .into(),
+        ));
+    }
+    let id = change_set
+        .id()
+        .map_err(|error| Error::Conversion(error.to_string()))?;
+    let threshold = usize::try_from(policy.threshold)
+        .map_err(|_| Error::InvariantViolation("the provenance threshold exceeds usize".into()))?;
+    check_change_set_provenance(id, &policy.signers, threshold, provenance).map_err(|shortfall| {
+        Error::InvariantViolation(format!("change set {id} provenance: {shortfall}").into())
+    })
+}
+
 /// Committed time of the executing block, in milliseconds.
 pub(super) fn block_ms(state_transaction: &crate::state::StateTransaction<'_, '_>) -> u64 {
     u64::try_from(state_transaction._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX)
@@ -406,18 +474,25 @@ fn scheduled_records(
 }
 
 /// Admit a runtime-upgrade proposal to SORA Parliament: the notice the committed policy requires,
-/// frozen for the proposal, and the committed time of admission.
+/// frozen for the proposal, and the committed time of admission. A change set to schedule needs
+/// the endorsements the committed provenance policy requires.
 ///
 /// # Errors
-/// The policy is not committed, a change set to schedule fails admission, or a change set to
-/// cancel is not scheduled.
+/// The policy is not committed, a change set to schedule fails admission or its provenance
+/// falls short, or a change set to cancel is not scheduled.
 pub(crate) fn admit_proposal(
     action: &RuntimeUpgradeActionV1,
+    provenance: &[ChangeSetEndorsementV1],
     state_transaction: &crate::state::StateTransaction<'_, '_>,
 ) -> Result<(RuntimeNoticeV1, u64), Error> {
     let policy = committed_policy(crate::state::WorldReadOnly::parameters(
         &state_transaction.world,
     ))?;
+    check_provenance(
+        action,
+        provenance,
+        crate::state::WorldReadOnly::parameters(&state_transaction.world),
+    )?;
     let now_ms = block_ms(state_transaction);
     match action {
         RuntimeUpgradeActionV1::Schedule(change_set) => {

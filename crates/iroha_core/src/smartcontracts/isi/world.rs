@@ -3293,8 +3293,11 @@ pub mod isi {
                     "not permitted: CanProposeRuntimeChangeSet required".into(),
                 ));
             }
-            let (notice, proposed_ms) =
-                crate::runtime::change_set::admit_proposal(&self.action, state_transaction)?;
+            let (notice, proposed_ms) = crate::runtime::change_set::admit_proposal(
+                &self.action,
+                &self.provenance,
+                state_transaction,
+            )?;
             let h_now = state_transaction._curr_block.height().get();
             let payload = RuntimeUpgradeProposal {
                 proposal_operator: authority.clone(),
@@ -17618,11 +17621,28 @@ pub mod isi {
                         })
                         .map_err(invalid_smart_contract_parameter)?;
                 }
+                // A root commits only runtime policies its lifecycle can read (§6, §7.1): the
+                // change-set notice, the change-set provenance and the emergency panel.
                 if custom.id()
                     == iroha_data_model::parameter::RuntimeUpgradePolicyV1::parameter_id()
                 {
-                    // A root commits only a policy change-set admission can read (§6, "Notice").
                     iroha_data_model::parameter::RuntimeUpgradePolicyV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+                }
+                if custom.id()
+                    == iroha_data_model::parameter::RuntimeProvenancePolicyV1::parameter_id()
+                {
+                    iroha_data_model::parameter::RuntimeProvenancePolicyV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+                }
+                if custom.id()
+                    == iroha_data_model::parameter::RuntimeEmergencyPanelV1::parameter_id()
+                {
+                    iroha_data_model::parameter::RuntimeEmergencyPanelV1::from_custom_parameter(
                         custom,
                     )
                     .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
@@ -24400,6 +24420,7 @@ AccountEvent::PermissionRemoved(change))
                     network_id,
                     effective_height,
                 ),
+                provenance: Vec::new(),
             };
             let unrelated_contract =
                 ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)

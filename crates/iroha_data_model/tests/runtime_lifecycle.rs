@@ -12,10 +12,12 @@ use iroha_data_model::{
             SelectionId,
         },
         lifecycle::{
-            ChangeSetError, ChangeSetId, ChangeSetV1, ContainmentError, ContainmentKindV1,
-            ContainmentRecordV1, ContainmentStatusV1, ContainmentV1, ENDORSEMENT_LIFETIME_MS,
-            EndorsementV1, ExpectationV1, RestrictionKindV1, RootScopeV1, RuntimeRejectionV1,
-            SelectionTransitionV1, SupportAttestationV1, committee_digest, committee_supports,
+            ChangeSetEndorsementV1, ChangeSetError, ChangeSetId, ChangeSetV1, ContainmentError,
+            ContainmentKindV1, ContainmentRecordV1, ContainmentStatusV1, ContainmentV1,
+            ENDORSEMENT_LIFETIME_MS, EndorsementV1, ExpectationV1, ProvenanceShortfall,
+            RestrictionKindV1, RootScopeV1, RuntimeRejectionV1, SelectionTransitionV1,
+            SupportAttestationV1, check_change_set_provenance, committee_digest,
+            committee_supports,
         },
     },
 };
@@ -407,6 +409,51 @@ fn containment_needs_fresh_endorsements_from_the_panel() {
     assert_eq!(
         unordered.check_endorsements(&panel, 6, now, &six),
         Err(ContainmentError::Targets)
+    );
+}
+
+#[test]
+fn change_set_provenance_needs_distinct_trusted_signers() {
+    let change_set = ChangeSetId([0x42; 32]);
+    let mut signers: Vec<PublicKey> = (1..=3).map(|seed| key(seed).public_key().clone()).collect();
+    signers.sort();
+    let endorse = |seed: u8, change_set: ChangeSetId| {
+        let pair = key(seed);
+        ChangeSetEndorsementV1::sign(change_set, pair.public_key().clone(), pair.private_key())
+            .expect("endorse")
+    };
+    let one = endorse(1, change_set);
+    one.verify().expect("the signer's signature verifies");
+    assert_eq!(
+        check_change_set_provenance(change_set, &signers, 2, &[one.clone(), one.clone()]),
+        Err(ProvenanceShortfall { have: 1, need: 2 }),
+        "a repeated endorsement counts once"
+    );
+    assert_eq!(
+        check_change_set_provenance(
+            change_set,
+            &signers,
+            2,
+            &[
+                one.clone(),
+                endorse(9, change_set),
+                endorse(2, ChangeSetId([0x43; 32]))
+            ],
+        ),
+        Err(ProvenanceShortfall { have: 1, need: 2 }),
+        "untrusted keys and endorsements of another change set do not count"
+    );
+    let mut forged = endorse(2, change_set);
+    forged.signer = key(3).public_key().clone();
+    assert!(forged.verify().is_err());
+    assert_eq!(
+        check_change_set_provenance(change_set, &signers, 2, &[one.clone(), forged]),
+        Err(ProvenanceShortfall { have: 1, need: 2 }),
+        "a signature by another key does not count"
+    );
+    assert_eq!(
+        check_change_set_provenance(change_set, &signers, 2, &[one, endorse(3, change_set)]),
+        Ok(())
     );
 }
 

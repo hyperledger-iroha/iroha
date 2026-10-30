@@ -2109,8 +2109,11 @@ schedules a change set that moves the committed selection from its predecessor t
 successor at an effective height. `listRuntimeUpgrades()` returns the committed selection and
 its identity, the attesting committee and digest, and every recorded change set with its
 status (`scheduled`, `activated`, `lapsed` or `cancelled`) and frozen notice; each record also
-keeps its complete JSON. `proposeRuntimeUpgrade(changeSet:)` and `cancelRuntimeUpgrade(idHex:)`
-draft the Parliament proposal for local signing. All three are operator routes and require the
+keeps its complete JSON. `proposeRuntimeUpgrade(changeSet:provenance:)` and
+`cancelRuntimeUpgrade(idHex:)` draft the Parliament proposal for local signing. While the
+universal root commits a `runtime_provenance_policy_v1`, a proposal that schedules a change set
+needs `ToriiRuntimeChangeSetEndorsement`s from its threshold of distinct trusted release
+signers (`iroha runtime upgrade endorse` prints one); a root without that policy takes none. All three are operator routes and require the
 client's `ToriiOperatorSigningContext` (see the operator context below); without it they fail
 before any request is sent. Nothing activates a change set by request: at the start of its
 effective height it activates when every committee member attested it, its notice elapsed and
@@ -2128,7 +2131,13 @@ if #available(iOS 15, macOS 12, *) {
     let changeSet = try ToriiRuntimeChangeSet(
         json: ToriiJSONValue.decodeExact(from: Data(contentsOf: changeSetURL))
     )
-    let proposal = try await torii.proposeRuntimeUpgrade(changeSet: changeSet)
+    let endorsements = try endorsementURLs.map {
+        try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(contentsOf: $0)))
+    }
+    let proposal = try await torii.proposeRuntimeUpgrade(
+        changeSet: changeSet,
+        provenance: endorsements
+    )
     let cancellation = try await torii.cancelRuntimeUpgrade(idHex: snapshot.items[0].idHex)
     // Sign and submit `proposal.txInstructions` / `cancellation.txInstructions` locally.
 }

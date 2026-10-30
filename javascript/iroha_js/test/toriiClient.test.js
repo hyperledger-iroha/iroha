@@ -12073,10 +12073,65 @@ test("proposeRuntimeUpgrade posts the exact change set and admits the drafted pr
   assert.ok(captured.init.headers["X-Iroha-Operator-Signature"]);
   assert.equal(
     captured.init.body,
-    stringifyStrictLosslessIntegerJson(changeSet, "expected change set"),
+    stringifyStrictLosslessIntegerJson(
+      { change_set: changeSet, provenance: [] },
+      "expected proposal request",
+    ),
   );
   assert.match(captured.init.body, /"limit":1152921504606846976/u);
   assert.deepEqual(result, runtimeDraftResponseFixture());
+});
+
+test("proposeRuntimeUpgrade carries the release signers' endorsements", async () => {
+  let captured;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
+        status: 200,
+        jsonData: runtimeDraftResponseFixture(),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const changeSet = runtimeChangeSetFixture();
+  const endorsement = {
+    change_set: "5a".repeat(32),
+    signer: `ed0120${"AB".repeat(32)}`,
+    signature: "CD".repeat(64),
+  };
+  await client.proposeRuntimeUpgrade(changeSet, { provenance: [endorsement] });
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    change_set: changeSet,
+    provenance: [endorsement],
+  });
+
+  let calls = 0;
+  const offline = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("fetch should not run");
+    },
+  });
+  for (const [label, provenance, pattern] of [
+    ["not an array", endorsement, /provenance must be an array/u],
+    ["missing signature", [{ change_set: endorsement.change_set, signer: endorsement.signer }],
+      /provenance\[0\] is missing required fields: signature/u],
+    ["extra field", [{ ...endorsement, signed_at: 1 }],
+      /provenance\[0\] contains unsupported fields: signed_at/u],
+    ["lowercase signature", [{ ...endorsement, signature: "cd".repeat(64) }],
+      /provenance\[0\]\.signature must be uppercase byte-aligned hexadecimal/u],
+    ["short change set", [{ ...endorsement, change_set: "5a".repeat(31) }],
+      /provenance\[0\]\.change_set must be exactly 32 lowercase hexadecimal bytes/u],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(
+      offline.proposeRuntimeUpgrade(changeSet, { provenance }),
+      pattern,
+      label,
+    );
+  }
+  assert.equal(calls, 0);
 });
 
 test("proposeRuntimeUpgrade rejects retired manifests and non-canonical change sets before fetch", async () => {

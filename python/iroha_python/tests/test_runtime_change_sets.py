@@ -264,8 +264,32 @@ def test_propose_runtime_upgrade_posts_the_change_set_as_given() -> None:
     assert response.tx_instructions[0].wire_id == PROPOSAL_WIRE_ID
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/propose")
-    assert json.loads(session.calls[0]["data"].decode("utf-8")) == change_set
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "change_set": change_set,
+        "provenance": [],
+    }
     assert _operator_signed(session.calls[0])
+
+
+def test_propose_runtime_upgrade_carries_release_signer_endorsements() -> None:
+    session = RecordingSession(StubResponse(payload=_drafted("aa" * 32)))
+    change_set = _change_set(240)
+    endorsement = {
+        "change_set": "5a" * 32,
+        "signer": "ed0120" + "AB" * 32,
+        "signature": "CD" * 64,
+    }
+
+    _client(session).propose_runtime_upgrade_typed(change_set, [endorsement])
+
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "change_set": change_set,
+        "provenance": [endorsement],
+    }
+    for provenance in (endorsement, "endorsement", [["not", "an", "object"]]):
+        with pytest.raises(TypeError, match="endorsements must be a sequence of JSON objects"):
+            _client(session).propose_runtime_upgrade(change_set, provenance)  # type: ignore[arg-type]
+    assert len(session.calls) == 1
 
 
 def test_propose_runtime_upgrade_requires_a_change_set_object() -> None:

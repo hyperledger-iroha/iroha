@@ -7964,7 +7964,10 @@ pub mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgradeProposal { action }])
+        .with_instructions([ProposeRuntimeUpgradeProposal {
+            action,
+            provenance: Vec::new(),
+        }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -9276,6 +9279,7 @@ pub mod tests {
         );
         let runtime_upgrade = ProposeRuntimeUpgradeProposal {
             action: crate::runtime::change_set::test_support::schedule(test_network_id(), 42),
+            provenance: Vec::new(),
         };
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             runtime_upgrade

@@ -4,6 +4,10 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-30: `proposeRuntimeUpgrade(changeSet:provenance:)` posts `{change_set, provenance}`:
+  the change set and the trusted release signers' `ToriiRuntimeChangeSetEndorsement`s the
+  committed `runtime_provenance_policy_v1` requires (none for a root without that policy).
+
 - 2026-10-30: Runtime upgrades follow the governed change-set lifecycle
   (`specs/runtime_upgrades.md`); the manifest API is removed without compatibility.
   `listRuntimeUpgrades()` returns `ToriiRuntimeUpgradesSnapshot` (selection, committee, committee

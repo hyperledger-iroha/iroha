@@ -21504,8 +21504,9 @@ impl Client {
         let payload = Self::parse_json_ok_response(&resp, "explorer account qr request")?;
         ExplorerAccountQrSnapshot::from_value(payload)
     }
-    /// POST `/v1/runtime/upgrades/propose` with a runtime change set as the JSON body; the
-    /// response drafts the SORA Parliament proposal that schedules it.
+    /// POST `/v1/runtime/upgrades/propose` with a JSON body of the runtime change set to schedule
+    /// and its trusted release signers' endorsements (`{"change_set": …, "provenance": […]}`);
+    /// the response drafts the SORA Parliament proposal that schedules it.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_runtime_propose_upgrade_json(

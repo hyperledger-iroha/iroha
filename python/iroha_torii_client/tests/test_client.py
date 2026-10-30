@@ -5219,8 +5219,36 @@ def test_propose_runtime_upgrade_posts_change_set_as_given() -> None:
     assert result.tx_instructions[0].wire_id == _RUNTIME_PROPOSAL_WIRE_ID
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/propose")
-    assert json.loads(session.calls[0]["data"].decode("utf-8")) == change_set
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "change_set": change_set,
+        "provenance": [],
+    }
     assert _runtime_operator_signed(session.calls[0])
+
+
+def test_propose_runtime_upgrade_carries_release_signer_endorsements() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_runtime_tx_response("aa" * 32)))
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
+    change_set = _runtime_change_set(240)
+    endorsement = {
+        "change_set": "5a" * 32,
+        "signer": "ed0120" + "AB" * 32,
+        "signature": "CD" * 64,
+    }
+
+    client.propose_runtime_upgrade(change_set, [endorsement])
+
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "change_set": change_set,
+        "provenance": [endorsement],
+    }
+    for provenance in (endorsement, "endorsement", [["not", "an", "object"]]):
+        with pytest.raises(TypeError, match="endorsements must be a sequence of JSON objects"):
+            client.propose_runtime_upgrade(change_set, provenance)  # type: ignore[arg-type]
+    assert len(session.calls) == 1
 
 
 def test_propose_runtime_upgrade_requires_a_change_set_object() -> None:

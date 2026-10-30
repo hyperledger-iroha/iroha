@@ -130,10 +130,13 @@ impl Run for AbiCommand {
 pub enum UpgradeCommand {
     /// Show the committed selection, the attesting committee and every recorded change set
     List,
-    /// Draft the Parliament proposal that schedules a change set
+    /// Submit the Parliament proposal that schedules a change set, with the trusted release
+    /// signers' endorsements the committed provenance policy requires
     Propose(ProposeArgs),
-    /// Draft the Parliament proposal that withdraws a scheduled change set
+    /// Submit the Parliament proposal that withdraws a scheduled change set
     Cancel(CancelArgs),
+    /// Endorse a change set's provenance as a trusted release signer
+    Endorse(EndorseChangeSetArgs),
     /// Have the node sign its support for a scheduled change set with its validator key, then
     /// submit the attestation
     Attest(AttestArgs),
@@ -148,6 +151,7 @@ impl Run for UpgradeCommand {
             }
             UpgradeCommand::Propose(args) => args.run(context),
             UpgradeCommand::Cancel(args) => args.run(context),
+            UpgradeCommand::Endorse(args) => args.run(context),
             UpgradeCommand::Attest(args) => args.run(context),
         }
     }
@@ -157,14 +161,26 @@ pub struct ProposeArgs {
     /// Path to a JSON file with the `ChangeSetV1` to schedule
     #[arg(long, value_name = "PATH")]
     file: std::path::PathBuf,
+    /// Path to a JSON file with one `ChangeSetEndorsementV1`; repeat for each trusted release
+    /// signer. A root without a committed provenance policy takes none
+    #[arg(long = "endorsement", value_name = "PATH")]
+    endorsements: Vec<std::path::PathBuf>,
 }
 impl Run for ProposeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config()?;
-        let s = std::fs::read_to_string(&self.file)?;
-        let value: norito::json::Value = norito::json::from_str(&s)?;
-        let out = client.post_runtime_propose_upgrade_json(&value)?;
-        context.print_data(&out)
+        use iroha::data_model::runtime::lifecycle::{
+            ChangeSetEndorsementV1, ChangeSetV1, RuntimeUpgradeActionV1,
+        };
+        let change_set: ChangeSetV1 = read_json(&self.file, "change set")?;
+        let provenance = self
+            .endorsements
+            .iter()
+            .map(|path| read_json::<ChangeSetEndorsementV1>(path, "endorsement"))
+            .collect::<Result<Vec<_>>>()?;
+        context.finish(runtime_proposal(
+            RuntimeUpgradeActionV1::Schedule(change_set),
+            provenance,
+        ))
     }
 }
 #[derive(clap::Args, Debug)]
@@ -175,9 +191,50 @@ pub struct CancelArgs {
 }
 impl Run for CancelArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config()?;
-        let out = client.post_runtime_cancel_upgrade_json(&self.id)?;
-        context.print_data(&out)
+        use iroha::data_model::runtime::lifecycle::{ChangeSetId, RuntimeUpgradeActionV1};
+        let id = ChangeSetId(decode_hex_32("change-set id", &self.id)?);
+        context.finish(runtime_proposal(
+            RuntimeUpgradeActionV1::Cancel(id),
+            Vec::new(),
+        ))
+    }
+}
+/// The SORA Parliament proposal that carries `action` and its endorsements
+/// (`specs/live_runtime_upgrades.md` §6); the node admits it when the transaction executes.
+fn runtime_proposal(
+    action: iroha::data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
+    provenance: Vec<iroha::data_model::runtime::lifecycle::ChangeSetEndorsementV1>,
+) -> Vec<iroha::data_model::isi::InstructionBox> {
+    use iroha::data_model::isi::{InstructionBox, governance::ProposeRuntimeUpgradeProposal};
+    vec![InstructionBox::from(ProposeRuntimeUpgradeProposal {
+        action,
+        provenance,
+    })]
+}
+#[derive(clap::Args, Debug)]
+pub struct EndorseChangeSetArgs {
+    /// Path to a JSON file with the `ChangeSetV1` to endorse
+    #[arg(long, value_name = "PATH")]
+    file: std::path::PathBuf,
+    /// File holding the release signer's private key (multihash hex); it is read at run time
+    /// and never printed
+    #[arg(long, value_name = "PATH")]
+    signer_key_file: std::path::PathBuf,
+}
+impl Run for EndorseChangeSetArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        use iroha::data_model::runtime::lifecycle::{ChangeSetEndorsementV1, ChangeSetV1};
+        let change_set: ChangeSetV1 = read_json(&self.file, "change set")?;
+        let id = change_set
+            .id()
+            .map_err(|error| eyre!("change-set identity: {error}"))?;
+        let key = read_private_key(&self.signer_key_file)?;
+        let signer = iroha::crypto::KeyPair::from(key.clone())
+            .public_key()
+            .clone();
+        let endorsement = ChangeSetEndorsementV1::sign(id, signer, &key)
+            .map_err(|error| eyre!("failed to sign the endorsement: {error}"))?;
+        context.print_data(&endorsement)
     }
 }
 #[derive(clap::Args, Debug)]
@@ -335,4 +392,151 @@ fn decode_hex_32(what: &str, value: &str) -> Result<[u8; 32]> {
     bytes
         .try_into()
         .map_err(|_| eyre!("{what} is not 32 bytes"))
+}
+#[cfg(test)]
+mod tests {
+    use iroha::data_model::{
+        isi::{InstructionBox, governance::ProposeRuntimeUpgradeProposal},
+        prelude::Executable,
+        runtime::{
+            definition::SelectionId,
+            lifecycle::{
+                ChangeSetEndorsementV1, ChangeSetId, ChangeSetV1, RootScopeV1,
+                RuntimeUpgradeActionV1,
+            },
+        },
+    };
+
+    use super::*;
+
+    /// Captures what an upgrade command prints or submits; the commands need no client.
+    #[derive(Default)]
+    struct Captured {
+        printed: Option<String>,
+        submitted: Option<Executable>,
+    }
+    impl RunContext for Captured {
+        fn config(&self) -> &iroha::config::Config {
+            panic!("the upgrade commands build their instructions locally")
+        }
+        fn transaction_metadata(&self) -> Option<&iroha_model_base::metadata::Metadata> {
+            None
+        }
+        fn input_instructions(&self) -> bool {
+            false
+        }
+        fn output_instructions(&self) -> bool {
+            false
+        }
+        fn i18n(&self) -> &iroha_i18n::Localizer {
+            panic!("the upgrade commands print no localized text")
+        }
+        fn print_data<T: norito::json::JsonSerialize + ?Sized>(&mut self, data: &T) -> Result<()> {
+            assert!(self.printed.replace(norito::json::to_json(data)?).is_none());
+            Ok(())
+        }
+        fn println(&mut self, _: impl std::fmt::Display) -> Result<()> {
+            panic!("the upgrade commands print data only")
+        }
+        fn finish(&mut self, instructions: impl Into<Executable>) -> Result<()> {
+            assert!(self.submitted.replace(instructions.into()).is_none());
+            Ok(())
+        }
+    }
+
+    fn change_set() -> ChangeSetV1 {
+        ChangeSetV1 {
+            network: iroha::data_model::NetworkId::from_genesis_hash(
+                iroha::crypto::HashOf::from_untyped_unchecked(iroha::crypto::Hash::prehashed(
+                    [0x11; 32],
+                )),
+            ),
+            root: RootScopeV1::Universal,
+            predecessor: SelectionId([0x01; 32]),
+            successor: SelectionId([0x02; 32]),
+            effective_height: 9,
+            publish: Vec::new(),
+            transitions: Vec::new(),
+            qualification: [0x03; 32],
+        }
+    }
+
+    #[test]
+    fn a_release_signer_endorses_and_the_proposal_carries_the_endorsement() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let change_set = change_set();
+        let change_set_file = directory.path().join("change_set.json");
+        std::fs::write(
+            &change_set_file,
+            norito::json::to_json(&change_set).expect("change-set JSON"),
+        )
+        .expect("write the change set");
+        let signer =
+            iroha::crypto::KeyPair::from_seed(vec![0x21; 32], iroha::crypto::Algorithm::Ed25519);
+        let exposed = iroha::crypto::ExposedPrivateKey(signer.private_key().clone())
+            .try_to_multihash_string()
+            .expect("key multihash");
+        let key_file = directory.path().join("signer.key");
+        std::fs::write(&key_file, &exposed).expect("write the signer key");
+
+        let mut context = Captured::default();
+        EndorseChangeSetArgs {
+            file: change_set_file.clone(),
+            signer_key_file: key_file,
+        }
+        .run(&mut context)
+        .expect("endorse");
+        let printed = context.printed.expect("the endorsement is printed");
+        assert!(
+            !printed.contains(&exposed),
+            "the key never reaches the output"
+        );
+        let endorsement: ChangeSetEndorsementV1 =
+            norito::json::from_str(&printed).expect("endorsement JSON");
+        assert_eq!(endorsement.change_set, change_set.id().expect("identity"));
+        assert_eq!(&endorsement.signer, signer.public_key());
+        endorsement.verify().expect("a valid endorsement");
+
+        let endorsement_file = directory.path().join("endorsement.json");
+        std::fs::write(&endorsement_file, &printed).expect("write the endorsement");
+        let mut context = Captured::default();
+        ProposeArgs {
+            file: change_set_file,
+            endorsements: vec![endorsement_file],
+        }
+        .run(&mut context)
+        .expect("propose");
+        let expected = InstructionBox::from(ProposeRuntimeUpgradeProposal {
+            action: RuntimeUpgradeActionV1::Schedule(change_set),
+            provenance: vec![endorsement],
+        });
+        assert_eq!(
+            context.submitted,
+            Some(Executable::Instructions(vec![expected].into()))
+        );
+    }
+
+    #[test]
+    fn a_cancellation_carries_no_endorsements() {
+        let mut context = Captured::default();
+        CancelArgs {
+            id: hex::encode([0xA5; 32]),
+        }
+        .run(&mut context)
+        .expect("cancel");
+        let expected = InstructionBox::from(ProposeRuntimeUpgradeProposal {
+            action: RuntimeUpgradeActionV1::Cancel(ChangeSetId([0xA5; 32])),
+            provenance: Vec::new(),
+        });
+        assert_eq!(
+            context.submitted,
+            Some(Executable::Instructions(vec![expected].into()))
+        );
+        assert!(
+            CancelArgs { id: "zz".into() }
+                .run(&mut Captured::default())
+                .is_err(),
+            "a malformed identity submits nothing"
+        );
+    }
 }

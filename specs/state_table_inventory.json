@@ -19,7 +19,7 @@
     "table_catalog_readers": 214,
     "commitments": 36,
     "application_accumulators": 6,
-    "classified_domain_literals": 1127,
+    "classified_domain_literals": 1128,
     "construction_users": 54,
     "state_hash_functions": 220,
     "protocol_carriers": 11,
@@ -1149,6 +1149,7 @@
       {"literal":"iroha:routing-plan:v1","owner":"use:seed","sources":{"crates/iroha_data_model/src/block/execution_context.rs":1,"crates/iroha_data_model/src/block/lane_admission.rs":1}},
       {"literal":"iroha:runtime:adoption:v1\\0","owner":"use:record","sources":{"crates/iroha_data_model/src/runtime/lifecycle.rs":1}},
       {"literal":"iroha:runtime:baseline:v1\\0","owner":"use:record","sources":{"crates/iroha_core/src/runtime/catalog.rs":1}},
+      {"literal":"iroha:runtime:change-set-endorsement:v1\\0","owner":"use:record","sources":{"crates/iroha_data_model/src/runtime/lifecycle.rs":1}},
       {"literal":"iroha:runtime:change-set:v1\\0","owner":"use:record","sources":{"crates/iroha_data_model/src/runtime/lifecycle.rs":1}},
       {"literal":"iroha:runtime:committee:v1\\0","owner":"use:record","sources":{"crates/iroha_data_model/src/runtime/lifecycle.rs":1}},
       {"literal":"iroha:runtime:containment-endorsement:v1\\0","owner":"use:record","sources":{"crates/iroha_data_model/src/runtime/lifecycle.rs":1}},
@@ -2622,8 +2623,9 @@
         "iroha:runtime:definition:v1\\0",
         "iroha:runtime:selection:v1\\0"
       ]},
-      {"use":"record","reason":"Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content","literals":[
+      {"use":"record","reason":"Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content","literals":[
         "iroha:runtime:adoption:v1\\0",
+        "iroha:runtime:change-set-endorsement:v1\\0",
         "iroha:runtime:change-set:v1\\0",
         "iroha:runtime:committee:v1\\0",
         "iroha:runtime:containment-endorsement:v1\\0",

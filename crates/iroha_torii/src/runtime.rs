@@ -1594,12 +1594,15 @@ fn instruction_box_to_tx_instr(boxed: &iroha_data_model::isi::InstructionBox) ->
         payload_hex: hex::encode(framed),
     }
 }
-/// The governance proposal instruction that carries `action`, drafted for local signing.
+/// The governance proposal instruction that carries `action` and its release signers'
+/// endorsements, drafted for local signing.
 fn runtime_proposal_draft(
     action: iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
+    provenance: Vec<iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1>,
 ) -> ProposeUpgradeResponse {
     let boxed: iroha_data_model::isi::InstructionBox =
-        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action }.into();
+        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action, provenance }
+            .into();
     ProposeUpgradeResponse {
         ok: true,
         tx_instructions: vec![instruction_box_to_tx_instr(&boxed)],
@@ -1619,18 +1622,39 @@ impl IntoResponse for ProposeUpgradeResponse {
         crate::JsonBody(self).into_response()
     }
 }
+#[derive(
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeProposeUpgradeRequest")]
+/// Body of POST /v1/runtime/upgrades/propose: the change set to schedule and the trusted release
+/// signers' endorsements the committed provenance policy requires
+/// (`specs/live_runtime_upgrades.md` §6, "Who governs").
+pub struct RuntimeProposeUpgradeRequest {
+    /// The change set to schedule.
+    pub change_set: iroha_data_model::runtime::lifecycle::ChangeSetV1,
+    /// Endorsements of the change set's identity; empty when the root commits no provenance
+    /// policy.
+    pub provenance: Vec<iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1>,
+}
 /// POST /v1/runtime/upgrades/propose — draft the SORA Parliament proposal that schedules the
-/// `ChangeSetV1` in the body (`specs/live_runtime_upgrades.md` §6). Admission happens when the
-/// signed proposal executes.
+/// change set in the body with its endorsements (`specs/live_runtime_upgrades.md` §6). Admission,
+/// including the provenance check, happens when the signed proposal executes.
 #[expect(
     clippy::unused_async,
     reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
 )]
 pub async fn handle_runtime_propose_upgrade(
-    NoritoJson(change_set): NoritoJson<iroha_data_model::runtime::lifecycle::ChangeSetV1>,
+    NoritoJson(request): NoritoJson<RuntimeProposeUpgradeRequest>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
     Ok(runtime_proposal_draft(
-        iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(change_set),
+        iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(request.change_set),
+        request.provenance,
     ))
 }
 /// POST /v1/runtime/upgrades/cancel/{id} — draft the SORA Parliament proposal that withdraws
@@ -1647,6 +1671,7 @@ pub async fn handle_runtime_cancel_upgrade(
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
     Ok(runtime_proposal_draft(
         iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(change_set_id(&id)?),
+        Vec::new(),
     ))
 }
 /// A change-set identity from its 32-byte hex form.
@@ -1790,6 +1815,7 @@ mod tests {
             iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(
                 iroha_data_model::runtime::lifecycle::ChangeSetId([0xA5; 32]),
             ),
+            Vec::new(),
         );
         let [draft] = response.tx_instructions.as_slice() else {
             panic!("one drafted instruction");
@@ -2499,11 +2525,11 @@ mod tests {
             other => panic!("unexpected rowset variant: {other:?}"),
         }
     }
-    #[test]
-    fn the_propose_body_is_the_bare_change_set_object() {
+    #[tokio::test]
+    async fn the_propose_body_carries_the_change_set_and_its_endorsements() {
         use iroha_data_model::runtime::{
             definition::SelectionId,
-            lifecycle::{ChangeSetV1, RootScopeV1},
+            lifecycle::{ChangeSetEndorsementV1, ChangeSetV1, RootScopeV1, RuntimeUpgradeActionV1},
         };
         let change_set = ChangeSetV1 {
             network: iroha_data_model::NetworkId::from_genesis_hash(
@@ -2519,15 +2545,54 @@ mod tests {
             transitions: Vec::new(),
             qualification: [0x03; 32],
         };
-        let json = norito::json::to_json(&change_set).expect("change-set JSON");
+        let signer = iroha_crypto::KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
+        let endorsement = ChangeSetEndorsementV1::sign(
+            change_set.id().expect("change-set identity"),
+            signer.public_key().clone(),
+            signer.private_key(),
+        )
+        .expect("endorse");
+        let json = format!(
+            r#"{{"change_set":{},"provenance":[{}]}}"#,
+            norito::json::to_json(&change_set).expect("change-set JSON"),
+            norito::json::to_json(&endorsement).expect("endorsement JSON"),
+        );
+        let request: RuntimeProposeUpgradeRequest =
+            norito::json::from_str(&json).expect("the documented body decodes");
+        assert_eq!(request.change_set, change_set);
+        assert_eq!(request.provenance, vec![endorsement.clone()]);
+        let framed = norito::to_bytes(&request).expect("Norito body");
+        let decoded = <RuntimeProposeUpgradeRequest as crate::utils::extractors::SupportsNoritoDecode>::decode_norito(&framed)
+            .expect("the extractor's Norito body decodes");
+        assert_eq!(decoded.change_set, change_set);
+        assert_eq!(decoded.provenance, request.provenance);
+        let missing = format!(
+            r#"{{"change_set":{}}}"#,
+            norito::json::to_json(&change_set).expect("change-set JSON")
+        );
         assert!(
-            json.starts_with('{'),
-            "clients send the object itself: {json}"
+            norito::json::from_str::<RuntimeProposeUpgradeRequest>(&missing).is_err(),
+            "provenance is required, even when empty"
         );
+
+        let response = handle_runtime_propose_upgrade(NoritoJson(request))
+            .await
+            .expect("draft");
+        let [draft] = response.tx_instructions.as_slice() else {
+            panic!("one drafted instruction");
+        };
+        let framed = hex::decode(&draft.payload_hex).expect("framed instruction hex");
+        let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &framed)
+            .expect("canonical instruction");
+        let proposal = decoded
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
+            .expect("a runtime-upgrade proposal");
         assert_eq!(
-            norito::json::from_str::<ChangeSetV1>(&json).expect("bare object decodes"),
-            change_set
+            proposal.action,
+            RuntimeUpgradeActionV1::Schedule(change_set)
         );
+        assert_eq!(proposal.provenance, vec![endorsement]);
     }
 
     #[tokio::test]

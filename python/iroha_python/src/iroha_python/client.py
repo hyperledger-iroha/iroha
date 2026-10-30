@@ -15316,18 +15316,34 @@ class ToriiClient(
             raise RuntimeError("runtime upgrades endpoint returned no payload")
         return RuntimeUpgradesSnapshot.from_payload(payload)
 
-    def propose_runtime_upgrade(self, change_set: Mapping[str, Any]) -> Dict[str, Any]:
+    def propose_runtime_upgrade(
+        self,
+        change_set: Mapping[str, Any],
+        provenance: Sequence[Mapping[str, Any]] = (),
+    ) -> Dict[str, Any]:
         """Draft the SORA Parliament proposal that schedules a runtime change set.
 
-        ``change_set`` is the complete ``ChangeSetV1`` JSON object and is sent to
-        ``POST /v1/runtime/upgrades/propose`` as given; the node admits it when
-        the signed proposal executes. Sign and submit the returned instructions.
+        ``change_set`` is the complete ``ChangeSetV1`` JSON object and ``provenance``
+        the ``ChangeSetEndorsementV1`` objects of the trusted release signers the
+        committed ``runtime_provenance_policy_v1`` requires (``iroha runtime upgrade
+        endorse`` prints one); a root without that policy takes none. Both are sent
+        to ``POST /v1/runtime/upgrades/propose`` as given, and the node checks them
+        when the signed proposal executes. Sign and submit the returned instructions.
         """
 
         if not isinstance(change_set, Mapping):
             raise TypeError("runtime change set must be a JSON object")
+        if (
+            isinstance(provenance, (str, bytes, bytearray, Mapping))
+            or not isinstance(provenance, Sequence)
+            or not all(isinstance(endorsement, Mapping) for endorsement in provenance)
+        ):
+            raise TypeError("runtime change-set endorsements must be a sequence of JSON objects")
         body = json.dumps(
-            dict(change_set),
+            {
+                "change_set": dict(change_set),
+                "provenance": [dict(endorsement) for endorsement in provenance],
+            },
             allow_nan=False,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -15343,11 +15359,13 @@ class ToriiClient(
         return payload
 
     def propose_runtime_upgrade_typed(
-        self, change_set: Mapping[str, Any]
+        self,
+        change_set: Mapping[str, Any],
+        provenance: Sequence[Mapping[str, Any]] = (),
     ) -> RuntimeUpgradeActionResponse:
         """Typed wrapper for :meth:`propose_runtime_upgrade`."""
 
-        payload = self.propose_runtime_upgrade(change_set)
+        payload = self.propose_runtime_upgrade(change_set, provenance)
         return RuntimeUpgradeActionResponse.from_payload(payload)
 
     def cancel_runtime_upgrade(self, change_set_id_hex: str) -> Dict[str, Any]:

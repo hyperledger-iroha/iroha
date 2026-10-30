@@ -4,7 +4,10 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
     isi::runtime_upgrade::AttestRuntimeSupportV1,
-    parameter::{Parameter, runtime_upgrade_policy::RuntimeUpgradePolicyV1},
+    parameter::{
+        Parameter, runtime_provenance_policy::RuntimeProvenancePolicyV1,
+        runtime_upgrade_policy::RuntimeUpgradePolicyV1,
+    },
     runtime::{
         definition::{
             BindingV1, DefinitionDescriptorV1, EntrypointV1, ImplementationCodeV1,
@@ -12,8 +15,8 @@ use iroha_data_model::{
             SelectionId,
         },
         lifecycle::{
-            ChangeSetId, ChangeSetV1, RestrictionKindV1, RootScopeV1, RuntimeNoticeV1,
-            RuntimeUpgradeActionV1, SelectionTransitionV1, SupportAttestationV1,
+            ChangeSetEndorsementV1, ChangeSetId, ChangeSetV1, RestrictionKindV1, RootScopeV1,
+            RuntimeNoticeV1, RuntimeUpgradeActionV1, SelectionTransitionV1, SupportAttestationV1,
         },
     },
 };
@@ -151,6 +154,51 @@ pub(crate) fn commit_policy(
             policy.to_custom_parameter().expect("valid policy"),
         ))
         .expect("commit the runtime upgrade policy");
+}
+
+/// `count` release signers, sorted by public key as a provenance policy lists them.
+pub(crate) fn release_signers(count: u8) -> Vec<KeyPair> {
+    let mut keys: Vec<KeyPair> = (1..=count)
+        .map(|seed| KeyPair::from_seed(vec![0x40 + seed; 32], Algorithm::Ed25519))
+        .collect();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    keys
+}
+
+/// The provenance policy that trusts `signers` and needs `threshold` of them.
+pub(crate) fn provenance_policy(signers: &[KeyPair], threshold: u32) -> RuntimeProvenancePolicyV1 {
+    RuntimeProvenancePolicyV1 {
+        signers: signers.iter().map(|key| key.public_key().clone()).collect(),
+        threshold,
+    }
+}
+
+/// Commit `policy` as the universal root's runtime provenance policy.
+pub(crate) fn commit_provenance(
+    state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+    policy: &RuntimeProvenancePolicyV1,
+) {
+    state_transaction
+        .world
+        .set_parameter_for_testing(Parameter::Custom(
+            policy
+                .to_custom_parameter()
+                .expect("valid provenance policy"),
+        ))
+        .expect("commit the runtime provenance policy");
+}
+
+/// `signer`'s endorsement of the change set `action` schedules.
+pub(crate) fn endorse(action: &RuntimeUpgradeActionV1, signer: &KeyPair) -> ChangeSetEndorsementV1 {
+    let RuntimeUpgradeActionV1::Schedule(change_set) = action else {
+        panic!("only a change set to schedule is endorsed");
+    };
+    ChangeSetEndorsementV1::sign(
+        change_set.id().expect("change set identity"),
+        signer.public_key().clone(),
+        signer.private_key(),
+    )
+    .expect("endorse the change set")
 }
 
 /// A validator's signed support of an arbitrary change set, as the instruction that records it.

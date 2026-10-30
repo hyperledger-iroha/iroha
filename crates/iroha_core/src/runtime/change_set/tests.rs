@@ -94,6 +94,73 @@ fn admission_refuses_short_notice_foreign_networks_and_data_space_roots() {
 }
 
 #[test]
+fn a_scheduled_change_set_needs_the_committed_provenance() {
+    let signers = test_support::release_signers(3);
+    let action = test_support::schedule(network(), 200);
+    let cancel = RuntimeUpgradeActionV1::Cancel(ChangeSetId([9; 32]));
+    let endorse = |signer: &KeyPair| test_support::endorse(&action, signer);
+    let mut parameters = iroha_data_model::parameter::Parameters::default();
+    check_provenance(&action, &[], &parameters).expect("no policy, no endorsement");
+    let refusal = check_provenance(&action, &[endorse(&signers[0])], &parameters)
+        .expect_err("nothing judges endorsements without a committed policy");
+    assert!(
+        refusal
+            .to_string()
+            .contains("committed provenance policy judges"),
+        "{refusal}"
+    );
+
+    parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+        test_support::provenance_policy(&signers, 2)
+            .to_custom_parameter()
+            .expect("valid policy"),
+    ));
+    check_provenance(&cancel, &[], &parameters).expect("a cancellation publishes nothing");
+    assert!(check_provenance(&cancel, &[endorse(&signers[0])], &parameters).is_err());
+    let refusal = check_provenance(&action, &[endorse(&signers[0])], &parameters)
+        .expect_err("one of two endorsements");
+    assert!(refusal.to_string().contains("1 of the 2"), "{refusal}");
+    let repeated = [endorse(&signers[0]), endorse(&signers[0])];
+    assert!(
+        check_provenance(&action, &repeated, &parameters).is_err(),
+        "one signer twice"
+    );
+    let outsider = KeyPair::from_seed(vec![0x7f; 32], Algorithm::Ed25519);
+    let untrusted = [endorse(&signers[0]), endorse(&outsider)];
+    assert!(
+        check_provenance(&action, &untrusted, &parameters).is_err(),
+        "untrusted signer"
+    );
+    let other = test_support::schedule(network(), 201);
+    let misdirected = [
+        endorse(&signers[0]),
+        test_support::endorse(&other, &signers[1]),
+    ];
+    assert!(
+        check_provenance(&action, &misdirected, &parameters).is_err(),
+        "another change set"
+    );
+    let spam = [
+        endorse(&signers[0]),
+        endorse(&signers[1]),
+        endorse(&signers[2]),
+        endorse(&signers[2]),
+    ];
+    let refusal = check_provenance(&action, &spam, &parameters)
+        .expect_err("more endorsements than trusted signers");
+    assert!(
+        refusal.to_string().contains("exceed the 3 trusted"),
+        "{refusal}"
+    );
+    check_provenance(
+        &action,
+        &[endorse(&signers[2]), endorse(&signers[0])],
+        &parameters,
+    )
+    .expect("two distinct trusted signers");
+}
+
+#[test]
 fn a_change_set_meets_the_selection_scheduled_changes_leave() {
     let storage = published();
     let view = storage.view();

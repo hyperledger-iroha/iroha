@@ -4330,6 +4330,7 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
         (
             gov::ProposeRuntimeUpgradeProposal {
                 action: crate::runtime::change_set::test_support::schedule(foreign_network, 100),
+                provenance: Vec::new(),
             }
             .into(),
             "CanProposeRuntimeChangeSet",

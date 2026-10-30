@@ -167,7 +167,9 @@ artifacts are not generic transaction builders.
   §6).** Governed change sets replace the retired manifest instructions. A
   Parliament `RuntimeUpgrade` proposal
   (`iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal`) schedules
-  one `ChangeSetV1` or cancels one scheduled change-set id. Validators attest
+  one `ChangeSetV1`, with the release signers' `ChangeSetEndorsementV1`s the
+  committed `runtime_provenance_policy_v1` requires, or cancels one scheduled
+  change-set id. Validators attest
   support with `AttestRuntimeSupportV1` (`iroha.runtime.support.attest.v1`); a
   scheduled change set activates at its effective height only when every
   committee member attested and its notice elapsed, otherwise it lapses. There

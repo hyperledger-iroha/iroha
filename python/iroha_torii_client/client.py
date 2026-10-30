@@ -4214,19 +4214,36 @@ class ToriiClient(
             context="runtime upgrades list response",
         )
 
-    def propose_runtime_upgrade(self, change_set: Mapping[str, Any]) -> RuntimeUpgradeTxResponse:
+    def propose_runtime_upgrade(
+        self,
+        change_set: Mapping[str, Any],
+        provenance: Sequence[Mapping[str, Any]] = (),
+    ) -> RuntimeUpgradeTxResponse:
         """Draft the SORA Parliament proposal that schedules a runtime change set.
 
-        ``change_set`` is the complete ``ChangeSetV1`` JSON object and is sent to
-        ``POST /v1/runtime/upgrades/propose`` as given; the node admits it when the
-        signed proposal executes. Sign and submit the returned instructions.
+        ``change_set`` is the complete ``ChangeSetV1`` JSON object and ``provenance``
+        the ``ChangeSetEndorsementV1`` objects of the trusted release signers the
+        committed ``runtime_provenance_policy_v1`` requires (``iroha runtime upgrade
+        endorse`` prints one); a root without that policy takes none. Both are sent
+        to ``POST /v1/runtime/upgrades/propose`` as given, and the node checks them
+        when the signed proposal executes. Sign and submit the returned instructions.
         """
 
         if not isinstance(change_set, Mapping):
             raise TypeError("runtime change set must be a JSON object")
+        if (
+            isinstance(provenance, (str, bytes, bytearray, Mapping))
+            or not isinstance(provenance, Sequence)
+            or not all(isinstance(endorsement, Mapping) for endorsement in provenance)
+        ):
+            raise TypeError("runtime change-set endorsements must be a sequence of JSON objects")
+        body = {
+            "change_set": dict(change_set),
+            "provenance": [dict(endorsement) for endorsement in provenance],
+        }
         response = self._operator_post(
             "/v1/runtime/upgrades/propose",
-            json.dumps(dict(change_set)).encode("utf-8"),
+            json.dumps(body).encode("utf-8"),
         )
         self._expect_status(response, {200})
         body = self._ensure_mapping(response.json(), "runtime upgrade propose response")

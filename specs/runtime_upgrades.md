@@ -26,10 +26,12 @@ deleted.
 
 ## Lifecycle
 
-1. **Propose.** `ProposeRuntimeUpgradeProposal { action: RuntimeUpgradeActionV1 }` submits
-   `Schedule(change_set)` or `Cancel(id)` to SORA Parliament. It needs the unit permission
+1. **Propose.** `ProposeRuntimeUpgradeProposal { action: RuntimeUpgradeActionV1, provenance }`
+   submits `Schedule(change_set)` or `Cancel(id)` to SORA Parliament. It needs the unit permission
    `CanProposeRuntimeChangeSet`. Admission reads the committed policy
    `runtime_upgrade_policy_v1` (`RuntimeUpgradePolicyV1`); a root without it admits no change set.
+   `provenance` holds the release signers' endorsements the committed provenance policy requires
+   (below).
    A change set must name this network and the universal root (data-space roots are a TODO of
    §11), give the policy's block notice (the disable notice if it restricts, deactivates, unbinds
    or retires anything) and apply to the selection that scheduled change sets will leave at its
@@ -105,6 +107,22 @@ the activation notice. A change set becomes eligible only when both the block fl
 The type's defaults are the production values of the design (3,600 blocks; 14 days to activate,
 30 days to disable; a 24-hour cushion); a network commits its own values explicitly.
 
+## Provenance policy
+
+`runtime_provenance_policy_v1` is a custom parameter holding canonical JSON of
+`RuntimeProvenancePolicyV1 { signers, threshold }`: the trusted release signers, sorted and unique,
+and how many of them must vouch for the build, SBOM and SLSA evidence of what a change set
+publishes. `SetParameter` rejects an empty, unsorted or repeated signer list, a threshold of zero or
+above the number of signers, and a payload over 16 KiB or not canonical. A signer endorses a change
+set with `ChangeSetEndorsementV1 { change_set, signer, signature }`, a signature over
+`iroha:runtime:change-set-endorsement:v1\0` followed by the change-set identity. While the policy is
+committed, a proposal that schedules a change set needs valid endorsements of that identity from
+`threshold` distinct trusted signers, and carries at most one endorsement per trusted signer;
+endorsements of another change set, from other keys or with bad signatures do not count. A
+cancellation, or a proposal under a root without the policy, carries no endorsements. Admission
+checks them when the proposal executes; they are not stored with the proposal, whose transaction
+keeps them in the block history.
+
 ## Torii
 
 | Route | Result |
@@ -113,7 +131,7 @@ The type's defaults are the production values of the design (3,600 blocks; 14 da
 | `GET /v1/runtime/abi/hash` | `{ policy: "V1", abi_hash_hex }` |
 | `GET /v1/runtime/metrics` | ABI version and change sets by status (`scheduled`, `activated`, `lapsed`, `canceled`) |
 | `GET /v1/runtime/upgrades` | Committed selection and its identity, committee keys and digest, every change-set record |
-| `POST /v1/runtime/upgrades/propose` | Body: `ChangeSetV1`. Drafts the `Schedule` proposal for local signing |
+| `POST /v1/runtime/upgrades/propose` | Body: `{ change_set, provenance }`, the `ChangeSetV1` and its `ChangeSetEndorsementV1`s (empty without a provenance policy). Drafts the `Schedule` proposal for local signing |
 | `POST /v1/runtime/upgrades/cancel/{id}` | Drafts the `Cancel` proposal for local signing |
 | `POST /v1/runtime/upgrades/attest/{id}` | The node signs its support with its validator key and drafts the `AttestRuntimeSupportV1` instruction; refused unless its release executes the successor and its key is a committee member |
 | `GET /v1/runtime/release` | Build, release digest, and whether the release executes the committed selection and each scheduled successor, naming the first definition it lacks |
@@ -126,8 +144,11 @@ The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tool
 
 - `iroha runtime abi active|active-query|hash`, `iroha runtime status`, `iroha runtime capabilities`
 - `iroha runtime upgrade list`
-- `iroha runtime upgrade propose --file <change_set.json>`
-- `iroha runtime upgrade cancel --id <hex>`
+- `iroha runtime upgrade endorse --file <change_set.json> --signer-key-file <path>` prints a
+  release signer's `ChangeSetEndorsementV1`; the key is read at run time and never printed.
+- `iroha runtime upgrade propose --file <change_set.json> [--endorsement <file>...]` submits the
+  `Schedule` proposal with the endorsements.
+- `iroha runtime upgrade cancel --id <hex>` submits the `Cancel` proposal.
 - `iroha runtime upgrade attest --id <hex>` has the node sign its support and submits the
   drafted `AttestRuntimeSupportV1`; the operator never handles the validator key.
 - `iroha runtime release` shows the node's release support.

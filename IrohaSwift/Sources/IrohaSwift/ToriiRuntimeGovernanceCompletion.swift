@@ -172,9 +172,12 @@ extension ToriiClient {
     @discardableResult
     public func proposeRuntimeUpgrade(
         changeSet: ToriiRuntimeChangeSet,
+        provenance: [ToriiRuntimeChangeSetEndorsement] = [],
         completion: @escaping (Result<ToriiRuntimeUpgradeActionResponse, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.proposeRuntimeUpgrade(changeSet: changeSet) }
+        runTask(completion) {
+            try await self.proposeRuntimeUpgrade(changeSet: changeSet, provenance: provenance)
+        }
     }
 
     @discardableResult

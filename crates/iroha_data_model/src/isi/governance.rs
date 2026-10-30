@@ -132,6 +132,10 @@ impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {
 pub struct ProposeRuntimeUpgradeProposal {
     /// The change set to schedule, or the scheduled change set to withdraw.
     pub action: RuntimeUpgradeActionV1,
+    /// Trusted release signers' endorsements of the change set to schedule, at most one per
+    /// trusted signer; the committed `runtime_provenance_policy_v1` decides how many it needs.
+    /// A cancellation, or a proposal to a root without that policy, carries none.
+    pub provenance: Vec<crate::runtime::lifecycle::ChangeSetEndorsementV1>,
 }
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 /// Propose one SCCP v1 governance decision to the SORA Parliament (`specs/sccp.md` §4.14.3).
@@ -461,6 +465,7 @@ impl_governance_decode_from_slice!(ProposeGlobalDataTriggerPermissionGovernance 
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     action: RuntimeUpgradeActionV1,
+    provenance: Vec<crate::runtime::lifecycle::ChangeSetEndorsementV1>,
 });
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
     proposal: crate::sccp::governance::SccpGovernanceProposalV1,
@@ -917,8 +922,19 @@ mod tests {
     }
     #[test]
     fn runtime_upgrade_proposal_roundtrip() {
+        let RuntimeUpgradeActionV1::Schedule(change_set) = runtime_action() else {
+            panic!("the fixture schedules a change set");
+        };
+        let key = iroha_crypto::KeyPair::from_seed(vec![9; 32], iroha_crypto::Algorithm::Ed25519);
+        let endorsement = crate::runtime::lifecycle::ChangeSetEndorsementV1::sign(
+            change_set.id().expect("change-set identity"),
+            key.public_key().clone(),
+            key.private_key(),
+        )
+        .expect("endorse");
         let ins = ProposeRuntimeUpgradeProposal {
             action: runtime_action(),
+            provenance: vec![endorsement],
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
@@ -977,6 +993,7 @@ mod tests {
         });
         assert_slice_roundtrip(ProposeRuntimeUpgradeProposal {
             action: runtime_action(),
+            provenance: Vec::new(),
         });
         assert_slice_roundtrip(ProposeSccpRouteGovernance {
             proposal: sccp_governance_proposal(),
@@ -1043,6 +1060,7 @@ mod tests {
             &registry,
             ProposeRuntimeUpgradeProposal {
                 action: runtime_action(),
+                provenance: Vec::new(),
             },
         );
         assert_registry_decodes(

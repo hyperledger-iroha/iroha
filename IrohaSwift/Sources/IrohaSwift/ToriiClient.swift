@@ -7332,8 +7332,8 @@ public struct ToriiRuntimeNotice: Decodable, Sendable, Equatable {
 ///
 /// The selections and the effective height are typed and checked exactly. `json` keeps the
 /// complete change-set object as Torii encodes it (network, root, published definitions,
-/// ordered transitions and the qualification digest); it is the body
-/// `ToriiClient.proposeRuntimeUpgrade(changeSet:)` posts.
+/// ordered transitions and the qualification digest); it is the `change_set` that
+/// `ToriiClient.proposeRuntimeUpgrade(changeSet:provenance:)` posts.
 public struct ToriiRuntimeChangeSet: Decodable, Sendable, Equatable {
     /// Selection the change set starts from, 32-byte lowercase hex.
     public let predecessorHex: String
@@ -7382,6 +7382,69 @@ public struct ToriiRuntimeChangeSet: Decodable, Sendable, Equatable {
             field: "effective_height",
             maximum: firstReleaseMaxExactJSONUInt64
         )
+        json = try ToriiJSONValue(from: decoder)
+    }
+}
+
+/// A trusted release signer's endorsement of a change set's provenance
+/// (`ChangeSetEndorsementV1`, `specs/live_runtime_upgrades.md` §6, "Who governs");
+/// `iroha runtime upgrade endorse` prints one.
+///
+/// While the universal root commits a `runtime_provenance_policy_v1`, a proposal that schedules
+/// a change set needs endorsements from its threshold of distinct trusted signers; the node
+/// verifies every signature when the proposal executes. `json` keeps the exact object.
+public struct ToriiRuntimeChangeSetEndorsement: Decodable, Sendable, Equatable {
+    /// Identity of the endorsed change set, 32-byte lowercase hex.
+    public let changeSetHex: String
+    /// The release signer's canonical public-key multihash.
+    public let signer: String
+    /// The signature, uppercase hexadecimal.
+    public let signatureHex: String
+    /// The complete `ChangeSetEndorsementV1` JSON object.
+    public let json: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case changeSet = "change_set"
+        case signer
+        case signature
+    }
+
+    /// Validate one `ChangeSetEndorsementV1` JSON object, for example one read with
+    /// `ToriiJSONValue.decodeExact(from:)`.
+    public init(json: ToriiJSONValue) throws {
+        do {
+            self = try json.decode(as: ToriiRuntimeChangeSetEndorsement.self)
+        } catch {
+            throw ToriiClientError.invalidPayload("runtime change-set endorsement is invalid: \(error)")
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime change-set endorsement"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        changeSetHex = try decodeRuntimeHash32(container, forKey: .changeSet, field: "change_set")
+        signer = try container.decode(String.self, forKey: .signer)
+        guard !signer.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .signer,
+                in: container,
+                debugDescription: "signer must be a non-empty public-key multihash"
+            )
+        }
+        signatureHex = try container.decode(String.self, forKey: .signature)
+        guard !signatureHex.isEmpty,
+              signatureHex.utf8.count.isMultiple(of: 2),
+              signatureHex.utf8.allSatisfy({ (0x30...0x39).contains($0) || (0x41...0x46).contains($0) }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .signature,
+                in: container,
+                debugDescription: "signature must be uppercase byte-aligned hexadecimal"
+            )
+        }
         json = try ToriiJSONValue(from: decoder)
     }
 }
@@ -22382,13 +22445,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     /// Operator-authenticated `POST /v1/runtime/upgrades/propose` with the `ChangeSetV1` object
-    /// as the body: drafts the SORA Parliament proposal that schedules `changeSet`.
+    /// as `change_set` and the trusted release signers' endorsements as `provenance`: drafts
+    /// the SORA Parliament proposal that schedules `changeSet`. A root without a committed
+    /// `runtime_provenance_policy_v1` takes no endorsements.
     ///
     /// Nothing activates a change set by request. Once enacted it is `Scheduled`; at the start
     /// of its effective height it activates if every committee member attested it, its notice
     /// elapsed and it still applies to the committed selection, and lapses otherwise.
-    public func proposeRuntimeUpgrade(changeSet: ToriiRuntimeChangeSet) async throws -> ToriiRuntimeUpgradeActionResponse {
-        let body = try changeSet.json.encodedData()
+    public func proposeRuntimeUpgrade(
+        changeSet: ToriiRuntimeChangeSet,
+        provenance: [ToriiRuntimeChangeSetEndorsement] = []
+    ) async throws -> ToriiRuntimeUpgradeActionResponse {
+        let body = try ToriiJSONValue.object([
+            "change_set": changeSet.json,
+            "provenance": .array(provenance.map(\.json)),
+        ]).encodedData()
         let request = try makeOperatorRequest(
             path: "/v1/runtime/upgrades/propose",
             method: .post,

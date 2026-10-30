@@ -1726,20 +1726,31 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     public func proposeRuntimeUpgrade(changeSet: ToriiRuntimeChangeSet,
+                                      provenance: [ToriiRuntimeChangeSetEndorsement] = [],
                                       completion: @escaping (Result<ToriiRuntimeUpgradeActionResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.proposeRuntimeUpgrade(changeSet: changeSet, completion: completion)
+        toriiRestClient.proposeRuntimeUpgrade(
+            changeSet: changeSet,
+            provenance: provenance,
+            completion: completion
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func proposeRuntimeUpgrade(changeSet: ToriiRuntimeChangeSet) async throws -> ToriiRuntimeUpgradeActionResponse {
+    public func proposeRuntimeUpgrade(
+        changeSet: ToriiRuntimeChangeSet,
+        provenance: [ToriiRuntimeChangeSetEndorsement] = []
+    ) async throws -> ToriiRuntimeUpgradeActionResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.proposeRuntimeUpgrade(changeSet: changeSet)
+        return try await toriiRestClient.proposeRuntimeUpgrade(
+            changeSet: changeSet,
+            provenance: provenance
+        )
     }
 
     public func cancelRuntimeUpgrade(idHex: String,

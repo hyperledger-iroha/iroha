@@ -193,6 +193,29 @@ export function normalizeRuntimeChangeSetV1(value, context = "changeSet") {
   };
 }
 
+/**
+ * Validate and rebuild the trusted release signers' `ChangeSetEndorsementV1` JSON objects a
+ * runtime-upgrade proposal carries (`specs/live_runtime_upgrades.md` §6, "Who governs").
+ *
+ * The node verifies every signature against the committed `runtime_provenance_policy_v1` when
+ * the proposal executes; a root without that policy takes no endorsements.
+ */
+export function normalizeRuntimeChangeSetEndorsementsV1(value, context = "provenance") {
+  return array(value, context).map((item, index) => {
+    const itemContext = `${context}[${index}]`;
+    const endorsement = exactRecord(item, ["change_set", "signer", "signature"], itemContext);
+    const signature = nonEmptyString(endorsement.signature, `${itemContext}.signature`);
+    if (!/^(?:[0-9A-F]{2})+$/u.test(signature)) {
+      throw new TypeError(`${itemContext}.signature must be uppercase byte-aligned hexadecimal`);
+    }
+    return {
+      change_set: lowerHex32(endorsement.change_set, `${itemContext}.change_set`),
+      signer: nonEmptyString(endorsement.signer, `${itemContext}.signer`),
+      signature,
+    };
+  });
+}
+
 function taggedJsonArray(value, context) {
   return array(value, context).map((item, index) => {
     const itemContext = `${context}[${index}]`;

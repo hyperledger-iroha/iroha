@@ -1413,9 +1413,10 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content",
+        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content",
         literals: &[
             r"iroha:runtime:adoption:v1\0",
+            r"iroha:runtime:change-set-endorsement:v1\0",
             r"iroha:runtime:change-set:v1\0",
             r"iroha:runtime:committee:v1\0",
             r"iroha:runtime:containment-endorsement:v1\0",

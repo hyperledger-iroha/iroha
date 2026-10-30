@@ -1,7 +1,8 @@
 //! Governed runtime change sets through the public node API
 //! (`specs/live_runtime_upgrades.md` §6): the baseline selection executes v1 programs, and a
 //! change set reaches SORA Parliament only from an account holding `CanProposeRuntimeChangeSet`,
-//! under a committed notice policy, with at least that notice.
+//! under a committed notice policy, with at least that notice, and under a committed provenance
+//! policy only with its trusted release signers' endorsements.
 
 use iroha_core::smartcontracts::Execute;
 use iroha_core::{
@@ -12,17 +13,17 @@ use iroha_core::{
     state::{State, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId,
     isi::governance::ProposeRuntimeUpgradeProposal,
-    parameter::{Parameter, RuntimeUpgradePolicyV1},
+    parameter::{Parameter, RuntimeProvenancePolicyV1, RuntimeUpgradePolicyV1},
     prelude::*,
     runtime::{
         definition::RestrictionEntryV1,
         lifecycle::{
-            ChangeSetV1, RestrictionKindV1, RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1,
-            SelectionTransitionV1,
+            ChangeSetEndorsementV1, ChangeSetV1, RestrictionKindV1, RootScopeV1, RuntimeNoticeV1,
+            RuntimeUpgradeActionV1, SelectionTransitionV1,
         },
     },
 };
@@ -171,6 +172,7 @@ fn change_set_proposals_need_the_permission_a_committed_policy_and_its_notice() 
     let mut stx = block.transaction();
     let propose = |effective_height| ProposeRuntimeUpgradeProposal {
         action: RuntimeUpgradeActionV1::Schedule(deprecate_bundle(network_id, effective_height)),
+        provenance: Vec::new(),
     };
     let rejection = |result: Result<(), _>| format!("{:?}", result.expect_err("rejected"));
 
@@ -240,5 +242,87 @@ fn change_set_proposals_need_the_permission_a_committed_policy_and_its_notice() 
             .expect("release catalog")
             .baseline,
         "a proposal never changes the selection"
+    );
+}
+
+#[test]
+fn change_set_proposals_need_the_committed_provenance() {
+    let (world, account_id, _) = world_with_account();
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let network_id = *state.network_id_ref();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let rejection = |result: Result<(), _>| format!("{:?}", result.expect_err("rejected"));
+    Grant::account_permission(
+        Permission::from(CanProposeRuntimeChangeSet),
+        account_id.clone(),
+    )
+    .execute(&account_id, &mut stx)
+    .expect("grant the proposal permission");
+    SetParameter::new(Parameter::Custom(
+        policy(10).to_custom_parameter().expect("valid policy"),
+    ))
+    .execute(&account_id, &mut stx)
+    .expect("commit the notice policy");
+
+    let mut signers: Vec<KeyPair> = (1..=3_u8)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519))
+        .collect();
+    signers.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let provenance = RuntimeProvenancePolicyV1 {
+        signers: signers.iter().map(|key| key.public_key().clone()).collect(),
+        threshold: 2,
+    };
+    let mut unreachable = provenance.clone();
+    unreachable.threshold = 4;
+    let malformed = iroha_data_model::parameter::CustomParameter::new(
+        RuntimeProvenancePolicyV1::parameter_id().clone(),
+        iroha_primitives::json::Json::new(unreachable),
+    );
+    let error =
+        rejection(SetParameter::new(Parameter::Custom(malformed)).execute(&account_id, &mut stx));
+    assert!(
+        error.contains("the threshold must be at least one"),
+        "{error}"
+    );
+    SetParameter::new(Parameter::Custom(
+        provenance
+            .to_custom_parameter()
+            .expect("valid provenance policy"),
+    ))
+    .execute(&account_id, &mut stx)
+    .expect("commit the provenance policy");
+
+    let change_set = deprecate_bundle(network_id, 11);
+    let id = change_set.id().expect("change set identity");
+    let endorse = |signer: &KeyPair| {
+        ChangeSetEndorsementV1::sign(id, signer.public_key().clone(), signer.private_key())
+            .expect("endorse the change set")
+    };
+    let propose = |provenance| ProposeRuntimeUpgradeProposal {
+        action: RuntimeUpgradeActionV1::Schedule(change_set.clone()),
+        provenance,
+    };
+    let error = rejection(propose(vec![endorse(&signers[1])]).execute(&account_id, &mut stx));
+    assert!(
+        error.contains("1 of the 2 trusted signer endorsements"),
+        "{error}"
+    );
+    propose(vec![endorse(&signers[1]), endorse(&signers[0])])
+        .execute(&account_id, &mut stx)
+        .expect("two trusted release signers vouch for the change set");
+    assert_eq!(
+        stx.world
+            .governance_proposals()
+            .iter()
+            .filter(|(_, record)| record.as_runtime_upgrade().is_some())
+            .count(),
+        1,
+        "the endorsed change set reaches Parliament"
     );
 }

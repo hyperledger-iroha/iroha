@@ -299,9 +299,15 @@ place so neither storage version is corrupted, and a certified repair resumes or
 sets, restrictions and retirements. The admins of a permissioned data space govern that data
 space's own selection and nothing else. Every rule that decides whether a change set is valid
 (provenance requirements, notice, the checkpoint startup floor) comes from committed State, never
-from node configuration. The notice policy is the committed parameter `runtime_upgrade_policy_v1`;
-the manifest provenance check that read node configuration is deleted, and provenance requirements
-return only as committed State.
+from node configuration. The notice policy is the committed parameter `runtime_upgrade_policy_v1`.
+The provenance policy is the committed parameter `runtime_provenance_policy_v1`: its trusted release
+signers vouch for the build, SBOM and SLSA evidence of what a change set publishes. While it is
+committed, Parliament admits a proposal that schedules a change set only with valid endorsements
+(`ChangeSetEndorsementV1`, a signature over `iroha:runtime:change-set-endorsement:v1\0` followed
+by the change-set identity, which binds the network) from its threshold of distinct trusted
+signers. A proposal carries at most one endorsement per trusted signer, and none to cancel a
+change set or under a root without the policy; admission checks them when the proposal executes.
+The manifest provenance check that read node configuration is deleted.
 
 1. **Stage.** Publish the definitions and artifacts. A node stores and authenticates definitions it
    cannot execute: admission checks only that the change set applies to the selection it will meet
@@ -720,11 +726,11 @@ not a date: it happens once everything its first selection needs is implemented 
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
    adopted State carries (triggers, multisig, AMX), expectations and deferred consent, stable
    rejection codes and event envelopes. Done for the universal root: change sets with proposal
-   through Parliament, the committed notice policy, all-`n` attestation bound to the committee
-   and signed by each node for its own release, scheduling, activation and lapse at block start,
-   the unsupported-node stop with a reason naming the selection, stable rejection codes and
-   lifecycle events, and handshake host profiles. Still open: committed provenance policy,
-   completion capabilities and obligation kinds, expectations and deferred consent.
+   through Parliament, the committed notice and provenance policies, all-`n` attestation bound to
+   the committee and signed by each node for its own release, scheduling, activation and lapse at
+   block start, the unsupported-node stop with a reason naming the selection, stable rejection
+   codes and lifecycle events, and handshake host profiles. Still open: completion capabilities and
+   obligation kinds, expectations and deferred consent.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented

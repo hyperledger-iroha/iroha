@@ -4573,8 +4573,12 @@ require an immutable `OperatorSigningContext` and sign every request.
   `successorHex`, `status` (`Scheduled`, or `Activated`, `Lapsed` or `Cancelled` with the
   `height` at which that happened) and the frozen `notice`. The complete `ChangeSetRecordV1` stays
   available as `record`, with integers above `Number.MAX_SAFE_INTEGER` as bigint.
-- `proposeRuntimeUpgrade(changeSet)` posts the exact `ChangeSetV1` JSON object and returns the
-  drafted SORA Parliament proposal that schedules it. Before sending, the SDK requires the exact
+- `proposeRuntimeUpgrade(changeSet, { provenance })` posts the exact `ChangeSetV1` JSON object as
+  `change_set` with the trusted release signers' `ChangeSetEndorsementV1` objects as `provenance`,
+  and returns the drafted SORA Parliament proposal that schedules it. While the universal root
+  commits a `runtime_provenance_policy_v1`, the proposal needs endorsements from its threshold of
+  distinct trusted signers (each produced by `iroha runtime upgrade endorse`); a root without that
+  policy takes none, and `provenance` defaults to `[]`. Before sending, the SDK requires the exact
   snake_case field set, the universal root, 32-byte lowercase hex identities and an
   `effective_height` of at most `Number.MAX_SAFE_INTEGER`; pass larger integers inside published
   definitions or transitions as bigint.
@@ -4621,7 +4625,8 @@ for (const item of runtime.items) {
   console.log(`${item.idHex} effective ${item.effectiveHeight}: ${item.status.kind}${at}`);
 }
 
-// Nothing is scheduled before this change set, so it meets the committed selection.
+// Nothing is scheduled before this change set, so it meets the committed selection. The
+// endorsements come from the trusted release signers of the committed provenance policy.
 const draft = await torii.proposeRuntimeUpgrade({
   network: exactNetworkId,
   root: { kind: "Universal", content: null },
@@ -4631,7 +4636,7 @@ const draft = await torii.proposeRuntimeUpgrade({
   publish: [],
   transitions: [{ kind: "Activate", content: definitionIdHex }],
   qualification: qualificationDigestHex,
-});
+}, { provenance: releaseSignerEndorsements });
 const [{ wire_id: wireId, payload_hex: payloadHex }] = draft.tx_instructions;
 
 const withdrawal = await torii.cancelRuntimeUpgrade(scheduledChangeSetIdHex);
