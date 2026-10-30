@@ -55,7 +55,7 @@ impl NetworkServicePlanV1 {
         let mut trusted_signers = Vec::with_capacity(COUNCIL_KEYS.len());
         for name in COUNCIL_KEYS {
             let label = format!("native-service-network/{name}");
-            let key = localnet_ephemeral_identity(seed, label.as_bytes())?;
+            let key = ephemeral_identity(seed, label.as_bytes())?;
             ensure!(
                 unique.insert(key.public_key.clone()),
                 "network council keys must be distinct"

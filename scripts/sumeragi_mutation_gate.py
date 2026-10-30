@@ -2816,7 +2816,7 @@ DEPLOY_MUTATIONS = [
     m("DEP6", "Administrative AMX registration: accept a substituted original child or signer",
       ["attachment::amx_registration::tests::original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution"]),
     m("DEP7", "signed service profile: reconstruct completed original authenticated genesis metadata",
-      ["localnet::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"]),
+      ["sora_network::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"]),
 
 ]
 

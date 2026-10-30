@@ -351,7 +351,7 @@ fn managed_amx_sources_feed_real_private_staging_and_exact_retained_generation()
     let sources = fixture.retain(true).unwrap();
     let child = fixture.temporary.path().join("private");
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
-    let prepared = crate::localnet::prepare_private_root_with_amx_at(
+    let prepared = crate::sora_network::prepare_private_root_with_amx_at(
         "private",
         &child,
         &ports,
@@ -363,7 +363,7 @@ fn managed_amx_sources_feed_real_private_staging_and_exact_retained_generation()
     sources.require_signed_generation(&prepared).unwrap();
     let original = std::fs::read(child.join("genesis.signed.nrt")).unwrap();
     let reopened_sources = fixture.retain(false).unwrap();
-    let reopened = crate::localnet::prepare_private_root_with_amx_at(
+    let reopened = crate::sora_network::prepare_private_root_with_amx_at(
         "private",
         &child,
         &ports,

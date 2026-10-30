@@ -1,16 +1,14 @@
 #[test]
 fn private_profile_fee_policy_is_signed_and_absent_from_node_config() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     for (profile, label, base_port) in [
         (SoraProfile::PrivateSbp, "sbp", 28_080_u16),
         (SoraProfile::PrivateCbuae, "cbuae", 29_080_u16),
         (SoraProfile::PrivateBpng, "bpng", 30_080_u16),
     ] {
         let out_dir = temp.path().join(label);
-        let opts = LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: Some(profile),
-            perf_profile: None,
+        let opts = NetworkOptions {
+            sora_profile: profile,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some(format!("private-direct-settlement-{label}")),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -18,12 +16,9 @@ fn private_profile_fee_policy_is_signed_and_absent_from_node_config() {
             base_api_port: base_port,
             base_p2p_port: base_port.saturating_add(257),
             out_dir: out_dir.clone(),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Npos,
         };
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+        generate_network(&opts, &mut BufWriter::new(Vec::new()))
             .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
         let signed = read_signed_genesis(&out_dir.join("genesis.signed.nrt"))
             .expect("canonical generated signed genesis");

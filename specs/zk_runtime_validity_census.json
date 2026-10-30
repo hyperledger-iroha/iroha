@@ -342,7 +342,7 @@
      "contains": "[static.zk."
     },
     {
-     "path": "crates/iroha_deploy/src/localnet.rs",
+     "path": "crates/iroha_deploy/src/sora_network.rs",
      "contains": "zk.insert(\"halo2\""
     }
    ],
@@ -400,11 +400,11 @@
      "contains": "compute_genesis_confidential_policy_hash"
     },
     {
-     "path": "crates/iroha_deploy/src/localnet.rs",
+     "path": "crates/iroha_deploy/src/sora_network.rs",
      "contains": "compute_genesis_confidential_policy_hash"
     },
     {
-     "path": "crates/iroha_deploy/src/localnet/private_root.rs",
+     "path": "crates/iroha_deploy/src/sora_network/private_root.rs",
      "contains": "compute_genesis_confidential_policy_hash"
     },
     {
@@ -1454,7 +1454,7 @@
    "sites": [
     ["crates/iroha_cli/src/client_config.rs", "env_read", "HOME", 1],
     ["crates/iroha_cli/src/client_config.rs", "env_read", "USERPROFILE", 1],
-    ["crates/iroha_deploy/src/localnet.rs", "env_read", "CARGO_TARGET_DIR", 1],
+    ["crates/iroha_deploy/src/sora_network.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "LOCALAPPDATA", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "XDG_STATE_HOME", 1],
     ["crates/iroha_test_network/src/config.rs", "env_read", "IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR", 1],

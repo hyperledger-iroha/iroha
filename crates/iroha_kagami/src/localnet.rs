@@ -1,7 +1,9 @@
-//! CLI syntax for the shared native localnet generator.
+//! CLI syntax for developer localnet bundles.
+//!
+//! Sora networks (Nexus, the public Taira chain and the private dataspace presets) come from
+//! `kagami sora-network generate`.
 use crate::{Outcome, RunArgs};
 use clap::{Args as ClapArgs, ValueEnum};
-use color_eyre::eyre::{Result, eyre};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
 use iroha_deploy::localnet::*;
 use std::{
@@ -10,37 +12,6 @@ use std::{
     path::PathBuf,
 };
 use zeroize::Zeroizing;
-
-/// Native validation of one isolated post-DKG Taira peer launch.
-#[derive(ClapArgs)]
-pub struct ValidateBeaconLaunchArgs {
-    /// Absolute directory containing the unchanged generated peer0..3 configurations.
-    #[arg(long)]
-    network_dir: PathBuf,
-    /// Zero-based generated peer index.
-    #[arg(long, value_parser = clap::value_parser!(u16).range(0..=3))]
-    peer_index: u16,
-    /// Separate native configuration in the private run's beacon/seat-N directory.
-    #[arg(long)]
-    beacon_config: PathBuf,
-    /// Owner-only native beacon credential beside the separate configuration.
-    #[arg(long)]
-    beacon_credential: PathBuf,
-}
-
-impl<T: Write> RunArgs<T> for ValidateBeaconLaunchArgs {
-    fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let selection = validate_beacon_launch(
-            &self.network_dir,
-            self.peer_index,
-            &self.beacon_config,
-            &self.beacon_credential,
-        )?;
-        writer.write_all(&norito::json::to_vec(&selection)?)?;
-        writeln!(writer)?;
-        Ok(())
-    }
-}
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConsensusModeArg {
@@ -53,50 +24,6 @@ impl From<ConsensusModeArg> for SumeragiConsensusMode {
             ConsensusModeArg::Permissioned => SumeragiConsensusMode::Permissioned,
             ConsensusModeArg::Npos => SumeragiConsensusMode::Npos,
         }
-    }
-}
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SoraProfileArg {
-    Dataspace,
-    Nexus,
-}
-/// Canonical restricted-dataspace presets supported by the localnet generator.
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrivateDataspaceArg {
-    /// State Bank of Pakistan dataspace (id 10, lane 3).
-    Sbp,
-    /// Central Bank of the UAE dataspace (id 12, lane 4).
-    Cbuae,
-    /// Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5).
-    Bpng,
-}
-impl From<SoraProfileArg> for SoraProfile {
-    fn from(value: SoraProfileArg) -> Self {
-        match value {
-            SoraProfileArg::Dataspace => SoraProfile::Dataspace,
-            SoraProfileArg::Nexus => SoraProfile::Nexus,
-        }
-    }
-}
-fn resolve_sora_profile(
-    profile: Option<SoraProfileArg>,
-    private_dataspace: Option<PrivateDataspaceArg>,
-) -> Result<Option<SoraProfile>> {
-    match (profile, private_dataspace) {
-        (None, None) => Ok(None),
-        (Some(profile), None) => Ok(Some(profile.into())),
-        (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Sbp)) => {
-            Ok(Some(SoraProfile::PrivateSbp))
-        }
-        (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Cbuae)) => {
-            Ok(Some(SoraProfile::PrivateCbuae))
-        }
-        (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Bpng)) => {
-            Ok(Some(SoraProfile::PrivateBpng))
-        }
-        (Some(SoraProfileArg::Nexus) | None, Some(_)) => Err(eyre!(
-            "`--private-dataspace` requires `--sora-profile dataspace`"
-        )),
     }
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +43,9 @@ impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
         }
     }
 }
-/// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
+/// Generate a bare-metal developer localnet (no Docker): genesis, per-peer configs, start/stop scripts.
+///
+/// Sora networks, including the public Taira chain, come from `kagami sora-network generate`.
 #[derive(ClapArgs)]
 pub struct Args {
     /// Number of peers to generate (minimum four).
@@ -127,20 +56,13 @@ pub struct Args {
     /// Omit this option to generate independent keys from operating-system entropy.
     #[arg(long, short)]
     seed: Option<String>,
-    /// Canonical chain identifier written into genesis, peer configs, and the client config.
+    /// Canonical developer chain identifier written into genesis, peer configs, and the client
+    /// config. Public chain identities are rejected.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
     /// Account-address chain prefix written into genesis and client/peer configs.
-    /// Public chain identities retain their fixed prefix.
     #[arg(long, value_name = "PREFIX")]
     chain_discriminant: Option<u16>,
-    /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
-    /// Requires at least 4 peers.
-    #[arg(long, value_enum, value_name = "PROFILE")]
-    sora_profile: Option<SoraProfileArg>,
-    /// Select an exact restricted dataspace preset for the `dataspace` Sora profile.
-    #[arg(long, value_enum, value_name = "DATASPACE", requires = "sora_profile")]
-    private_dataspace: Option<PrivateDataspaceArg>,
     /// Apply a localnet performance profile (10k TPS / 1s finality presets).
     #[arg(long, value_enum, value_name = "PROFILE")]
     perf_profile: Option<LocalnetPerfProfileArg>,
@@ -176,8 +98,7 @@ pub struct Args {
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     block_cadence_ms: Option<u64>,
     /// Consensus mode to emit in genesis/configs.
-    /// Defaults to `permissioned`.
-    /// Sora profile localnets and perf profiles require `npos`.
+    /// Defaults to `permissioned`; perf profiles select their own mode.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
 }
@@ -201,8 +122,6 @@ impl<T: Write> RunArgs<T> for Args {
             seed,
             chain_id,
             chain_discriminant,
-            sora_profile,
-            private_dataspace,
             perf_profile,
             bind_host,
             public_host,
@@ -219,7 +138,6 @@ impl<T: Write> RunArgs<T> for Args {
         // validation. Once validation succeeds, `LocalnetOptions` takes over
         // the same custody obligation through its `Drop` implementation.
         let mut seed = seed.map(Zeroizing::new);
-        let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
         let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
         let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
         let mut assets = if sample_asset {
@@ -238,8 +156,6 @@ impl<T: Write> RunArgs<T> for Args {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
         let opts = LocalnetOptions {
-            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
-            sora_profile,
             perf_profile,
             peers,
             seed: seed.as_mut().map(|seed| std::mem::take(&mut **seed)),
@@ -260,108 +176,36 @@ impl<T: Write> RunArgs<T> for Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser as _;
     use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_data_model::prelude::NetworkId;
-    use iroha_deploy::genesis::profile::{
-        PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID, known_chain_discriminant_for_chain_id,
-    };
+    use iroha_deploy::genesis::profile::{PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID};
     use iroha_genesis::{RawGenesisTransaction, read_signed_genesis};
     use std::fs;
-    #[test]
-    fn beacon_launch_cli_requires_all_explicit_native_selectors() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct TestArgs {
-            #[command(flatten)]
-            launch: ValidateBeaconLaunchArgs,
-        }
-        let values = [
-            "validate-beacon-launch",
-            "--network-dir",
-            "/private/run/network",
-            "--peer-index",
-            "0",
-            "--beacon-config",
-            "/private/run/beacon/seat-1/beacon.toml",
-            "--beacon-credential",
-            "/private/run/beacon/seat-1/iroha-global-beacon-partial-signer-v1.norito",
-        ];
-        let parsed = TestArgs::try_parse_from(values).unwrap();
-        assert_eq!(parsed.launch.peer_index, 0);
-        for missing in [1, 3, 5, 7] {
-            let mut absent = values.to_vec();
-            absent.drain(missing..missing + 2);
-            assert!(TestArgs::try_parse_from(absent).is_err());
-        }
-        let mut invalid = values;
-        invalid[4] = "4";
-        assert!(TestArgs::try_parse_from(invalid).is_err());
-        let mut extra = values.to_vec();
-        extra.extend(["--runtime-toggle", "true"]);
-        assert!(TestArgs::try_parse_from(extra).is_err());
+
+    #[derive(clap::Parser)]
+    struct TestArgs {
+        #[command(flatten)]
+        localnet: Args,
     }
+
     #[test]
-    fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct TestArgs {
-            #[command(flatten)]
-            localnet: Args,
-        }
-        for (name, expected) in [
-            ("sbp", SoraProfile::PrivateSbp),
-            ("cbuae", SoraProfile::PrivateCbuae),
-            ("bpng", SoraProfile::PrivateBpng),
+    fn localnet_cli_rejects_sora_selectors_and_retired_aliases() {
+        for sora_only in [
+            ["--sora-profile", "nexus"],
+            ["--private-dataspace", "cbuae"],
+            ["--profile", "dataspace"],
         ] {
-            let parsed = TestArgs::try_parse_from([
+            let mut args = vec![
                 "kagami-localnet-test",
                 "--out-dir",
                 "/tmp/kagami-localnet-test",
-                "--sora-profile",
-                "dataspace",
-                "--private-dataspace",
-                name,
-            ])
-            .expect("parse typed private dataspace selector");
-            assert_eq!(
-                resolve_sora_profile(
-                    parsed.localnet.sora_profile,
-                    parsed.localnet.private_dataspace,
-                )
-                .expect("resolve typed private dataspace selector"),
-                Some(expected)
-            );
-        }
-        assert!(
-            TestArgs::try_parse_from([
-                "kagami-localnet-test",
-                "--out-dir",
-                "/tmp/kagami-localnet-test",
-                "--private-dataspace",
-                "cbuae",
-            ])
-            .is_err(),
-            "private dataspace selection must require an explicit Sora profile"
-        );
-        assert!(
-            resolve_sora_profile(
-                Some(SoraProfileArg::Nexus),
-                Some(PrivateDataspaceArg::Cbuae),
-            )
-            .is_err(),
-            "private dataspace selection must reject the public Nexus profile"
-        );
-        for retired in ["dataspaces", "public", "sora-nexus", "nexus-public"] {
+            ];
+            args.extend(sora_only);
             assert!(
-                TestArgs::try_parse_from([
-                    "kagami-localnet-test",
-                    "--out-dir",
-                    "/tmp/kagami-localnet-test",
-                    "--sora-profile",
-                    retired,
-                ])
-                .is_err(),
-                "first-release CLI must reject retired profile alias {retired}"
+                TestArgs::try_parse_from(args).is_err(),
+                "developer localnets must not accept Sora option {}",
+                sora_only[0]
             );
         }
         for retired in ["throughput-10k-permissioned", "throughput-10k-npos"] {
@@ -378,49 +222,40 @@ mod tests {
             );
         }
     }
+
     #[test]
-    fn localnet_cli_accepts_an_explicit_canonical_chain_id() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct TestArgs {
-            #[command(flatten)]
-            localnet: Args,
-        }
-        let parsed = TestArgs::try_parse_from([
-            "kagami-localnet-test",
-            "--out-dir",
-            "/tmp/kagami-localnet-test",
-            "--chain-id",
-            PUBLIC_TAIRA_CHAIN_ID,
-        ])
-        .expect("parse explicit localnet chain id");
-        assert_eq!(
-            resolve_localnet_chain_id(Some(&parsed.localnet.chain_id))
-                .expect("resolve explicit localnet chain id"),
-            PUBLIC_TAIRA_CHAIN_ID
-        );
-        assert!(resolve_localnet_chain_id(Some("   ")).is_err());
-        assert!(resolve_localnet_chain_id(Some("iroha3-taira")).is_err());
-        assert!(resolve_localnet_chain_id(Some("iroha3-nexus")).is_err());
-        assert!(resolve_localnet_chain_id(Some("cbdc16")).is_err());
-        assert!(
-            resolve_localnet_chain_id(Some(PUBLIC_NEXUS_CHAIN_ID))
-                .expect_err("disposable localnet cannot impersonate mainnet")
-                .to_string()
-                .contains("operator")
-        );
-        for padded in [
-            format!(" {PUBLIC_TAIRA_CHAIN_ID}"),
-            format!("{PUBLIC_TAIRA_CHAIN_ID} "),
-            format!("{PUBLIC_TAIRA_CHAIN_ID}\n"),
-            format!("\t{PUBLIC_TAIRA_CHAIN_ID}"),
-        ] {
+    fn localnet_cli_rejects_public_chain_ids_without_partial_output() {
+        let parent = tempfile::tempdir().expect("create public-chain refusal parent");
+        let private = iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private"))
+            .expect("create private public-chain refusal parent");
+        for (index, chain) in [PUBLIC_TAIRA_CHAIN_ID, PUBLIC_NEXUS_CHAIN_ID]
+            .into_iter()
+            .enumerate()
+        {
+            let output = private.path().join(format!("public{index}"));
+            let parsed = TestArgs::try_parse_from([
+                "kagami-localnet-test",
+                "--out-dir",
+                output.to_str().expect("UTF-8 temporary path"),
+                "--chain-id",
+                chain,
+            ])
+            .expect("parse public chain id");
+            let error = parsed
+                .localnet
+                .run(&mut BufWriter::new(Vec::new()))
+                .expect_err("a developer localnet cannot use a public chain identity");
             assert!(
-                resolve_localnet_chain_id(Some(&padded)).is_err(),
-                "padded chain identity must fail rather than normalize: {padded:?}"
+                error.to_string().contains("kagami sora-network generate"),
+                "the refusal names the Sora network command: {error}"
+            );
+            assert!(
+                !output.exists(),
+                "a refused public chain identity must not create output"
             );
         }
     }
+
     #[test]
     fn localnet_perf_profile_keeps_matching_consensus_mode() {
         let mode =
@@ -428,20 +263,13 @@ mod tests {
         assert_eq!(mode, SumeragiConsensusMode::Npos);
     }
     #[test]
-    fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {
+    fn localnet_defaults_to_permissioned_without_perf_preset() {
         let mode = resolve_requested_consensus_mode(None, None);
         assert_eq!(mode, SumeragiConsensusMode::Permissioned);
     }
 
     #[test]
     fn localnet_chain_discriminant_cli_generates_matching_native_artifacts() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct TestArgs {
-            #[command(flatten)]
-            localnet: Args,
-        }
-
         let parent = tempfile::tempdir().expect("create isolated localnet parent");
         let private = iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private"))
             .expect("create private localnet parent");
@@ -516,9 +344,13 @@ mod tests {
                     .and_then(toml::Value::as_integer),
                 Some(369)
             );
-            let authority = peer["torii"]["account_onboarding"]["authority"]
+            assert!(
+                peer["torii"].get("account_onboarding").is_none(),
+                "developer localnets generate no onboarding authority"
+            );
+            let authority = peer["gov"]["bond_escrow_account"]
                 .as_str()
-                .expect("onboarding authority account literal");
+                .expect("governance account literal in the chain prefix");
             assert!(
                 iroha_data_model::account::address::AccountAddress::parse_encoded(
                     authority,
@@ -545,62 +377,5 @@ mod tests {
                     .unwrap_or(false)
             );
         }
-    }
-
-    #[test]
-    fn localnet_chain_discriminant_public_conflicts_leave_no_partial_output() {
-        use clap::Parser as _;
-        #[derive(clap::Parser)]
-        struct TestArgs {
-            #[command(flatten)]
-            localnet: Args,
-        }
-        let parent = tempfile::tempdir().expect("create public-chain validation parent");
-        let private = iroha_fs::PrivateDirectory::open_or_create(parent.path().join("private"))
-            .expect("create private public-chain validation parent");
-        for (index, chain) in [PUBLIC_TAIRA_CHAIN_ID, PUBLIC_NEXUS_CHAIN_ID]
-            .into_iter()
-            .enumerate()
-        {
-            let output = private.path().join(format!("conflict{index}"));
-            let wrong = known_chain_discriminant_for_chain_id(chain)
-                .unwrap()
-                .wrapping_add(1)
-                .to_string();
-            let parsed = TestArgs::try_parse_from([
-                "kagami-localnet-test",
-                "--out-dir",
-                output.to_str().unwrap(),
-                "--chain-id",
-                chain,
-                "--chain-discriminant",
-                &wrong,
-                "--sora-profile",
-                "nexus",
-                "--consensus-mode",
-                "npos",
-            ])
-            .expect("parse typed public-chain prefix conflict");
-            assert!(
-                parsed
-                    .localnet
-                    .run(&mut BufWriter::new(Vec::new()))
-                    .is_err()
-            );
-            assert!(
-                !output.exists(),
-                "invalid public prefix must not create output"
-            );
-        }
-        assert!(
-            TestArgs::try_parse_from([
-                "kagami-localnet-test",
-                "--out-dir",
-                "/tmp/unused-chain-prefix-test",
-                "--chain-discriminant",
-                "65536",
-            ])
-            .is_err()
-        );
     }
 }

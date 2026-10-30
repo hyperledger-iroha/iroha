@@ -1186,7 +1186,7 @@ mod tests {
         .unwrap();
         let alias = "desktop-private";
         let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias).unwrap();
-        let spec = iroha_deploy::localnet::PrivateRootSpec {
+        let spec = iroha_deploy::sora_network::PrivateRootSpec {
             parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
                 iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
                     b"desktop parent",

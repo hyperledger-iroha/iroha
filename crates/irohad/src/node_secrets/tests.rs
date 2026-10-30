@@ -682,6 +682,77 @@ fn config_key_files_pass_custody_before_the_parser_reads_them() {
     verify_config_key_custody(&fixture.data_dir).expect("restored key files");
 }
 
+#[test]
+fn missing_local_identities_are_created_owner_only_and_never_replaced() {
+    let fixture = SecretsFixture::new();
+    let identities = [NodeSecretFile::Transport, NodeSecretFile::Streaming];
+    // A fresh data directory has no `secrets` directory yet.
+    fs::remove_dir(fixture.data_dir.secrets_dir().join("authority")).expect("empty authority");
+    fs::remove_dir(fixture.data_dir.secrets_dir()).expect("empty secrets");
+    let created = create_local_identities(&fixture.data_dir, &identities).expect("created");
+    assert_eq!(
+        created.iter().map(|(file, _)| *file).collect::<Vec<_>>(),
+        identities
+    );
+    assert_ne!(created[0].1, created[1].1);
+    let mode = |path: &Path| fs::metadata(path).expect("metadata").permissions().mode() & 0o7777;
+    assert_eq!(mode(&fixture.data_dir.secrets_dir()), 0o700);
+    for (file, public_key) in &created {
+        let path = fixture.data_dir.secret(*file);
+        assert_eq!(mode(&path), 0o600);
+        let key_pair = parse_ed25519_signer_record_v1(&fs::read(&path).expect("read identity"))
+            .expect("one canonical Ed25519 record");
+        assert_eq!(key_pair.public_key(), public_key);
+    }
+    verify_config_key_custody(&fixture.data_dir).expect("created files pass custody");
+    // Existing identities are kept, and nothing else is ever created.
+    let transport = fixture.data_dir.secret(NodeSecretFile::Transport);
+    let original = fs::read(&transport).expect("read transport identity");
+    assert!(
+        create_local_identities(&fixture.data_dir, &identities)
+            .expect("kept")
+            .is_empty()
+    );
+    assert_eq!(fs::read(&transport).expect("reread"), original);
+    assert!(
+        create_local_identities(&fixture.data_dir, &[])
+            .expect("nothing requested")
+            .is_empty()
+    );
+    assert!(!fixture.data_dir.secret(NodeSecretFile::Validator).exists());
+    // An existing file that fails custody is refused, not replaced.
+    fs::set_permissions(&transport, fs::Permissions::from_mode(0o644)).expect("readable");
+    assert_eq!(
+        create_local_identities(&fixture.data_dir, &identities),
+        Err(NodeSecretsErrorV1::Custody {
+            file: NodeSecretFile::Transport,
+            error: RuntimeCredentialErrorV1::InvalidSource,
+        })
+    );
+    assert_eq!(fs::read(&transport).expect("reread"), original);
+    // A `secrets` directory that others can read is never hardened or written to.
+    fs::remove_file(&transport).expect("remove transport identity");
+    fs::set_permissions(
+        fixture.data_dir.secrets_dir(),
+        fs::Permissions::from_mode(0o755),
+    )
+    .expect("shared secrets directory");
+    let error = create_local_identities(&fixture.data_dir, &identities)
+        .expect_err("a shared secrets directory is refused");
+    assert!(matches!(
+        error,
+        NodeSecretsErrorV1::Create {
+            file: NodeSecretFile::Transport,
+            kind: Some(_),
+        }
+    ));
+    assert!(
+        error.to_string().contains("secrets/transport.key"),
+        "{error}"
+    );
+    assert!(!transport.exists());
+}
+
 fn credential_test_budget() -> AllocationBudget {
     AllocationBudget::new(64 * 1024 * 1024)
 }

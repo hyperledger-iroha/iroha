@@ -73,11 +73,9 @@ fn generated_publication_retains_exact_owner_pin_session_tls_port_and_disabled_o
     }
     for peer in &prepared.peers {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
-        let parsed = parse_localnet_peer_config(
-            std::str::from_utf8(&bytes).unwrap(),
-            Some(&peer.config_path),
-        )
-        .unwrap();
+        let parsed =
+            config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
+                .unwrap();
         assert!(parsed.musubi_publication.installation.is_none());
     }
     let again = prepared.publication_service_plan().unwrap().unwrap();
@@ -115,7 +113,7 @@ fn generated_publication_retains_exact_owner_pin_session_tls_port_and_disabled_o
             369
         );
     }
-    let parsed = parse_localnet_peer_config(&toml::to_string(&table).unwrap(), Some(peer)).unwrap();
+    let parsed = config::parse_peer_config(&toml::to_string(&table).unwrap(), peer).unwrap();
     assert_eq!(parsed.musubi_publication, config);
     let publication = table
         .get_mut("musubi_publication")
@@ -126,7 +124,7 @@ fn generated_publication_retains_exact_owner_pin_session_tls_port_and_disabled_o
         "private_tls_bind".into(),
         toml::Value::String("127.0.0.1:0".into()),
     );
-    assert!(parse_localnet_peer_config(&toml::to_string(&table).unwrap(), Some(peer)).is_err());
+    assert!(config::parse_peer_config(&toml::to_string(&table).unwrap(), peer).is_err());
     assert_eq!(
         iroha_fs::read_private(peer, 1024 * 1024)
             .unwrap()
@@ -154,8 +152,7 @@ fn publication_plan_mutation_cannot_replace_signed_original_or_select_another_pr
     let prepared = prepared(&generation, LocalnetServiceProfile::StreamTokenAuthorities);
     let root = prepared.context.client_config.parent().unwrap();
     let directory =
-        PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
-            .unwrap();
+        PrivateDirectory::open_exact(root.join(RUNTIME_DIRECTORY).join(DIRECTORY)).unwrap();
     let original = directory.read(MANIFEST, MAX_MANIFEST).unwrap();
     let manifest: StreamTokenAuthorityManifest = norito::json::from_slice(&original).unwrap();
     let retained = prepared.publication_service_plan().unwrap().unwrap();
@@ -321,14 +318,11 @@ fn standard_profile_has_no_publication_role_plan_or_initialized_custody() {
     for peer in &prepared.peers {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
         assert!(
-            parse_localnet_peer_config(
-                std::str::from_utf8(&bytes).unwrap(),
-                Some(&peer.config_path)
-            )
-            .unwrap()
-            .musubi_publication
-            .installation
-            .is_none()
+            config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
+                .unwrap()
+                .musubi_publication
+                .installation
+                .is_none()
         );
     }
 }

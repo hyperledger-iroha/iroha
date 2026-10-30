@@ -3146,11 +3146,79 @@ mod tests {
             "stale capture bytes must fail, not overwrite"
         );
     }
+    #[test]
+    fn sora_prepared_bundle_mounts_onboarding_and_faucet_signers_as_secrets() {
+        let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
+        let config_dir = temp_dir.path().join("sora-bundle");
+        let options = iroha_deploy::sora_network::NetworkOptions {
+            sora_profile: iroha_deploy::sora_network::SoraProfile::Nexus,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("kagami-compose-sora-bundle".to_owned()),
+            bind_host: "127.0.0.1".to_owned(),
+            public_host: "127.0.0.1".to_owned(),
+            base_api_port: 19_180,
+            base_p2p_port: 23_437,
+            out_dir: config_dir.clone(),
+            block_cadence_ms: None,
+        };
+        iroha_deploy::sora_network::generate_network(&options, &mut BufWriter::new(Vec::new()))
+            .expect("generate Sora network bundle");
+        let deployment_dir = temp_dir.path().join("deployment");
+        fs::create_dir_all(&deployment_dir).expect("create deployment directory");
+        let args = Args {
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: None,
+            healthcheck: false,
+            config_dir,
+            peer_config: None,
+            image: "hyperledger/iroha:dev".to_owned(),
+            build: None,
+            no_cache: false,
+            out_file: deployment_dir.join("docker-compose.yml"),
+            print: true,
+            force: false,
+            no_banner: true,
+        };
+        let mut output = Vec::new();
+        let mut writer = BufWriter::new(&mut output);
+        args.run(&mut writer).expect("render Sora prepared bundle");
+        writer.flush().expect("flush prepared Compose output");
+        drop(writer);
+        let output = String::from_utf8(output).expect("Compose output is UTF-8");
+        let peer0 = fs::read_dir(deployment_dir.join(".kagami-compose"))
+            .expect("read projection root")
+            .map(|entry| {
+                entry
+                    .expect("read projection entry")
+                    .path()
+                    .join("peer0.toml")
+            })
+            .find(|path| path.is_file())
+            .expect("peer0 projection");
+        let projected = fs::read_to_string(peer0)
+            .expect("read peer0 projection")
+            .parse::<toml::Table>()
+            .expect("parse peer0 projection");
+        for (section, target) in [
+            (
+                "account_onboarding",
+                "/run/secrets/iroha_peer0_onboarding_private_key",
+            ),
+            ("faucet", "/run/secrets/iroha_peer0_faucet_private_key"),
+        ] {
+            assert_eq!(
+                projected["torii"][section]["private_key_file"].as_str(),
+                Some(target)
+            );
+            assert!(
+                output.contains(&format!("target: {target}")),
+                "prepared torii.{section} signer must be mounted as a Compose secret"
+            );
+        }
+    }
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
-            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("kagami-compose-prepared-bundle".to_owned()),
@@ -3624,30 +3692,15 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some("/config/runtime/rans_seed0.toml")
         );
-        assert_eq!(
-            table_at("torii")
-                .get("account_onboarding")
-                .and_then(toml::Value::as_table)
-                .and_then(|onboarding| onboarding.get("private_key_file"))
-                .and_then(toml::Value::as_str),
-            Some("/run/secrets/iroha_peer0_onboarding_private_key")
-        );
-        assert!(
-            output.contains("target: /run/secrets/iroha_peer0_onboarding_private_key"),
-            "prepared onboarding signer must be mounted as a Compose secret"
-        );
-        assert_eq!(
-            table_at("torii")
-                .get("faucet")
-                .and_then(toml::Value::as_table)
-                .and_then(|faucet| faucet.get("private_key_file"))
-                .and_then(toml::Value::as_str),
-            Some("/run/secrets/iroha_peer0_faucet_private_key")
-        );
-        assert!(
-            output.contains("target: /run/secrets/iroha_peer0_faucet_private_key"),
-            "prepared faucet signer must be mounted as a Compose secret"
-        );
+        // Developer bundles carry no faucet or onboarding signer, so none is mounted.
+        for absent in ["account_onboarding", "faucet"] {
+            assert!(
+                !table_at("torii").contains_key(absent),
+                "developer bundle projects no torii.{absent}"
+            );
+        }
+        assert!(!output.contains("/run/secrets/iroha_peer0_onboarding_private_key"));
+        assert!(!output.contains("/run/secrets/iroha_peer0_faucet_private_key"));
         let original_peer0 =
             fs::read_to_string(config_dir.join("peer0.toml")).expect("read source peer0 config");
         let original_peer0 = original_peer0

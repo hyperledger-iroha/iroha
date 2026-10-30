@@ -246,7 +246,7 @@ impl ManagedStore {
     pub fn up_private_root(
         &self,
         request: &LocalnetRequest,
-        spec: &crate::localnet::PrivateRootSpec,
+        spec: &crate::sora_network::PrivateRootSpec,
     ) -> Result<ManagedStatus> {
         self.up_private_root_bound(request, spec, |_| Ok(()))
     }
@@ -254,7 +254,7 @@ impl ManagedStore {
     pub(super) fn up_private_root_bound(
         &self,
         request: &LocalnetRequest,
-        spec: &crate::localnet::PrivateRootSpec,
+        spec: &crate::sora_network::PrivateRootSpec,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
         spec.validate()
@@ -274,7 +274,7 @@ impl ManagedStore {
     pub(super) fn up_private_root_with_amx_bound(
         &self,
         request: &LocalnetRequest,
-        spec: &crate::localnet::PrivateRootSpec,
+        spec: &crate::sora_network::PrivateRootSpec,
         selection: &crate::bootstrap::AmxSourceSelection<'_>,
         retain_context: impl FnOnce(&PreparedLocalnet) -> Result<()>,
     ) -> Result<ManagedStatus> {
@@ -1055,7 +1055,7 @@ pub(super) fn validate_prepared(
             prepared.context.client_config.parent().ok_or_else(|| {
                 Error::Invalid("private context has no generation directory".into())
             })?;
-        crate::localnet::verify_private_root(generation, prepared, spec)?;
+        crate::sora_network::verify_private_root(generation, prepared, spec)?;
     } else {
         crate::localnet::service_authorities::validate_retained(prepared)?;
     }

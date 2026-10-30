@@ -855,7 +855,8 @@ pub struct StartupArgs {
     ///
     /// The runtime-only secrets under `<data_dir>/secrets/` (runtime signer and beacon
     /// credential) are never opened; the key files the configuration names are read by
-    /// the parser after their custody checks.
+    /// the parser after their custody checks. As on a real start, a missing node-local
+    /// `SoraNet` transport or streaming identity is created first.
     #[arg(long)]
     pub check_config: bool,
     /// With `--check-config`, print this build's and configuration's compatibility values as one
@@ -5747,18 +5748,32 @@ fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Conc
         );
     }
 }
-/// Check the custody of the `<data_dir>/secrets/` key files the configuration parser may read
-/// ([`node_secrets::verify_config_key_custody`]).
+/// Create the missing node-local identities, then check the custody of the `<data_dir>/secrets/`
+/// key files the configuration parser may read ([`node_secrets::create_local_identities`],
+/// [`node_secrets::verify_config_key_custody`]). Each created identity is reported on stderr: the
+/// logger starts only after the configuration is read, and stdout carries check results.
 #[cfg(feature = "daemon")]
-fn verify_config_key_custody(data_dir: &Path) -> Result<(), String> {
-    node_secrets::verify_config_key_custody(&iroha_config::parameters::actual::DataDir::new(
-        data_dir.to_path_buf(),
-    ))
-    .map_err(|error| error.to_string())
+fn prepare_config_key_files(
+    data_dir: &Path,
+    local_identities: &[iroha_config::parameters::actual::NodeSecretFile],
+) -> Result<(), String> {
+    let data_dir = iroha_config::parameters::actual::DataDir::new(data_dir.to_path_buf());
+    let created = node_secrets::create_local_identities(&data_dir, local_identities)
+        .map_err(|error| error.to_string())?;
+    for (file, public_key) in created {
+        eprintln!(
+            "iroha3d: created node-local identity {} ({public_key})",
+            data_dir.secret(file).display()
+        );
+    }
+    node_secrets::verify_config_key_custody(&data_dir).map_err(|error| error.to_string())
 }
 /// Non-daemon builds have no fixed-secret runtime provider.
 #[cfg(not(feature = "daemon"))]
-fn verify_config_key_custody(_data_dir: &Path) -> Result<(), String> {
+fn prepare_config_key_files(
+    _data_dir: &Path,
+    _local_identities: &[iroha_config::parameters::actual::NodeSecretFile],
+) -> Result<(), String> {
     Ok(())
 }
 /// Sora Nexus features that a flat configuration may enable only together with `--sora`.
@@ -5857,10 +5872,15 @@ fn read_config_and_genesis_with_filesystem_space(
         let node = open_node_config(file, NodeConfigOptions { sora: args.sora })
             .change_context(ConfigError::ReadConfig)?;
         let data_dir = node.data_dir().map(Path::to_path_buf);
+        let local_identities = node.local_identities().to_vec();
         let (reader, binding) = node.into_parts();
         // The parser reads the key files the configuration names under `<data_dir>/secrets/`;
-        // they pass the runtime-secret custody checks first.
-        if let Some(Err(error)) = data_dir.as_deref().map(verify_config_key_custody) {
+        // a missing node-local identity is created and every file passes the runtime-secret
+        // custody checks first.
+        if let Some(Err(error)) = data_dir
+            .as_deref()
+            .map(|data_dir| prepare_config_key_files(data_dir, &local_identities))
+        {
             // Defuse the prepared reader's drop guard; the custody error replaces its report.
             let _ = reader.into_result();
             return Err(Report::new(ConfigError::ReadConfig).attach(error));
@@ -6197,23 +6217,12 @@ fn derive_runtime_nexus_storage_budget(
                     filesystem.filesystem_id
                 ))
             })?;
+        // The derived budget must be non-zero and hold what the node already stores.
         let budget_bytes = usable_bytes
             .checked_sub(reserve_bytes)
             .and_then(NonZeroU64::new)
-            .ok_or_else(|| {
-                Report::new(ConfigError::ParseConfig).attach(format!(
-                    "filesystem `{}` has no safe non-zero Nexus storage budget after reserving {reserve_bytes} bytes of headroom; configure nexus.storage.local_budget_bytes explicitly only after freeing space",
-                    filesystem.filesystem_id
-                ))
-            })?;
-        if budget_bytes.get() < filesystem.managed_bytes {
-            return Err(Report::new(ConfigError::ParseConfig).attach(format!(
-                "filesystem `{}` derived budget {} is below the {} managed bytes after reserving {reserve_bytes} bytes of headroom; free space before startup or configure nexus.storage.local_budget_bytes deliberately",
-                filesystem.filesystem_id,
-                budget_bytes.get(),
-                filesystem.managed_bytes
-            )));
-        }
+            .filter(|budget| budget.get() >= filesystem.managed_bytes)
+            .ok_or_else(|| insufficient_storage_headroom(filesystem, reserve_bytes))?;
         filesystem_budgets.push(NexusStorageFilesystemBudget {
             budget_bytes,
             components: filesystem.components.clone(),
@@ -6224,6 +6233,61 @@ fn derive_runtime_nexus_storage_budget(
             .attach("runtime Nexus storage derivation produced no filesystem budget groups"));
     }
     Ok(filesystem_budgets)
+}
+/// The startup error of a filesystem with too little free space for the budget an unset
+/// `nexus.storage.local_budget_bytes` derives: the rule, the numbers, how much space is missing
+/// and both remedies.
+fn insufficient_storage_headroom(
+    filesystem: &StorageBudgetFilesystemProbe,
+    reserve_bytes: u64,
+) -> Report<ConfigError> {
+    let headroom_bps =
+        iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_BPS;
+    // budget = managed + available - reserve must be non-zero and at least the managed bytes.
+    let required_available = reserve_bytes.saturating_add(u64::from(filesystem.managed_bytes == 0));
+    let shortfall = required_available.saturating_sub(filesystem.available_bytes);
+    Report::new(ConfigError::ParseConfig).attach(format!(
+        "not enough free disk space for Nexus storage at `{path}` ({components}): \
+         `nexus.storage.local_budget_bytes` is unset, so the node keeps {percent} of the \
+         filesystem free ({reserve} of {total}) and budgets the rest of the free space plus the \
+         {managed} it already stores, but only {available} is free. Free at least {missing} on \
+         that filesystem, or set `nexus.storage.local_budget_bytes` to the bytes this node may \
+         store",
+        path = filesystem.path.display(),
+        components = nexus_storage_component_labels(&filesystem.components).join(", "),
+        percent = basis_points_percent(headroom_bps),
+        reserve = byte_quantity(reserve_bytes),
+        total = byte_quantity(filesystem.total_bytes),
+        managed = byte_quantity(filesystem.managed_bytes),
+        available = byte_quantity(filesystem.available_bytes),
+        missing = byte_quantity(shortfall),
+    ))
+}
+/// Basis points as a percentage, for operator messages.
+fn basis_points_percent(bps: u16) -> String {
+    if bps % 100 == 0 {
+        format!("{}%", bps / 100)
+    } else {
+        format!("{}.{:02}%", bps / 100, bps % 100)
+    }
+}
+/// A byte count with its binary-prefixed size (one decimal, rounded down), for operator messages.
+fn byte_quantity(bytes: u64) -> String {
+    const UNITS: [(&str, u32); 4] = [("TiB", 40), ("GiB", 30), ("MiB", 20), ("KiB", 10)];
+    UNITS
+        .iter()
+        .find(|(_, shift)| bytes >> shift > 0)
+        .map_or_else(
+            || format!("{bytes} bytes"),
+            |(unit, shift)| {
+                let scale = 1_u64 << shift;
+                format!(
+                    "{bytes} bytes ({}.{} {unit})",
+                    bytes / scale,
+                    bytes % scale * 10 / scale
+                )
+            },
+        )
 }
 fn warn_if_nexus_storage_budget_exceeds_available(
     config: &Config,
@@ -12310,8 +12374,6 @@ mod tests {
                 World::new(),
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
-                #[cfg(feature = "telemetry")]
-                StateTelemetry::default(),
             );
             assert!(
                 state
@@ -12637,10 +12699,42 @@ mod tests {
             let error = derive_runtime_nexus_storage_budget(&[probe])
                 .expect_err("auto derivation must not activate a cap below managed usage");
             let diagnostic = format!("{error:?}");
+            for expected in [
+                "not enough free disk space for Nexus storage at `/tmp/nexus-storage` (kura)",
+                "`nexus.storage.local_budget_bytes` is unset",
+                "keeps 20% of the filesystem free (200 bytes of 1000 bytes)",
+                "plus the 150 bytes it already stores, but only 100 bytes is free",
+                // The budget must hold the managed bytes: 150 + available - 200 >= 150.
+                "Free at least 100 bytes on that filesystem",
+                "or set `nexus.storage.local_budget_bytes`",
+            ] {
+                assert!(diagnostic.contains(expected), "{expected}: {diagnostic}");
+            }
+        }
+        #[test]
+        fn runtime_budget_error_names_the_missing_space_in_binary_units() {
+            const GIB: u64 = 1 << 30;
+            // A 100 GiB disk with 12.5 GiB free and nothing stored yet: 20 GiB stays free.
+            let probe = storage_budget_probe(100 * GIB, 12 * GIB + GIB / 2, 0);
+            let diagnostic = format!(
+                "{:?}",
+                derive_runtime_nexus_storage_budget(&[probe]).expect_err("below the headroom")
+            );
             assert!(
-                diagnostic.contains("below the 150 managed bytes"),
+                diagnostic
+                    .contains("(21474836480 bytes (20.0 GiB) of 107374182400 bytes (100.0 GiB))"),
                 "{diagnostic}"
             );
+            assert!(
+                diagnostic.contains("Free at least 8053063681 bytes (7.5 GiB)"),
+                "{diagnostic}"
+            );
+            assert_eq!(byte_quantity(0), "0 bytes");
+            assert_eq!(byte_quantity(1_023), "1023 bytes");
+            assert_eq!(byte_quantity(1_536), "1536 bytes (1.5 KiB)");
+            assert_eq!(byte_quantity(1 << 40), "1099511627776 bytes (1.0 TiB)");
+            assert_eq!(basis_points_percent(2_000), "20%");
+            assert_eq!(basis_points_percent(2_050), "20.50%");
         }
         #[cfg(unix)]
         include!("main/runtime_budget_and_config_tests.rs");

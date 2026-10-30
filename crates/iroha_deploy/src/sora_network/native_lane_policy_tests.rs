@@ -19,16 +19,13 @@ const TAIRA_BPNG_DATASPACE_ID: u64 = 8_648_377_547_929_788_715;
 
 fn generate(
     seed: &str,
-    sora_profile: Option<SoraProfile>,
-    consensus_mode: SumeragiConsensusMode,
+    sora_profile: SoraProfile,
     chain: Option<&str>,
-) -> crate::localnet::localnet_test_helpers::PrivateTempDir {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+) -> crate::sora_network::localnet_test_helpers::PrivateTempDir {
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("temporary localnet directory");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
+    let opts = NetworkOptions {
         sora_profile,
-        perf_profile: None,
         peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),
         seed: Some(seed.to_owned()),
         bind_host: "127.0.0.1".to_owned(),
@@ -36,21 +33,17 @@ fn generate(
         base_api_port: 18_880,
         base_p2p_port: 18_970,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode,
     };
-    generate_localnet_with_chain(&opts, &mut BufWriter::new(Vec::new()), chain, None)
+    generate_network_with_chain(&opts, &mut BufWriter::new(Vec::new()), chain, None)
         .expect("generate localnet");
     temp
 }
 
-fn taira() -> crate::localnet::localnet_test_helpers::PrivateTempDir {
+fn taira() -> crate::sora_network::localnet_test_helpers::PrivateTempDir {
     generate(
         "taira-native-lane-policy",
-        Some(SoraProfile::Nexus),
-        SumeragiConsensusMode::Npos,
+        SoraProfile::Nexus,
         Some(PUBLIC_TAIRA_CHAIN_ID),
     )
 }
@@ -248,17 +241,4 @@ fn generated_taira_genesis_admits_the_public_bpng_dataspace() {
         verify_genesis_dataspace_v1(&genesis, &context, &selector).expect("BPNG dataspace");
     assert_eq!(authority.dataspace_id(), dataspace);
     assert_eq!(authority.lane_id(), LaneId::new(5));
-}
-
-#[test]
-fn single_lane_localnet_genesis_has_no_lane_policy() {
-    let temp = generate(
-        "single-lane-no-native-lane-policy",
-        None,
-        SumeragiConsensusMode::Permissioned,
-        None,
-    );
-    let manifest =
-        RawGenesisTransaction::from_path(temp.path().join("genesis.json")).expect("bound genesis");
-    assert!(lane_policy(&manifest).is_none());
 }

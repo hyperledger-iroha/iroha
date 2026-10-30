@@ -26,7 +26,7 @@ impl GeneratedAuthorities {
             .ok_or_else(|| eyre!("generated provider peer is absent"))?;
         let selected = policy();
         ensure!(
-            storage == super::super::LocalnetPeerStoragePaths::new(generation, peer_index).sorafs
+            storage == super::super::config::sorafs_storage_dir(generation, peer_index)
                 && original.provider.attestation_policy_digest() == selected.digest()?,
             "generated native attestation storage or original policy differs"
         );

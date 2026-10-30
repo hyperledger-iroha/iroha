@@ -30,6 +30,7 @@ mod schema;
 use iroha_deploy::secret_toml;
 mod secure_fs;
 use iroha_deploy::shell;
+mod sora_network;
 mod swarm;
 mod tui;
 mod verify;
@@ -53,6 +54,7 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami context list\n",
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
+    "  kagami sora-network generate --profile nexus --out-dir ./nexus\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
@@ -141,6 +143,9 @@ enum Command {
     ManagedWorker(developer::WorkerArgs),
     /// Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
     Docker(swarm::Args),
+    /// Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
+    #[command(subcommand)]
+    SoraNetwork(sora_network::Command),
     /// Generate cryptographic key pairs and optional validator Proofs-of-Possession
     Keys(Box<crypto::Args>),
     /// Commands related to genesis
@@ -191,6 +196,7 @@ impl<T: Write> RunArgs<T> for Command {
             Package(args) => args.run(writer),
             ManagedWorker(args) => args.run(writer),
             Docker(args) => args.run(writer),
+            SoraNetwork(args) => args.run(writer),
             Keys(args) => args.run(writer),
             Genesis(args) => args.run(writer),
             PrivacyBootstrap(args) => args.run(writer),
@@ -439,6 +445,17 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn sora_network_bundles_are_separate_from_developer_localnets() {
+        const BEACON_LAUNCH: &str = "validate-beacon-launch --network-dir /run/network \
+             --peer-index 0 --beacon-config /run/beacon.toml --beacon-credential /run/beacon.cred";
+        assert!(parse("kagami sora-network generate --profile nexus --out-dir ./nexus").is_ok());
+        assert!(parse(&format!("kagami sora-network {BEACON_LAUNCH}")).is_ok());
+        assert!(
+            parse("kagami localnet generate --sora-profile nexus --out-dir ./localnet").is_err()
+        );
+        assert!(parse(&format!("kagami localnet {BEACON_LAUNCH}")).is_err());
     }
     #[test]
     fn removed_top_level_commands_fail() {

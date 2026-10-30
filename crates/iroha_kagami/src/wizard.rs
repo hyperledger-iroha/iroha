@@ -226,7 +226,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         defaults.observer_public_host.to_string(),
         args.non_interactive,
     )?;
-    let p2p_host = iroha_deploy::localnet::canonical_host(&p2p_host, "p2p host")?;
+    let p2p_host = iroha_deploy::host::canonical_host(&p2p_host, "p2p host")?;
     let p2p_port = resolve_number(
         "P2P port",
         args.p2p_port,
@@ -971,7 +971,7 @@ fn rewrite_address_port(template: &str, port: u16) -> Result<String> {
 }
 /// Render a host and port as a checksummed canonical socket-address literal.
 fn addr_literal(host: &str, port: u16) -> Result<String> {
-    iroha_deploy::localnet::canonical_endpoint_literal(host, "address host", port)
+    iroha_deploy::host::canonical_endpoint_literal(host, "address host", port)
 }
 /// Parse either a plain socket address or an existing canonical literal and render it canonically.
 fn canonical_addr_literal(raw: &str) -> Result<String> {
@@ -1003,7 +1003,7 @@ fn validated_addr_literal(address: &SocketAddr, host_field: &str) -> Result<Stri
         return Err(eyre!("socket address port must be greater than zero"));
     }
     if let SocketAddr::Host(host) = address {
-        return iroha_deploy::localnet::canonical_endpoint_literal(
+        return iroha_deploy::host::canonical_endpoint_literal(
             host.host.as_ref(),
             host_field,
             host.port,

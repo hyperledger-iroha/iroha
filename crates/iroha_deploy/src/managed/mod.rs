@@ -466,7 +466,7 @@ struct RetainedLocalnet {
 enum RootKind {
     Global,
     Private {
-        spec: crate::localnet::PrivateRootSpec,
+        spec: crate::sora_network::PrivateRootSpec,
     },
 }
 

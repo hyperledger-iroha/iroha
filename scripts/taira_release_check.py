@@ -1371,16 +1371,16 @@ HARNESS_TARGETS = {
 
 DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", (
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
-    "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
-    "localnet::tests::localnet_assets_contain_only_explicit_requests",
-    "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
-    "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
-    "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
-    "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-    "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-    "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
-    "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
-    "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
+    "sora_network::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+    "sora_network::tests::localnet_assets_contain_only_explicit_requests",
+    "sora_network::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
+    "sora_network::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+    "sora_network::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+    "sora_network::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+    "sora_network::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
+    "sora_network::tests::generated_localnet_bootstraps_explicitly_requested_asset",
+    "sora_network::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
+    "sora_network::tests::private_dataspace_manifests_use_the_selected_lane_alias",
 )), )
 
 KAGAMI_STAGES = (("native Kagami bootstrap signing and key custody", (

@@ -64,7 +64,7 @@ fn private_call_cap_uses_native_child_currency_and_never_parent_fee_asset() {
     let spec = crate::managed::tests::private_spec();
     let ports = LocalnetPorts::reserve().unwrap();
     let prepared =
-        crate::localnet::prepare_private_root("private", bundle.path(), &ports, &spec).unwrap();
+        crate::sora_network::prepare_private_root("private", bundle.path(), &ports, &spec).unwrap();
     let pin = store::pin_binary(&std::env::current_exe().unwrap()).unwrap();
     let retained = RetainedLocalnet {
         root_kind: RootKind::Private { spec: spec.clone() },
@@ -92,11 +92,11 @@ fn private_call_cap_uses_native_child_currency_and_never_parent_fee_asset() {
     );
     assert_eq!(
         target.fee_asset().unwrap(),
-        crate::localnet::private_fee_asset(&spec).unwrap()
+        crate::sora_network::private_fee_asset(&spec).unwrap()
     );
     assert_ne!(
         target.fee_asset().unwrap(),
-        crate::localnet::localnet_xor_asset_definition_id()
+        crate::sora_network::localnet_xor_asset_definition_id()
     );
 }
 

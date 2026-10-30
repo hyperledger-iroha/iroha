@@ -1543,10 +1543,17 @@ fn validate_genesis_on_current_thread(
                                 ExecutionOutputV1::Network(row) => {
                                     format!("tx#{}", row.input_index)
                                 }
-                                ExecutionOutputV1::Pipeline(_) => {
+                                ExecutionOutputV1::NetworkWithLifecycle(row) => {
+                                    format!("tx#{}", row.execution.input_index)
+                                }
+                                ExecutionOutputV1::Pipeline(_)
+                                | ExecutionOutputV1::PipelineWithLifecycle(_) => {
                                     format!("pipeline output#{index}")
                                 }
-                                ExecutionOutputV1::Time(_) => format!("time output#{index}"),
+                                ExecutionOutputV1::Time(_)
+                                | ExecutionOutputV1::TimeWithLifecycle(_) => {
+                                    format!("time output#{index}")
+                                }
                             };
                             Some(format!("{source}: {error}; details: {error:?}"))
                         })

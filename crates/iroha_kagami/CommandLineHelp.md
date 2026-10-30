@@ -13,7 +13,6 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet down`↴](#kagami-localnet-down)
 * [`kagami localnet reset`↴](#kagami-localnet-reset)
 * [`kagami localnet generate`↴](#kagami-localnet-generate)
-* [`kagami localnet validate-beacon-launch`↴](#kagami-localnet-validate-beacon-launch)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
 * [`kagami dataspace register-amx`↴](#kagami-dataspace-register-amx)
@@ -31,6 +30,9 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami package`↴](#kagami-package)
 * [`kagami package publish`↴](#kagami-package-publish)
 * [`kagami docker`↴](#kagami-docker)
+* [`kagami sora-network`↴](#kagami-sora-network)
+* [`kagami sora-network generate`↴](#kagami-sora-network-generate)
+* [`kagami sora-network validate-beacon-launch`↴](#kagami-sora-network-validate-beacon-launch)
 * [`kagami keys`↴](#kagami-keys)
 * [`kagami genesis`↴](#kagami-genesis)
 * [`kagami genesis sign`↴](#kagami-genesis-sign)
@@ -77,6 +79,7 @@ Common tasks:
   kagami context list
   kagami wizard
   kagami localnet generate --out-dir ./localnet
+  kagami sora-network generate --profile nexus --out-dir ./nexus
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
@@ -92,6 +95,7 @@ Common tasks:
 * `contract` — Build and deploy native IVM contracts in one invocation
 * `package` — Publish native Musubi packages through an exact generated local environment
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
+* `sora-network` — Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `genesis` — Commands related to genesis
 * `privacy-bootstrap` — Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
@@ -147,8 +151,7 @@ Start and manage a persistent localnet without supplying configuration
 * `logs` — Read a bounded retained supervisor or validator log tail
 * `down` — Stop the owned validators, preserving their identities and ledger
 * `reset` — Explicitly retire one stopped generation so the next up creates a fresh ledger
-* `generate` — Generate an operator-owned network bundle without starting validators
-* `validate-beacon-launch` — Validate an isolated native beacon configuration and opaque descriptor handoff
+* `generate` — Generate a developer network bundle without starting validators
 
 
 
@@ -260,7 +263,7 @@ Explicitly retire one stopped generation so the next up creates a fresh ledger
 
 ## `kagami localnet generate`
 
-Generate an operator-owned network bundle without starting validators
+Generate a developer network bundle without starting validators
 
 **Usage:** `kagami localnet generate [OPTIONS] --out-dir <DIR>`
 
@@ -272,24 +275,10 @@ Generate an operator-owned network bundle without starting validators
 * `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic development keys.
 
    Omit this option to generate independent keys from operating-system entropy.
-* `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
+* `--chain-id <CHAIN_ID>` — Canonical developer chain identifier written into genesis, peer configs, and the client config. Public chain identities are rejected
 
   Default value: `00000000-0000-0000-0000-000000000000`
-* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs. Public chain identities retain their fixed prefix
-* `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
-
-  Possible values: `dataspace`, `nexus`
-
-* `--private-dataspace <DATASPACE>` — Select an exact restricted dataspace preset for the `dataspace` Sora profile
-
-  Possible values:
-  - `sbp`:
-    State Bank of Pakistan dataspace (id 10, lane 3)
-  - `cbuae`:
-    Central Bank of the UAE dataspace (id 12, lane 4)
-  - `bpng`:
-    Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5)
-
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs
 * `--perf-profile <PROFILE>` — Apply a localnet performance profile (10k TPS / 1s finality presets)
 
   Possible values: `10k-permissioned`, `10k-npos`
@@ -315,25 +304,10 @@ Generate an operator-owned network bundle without starting validators
   Default value: `false`
 * `--asset-definition-id <ASSET_DEFINITION_ID>` — Register additional asset definition IDs owned by the generated client signer. Repeat the flag to register more than one asset definition. A localnet reserve is minted to the generated client signer for each requested asset definition
 * `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second localnet cadence
-* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned`. Sora profile localnets and perf profiles require `npos`
+* `--consensus-mode <MODE>` — Consensus mode to emit in genesis/configs. Defaults to `permissioned`; perf profiles select their own mode
 
   Possible values: `permissioned`, `npos`
 
-
-
-
-## `kagami localnet validate-beacon-launch`
-
-Validate an isolated native beacon configuration and opaque descriptor handoff
-
-**Usage:** `kagami localnet validate-beacon-launch --network-dir <NETWORK_DIR> --peer-index <PEER_INDEX> --beacon-config <BEACON_CONFIG> --beacon-credential <BEACON_CREDENTIAL>`
-
-###### **Options:**
-
-* `--network-dir <NETWORK_DIR>` — Absolute directory containing the unchanged generated peer0..3 configurations
-* `--peer-index <PEER_INDEX>` — Zero-based generated peer index
-* `--beacon-config <BEACON_CONFIG>` — Separate native configuration in the private run's beacon/seat-N directory
-* `--beacon-credential <BEACON_CREDENTIAL>` — Owner-only native beacon credential beside the separate configuration
 
 
 
@@ -701,6 +675,87 @@ Generate validator-only Docker Compose from a prepared bundle or explicit dev se
    Note that the target path still needs to be provided, as it is used to resolve paths.
 * `-F`, `--force` — Overwrite the target file if it already exists
 * `--no-banner` — Do not include the banner with the generation notice in the file
+
+
+
+## `kagami sora-network`
+
+Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
+
+**Usage:** `kagami sora-network <COMMAND>`
+
+###### **Subcommands:**
+
+* `generate` — Generate a Sora network bundle without starting validators
+* `validate-beacon-launch` — Validate an isolated native beacon configuration and opaque descriptor handoff
+
+
+
+## `kagami sora-network generate`
+
+Generate a Sora network bundle without starting validators
+
+**Usage:** `kagami sora-network generate [OPTIONS] --profile <PROFILE> --out-dir <DIR>`
+
+###### **Options:**
+
+* `--profile <PROFILE>` — Sora network profile; `nexus` enforces public dataspace rules
+
+  Possible values:
+  - `dataspace`:
+    Dataspace-oriented defaults; `--private-dataspace` selects a restricted preset
+  - `nexus`:
+    Public dataspace rules (Nexus); the public Taira chain uses this profile
+
+* `--private-dataspace <DATASPACE>` — Select an exact restricted dataspace preset for the `dataspace` profile
+
+  Possible values:
+  - `sbp`:
+    State Bank of Pakistan dataspace (id 10, lane 3)
+  - `cbuae`:
+    Central Bank of the UAE dataspace (id 12, lane 4)
+  - `bpng`:
+    Bank of Papua New Guinea local dataspace (id 8648377547929788715, lane 5)
+
+* `-p`, `--peers <COUNT>` — Number of validators to generate (an exact `3f + 1` committee, minimum four)
+
+  Default value: `4`
+* `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic keys.
+
+   Omit this option to generate independent keys from operating-system entropy.
+* `--chain-id <CHAIN_ID>` — Canonical chain identifier written into genesis, peer configs, and the client config
+
+  Default value: `00000000-0000-0000-0000-000000000000`
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and client/peer configs. Public chain identities retain their fixed prefix
+* `--bind-host <HOST>` — Host to bind P2P and Torii listeners to (host/IP only, no port)
+
+  Default value: `0.0.0.0`
+* `--public-host <HOST>` — Host to advertise to peers and use for client Torii URL (host/IP only, no port)
+
+  Default value: `127.0.0.1`
+* `--base-api-port <BASE_API_PORT>` — Base Torii API port (per-peer increments by 1)
+
+  Default value: `8080`
+* `--base-p2p-port <BASE_P2P_PORT>` — Base P2P port (per-peer increments by 1)
+
+  Default value: `1337`
+* `-o`, `--out-dir <DIR>` — Output directory for configs/genesis/scripts
+* `--block-cadence-ms <MILLISECONDS>` — Override the immutable signed block cadence in milliseconds. Leave unset to use the one-second default cadence
+
+
+
+## `kagami sora-network validate-beacon-launch`
+
+Validate an isolated native beacon configuration and opaque descriptor handoff
+
+**Usage:** `kagami sora-network validate-beacon-launch --network-dir <NETWORK_DIR> --peer-index <PEER_INDEX> --beacon-config <BEACON_CONFIG> --beacon-credential <BEACON_CREDENTIAL>`
+
+###### **Options:**
+
+* `--network-dir <NETWORK_DIR>` — Absolute directory containing the unchanged generated peer0..3 configurations
+* `--peer-index <PEER_INDEX>` — Zero-based generated peer index
+* `--beacon-config <BEACON_CONFIG>` — Separate native configuration in the private run's beacon/seat-N directory
+* `--beacon-credential <BEACON_CREDENTIAL>` — Owner-only native beacon credential beside the separate configuration
 
 
 

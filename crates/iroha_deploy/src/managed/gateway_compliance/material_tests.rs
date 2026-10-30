@@ -506,12 +506,16 @@ fn retained_compliance_signers_refuse_profile_and_operation_custody_drift_withou
             .write_atomic("peer3.toml", &original, PublishMode::Replace)
             .unwrap();
         accept();
-        let runtime = generation.open_child("runtime").unwrap();
-        let key = runtime.read("onboarding-signer.key", 4096).unwrap();
-        std::fs::remove_file(runtime.path().join("onboarding-signer.key")).unwrap();
+        let tables = generation
+            .open_child("codec")
+            .and_then(|codec| codec.open_child("rans"))
+            .and_then(|rans| rans.open_child("tables"))
+            .unwrap();
+        let table = tables.read("rans_seed0.toml", 64 * 1024).unwrap();
+        std::fs::remove_file(tables.path().join("rans_seed0.toml")).unwrap();
         refuse();
-        runtime
-            .write_atomic("onboarding-signer.key", &key, PublishMode::CreateNew)
+        tables
+            .write_atomic("rans_seed0.toml", &table, PublishMode::CreateNew)
             .unwrap();
         accept();
         #[cfg(unix)]

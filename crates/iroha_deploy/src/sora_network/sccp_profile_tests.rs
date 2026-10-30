@@ -132,7 +132,7 @@ fn assert_sccp_localnet_profile(
 fn sccp_canonical_taira_resets_keep_native_stake_authority_and_fresh_consumed_nonces() {
     // This generator writes ephemeral signing keys. Use the same private, RAII-owned
     // external runtime directory as the other native Taira generator tests.
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir()
+    let temporary = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("private runtime outside the checkout");
     let history = temporary.path().join("sccp-reset-history");
     let _chain_discriminant = ChainDiscriminantGuard::enter(
@@ -143,7 +143,7 @@ fn sccp_canonical_taira_resets_keep_native_stake_authority_and_fresh_consumed_no
         let directory = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join(name))
             .expect("private reset output");
         let options = canonical_taira_options(directory.path(), "sccp-same-seed-reset");
-        generate_localnet_with_chain(
+        generate_network_with_chain(
             &options,
             &mut BufWriter::new(Vec::new()),
             Some(PUBLIC_TAIRA_CHAIN_ID),

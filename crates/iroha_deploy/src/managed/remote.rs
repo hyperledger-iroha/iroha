@@ -7,8 +7,8 @@ use crate::{
         AuthenticatedBootstrap, BootstrapError, BootstrapStore, InstalledNetworkProfile,
         discover_native_bootstrap,
     },
-    localnet::PrivateRootSpec,
     provisioning::{ProvisioningProgress, ProvisioningStage, RemoteProvisioning},
+    sora_network::PrivateRootSpec,
 };
 use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
 #[cfg(test)]

@@ -231,13 +231,13 @@ fn retained_root_kind_is_mandatory_and_private_identity_cannot_replace_global() 
     );
 }
 
-pub(super) fn private_spec() -> crate::localnet::PrivateRootSpec {
+pub(super) fn private_spec() -> crate::sora_network::PrivateRootSpec {
     use iroha_data_model::sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1};
     let alias = "privateapp";
     let name_hash = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias)
         .unwrap()
         .name_hash();
-    crate::localnet::PrivateRootSpec {
+    crate::sora_network::PrivateRootSpec {
         parent_network_id:
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
                 .parse()

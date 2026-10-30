@@ -132,9 +132,12 @@ pub mod data_dir {
     ];
     /// Validator BLS private key (`private_key_file`).
     pub const VALIDATOR_KEY: &str = "validator.key";
-    /// `SoraNet` transport Ed25519 private key (`soranet_transport_private_key_file`).
+    /// `SoraNet` transport Ed25519 private key (`soranet_transport_private_key_file`). A
+    /// node-local identity: `iroha3d` creates it when absent and not pinned
+    /// ([`crate::node_config::NodeConfigReader::local_identities`]).
     pub const TRANSPORT_KEY: &str = "transport.key";
-    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
+    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`). A
+    /// node-local identity like [`TRANSPORT_KEY`].
     pub const STREAMING_KEY: &str = "streaming.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";

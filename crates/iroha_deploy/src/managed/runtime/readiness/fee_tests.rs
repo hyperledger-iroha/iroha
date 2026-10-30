@@ -3,12 +3,13 @@
 
 use super::*;
 use crate::{
-    localnet::{LocalnetServiceProfile, PrivateRootSpec},
+    localnet::LocalnetServiceProfile,
     managed::{
         LocalnetPorts,
         native_operation::test_support::native_fixture::{NativeFixture, balance},
         service_authority::{NetworkPurpose, ServiceAuthority},
     },
+    sora_network::PrivateRootSpec,
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -65,7 +66,7 @@ fn all_generated_profiles_select_their_original_bounded_asset_without_services_o
         dataspace_alias: alias.into(),
     };
     let ports = LocalnetPorts::reserve().unwrap();
-    let prepared = crate::localnet::prepare_private_root(
+    let prepared = crate::sora_network::prepare_private_root(
         "readiness-private",
         &temporary.path().join("private"),
         &ports,
@@ -107,7 +108,7 @@ fn fee_policy_or_peer_identity_substitution_refuses_despite_unchanged_expected_h
         let original = root.read("peer3.toml", 1024 * 1024).unwrap();
         let selected = fees::select(&prepared, &client).unwrap();
         let original_text = std::str::from_utf8(&original).unwrap();
-        let original_config = crate::localnet::parse_localnet_peer_config(
+        let original_config = crate::sora_network::parse_localnet_peer_config(
             original_text,
             Some(&prepared.peers[3].config_path),
         )
@@ -193,7 +194,7 @@ fn fee_policy_or_peer_identity_substitution_refuses_despite_unchanged_expected_h
             );
         let altered = toml::to_string(&*table).unwrap();
         assert!(
-            crate::localnet::parse_localnet_peer_config(
+            crate::sora_network::parse_localnet_peer_config(
                 &altered,
                 Some(&prepared.peers[3].config_path)
             )

@@ -499,11 +499,10 @@ class TrustedInrouGuestArtifact:
 CLI_SURFACES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "kagami",
-        ("localnet", "generate"),
+        ("sora-network", "generate"),
         (
             "--out-dir",
-            "--sora-profile",
-            "--consensus-mode",
+            "--profile",
             "--peers",
             "--bind-host",
             "--public-host",
@@ -2608,14 +2607,12 @@ def generate_network(
     run(
         [
             str(kagami),
-            "localnet",
+            "sora-network",
             "generate",
             "--out-dir",
             str(target),
-            "--sora-profile",
+            "--profile",
             "nexus",
-            "--consensus-mode",
-            "npos",
             "--peers",
             str(PEER_COUNT),
             "--bind-host",

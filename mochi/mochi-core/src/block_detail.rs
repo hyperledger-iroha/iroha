@@ -296,20 +296,34 @@ impl BlockDetail {
             .execution_outputs()
             .iter()
             .enumerate()
-            .filter_map(|(output_index, output)| match output {
-                ExecutionOutputV1::Network(_) => None,
-                ExecutionOutputV1::Pipeline(row) => Some(InvocationRow {
+            .filter_map(|(output_index, output)| {
+                let (kind, trigger, result) = match output {
+                    ExecutionOutputV1::Network(_) | ExecutionOutputV1::NetworkWithLifecycle(_) => {
+                        return None;
+                    }
+                    ExecutionOutputV1::Pipeline(row) => {
+                        ("Pipeline trigger", &row.invocation.trigger, &row.result)
+                    }
+                    ExecutionOutputV1::PipelineWithLifecycle(row) => (
+                        "Pipeline trigger",
+                        &row.execution.invocation.trigger,
+                        &row.execution.result,
+                    ),
+                    ExecutionOutputV1::Time(row) => {
+                        ("Time trigger", &row.invocation.trigger, &row.result)
+                    }
+                    ExecutionOutputV1::TimeWithLifecycle(row) => (
+                        "Time trigger",
+                        &row.execution.invocation.trigger,
+                        &row.execution.result,
+                    ),
+                };
+                Some(InvocationRow {
                     output_index,
-                    kind: "Pipeline trigger",
-                    trigger: row.invocation.trigger.trigger_id.to_string(),
-                    outcome: Outcome::of(&row.result),
-                }),
-                ExecutionOutputV1::Time(row) => Some(InvocationRow {
-                    output_index,
-                    kind: "Time trigger",
-                    trigger: row.invocation.trigger.trigger_id.to_string(),
-                    outcome: Outcome::of(&row.result),
-                }),
+                    kind,
+                    trigger: trigger.trigger_id.to_string(),
+                    outcome: Outcome::of(result),
+                })
             })
             .collect();
         Self {

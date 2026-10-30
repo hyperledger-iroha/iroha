@@ -5243,7 +5243,7 @@ def test_native_carrier_metadata_mutation_has_actual_state_reader_controls():
 
 def test_deploy_completed_genesis_metadata_mutation_has_original_profile_owner():
     mid = "DEP7"
-    selector = "localnet::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"
+    selector = "sora_network::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"
     rule = gate.index_mutations(gate.DEPLOY_MUTATIONS)[mid]
     assert rule.tests == (selector,) and not rule.scenarios
     assert gate.has_switch(mid, deploy=True)
@@ -5260,7 +5260,7 @@ def test_deploy_completed_genesis_metadata_mutation_has_original_profile_owner()
     assert 'let values = IDS' in build
     row = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
     assert len(row) == 1 and selector in row[0]
-    native = (source / "src/localnet/private_root.rs").read_text()
+    native = (source / "src/sora_network/private_root.rs").read_text()
     assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
 
 
