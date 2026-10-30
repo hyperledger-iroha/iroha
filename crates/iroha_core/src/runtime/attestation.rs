@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::{Hash, KeyPair, PublicKey};
 use iroha_data_model::runtime::{
-    definition::{DefinitionId, RootSelectionV1, SelectionId},
+    definition::{
+        DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1, SelectionId,
+    },
     lifecycle::{
         ChangeSetId, ChangeSetRecordV1, ChangeSetStatusV1, LifecycleSignatureError,
         SignedSupportAttestationV1, SupportAttestationV1, committee_digest,
@@ -96,6 +98,47 @@ pub enum ReleaseSupport {
     Supported,
     /// The first definition the selection relies on that the release lacks.
     Missing(DefinitionId),
+}
+
+/// The host profiles `selection` activates, in identity order: what a peer must implement to
+/// serve the root (§6, "Handshake").
+#[must_use]
+pub fn active_host_profiles(
+    selection: &RootSelectionV1,
+    lookup: &impl DefinitionLookup,
+) -> Vec<DefinitionId> {
+    selection
+        .active
+        .iter()
+        .copied()
+        .filter(|id| {
+            matches!(
+                lookup.definition(id),
+                Some(DefinitionDescriptorV1::HostProfile(_))
+            )
+        })
+        .collect()
+}
+
+/// The host profiles the committed selection of `world` activates (§6, "Handshake").
+#[must_use]
+pub fn committed_host_profiles(world: &impl WorldReadOnly) -> Vec<DefinitionId> {
+    active_host_profiles(
+        world.runtime_selection(),
+        &PublishedDefinitions(world.runtime_definitions()),
+    )
+}
+
+/// The host profiles `catalog` implements, in identity order: what this release advertises in
+/// the handshake.
+#[must_use]
+pub fn release_host_profiles(catalog: &ReleaseCatalog) -> Vec<DefinitionId> {
+    catalog
+        .definitions
+        .iter()
+        .filter(|(_, descriptor)| matches!(descriptor, DefinitionDescriptorV1::HostProfile(_)))
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 /// Whether `catalog` executes `selection`.

@@ -132,6 +132,16 @@ The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tool
   drafted `AttestRuntimeSupportV1`; the operator never handles the validator key.
 - `iroha runtime release` shows the node's release support.
 
+## Handshake
+
+Each peer's handshake advertises the host profiles its release implements
+(`ConsensusConfigCaps::host_profiles`, an `iroha_p2p::HostProfileSet` of at most eight sorted
+identities). A node refuses a peer whose set is not canonical or lacks a host profile the committed
+selection activates (`ConsensusHandshakeCaps::required_host_profiles`); extra, dormant profiles never
+block a connection. `irohad` seeds the requirement from the committed selection at startup and
+refreshes it after every `RuntimeUpgradeEvent::Activated`. The compatibility probe reports
+`host_profiles` instead of the former compiled gas-schedule hash.
+
 ## Telemetry
 
 `runtime_abi_version` and `runtime_upgrade_events_total{kind=scheduled|canceled|attested|contained}`.

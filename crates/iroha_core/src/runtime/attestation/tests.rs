@@ -6,7 +6,6 @@ use iroha_data_model::{
         lifecycle::{ChangeSetV1, RuntimeNoticeV1},
     },
 };
-use mv::storage::StorageReadOnly as _;
 
 use super::*;
 use crate::runtime::change_set::{check_attestation, test_support};
@@ -203,4 +202,32 @@ fn the_release_digest_binds_the_build_and_every_implemented_definition() {
         .expect("an implementation");
     fewer.definitions.remove(&dropped);
     assert_ne!(release_digest(&build, &fewer), Ok(digest));
+}
+
+#[test]
+fn the_baseline_activates_the_host_profiles_the_release_implements() {
+    let catalog = release_catalog().expect("catalog");
+    let implemented = release_host_profiles(catalog);
+    assert!(
+        !implemented.is_empty(),
+        "the release implements the baseline host profile"
+    );
+    assert!(implemented.iter().all(|id| matches!(
+        catalog.definitions[id],
+        DefinitionDescriptorV1::HostProfile(_)
+    )));
+    assert_eq!(
+        active_host_profiles(&catalog.baseline, &catalog.definitions),
+        implemented
+    );
+    let state = crate::state::State::new_for_testing(
+        crate::state::World::default(),
+        crate::kura::Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    assert_eq!(
+        committed_host_profiles(&state.world_view()),
+        implemented,
+        "a World founded on the baseline requires exactly its host profiles"
+    );
 }

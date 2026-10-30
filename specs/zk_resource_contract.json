@@ -15583,6 +15583,16 @@
         }
       },
       {
+        "path": "crates/iroha_p2p/src/lib.rs",
+        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md \u00a76, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
+        "symbols": [
+          "MAX_HANDSHAKE_HOST_PROFILES"
+        ],
+        "exprs": {
+          "MAX_HANDSHAKE_HOST_PROFILES": "8"
+        }
+      },
+      {
         "reason": "Local scheduling of one P2P connection and of the network actor: burst sizes per traffic class, drain budgets, buffer and pool capacities, credit-offer and record-header ceilings of the receive-credit protocol, channel capacities, backoff and the trait flag HAS_INBOUND_DECODE_LIMITS. They order and pace delivery. The frame a peer may send is bounded by the transport.* frame bounds; none of these drops a frame the frame bounds admit.",
         "files": [
           {

@@ -2855,11 +2855,19 @@ impl Iroha {
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             .into(),
         };
+        // The handshake requires what the committed selection activates; the listener below
+        // replaces the requirement whenever a change set activates.
+        let required_host_profiles = iroha_p2p::RequiredHostProfiles::leak(
+            committed_host_profiles(&state).map_err(|error| {
+                Report::new(StartError::StartP2p).attach(error.to_string())
+            })?,
+        );
         let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
             mode: signed_consensus_mode,
             proto_version: u32::from(iroha_core::sumeragi::node::PROTOCOL_VERSION),
             consensus_fingerprint: consensus_fingerprint.0,
             config: config_caps,
+            required_host_profiles: Some(required_host_profiles),
         };
         // The handshake identifies the release, not the chain's committed ZK
         // policy: a policy an authorized `SetParameter` commits is State, and
@@ -3169,6 +3177,11 @@ impl Iroha {
             start_telemetry(&logger, &config, &telemetry, &mut supervisor).await;
             log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
         }
+        supervisor.monitor(tokio::spawn(run_required_host_profiles_listener(
+            Arc::clone(&state),
+            required_host_profiles,
+            events_sender.subscribe(),
+        )));
         let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
@@ -8926,8 +8939,63 @@ fn build_consensus_config_caps(
         native_config_fingerprint: [0; 32],
         execution_policy_hash: [0; 32],
         nexus_policy_digest,
-        ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
+        host_profiles: release_host_profiles()?,
     })
+}
+/// The host profiles this release implements, advertised in the handshake.
+fn release_host_profiles() -> ReportResult<iroha_p2p::HostProfileSet, StartError> {
+    let catalog = iroha_core::runtime::release_catalog().map_err(|error| {
+        Report::new(StartError::StartP2p).attach(format!("release catalog: {error}"))
+    })?;
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::release_host_profiles(catalog)
+            .into_iter()
+            .map(|id| id.0),
+    )
+    .map_err(|error| Report::new(StartError::StartP2p).attach(error.to_string()))
+}
+/// The host profiles the committed selection of `state` activates.
+fn committed_host_profiles(
+    state: &State,
+) -> Result<iroha_p2p::HostProfileSet, iroha_p2p::HostProfileSetOverflow> {
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::committed_host_profiles(&state.world_view())
+            .into_iter()
+            .map(|id| id.0),
+    )
+}
+/// Keep the handshake's required host profiles equal to those the committed selection activates
+/// (`specs/live_runtime_upgrades.md` §6, "Handshake"): they change only when a change set
+/// activates, so the listener recomputes them on each activation and after a lag.
+async fn run_required_host_profiles_listener(
+    state: Arc<State>,
+    required: &'static iroha_p2p::RequiredHostProfiles,
+    mut events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
+) {
+    use iroha_data_model::events::{
+        EventBox,
+        data::{DataEvent, runtime_upgrade::RuntimeUpgradeEvent},
+    };
+    loop {
+        let refresh = match events.recv().await {
+            Ok(EventBox::Data(event)) => matches!(
+                event.as_ref(),
+                DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Activated(_))
+            ),
+            Ok(_) => false,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        if refresh {
+            match committed_host_profiles(&state) {
+                Ok(profiles) => required.set(profiles),
+                Err(error) => iroha_logger::error!(
+                    %error,
+                    "the committed selection activates more host profiles than a handshake carries"
+                ),
+            }
+        }
+    }
 }
 /// Bind handshake monetary identity to the authenticated original signed genesis.
 ///
@@ -9042,6 +9110,7 @@ fn consensus_caps_from_genesis(
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
+            required_host_profiles: None,
         },
         consensus_params.block_cadence_ms.get(),
         maximum_validator_roster_len,
@@ -12221,8 +12290,12 @@ mod tests {
             assert_eq!(caps.native_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
             assert_eq!(
-                caps.ivm_gas_schedule_hash,
-                <[u8; 32]>::from(ivm::gas::schedule_hash())
+                caps.host_profiles,
+                release_host_profiles().expect("release host profiles"),
+            );
+            assert!(
+                !caps.host_profiles.as_slice().is_empty(),
+                "the release implements the baseline host profile"
             );
         }
         #[test]

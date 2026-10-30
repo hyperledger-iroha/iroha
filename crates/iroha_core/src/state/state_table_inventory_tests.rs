@@ -5628,6 +5628,7 @@ const CARRIERS: &[Carrier] = &[
         types: &[
             (HANDSHAKE_CAPS, "pub struct ConsensusHandshakeCaps {"),
             (HANDSHAKE_CAPS, "pub struct ConsensusConfigCaps {"),
+            (HANDSHAKE_CAPS, "pub struct HostProfileSet {"),
             (HANDSHAKE_CAPS, "pub struct ConfidentialHandshakeCaps {"),
             (HANDSHAKE_CAPS, "pub struct CryptoHandshakeCaps {"),
             (HANDSHAKE_WIRE, "pub(super) struct HandshakeHello {"),
@@ -5662,8 +5663,10 @@ const CARRIERS: &[Carrier] = &[
                 HashUse::Block("fingerprint of the signed genesis native consensus configuration"),
             ),
             (
-                "ConsensusConfigCaps.ivm_gas_schedule_hash",
-                HashUse::Block("digest of the IVM gas schedule compiled into the binary"),
+                "HostProfileSet.ids",
+                HashUse::Block(
+                    "identities of the host-profile definitions a release implements or a committed selection activates",
+                ),
             ),
             (
                 "ConfidentialHandshakeCaps.features",
@@ -5721,6 +5724,15 @@ const CARRIERS: &[Carrier] = &[
                 "ConsensusHandshakeCaps.config",
                 "the shared configuration capabilities: walked as ConsensusConfigCaps",
             ),
+            (
+                "ConsensusHandshakeCaps.required_host_profiles",
+                "the host profiles the local committed selection activates: a process-local requirement read at handshake time, never sent",
+            ),
+            (
+                "ConsensusConfigCaps.host_profiles",
+                "the host profiles the release implements: walked as HostProfileSet",
+            ),
+            ("HostProfileSet.len", "number of identities in the set"),
             (
                 "ConfidentialHandshakeCaps.enabled",
                 "whether the node enforces confidential verification: node configuration",
@@ -5854,6 +5866,7 @@ const CARRIERS: &[Carrier] = &[
         exhaustive: &[
             "ConsensusHandshakeCaps",
             "ConsensusConfigCaps",
+            "HostProfileSet",
             "ConfidentialHandshakeCaps",
             "CryptoHandshakeCaps",
             "HandshakeHello",
@@ -5869,6 +5882,10 @@ const CARRIERS: &[Carrier] = &[
             ("NetworkId", "network identity fixed at genesis"),
             ("SocketAddr", "network address of a peer"),
             ("RelayRole", "enumeration without a hash payload"),
+            (
+                "RequiredHostProfiles",
+                "process-local cell holding the host profiles the committed selection activates; read at handshake time and never sent",
+            ),
         ],
     },
     Carrier {
@@ -8892,6 +8909,7 @@ fn state_hash_function_scan_lists_every_state_reader_that_returns_a_hash() {
             "HandshakeHello",
             "HandshakeIdentityBindingV1",
             "HandshakeTrustMeta",
+            "HostProfileSet",
             "LaneBatch",
             "LaneResult",
         ]
@@ -11815,6 +11833,7 @@ fn protocol_carriers_classify_every_hash_bearing_field() {
             &[
                 "ConsensusHandshakeCaps",
                 "ConsensusConfigCaps",
+                "HostProfileSet",
                 "ConfidentialHandshakeCaps",
                 "CryptoHandshakeCaps",
                 "HandshakeHello",
@@ -12498,6 +12517,7 @@ fn contract_section_states_every_publication_and_binding_rule_once() {
                 &[
                     "ConsensusHandshakeCaps",
                     "ConsensusConfigCaps",
+                    "HostProfileSet",
                     "ConfidentialHandshakeCaps",
                     "CryptoHandshakeCaps",
                     "HandshakeHello",

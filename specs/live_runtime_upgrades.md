@@ -361,9 +361,10 @@ return only as committed State.
   the whole selection history above its checkpoint.
 - **Handshake.** It distinguishes dormant capabilities from active compatibility requirements. A
   peer may carry extra definitions and may lag; it must support what the active selection requires.
-  The equality check on the release's compiled gas schedule (`iroha_p2p`
-  `consensus_config_mismatch`) becomes a check against the active host profiles, not a deletion of
-  the comparison.
+  The equality check on the release's compiled gas schedule became a check against the active host
+  profiles: each peer advertises the host profiles its release implements
+  (`iroha_p2p::HostProfileSet`), and a node refuses a peer that lacks one its committed selection
+  activates (`RequiredHostProfiles`, refreshed whenever a change set activates).
 - **Fees.** The predecessor fee-policy cut (`StateTransaction::root_fee_policy`) is preserved across
   transitions.
 
@@ -722,8 +723,8 @@ not a date: it happens once everything its first selection needs is implemented 
    through Parliament, the committed notice policy, all-`n` attestation bound to the committee
    and signed by each node for its own release, scheduling, activation and lapse at block start,
    the unsupported-node stop with a reason naming the selection, stable rejection codes and
-   lifecycle events. Still open: committed provenance policy, handshake profiles, completion
-   capabilities and obligation kinds, expectations and deferred consent.
+   lifecycle events, and handshake host profiles. Still open: committed provenance policy,
+   completion capabilities and obligation kinds, expectations and deferred consent.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
