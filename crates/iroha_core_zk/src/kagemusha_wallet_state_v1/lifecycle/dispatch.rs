@@ -16,6 +16,7 @@ use super::super::capacity::{FROZEN_BOUND, PLAN_BOUND};
 
 // Only the actual review owner supplies ReviewedUnbound. Ordinary exact recovery and the
 // independently reserved Archive path retain their existing preparation behavior.
+#[cfg_attr(target_pointer_width = "32", allow(variant_size_differences))]
 #[derive(Clone, Copy)]
 enum DispatchAdmission<'a> {
     Ordinary,
