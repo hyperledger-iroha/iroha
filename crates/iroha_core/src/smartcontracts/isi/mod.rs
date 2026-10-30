@@ -877,6 +877,7 @@ pub(crate) fn execute_borrowed_instruction(
         instruction,
         state_transaction.world.runtime_selection.get(),
         state_transaction._curr_block.height().get(),
+        || crate::runtime::obligations::step(instruction, &state_transaction.world),
     )?;
     iroha_logger::debug!(isi=%instruction, "Executing");
     if let Some(result) = NATIVE_INSTRUCTIONS

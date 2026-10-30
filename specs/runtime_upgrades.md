@@ -106,6 +106,28 @@ CLI: `iroha runtime contain list` reads the records; `iroha runtime contain endo
 [--at-ms <ms>]` prints one member's `EndorsementV1`; `iroha runtime contain submit --file
 <containment.json> --endorsement <file>...` submits them.
 
+## Obligations
+
+A live asset escrow or lock (status `Open`, `Accepted`, `PaymentSent`, `Disputed` or `Locked`) is
+an obligation of the native escrow implementation (design §7.2, `iroha_core::runtime::obligations`);
+its committed `world.asset_escrows` record is its registration. A restriction never removes its
+settlement authority:
+
+- **Dispatch.** While a definition behind an escrow instruction has admission closed, the
+  instructions that continue or complete a live escrow still run: accepting its offer continues
+  it, and marking payment sent, releasing, cancelling, opening or resolving a dispute, attesting a
+  condition, drawing down and expiring (with the controlled-lock forms) complete it. While the
+  definition is completion-only, only the completions run. Opening new custody runs under
+  neither, and disabling stops every instruction.
+- **Activation.** A change set whose successor leaves a completion of a live escrow unbound, or
+  bound to an inactive or disabled interface or implementation, lapses at its effective height
+  instead of activating. A definition is therefore disabled only once every escrow that needs it
+  has completed.
+
+Not yet registered: pending consent (multisig), scheduled triggers, migration cursors, AMX
+participations and obligations that contracts create. Obligations do not yet retain a captured
+completion closure that dispatch honors after a rebinding.
+
 ## Notice policy
 
 `runtime_upgrade_policy_v1` is a custom parameter holding canonical JSON of

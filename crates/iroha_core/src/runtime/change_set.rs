@@ -312,6 +312,7 @@ pub(crate) fn activate_due(
         .collect();
     due.sort_unstable();
     let holding = super::containment::holding(wtx);
+    let live = super::obligations::LiveObligations::of(wtx);
     for (_, id) in due {
         let Some(mut record) = wtx.runtime_change_sets.get(&id).cloned() else {
             continue;
@@ -322,6 +323,14 @@ pub(crate) fn activate_due(
                 .change_set
                 .apply(&current, &PublishedDefinitions(&wtx.runtime_definitions))
                 .ok()
+                .filter(|applied| {
+                    // A successor that strands a live obligation never activates (§7.2).
+                    let stranded = super::obligations::stranded(&applied.selection, &live);
+                    if let Some(reason) = &stranded {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                    }
+                    stranded.is_none()
+                })
         } else {
             None
         };

@@ -392,6 +392,45 @@ fn block_start_activates_a_supported_change_set_at_its_height() {
 }
 
 #[test]
+fn block_start_lapses_a_change_set_that_would_strand_a_live_escrow() {
+    let wire_id =
+        iroha_data_model::isi::wire_id_of::<iroha_data_model::isi::escrow::ReleaseAssetEscrow>()
+            .expect("registered");
+    let change = test_support::restrict_baseline_interface(
+        network(),
+        150,
+        wire_id,
+        RestrictionKindV1::Disabled,
+    );
+    let id = change.id().unwrap();
+    let status = |state: &crate::state::State| {
+        let block = state.try_block(header_at(150)).expect("block start");
+        let status = block
+            .world
+            .runtime_change_sets
+            .get(&id)
+            .map(|record| record.status);
+        (status, block.world.runtime_selection.get().clone())
+    };
+
+    let state = scheduled_state(&change, &validators(), 4);
+    {
+        let escrow = test_support::live_escrow(1);
+        let mut escrows = state.world.asset_escrows.block();
+        escrows.insert(escrow.id, escrow);
+        escrows.commit();
+    }
+    let (lapsed, selection) = status(&state);
+    assert_eq!(lapsed, Some(ChangeSetStatusV1::Lapsed(150)));
+    assert_eq!(selection, baseline(), "escrow release stays executable");
+
+    let drained = scheduled_state(&change, &validators(), 4);
+    let (activated, selection) = status(&drained);
+    assert_eq!(activated, Some(ChangeSetStatusV1::Activated(150)));
+    assert_eq!(selection.id().unwrap(), change.successor);
+}
+
+#[test]
 fn block_start_lapses_a_change_set_without_every_validator() {
     let change = test_support::deprecate_baseline_bundle(network(), 150);
     let id = change.id().unwrap();

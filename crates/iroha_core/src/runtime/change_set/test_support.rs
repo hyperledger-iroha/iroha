@@ -125,6 +125,73 @@ pub(crate) fn deprecate_baseline_bundle(network: NetworkId, effective_height: u6
     }
 }
 
+/// A change set of `network`'s universal root, effective at `effective_height`, that applies
+/// `restriction` to the baseline interface bound to `wire_id`.
+pub(crate) fn restrict_baseline_interface(
+    network: NetworkId,
+    effective_height: u64,
+    wire_id: &str,
+    restriction: RestrictionKindV1,
+) -> ChangeSetV1 {
+    let predecessor = release_catalog().expect("release catalog").baseline.clone();
+    let interface = predecessor
+        .bindings
+        .iter()
+        .find(|binding| binding.wire_id == wire_id)
+        .expect("baseline binding")
+        .interface;
+    let mut successor = predecessor.clone();
+    successor.restrictions.push(RestrictionEntryV1 {
+        definition: interface,
+        restriction: restriction.at(effective_height),
+    });
+    successor.restrictions.sort_by_key(|entry| entry.definition);
+    ChangeSetV1 {
+        network,
+        root: RootScopeV1::Universal,
+        predecessor: predecessor.id().expect("baseline identity"),
+        successor: successor.id().expect("successor identity"),
+        effective_height,
+        publish: Vec::new(),
+        transitions: vec![SelectionTransitionV1::Restrict {
+            definition: interface,
+            restriction,
+        }],
+        qualification: [0x35; 32],
+    }
+}
+
+/// A live asset lock of `seed`: custody not yet paid out or refunded.
+pub(crate) fn live_escrow(seed: u8) -> iroha_data_model::escrow::AssetEscrowRecord {
+    use iroha_data_model::escrow::{
+        AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId,
+    };
+    let seller = iroha_test_samples::ALICE_ID.clone();
+    AssetEscrowRecord {
+        id: EscrowId(Hash::prehashed([seed; 32])),
+        seller: seller.clone(),
+        buyer: None,
+        asset_definition: iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("fee asset definition"),
+        amount: iroha_primitives::numeric::Quantity::one(),
+        custody: seller,
+        status: AssetEscrowStatus::Locked,
+        kind: AssetEscrowKind::Lock,
+        remaining_amount: iroha_primitives::numeric::Quantity::one(),
+        release_authority: None,
+        expires_at_ms: None,
+        evidence_hashes: Vec::new(),
+        conditions: Vec::new(),
+        created_at_ms: 1,
+        accepted_at_ms: None,
+        payment_sent_at_ms: None,
+        disputed_at_ms: None,
+        closed_at_ms: None,
+        resolution: None,
+    }
+}
+
 /// The governance action that schedules [`add_instruction`].
 pub(crate) fn schedule(network: NetworkId, effective_height: u64) -> RuntimeUpgradeActionV1 {
     RuntimeUpgradeActionV1::Schedule(add_instruction(network, effective_height))
@@ -171,21 +238,6 @@ pub(crate) fn provenance_policy(signers: &[KeyPair], threshold: u32) -> RuntimeP
         signers: signers.iter().map(|key| key.public_key().clone()).collect(),
         threshold,
     }
-}
-
-/// Commit `policy` as the universal root's runtime provenance policy.
-pub(crate) fn commit_provenance(
-    state_transaction: &mut crate::state::StateTransaction<'_, '_>,
-    policy: &RuntimeProvenancePolicyV1,
-) {
-    state_transaction
-        .world
-        .set_parameter_for_testing(Parameter::Custom(
-            policy
-                .to_custom_parameter()
-                .expect("valid provenance policy"),
-        ))
-        .expect("commit the runtime provenance policy");
 }
 
 /// `signer`'s endorsement of the change set `action` schedules.

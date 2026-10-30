@@ -731,8 +731,10 @@ not a date: it happens once everything its first selection needs is implemented 
    through Parliament, the committed notice and provenance policies, all-`n` attestation bound to
    the committee and signed by each node for its own release, scheduling, activation and lapse at
    block start, the unsupported-node stop with a reason naming the selection, stable rejection
-   codes and lifecycle events, and handshake host profiles. Still open: completion capabilities and
-   obligation kinds, expectations and deferred consent.
+   codes and lifecycle events, handshake host profiles, and native escrow obligations, whose
+   continuations and completions run through admission closure and completion-only and which no
+   activation strands. Still open: the other obligation kinds (pending consent, triggers,
+   migration cursors, AMX), captured completion closures, expectations and deferred consent.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
