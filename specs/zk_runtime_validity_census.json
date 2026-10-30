@@ -1933,7 +1933,6 @@
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.parliament_sortition_pulse_delay_blocks", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.parliament_timed_ovn.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.plain_voting_enabled", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.runtime_upgrade_provenance.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.slash_double_vote_bps", 2],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.slash_ineligible_proof_bps", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.slash_invalid_proof_bps", 4],
@@ -2124,8 +2123,9 @@
    "gates": "The complete root monetary schedule, exact currency, sink, sponsor custody and Global claim exemptions.",
    "decided_by": "The mandatory root_fees_v1 parameter, validated and atomically projected by StateParameters. Each block freezes its predecessor projection; restore rebuilds it from original canonical Parameters. H1 authors exactly one original policy and retains both signed policy digest checks. Currency and sponsor custody are immutable after H1; other authorized terms apply next block. Node fee and fee-relay worker configuration are removed.",
    "attribution": "read",
-   "open_reason": "The moved execution readers, including SoraCloud fee currency and sink resolution, now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Two remaining detector rows retain fee projection consumers in Torii. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
+   "open_reason": "The moved execution readers, including SoraCloud fee currency and sink resolution, now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Two remaining detector rows retain fee projection consumers in Torii. The executor row (root_fees.rs) is the §13.4 mutation HC396, taken only in a test build with `sumeragi_core_mutation = \"HC396\"`: it substitutes the node's `nexus.fees` for the committed projection so that the original-policy tests can kill it. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
    "sites": [
+    ["crates/iroha_core/src/executor/root_fees.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/game.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/lib.rs", "node_policy_read", "fees", 2]
    ],
@@ -3245,7 +3245,7 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/q.rs", "qualification", "qualification", 42],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/q/session.rs", "qualification", "qualification", 30],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/sigma.rs", "qualification", "qualification", 24],
-    ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/wallet.rs", "qualification", "qualification", 73],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/wallet.rs", "qualification", "qualification", 83],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker.rs", "qualification", "qualification", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker_configuration.rs", "qualification", "qualification", 2],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/owner.rs", "qualification", "qualification", 1],
@@ -5378,8 +5378,9 @@
    "gates": "JavaScript SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
+    ["javascript/iroha_js/src/governanceProposalV1.js", "sdk_availability", "qualification", 4],
     ["javascript/iroha_js/src/parliamentApiV1.js", "sdk_availability", "qualification", 2]
    ]
   },
@@ -5407,8 +5408,6 @@
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "exact12", 77],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "readiness", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/SubmitPrivacyZkX509CertificateV1.kt", "sdk_availability", "exact12", 1],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "exact12", 1],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "qualification", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "release_manifest", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt", "sdk_availability", "exact12", 4]
    ]
@@ -5470,9 +5469,10 @@
    "gates": "Kotlin/Java/Android SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt", "sdk_availability", "qualification", 2]
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt", "sdk_availability", "qualification", 2],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentProposalValidatorV1.kt", "sdk_availability", "qualification", 2]
    ]
   },
   {
@@ -5537,8 +5537,9 @@
    "gates": "Python SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
+    ["python/iroha_torii_client/governance_proposals.py", "sdk_availability", "qualification", 3],
     ["python/iroha_torii_client/parliament_api.py", "sdk_availability", "qualification", 2],
     ["python/iroha_torii_client/parliament_api.py", "sdk_availability", "readiness", 3]
    ]
@@ -5597,7 +5598,7 @@
    "gates": "Swift SDK: words that a detector matches in names and comments.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_swift.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. KagemushaWalletApplePlatformV1.swift and KagemushaWalletAppleSystemV1.swift mention in comments that platform rollback qualification stays open; no code reads a qualification record. The X.509 signing-preparation and KAGEMUSHA fold-progress readiness hits are API documentation: they grant no release readiness or monetary completion.",
+   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_swift.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. KagemushaWalletApplePlatformV1.swift and KagemushaWalletAppleSystemV1.swift mention in comments that platform rollback qualification stays open; no code reads a qualification record. The X.509 signing-preparation and KAGEMUSHA fold-progress readiness hits are API documentation: they grant no release readiness or monetary completion. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
     ["IrohaSwift/Sources/IrohaSwift/AccelerationSettings.swift", "sdk_availability", "qualification", 2],
     ["IrohaSwift/Sources/IrohaSwift/ConnectClient.swift", "sdk_availability", "qualification", 1],
@@ -5610,7 +5611,7 @@
     ["IrohaSwift/Sources/IrohaSwift/NativeAcceleration.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/Petal/PetalDecoder.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/RetailFeeV1.swift", "sdk_availability", "qualification", 8],
-    ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "qualification", 6],
+    ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "qualification", 8],
     ["IrohaSwift/Sources/IrohaSwift/ToriiSumeragiModels.swift", "sdk_availability", "readiness", 2],
     ["IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/ValidatorStakingNoritoV1.swift", "sdk_availability", "qualification", 2],
@@ -5712,12 +5713,13 @@
    "gates": "SCCP RegisterRoute requires original native committee/deployment authority and completed Parliament and reconciliation launch relations.",
    "decided_by": "Outside the ZK delivery plan; actual canonical authority and launch relations must be implemented before registration.",
    "attribution": "read",
-   "note": "RegisterRoute validates original Global/NetworkId/instance identity, retained generation pins and successor chains, canonical-time margins, TON StateInit with locked code and the exact locked EVM CREATE2 address. It still refuses missing Parliament and reconciliation launch authority; a valid pin or deployment shape is not permission to register. Readiness projections in SDK, CLI and native metadata expose these implementation and committed-state requirements without granting authority. parliament_binding_ballot_available and sccp_reconciliation_available remain false; no launch qualification is claimed.",
+   "note": "RegisterRoute validates original Global/NetworkId/instance identity, retained generation pins and successor chains, canonical-time margins, TON StateInit with locked code and the exact locked EVM CREATE2 address. It still refuses missing Parliament and reconciliation launch authority; a valid pin or deployment shape is not permission to register. Readiness projections in SDK, CLI and native metadata expose these implementation and committed-state requirements without granting authority. parliament_binding_ballot_available and sccp_reconciliation_available remain false; no launch qualification is claimed. The Taira doctor's `--parliament` check reads the same public readiness projection through a signer-free client as a diagnostic (taira_doctor_accounts.rs); it authorizes nothing.",
    "sites": [
     ["crates/iroha/src/blocking/sccp.rs", "qualification", "readiness", 3],
     ["crates/iroha/src/client/sccp.rs", "qualification", "readiness", 4],
     ["crates/iroha_cli/src/sccp/governance.rs", "qualification", "qualification", 1],
     ["crates/iroha_cli/src/sccp/governance.rs", "qualification", "readiness", 3],
+    ["crates/iroha_cli/src/taira_doctor_accounts.rs", "qualification", "readiness", 2],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/governance_metadata.rs", "qualification", "readiness", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/governance_metadata/diagnostics.rs", "qualification", "readiness", 5],
     ["crates/iroha_torii/src/sccp.rs", "qualification", "readiness", 1],
@@ -6667,7 +6669,7 @@
  },
  "summary": {
   "entries": 232,
-  "sites": 1502,
+  "sites": 1504,
   "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
