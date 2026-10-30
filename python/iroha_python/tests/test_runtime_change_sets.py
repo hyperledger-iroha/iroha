@@ -10,6 +10,7 @@ import pytest
 
 import iroha_python
 import iroha_python.client as client_module
+from iroha_python import NetworkId, OperatorSigningContext
 from iroha_python.client import (
     RuntimeChangeSetStatus,
     RuntimeMetrics,
@@ -18,6 +19,7 @@ from iroha_python.client import (
     RuntimeUpgradesSnapshot,
     ToriiClient,
 )
+from iroha_python.crypto import Ed25519KeyPair
 
 from .helpers import RecordingSession, StubResponse
 
@@ -30,6 +32,16 @@ COMMITTEE = [
     "ed012066BE7E332C7A453332BD9D0A7F7DB055F5C5EF1A06ADA66D98B39FB6810C473A",
 ]
 PROPOSAL_WIRE_ID = "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+OPERATOR_CONTEXT = OperatorSigningContext(
+    NetworkId.from_bytes(bytes([0xC7]) * 32),
+    Ed25519KeyPair.from_private_key(bytes([0x17]) * 32),
+)
+OPERATOR_HEADERS = (
+    "x-iroha-operator-public-key",
+    "x-iroha-operator-timestamp-ms",
+    "x-iroha-operator-nonce",
+    "x-iroha-operator-signature",
+)
 
 
 def _change_set(effective_height: int) -> Dict[str, Any]:
@@ -78,7 +90,32 @@ def _drafted(payload_hex: str) -> Dict[str, Any]:
 
 
 def _client(session: RecordingSession) -> ToriiClient:
-    return ToriiClient("http://node.test", session=session, chain_discriminant=753)
+    return ToriiClient(
+        "http://node.test",
+        session=session,
+        chain_discriminant=753,
+        operator_signing_context=OPERATOR_CONTEXT,
+    )
+
+
+def _operator_signed(call: Dict[str, Any]) -> bool:
+    names = {str(name).lower() for name in call["headers"]}
+    return all(name in names for name in OPERATOR_HEADERS)
+
+
+def test_runtime_upgrade_routes_are_operator_routes() -> None:
+    session = RecordingSession(StubResponse(payload=_snapshot()))
+    client = ToriiClient("http://node.test", session=session, chain_discriminant=753)
+
+    for call in (
+        client.list_runtime_upgrades,
+        lambda: client.propose_runtime_upgrade(_change_set(240)),
+        lambda: client.cancel_runtime_upgrade("aa" * 32),
+    ):
+        with pytest.raises(ValueError, match="operator_signing_context"):
+            call()
+
+    assert session.calls == []
 
 
 def test_list_runtime_upgrades_typed_parses_selection_and_change_sets() -> None:
@@ -93,6 +130,7 @@ def test_list_runtime_upgrades_typed_parses_selection_and_change_sets() -> None:
 
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades")
+    assert _operator_signed(session.calls[0])
     assert isinstance(snapshot, RuntimeUpgradesSnapshot)
     assert snapshot.selection_id_hex == SELECTION_ID
     assert snapshot.selection == payload["selection"]
@@ -227,6 +265,7 @@ def test_propose_runtime_upgrade_posts_the_change_set_as_given() -> None:
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/propose")
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == change_set
+    assert _operator_signed(session.calls[0])
 
 
 def test_propose_runtime_upgrade_requires_a_change_set_object() -> None:
@@ -247,6 +286,7 @@ def test_cancel_runtime_upgrade_posts_the_change_set_id() -> None:
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/cancel/" + "aa" * 32)
     assert session.calls[0]["data"] == b""
+    assert _operator_signed(session.calls[0])
 
 
 @pytest.mark.parametrize(

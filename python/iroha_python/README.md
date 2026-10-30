@@ -2051,12 +2051,19 @@ A network changes its runtime through governed change sets: SORA Parliament
 schedules a `ChangeSetV1` that moves the universal root from its committed
 selection to a successor selection at an effective height.
 
+The change-set routes (`/v1/runtime/upgrades*`) are operator routes: the client
+signs them with its `operator_signing_context`, so construct it with the
+operator's key, loaded from runtime-only configuration.
+
 ```python
 import json
 
-from iroha_python import ToriiCanonicalRequestAuth, ToriiClient
+from iroha_python import OperatorSigningContext, ToriiCanonicalRequestAuth, ToriiClient
 
-client = ToriiClient("http://127.0.0.1:8080")
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=OperatorSigningContext(network_id, operator_key_pair),
+)
 canonical_auth = ToriiCanonicalRequestAuth(
     network_id=exact_network_id,
     account_id=canonical_i105_account_id,
@@ -2084,13 +2091,23 @@ schedule = client.propose_runtime_upgrade_typed(change_set)
 
 # Draft the proposal that withdraws a scheduled change set by its identity
 cancel = client.cancel_runtime_upgrade_typed(snapshot.items[0].id_hex)
+
+# Validator operators: ask the node which selections its release executes, then have it
+# sign its support for a scheduled change set with its own validator key
+release = client.get_runtime_release()
+attestation = client.attest_runtime_upgrade_typed(snapshot.items[0].id_hex)
 ```
 
-Both drafts return the `ProposeRuntimeUpgradeProposal` instruction for local
-signing and submission. There is no activation call: at the start of its
+Both proposal drafts return the `ProposeRuntimeUpgradeProposal` instruction for
+local signing and submission. There is no activation call: at the start of its
 effective height a scheduled change set activates when every committee member
-has attested support for it (`iroha runtime upgrade attest`), its frozen notice
-has elapsed and it still applies to the committed selection; otherwise it lapses.
+has attested support for it, its frozen notice has elapsed and it still applies
+to the committed selection; otherwise it lapses. The node, not its operator,
+decides support: `attest_runtime_upgrade` returns one
+`iroha.runtime.support.attest.v1` instruction the node signed only if its release
+executes the successor selection and its key is a committee member, and
+`get_runtime_release` names any committed or scheduled selection the release
+cannot execute with the first definition it lacks.
 
 `RuntimeUpgradeListItem` types the change-set identity, effective height,
 predecessor and successor selections, status (`Scheduled`, or `Activated`,

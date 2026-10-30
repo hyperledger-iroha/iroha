@@ -729,6 +729,9 @@ __all__ = [
     "RuntimeUpgradeListItem",
     "RuntimeUpgradesSnapshot",
     "RuntimeUpgradeTxResponse",
+    "RuntimeSelectionSupport",
+    "RuntimeChangeSetSupport",
+    "RuntimeReleaseSupport",
     "ConnectPerIpSessions",
     "ConnectStatusPolicy",
     "ConnectStatusSnapshot",
@@ -1792,10 +1795,63 @@ class RuntimeUpgradesSnapshot:
 
 @dataclass(frozen=True)
 class RuntimeUpgradeTxResponse:
-    """Drafted SORA Parliament proposal returned by the runtime change-set helpers."""
+    """Drafted instruction returned by the runtime change-set helpers: the SORA Parliament
+    proposal of a propose or cancel draft, or the node-signed support attestation of an attest
+    draft."""
 
     ok: bool
     tx_instructions: List[TransactionInstruction]
+
+
+@dataclass(frozen=True)
+class RuntimeSelectionSupport:
+    """Whether the node's release executes one runtime selection.
+
+    ``missing_definition_hex`` is the first definition the selection relies on that the release
+    lacks, and ``None`` exactly when ``supported`` is true.
+    """
+
+    selection_id_hex: str
+    supported: bool
+    missing_definition_hex: Optional[str]
+
+
+@dataclass(frozen=True)
+class RuntimeChangeSetSupport:
+    """Whether the node's release executes the successor of one scheduled change set.
+
+    ``successor`` is ``None`` when the change set no longer applies to the selection it will
+    meet; ``unresolved`` then says why.
+    """
+
+    id_hex: str
+    effective_height: int
+    successor: Optional[RuntimeSelectionSupport]
+    unresolved: Optional[str]
+
+
+@dataclass(frozen=True)
+class RuntimeReleaseSupport:
+    """The node's build and the runtime selections its release executes (`GET /v1/runtime/release`)."""
+
+    build: Dict[str, str]
+    release_digest_hex: str
+    selection: RuntimeSelectionSupport
+    scheduled: List[RuntimeChangeSetSupport]
+
+
+_RUNTIME_SUPPORT_ATTESTATION_WIRE_ID = "iroha.runtime.support.attest.v1"
+_RUNTIME_RELEASE_FIELDS = ("build", "release_digest_hex", "selection", "scheduled")
+_RUNTIME_RELEASE_BUILD_FIELDS = (
+    "version",
+    "git_commit_sha",
+    "dpn_validator_release_commit",
+    "cargo_features",
+    "target_triple",
+    "wire_schema_hash",
+)
+_RUNTIME_SELECTION_SUPPORT_FIELDS = ("selection_id_hex", "supported", "missing_definition_hex")
+_RUNTIME_CHANGE_SET_SUPPORT_FIELDS = ("id_hex", "effective_height", "successor", "unresolved")
 
 
 _RUNTIME_METRICS_FIELDS = ("abi_version", "upgrade_events_total")
@@ -4145,12 +4201,14 @@ class ToriiClient(
         return self._parse_runtime_abi_hash(payload, context="runtime abi hash response")
 
     def list_runtime_upgrades(self) -> RuntimeUpgradesSnapshot:
-        """Fetch the committed runtime selection and every recorded change set (`GET /v1/runtime/upgrades`)."""
+        """Fetch the committed runtime selection and every recorded change set (`GET /v1/runtime/upgrades`).
 
-        payload = self._get_json_object(
-            "/v1/runtime/upgrades",
-            context="runtime upgrades list response",
-        )
+        Operator route: the client signs it with its ``operator_signing_context``.
+        """
+
+        response = self._operator_get("/v1/runtime/upgrades")
+        self._expect_status(response, {200})
+        payload = self._ensure_mapping(response.json(), "runtime upgrades list response")
         return self._parse_runtime_upgrades_snapshot(
             payload,
             context="runtime upgrades list response",
@@ -4166,12 +4224,12 @@ class ToriiClient(
 
         if not isinstance(change_set, Mapping):
             raise TypeError("runtime change set must be a JSON object")
-        body = self._post_json(
+        response = self._operator_post(
             "/v1/runtime/upgrades/propose",
-            dict(change_set),
-            context="runtime upgrade propose response",
-            expected_status=(200,),
+            json.dumps(dict(change_set)).encode("utf-8"),
         )
+        self._expect_status(response, {200})
+        body = self._ensure_mapping(response.json(), "runtime upgrade propose response")
         return self._parse_runtime_upgrade_tx_response(body, context="runtime upgrade propose response")
 
     def cancel_runtime_upgrade(self, change_set_id_hex: str) -> RuntimeUpgradeTxResponse:
@@ -4188,17 +4246,132 @@ class ToriiClient(
             context="runtime change set id",
             expected_length=64,
         )
-        response = self._request(
-            "POST",
-            f"/v1/runtime/upgrades/cancel/{identifier}",
-            headers={"Accept": "application/json"},
-        )
+        response = self._operator_post(f"/v1/runtime/upgrades/cancel/{identifier}", b"")
         self._expect_status(response, {200})
         payload = self._ensure_mapping(
             self._maybe_json(response),
             "runtime upgrade cancel response",
         )
         return self._parse_runtime_upgrade_tx_response(payload, context="runtime upgrade cancel response")
+
+    def attest_runtime_upgrade(self, change_set_id_hex: str) -> RuntimeUpgradeTxResponse:
+        """Have the node sign its support for a scheduled change set with its own validator key.
+
+        ``POST /v1/runtime/upgrades/attest/{id}``: the node attests only a successor selection
+        its release executes, and only while its key is a committee member. The draft holds
+        exactly one ``AttestRuntimeSupportV1`` instruction to submit. Operator route.
+        """
+
+        identifier = self._require_exact_lower_hex_string(
+            change_set_id_hex,
+            context="runtime change set id",
+            expected_length=64,
+        )
+        response = self._operator_post(f"/v1/runtime/upgrades/attest/{identifier}", b"")
+        self._expect_status(response, {200})
+        context = "runtime upgrade attest response"
+        payload = self._ensure_mapping(self._maybe_json(response), context)
+        draft = self._parse_runtime_upgrade_tx_response(payload, context=context)
+        if (
+            not draft.ok
+            or len(draft.tx_instructions) != 1
+            or draft.tx_instructions[0].wire_id != _RUNTIME_SUPPORT_ATTESTATION_WIRE_ID
+        ):
+            raise RuntimeError(
+                f"{context} must hold exactly one {_RUNTIME_SUPPORT_ATTESTATION_WIRE_ID} instruction"
+            )
+        return draft
+
+    def get_runtime_release(self) -> RuntimeReleaseSupport:
+        """Report the node's release and the runtime selections it executes (`GET /v1/runtime/release`).
+
+        Says whether the release executes the committed selection and the successor of each
+        scheduled change set, naming the first definition it lacks. Operator route.
+        """
+
+        response = self._operator_get("/v1/runtime/release")
+        self._expect_status(response, {200})
+        context = "runtime release response"
+        return self._parse_runtime_release(self._ensure_mapping(response.json(), context), context=context)
+
+    @staticmethod
+    def _parse_runtime_release(record: Mapping[str, Any], *, context: str) -> RuntimeReleaseSupport:
+        ToriiClient._validate_exact_fields(record, _RUNTIME_RELEASE_FIELDS, context)
+        build_context = f"{context}.build"
+        build = ToriiClient._ensure_mapping(record.get("build"), build_context)
+        ToriiClient._validate_exact_fields(build, _RUNTIME_RELEASE_BUILD_FIELDS, build_context)
+        for name in _RUNTIME_RELEASE_BUILD_FIELDS:
+            if not isinstance(build[name], str):
+                raise RuntimeError(f"{build_context}.{name} must be a string")
+        scheduled_value = record.get("scheduled")
+        if not isinstance(scheduled_value, list):
+            raise RuntimeError(f"{context}.scheduled must be a list")
+        scheduled: List[RuntimeChangeSetSupport] = []
+        for index, entry in enumerate(scheduled_value):
+            entry_context = f"{context}.scheduled[{index}]"
+            item = ToriiClient._ensure_mapping(entry, entry_context)
+            ToriiClient._validate_exact_fields(item, _RUNTIME_CHANGE_SET_SUPPORT_FIELDS, entry_context)
+            height = item["effective_height"]
+            if isinstance(height, bool) or not isinstance(height, int) or height < 1:
+                raise RuntimeError(f"{entry_context}.effective_height must be a positive integer")
+            successor = (
+                None
+                if item["successor"] is None
+                else ToriiClient._parse_runtime_selection_support(
+                    item["successor"], context=f"{entry_context}.successor"
+                )
+            )
+            unresolved = item["unresolved"]
+            if unresolved is not None and not isinstance(unresolved, str):
+                raise RuntimeError(f"{entry_context}.unresolved must be a string or null")
+            if (successor is None) == (unresolved is None):
+                raise RuntimeError(
+                    f"{entry_context} must name either a resolved successor or why it is unresolved"
+                )
+            scheduled.append(
+                RuntimeChangeSetSupport(
+                    id_hex=ToriiClient._require_exact_lower_hex_string(
+                        item["id_hex"], context=f"{entry_context}.id_hex", expected_length=64
+                    ),
+                    effective_height=height,
+                    successor=successor,
+                    unresolved=unresolved,
+                )
+            )
+        return RuntimeReleaseSupport(
+            build={name: build[name] for name in _RUNTIME_RELEASE_BUILD_FIELDS},
+            release_digest_hex=ToriiClient._require_exact_lower_hex_string(
+                record.get("release_digest_hex"),
+                context=f"{context}.release_digest_hex",
+                expected_length=64,
+            ),
+            selection=ToriiClient._parse_runtime_selection_support(
+                record.get("selection"), context=f"{context}.selection"
+            ),
+            scheduled=scheduled,
+        )
+
+    @staticmethod
+    def _parse_runtime_selection_support(value: Any, *, context: str) -> RuntimeSelectionSupport:
+        record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(record, _RUNTIME_SELECTION_SUPPORT_FIELDS, context)
+        supported = record["supported"]
+        if not isinstance(supported, bool):
+            raise RuntimeError(f"{context}.supported must be a boolean")
+        missing = record["missing_definition_hex"]
+        if missing is not None:
+            missing = ToriiClient._require_exact_lower_hex_string(
+                missing, context=f"{context}.missing_definition_hex", expected_length=64
+            )
+        if supported != (missing is None):
+            raise RuntimeError(f"{context} must name the missing definition exactly when unsupported")
+        return RuntimeSelectionSupport(
+            selection_id_hex=ToriiClient._require_exact_lower_hex_string(
+                record["selection_id_hex"], context=f"{context}.selection_id_hex", expected_length=64
+            ),
+            supported=supported,
+            missing_definition_hex=missing,
+        )
 
     def get_status_snapshot(self) -> StatusSnapshot:
         """Fetch Torii status snapshot (`GET /status`)."""
@@ -6763,11 +6936,40 @@ class ToriiClient(
         headers: Optional[Mapping[str, str]] = None,
         stream: bool = False,
     ) -> requests.Response:
-        context = self._operator_signing_context
-        if context is None:
-            raise ValueError("operator GET requires an immutable ToriiOperatorSigningContext before dispatch")
         query = urlencode(sorted(params.items()), doseq=True) if params else ""
         exact_target = f"{path}?{query}" if query else path
+        return self._operator_request("GET", exact_target, headers=headers, stream=stream)
+
+    def _operator_post(
+        self,
+        path: str,
+        body: bytes,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> requests.Response:
+        """Sign and dispatch one operator POST; the signature covers the exact JSON body."""
+
+        if type(body) is not bytes:
+            raise TypeError("operator POST body must be exact immutable bytes")
+        final_headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if headers:
+            final_headers.update(dict(headers))
+        return self._operator_request("POST", path, headers=final_headers, data=body)
+
+    def _operator_request(
+        self,
+        method: str,
+        target: str,
+        *,
+        headers: Optional[Mapping[str, str]] = None,
+        data: Optional[bytes] = None,
+        stream: bool = False,
+    ) -> requests.Response:
+        context = self._operator_signing_context
+        if context is None:
+            raise ValueError(
+                f"operator {method} requires an immutable ToriiOperatorSigningContext before dispatch"
+            )
         final_headers: Dict[str, str] = {"Accept": "application/json"}
         if headers:
             final_headers.update(dict(headers))
@@ -6776,24 +6978,24 @@ class ToriiClient(
             for name in source:
                 if str(name).lower() in _OPERATOR_FORBIDDEN_AUTH_HEADERS:
                     raise ValueError(
-                        "operator GETs reject token, canonical-account, "
+                        f"operator {method}s reject token, canonical-account, "
                         f"witness, and precomputed operator authentication header {name}"
                     )
         if getattr(self._session, "auth", None) is not None:
-            raise ValueError("operator GETs reject Session.auth token fallback")
+            raise ValueError(f"operator {method}s reject Session.auth token fallback")
         cookies = getattr(self._session, "cookies", None)
         if cookies is not None:
             try:
                 has_cookies = len(cookies) != 0
             except TypeError as exc:
-                raise TypeError("operator GETs require a sized Session.cookies jar") from exc
+                raise TypeError(f"operator {method}s require a sized Session.cookies jar") from exc
             if has_cookies:
-                raise ValueError("operator GETs reject Session.cookies token fallback")
-        final_headers = _OperatorRequestHeaderPlan(final_headers, context)
+                raise ValueError(f"operator {method}s reject Session.cookies token fallback")
         return self._request(
-            "GET",
-            exact_target,
-            headers=final_headers,
+            method,
+            target,
+            headers=_OperatorRequestHeaderPlan(final_headers, context),
+            data=data,
             stream=stream,
             allow_retry=False,
             allow_redirects=False,

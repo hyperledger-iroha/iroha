@@ -5463,6 +5463,56 @@ export interface ToriiRuntimeUpgradeTxResponse {
   tx_instructions: readonly [ToriiRuntimeUpgradeInstruction];
 }
 
+/** The support attestation a node signs with its own validator key, drafted for submission. */
+export interface ToriiRuntimeAttestationInstruction {
+  wire_id: "iroha.runtime.support.attest.v1";
+  /** Canonical framed instruction bytes, lowercase hex. */
+  payload_hex: string;
+}
+
+/** Draft returned by `attestRuntimeUpgrade`. */
+export interface ToriiRuntimeAttestationTxResponse {
+  ok: true;
+  tx_instructions: readonly [ToriiRuntimeAttestationInstruction];
+}
+
+/** Whether the node's release executes one runtime selection. */
+export interface ToriiRuntimeSelectionSupport {
+  /** Selection identity, 32-byte lowercase hex. */
+  selectionIdHex: string;
+  supported: boolean;
+  /** The first definition the selection relies on that the release lacks; `null` when supported. */
+  missingDefinitionHex: string | null;
+}
+
+/** Whether the node's release executes the successor of one scheduled change set. */
+export interface ToriiRuntimeChangeSetSupport {
+  /** Change-set identity, 32-byte lowercase hex. */
+  idHex: string;
+  effectiveHeight: number;
+  /** `null` when the change set no longer applies to the selection it will meet. */
+  successor: ToriiRuntimeSelectionSupport | null;
+  /** Why the successor cannot be resolved; `null` when it resolves. */
+  unresolved: string | null;
+}
+
+/** The node's build and the runtime selections its release executes (`GET /v1/runtime/release`). */
+export interface ToriiRuntimeReleaseSupport {
+  build: {
+    version: string;
+    gitCommitSha: string;
+    dpnValidatorReleaseCommit: string;
+    cargoFeatures: string;
+    targetTriple: string;
+    wireSchemaHash: string;
+  };
+  /** Digest of the release the node's support attestations bind, 32-byte lowercase hex. */
+  releaseDigestHex: string;
+  selection: ToriiRuntimeSelectionSupport;
+  /** Scheduled change sets by effective height, then identity. */
+  scheduled: ToriiRuntimeChangeSetSupport[];
+}
+
 /**
  * Where a change set stands. `Scheduled` waits for its effective height; `Activated`, `Lapsed`
  * (the effective height passed without complete, current support or notice) and `Cancelled`
@@ -10939,6 +10989,13 @@ export declare class ToriiClient {
     idHex: string | BinaryLike,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
+  /** Operator-signed request that the node sign its support for a scheduled change set. */
+  attestRuntimeUpgrade(
+    idHex: string | BinaryLike,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiRuntimeAttestationTxResponse>;
+  /** Operator-signed report of the runtime selections the node's release executes. */
+  getRuntimeRelease(options?: { signal?: AbortSignal }): Promise<ToriiRuntimeReleaseSupport>;
   listPeers(options?: {
     signal?: AbortSignal;
   }): Promise<Array<Record<string, unknown>>>;

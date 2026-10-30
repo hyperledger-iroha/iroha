@@ -4932,6 +4932,152 @@ def _runtime_tx_response(payload_hex: str) -> Dict[str, Any]:
     }
 
 
+def _runtime_operator_signed(call: Dict[str, Any]) -> bool:
+    names = {str(name).lower() for name in call["headers"]}
+    return {
+        "x-iroha-operator-public-key",
+        "x-iroha-operator-timestamp-ms",
+        "x-iroha-operator-nonce",
+        "x-iroha-operator-signature",
+    } <= names
+
+
+def _runtime_release_payload(**overrides: Any) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "build": {
+            "version": "3.0.0",
+            "git_commit_sha": "0123456789abcdef0123456789abcdef01234567",
+            "dpn_validator_release_commit": "unknown",
+            "cargo_features": "default",
+            "target_triple": "aarch64-apple-darwin",
+            "wire_schema_hash": "11" * 32,
+        },
+        "release_digest_hex": "22" * 32,
+        "selection": {
+            "selection_id_hex": "33" * 32,
+            "supported": True,
+            "missing_definition_hex": None,
+        },
+        "scheduled": [
+            {
+                "id_hex": "44" * 32,
+                "effective_height": 150,
+                "successor": {
+                    "selection_id_hex": "55" * 32,
+                    "supported": False,
+                    "missing_definition_hex": "66" * 32,
+                },
+                "unresolved": None,
+            },
+            {
+                "id_hex": "77" * 32,
+                "effective_height": 160,
+                "successor": None,
+                "unresolved": "no longer applies",
+            },
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_get_runtime_release_names_each_selection_the_release_cannot_execute() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_runtime_release_payload()))
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
+
+    report = client.get_runtime_release()
+
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"].endswith("/v1/runtime/release")
+    assert _runtime_operator_signed(session.calls[0])
+    assert report.build["git_commit_sha"] == "0123456789abcdef0123456789abcdef01234567"
+    assert report.release_digest_hex == "22" * 32
+    assert report.selection.supported and report.selection.missing_definition_hex is None
+    first, second = report.scheduled
+    assert first.effective_height == 150
+    assert first.successor is not None and not first.successor.supported
+    assert first.successor.missing_definition_hex == "66" * 32
+    assert second.successor is None and second.unresolved == "no longer applies"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {
+                "selection": {
+                    "selection_id_hex": "33" * 32,
+                    "supported": True,
+                    "missing_definition_hex": "66" * 32,
+                }
+            },
+            "missing definition exactly when unsupported",
+        ),
+        (
+            {
+                "scheduled": [
+                    {"id_hex": "44" * 32, "effective_height": 150, "successor": None, "unresolved": None}
+                ]
+            },
+            "either a resolved successor or why",
+        ),
+        ({"extra": 1}, "unsupported fields: extra"),
+    ],
+)
+def test_get_runtime_release_rejects_inexact_reports(overrides: Dict[str, Any], message: str) -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_runtime_release_payload(**overrides)))
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        client.get_runtime_release()
+
+
+def test_attest_runtime_upgrade_admits_only_the_node_signed_attestation() -> None:
+    attestation = {
+        "ok": True,
+        "tx_instructions": [{"wire_id": "iroha.runtime.support.attest.v1", "payload_hex": "0a0b"}],
+    }
+    session = RecordingSession()
+    session.queue(StubResponse(payload=attestation))
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
+
+    draft = client.attest_runtime_upgrade("cd" * 32)
+
+    assert draft.tx_instructions[0].wire_id == "iroha.runtime.support.attest.v1"
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/attest/" + "cd" * 32)
+    assert _runtime_operator_signed(session.calls[0])
+
+    session.queue(StubResponse(payload=_runtime_tx_response("dd" * 32)))
+    with pytest.raises(RuntimeError, match="exactly one iroha.runtime.support.attest.v1"):
+        client.attest_runtime_upgrade("cd" * 32)
+
+
+def test_runtime_upgrade_routes_are_operator_routes() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    for call in (
+        client.list_runtime_upgrades,
+        lambda: client.propose_runtime_upgrade(_runtime_change_set(240)),
+        lambda: client.cancel_runtime_upgrade("aa" * 32),
+        lambda: client.attest_runtime_upgrade("aa" * 32),
+        client.get_runtime_release,
+    ):
+        with pytest.raises(ValueError, match="ToriiOperatorSigningContext"):
+            call()
+
+    assert session.calls == []
+
+
 def test_list_runtime_upgrades_parses_selection_and_change_sets() -> None:
     payload = _runtime_upgrades_payload(
         _runtime_change_set_item("aa" * 32, 120, {"kind": "Scheduled", "content": None}),
@@ -4940,12 +5086,15 @@ def test_list_runtime_upgrades_parses_selection_and_change_sets() -> None:
     )
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
 
     snapshot = client.list_runtime_upgrades()
 
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades")
+    assert _runtime_operator_signed(session.calls[0])
     assert snapshot.selection_id_hex == _RUNTIME_SELECTION_ID
     assert snapshot.selection == payload["selection"]
     assert snapshot.committee == _NATIVE_AMX_VALIDATOR_SET
@@ -5048,7 +5197,9 @@ def test_list_runtime_upgrades_rejects_malformed_and_retired_snapshots(
     mutate(payload)
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
 
     with pytest.raises(RuntimeError, match=message):
         client.list_runtime_upgrades()
@@ -5057,7 +5208,9 @@ def test_list_runtime_upgrades_rejects_malformed_and_retired_snapshots(
 def test_propose_runtime_upgrade_posts_change_set_as_given() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=_runtime_tx_response("aa" * 32)))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
     change_set = _runtime_change_set(240)
 
     result = client.propose_runtime_upgrade(change_set)
@@ -5067,11 +5220,14 @@ def test_propose_runtime_upgrade_posts_change_set_as_given() -> None:
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/propose")
     assert json.loads(session.calls[0]["data"].decode("utf-8")) == change_set
+    assert _runtime_operator_signed(session.calls[0])
 
 
 def test_propose_runtime_upgrade_requires_a_change_set_object() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
 
     with pytest.raises(TypeError, match="runtime change set must be a JSON object"):
         client.propose_runtime_upgrade([_runtime_change_set(240)])  # type: ignore[arg-type]
@@ -5082,14 +5238,17 @@ def test_propose_runtime_upgrade_requires_a_change_set_object() -> None:
 def test_cancel_runtime_upgrade_posts_change_set_id() -> None:
     session = RecordingSession()
     session.queue(StubResponse(payload=_runtime_tx_response("dd" * 32)))
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
 
     response = client.cancel_runtime_upgrade("aa" * 32)
 
     assert response.tx_instructions[0].wire_id == _RUNTIME_PROPOSAL_WIRE_ID
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/cancel/" + "aa" * 32)
-    assert session.calls[0]["data"] is None
+    assert session.calls[0]["data"] in (None, b"")
+    assert _runtime_operator_signed(session.calls[0])
 
 
 @pytest.mark.parametrize(
@@ -5097,7 +5256,9 @@ def test_cancel_runtime_upgrade_posts_change_set_id() -> None:
 )
 def test_cancel_runtime_upgrade_requires_an_exact_change_set_id(change_set_id: Any) -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test", session=session, operator_signing_context=_operator_context()
+    )
 
     with pytest.raises(RuntimeError, match="exact lowercase 32-byte hex string"):
         client.cancel_runtime_upgrade(change_set_id)

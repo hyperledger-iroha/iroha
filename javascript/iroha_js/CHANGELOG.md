@@ -4,6 +4,13 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `attestRuntimeUpgrade(idHex)` has the node sign its support for a scheduled runtime change set with
+  its own validator key (`POST /v1/runtime/upgrades/attest/{id}`) and admits exactly one
+  `iroha.runtime.support.attest.v1` draft. `getRuntimeRelease()` reads `GET /v1/runtime/release` as
+  `ToriiRuntimeReleaseSupport`: the build, the release digest, and whether the release executes the
+  committed selection and each scheduled successor, naming the first missing definition. Both sign with
+  the client's `OperatorSigningContext`.
+
 - Runtime upgrades use governed change sets (`specs/live_runtime_upgrades.md` §6) and the manifest API is
   removed. `listRuntimeUpgrades()` returns the `/v1/runtime/upgrades` snapshot (`ToriiRuntimeUpgradesSnapshot`):
   the committed `selectionIdHex` and `selection`, the attesting `committee` and `committeeDigestHex`, and

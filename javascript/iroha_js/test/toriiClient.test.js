@@ -12152,6 +12152,132 @@ test("cancelRuntimeUpgrade signs the operator draft for the change-set id", asyn
   assert.deepEqual(response, runtimeDraftResponseFixture("ff00"));
 });
 
+test("attestRuntimeUpgrade signs the operator request and admits the node's attestation", async () => {
+  let captured;
+  const draft = {
+    ok: true,
+    tx_instructions: [{ wire_id: "iroha.runtime.support.attest.v1", payload_hex: "0a0b" }],
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: draft,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const response = await client.attestRuntimeUpgrade("cd".repeat(32));
+  assert.equal(captured.url, `${BASE_URL}/v1/runtime/upgrades/attest/0x${"cd".repeat(32)}`);
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.body, undefined);
+  assert.ok(captured.init.headers["X-Iroha-Operator-Signature"]);
+  assert.deepEqual(response, draft);
+
+  const proposalDraft = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: runtimeDraftResponseFixture(),
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    proposalDraft.attestRuntimeUpgrade("cd".repeat(32)),
+    /wire_id must be iroha\.runtime\.support\.attest\.v1/u,
+  );
+});
+
+function runtimeReleaseFixture(overrides = {}) {
+  return {
+    build: {
+      version: "3.0.0",
+      git_commit_sha: "0123456789abcdef0123456789abcdef01234567",
+      dpn_validator_release_commit: "unknown",
+      cargo_features: "default",
+      target_triple: "aarch64-apple-darwin",
+      wire_schema_hash: "11".repeat(32),
+    },
+    release_digest_hex: "22".repeat(32),
+    selection: {
+      selection_id_hex: "33".repeat(32),
+      supported: true,
+      missing_definition_hex: null,
+    },
+    scheduled: [
+      {
+        id_hex: "44".repeat(32),
+        effective_height: 150,
+        successor: {
+          selection_id_hex: "55".repeat(32),
+          supported: false,
+          missing_definition_hex: "66".repeat(32),
+        },
+        unresolved: null,
+      },
+      { id_hex: "77".repeat(32), effective_height: 160, successor: null, unresolved: "no longer applies" },
+    ],
+    ...overrides,
+  };
+}
+
+test("getRuntimeRelease names each selection the release cannot execute", async () => {
+  let captured;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
+        status: 200,
+        jsonData: runtimeReleaseFixture(),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const report = await client.getRuntimeRelease();
+  assert.equal(captured.url, `${BASE_URL}/v1/runtime/release`);
+  assert.equal(captured.init.method, "GET");
+  assert.ok(captured.init.headers["X-Iroha-Operator-Signature"]);
+  assert.equal(report.build.gitCommitSha, "0123456789abcdef0123456789abcdef01234567");
+  assert.equal(report.releaseDigestHex, "22".repeat(32));
+  assert.deepEqual(report.selection, {
+    selectionIdHex: "33".repeat(32),
+    supported: true,
+    missingDefinitionHex: null,
+  });
+  assert.deepEqual(report.scheduled, [
+    {
+      idHex: "44".repeat(32),
+      effectiveHeight: 150,
+      successor: {
+        selectionIdHex: "55".repeat(32),
+        supported: false,
+        missingDefinitionHex: "66".repeat(32),
+      },
+      unresolved: null,
+    },
+    { idHex: "77".repeat(32), effectiveHeight: 160, successor: null, unresolved: "no longer applies" },
+  ]);
+
+  for (const [label, payload, pattern] of [
+    ["supported with a missing definition", runtimeReleaseFixture({
+      selection: { selection_id_hex: "33".repeat(32), supported: true, missing_definition_hex: "66".repeat(32) },
+    }), /must name the missing definition exactly when unsupported/u],
+    ["neither resolved nor explained", runtimeReleaseFixture({
+      scheduled: [{ id_hex: "44".repeat(32), effective_height: 150, successor: null, unresolved: null }],
+    }), /must name either a resolved successor or why it is unresolved/u],
+    ["unknown field", { ...runtimeReleaseFixture(), extra: 1 }, /contains unsupported fields: extra/u],
+  ]) {
+    const rejecting = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(rejecting.getRuntimeRelease(), pattern, label);
+  }
+});
+
 test("runtime change-set drafts admit exactly one ProposeRuntimeUpgradeProposal instruction", async () => {
   const instruction = runtimeDraftResponseFixture().tx_instructions[0];
   const cases = [
@@ -12202,6 +12328,8 @@ test("runtime change-set routes require an operator signing context before fetch
     ["listRuntimeUpgrades", () => client.listRuntimeUpgrades()],
     ["proposeRuntimeUpgrade", () => client.proposeRuntimeUpgrade(runtimeChangeSetFixture())],
     ["cancelRuntimeUpgrade", () => client.cancelRuntimeUpgrade("aa".repeat(32))],
+    ["attestRuntimeUpgrade", () => client.attestRuntimeUpgrade("aa".repeat(32))],
+    ["getRuntimeRelease", () => client.getRuntimeRelease()],
   ]) {
     // eslint-disable-next-line no-await-in-loop
     await assert.rejects(

@@ -10001,7 +10001,8 @@ class RuntimeInstruction:
 
 @dataclass(frozen=True)
 class RuntimeUpgradeActionResponse:
-    """Drafted SORA Parliament proposal returned by the runtime change-set helpers."""
+    """Drafted instruction returned by the runtime change-set helpers: the SORA Parliament
+    proposal of a propose or cancel draft, or the node-signed support attestation."""
 
     ok: bool
     tx_instructions: List[RuntimeInstruction]
@@ -15294,13 +15295,18 @@ class ToriiClient(
         return RuntimeAbiHash.from_payload(payload)
 
     def list_runtime_upgrades(self) -> Optional[Any]:
-        """Fetch the committed runtime selection and every recorded change set (`GET /v1/runtime/upgrades`)."""
+        """Fetch the committed runtime selection and every recorded change set (`GET /v1/runtime/upgrades`).
 
-        return self.request_json(
-            "GET",
+        Operator route: the client signs it with its ``operator_signing_context``.
+        """
+
+        response = self._operator_get(
             "/v1/runtime/upgrades",
-            expected_status=(200,),
+            headers={"Accept": "application/json"},
+            context="list_runtime_upgrades",
         )
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     def list_runtime_upgrades_typed(self) -> RuntimeUpgradesSnapshot:
         """Typed wrapper for :meth:`list_runtime_upgrades`."""
@@ -15320,10 +15326,15 @@ class ToriiClient(
 
         if not isinstance(change_set, Mapping):
             raise TypeError("runtime change set must be a JSON object")
-        response = self._request(
-            "POST",
+        body = json.dumps(
+            dict(change_set),
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        response = self._operator_post(
             "/v1/runtime/upgrades/propose",
-            json_body=dict(change_set),
+            body,
+            context="propose_runtime_upgrade",
         )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)
@@ -15349,11 +15360,10 @@ class ToriiClient(
         """
 
         identifier = _require_runtime_hex32(change_set_id_hex, "change_set_id_hex")
-        response = self._request(
-            "POST",
+        response = self._operator_post(
             f"/v1/runtime/upgrades/cancel/{identifier}",
-            headers={"Content-Type": "application/json"},
-            data=b"",
+            b"",
+            context="cancel_runtime_upgrade",
         )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)
@@ -15366,6 +15376,62 @@ class ToriiClient(
 
         payload = self.cancel_runtime_upgrade(change_set_id_hex)
         return RuntimeUpgradeActionResponse.from_payload(payload)
+
+    def attest_runtime_upgrade(self, change_set_id_hex: str) -> Dict[str, Any]:
+        """Have the node sign its support for a scheduled change set with its own validator key.
+
+        ``POST /v1/runtime/upgrades/attest/{id}``: the node attests only a successor selection
+        its release executes, and only while its key is a committee member. The draft holds
+        exactly one ``iroha.runtime.support.attest.v1`` instruction to submit. Operator route.
+        """
+
+        identifier = _require_runtime_hex32(change_set_id_hex, "change_set_id_hex")
+        response = self._operator_post(
+            f"/v1/runtime/upgrades/attest/{identifier}",
+            b"",
+            context="attest_runtime_upgrade",
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, dict):
+            raise RuntimeError("unexpected runtime upgrade attestation response")
+        instructions = payload.get("tx_instructions")
+        if (
+            not isinstance(instructions, list)
+            or len(instructions) != 1
+            or not isinstance(instructions[0], dict)
+            or instructions[0].get("wire_id") != "iroha.runtime.support.attest.v1"
+        ):
+            raise RuntimeError(
+                "runtime upgrade attestation response must hold exactly one "
+                "iroha.runtime.support.attest.v1 instruction"
+            )
+        return payload
+
+    def attest_runtime_upgrade_typed(self, change_set_id_hex: str) -> RuntimeUpgradeActionResponse:
+        """Typed wrapper for :meth:`attest_runtime_upgrade`."""
+
+        payload = self.attest_runtime_upgrade(change_set_id_hex)
+        return RuntimeUpgradeActionResponse.from_payload(payload)
+
+    def get_runtime_release(self) -> Dict[str, Any]:
+        """Report the node's release and the runtime selections it executes (`GET /v1/runtime/release`).
+
+        The report names the build and release digest and, for the committed selection and the
+        successor of each scheduled change set, whether the release executes it and the first
+        definition it lacks. Operator route.
+        """
+
+        response = self._operator_get(
+            "/v1/runtime/release",
+            headers={"Accept": "application/json"},
+            context="get_runtime_release",
+        )
+        self._expect_status(response, (200,))
+        payload = self._maybe_json(response)
+        if not isinstance(payload, dict):
+            raise RuntimeError("unexpected runtime release response")
+        return payload
 
     # ------------------------------------------------------------------
     # UAID portfolio & Space Directory surfaces

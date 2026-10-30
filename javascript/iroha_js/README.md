@@ -4579,8 +4579,15 @@ require an immutable `OperatorSigningContext` and sign every request.
   `effective_height` of at most `Number.MAX_SAFE_INTEGER`; pass larger integers inside published
   definitions or transitions as bigint.
 - `cancelRuntimeUpgrade(idHex)` returns the drafted proposal that withdraws a scheduled change set.
+- `attestRuntimeUpgrade(idHex)` asks the node to sign its support for a scheduled change set with
+  its own validator key. The node refuses unless its release executes the successor selection and
+  its key is a committee member; the draft holds exactly one `iroha.runtime.support.attest.v1`
+  instruction to submit.
+- `getRuntimeRelease()` reports the node's build, its release digest, and whether its release
+  executes the committed selection and each scheduled successor, naming the first definition it
+  lacks (`ToriiRuntimeReleaseSupport`).
 
-Each draft contains exactly one
+Each propose or cancel draft contains exactly one
 `iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal` instruction (`wire_id` and the
 framed `payload_hex`) for your wallet or key store to sign and submit; admission happens when the
 signed proposal executes. There is no activation call: an approved change set activates at the

@@ -6015,6 +6015,72 @@ export class ToriiClient {
   }
 
   /**
+   * Have the node sign its support for a scheduled runtime change set with its own validator
+   * key (`POST /v1/runtime/upgrades/attest/{id}`). The node attests only a successor selection
+   * its release executes, and only while its key is a committee member; Torii returns the
+   * `AttestRuntimeSupportV1` instruction to submit. Operator-only.
+   * @param {string | BinaryLike} idHex 32-byte change-set identity
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiRuntimeAttestationTxResponse>}
+   */
+  async attestRuntimeUpgrade(idHex, options = {}) {
+    const hash = normalizeHex32String(idHex, "attestRuntimeUpgrade.idHex");
+    const { signal } = normalizeSignalOnlyOption(options, "attestRuntimeUpgrade");
+    const response = await this._request(
+      "POST",
+      `/v1/runtime/upgrades/attest/0x${hash}`,
+      {
+        headers: JSON_ACCEPT_HEADERS,
+        signal,
+        operatorSigningContext: requireOperatorSigningContext(
+          this._operatorSigningContext,
+          "attestRuntimeUpgrade",
+        ),
+      },
+    );
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "runtime upgrade attest response",
+      { signal },
+    );
+    return normalizeRuntimeUpgradeTxResponse(
+      payload,
+      "runtime upgrade attest response",
+      RUNTIME_SUPPORT_ATTESTATION_WIRE_ID,
+    );
+  }
+
+  /**
+   * Report the node's release and whether it executes the committed runtime selection and the
+   * successor of each scheduled change set, naming the first definition it lacks
+   * (`GET /v1/runtime/release`). A node whose release cannot execute the selection due at a
+   * height stops before that height. Operator-only.
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiRuntimeReleaseSupport>}
+   */
+  async getRuntimeRelease(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getRuntimeRelease");
+    const response = await this._request("GET", "/v1/runtime/release", {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getRuntimeRelease",
+      ),
+    });
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      JSON_RESPONSE_MAX_BYTES,
+      "runtime release response",
+      { signal },
+    );
+    return normalizeRuntimeReleaseSupport(payload);
+  }
+
+  /**
    * List currently online peers (`GET /v1/peers`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ReadonlyArray<Record<string, unknown>>>}
@@ -14901,6 +14967,8 @@ function normalizeExplorerBlockRecord(payload, context) {
 // Wire identity of the instruction Torii drafts for a runtime change-set proposal.
 const RUNTIME_UPGRADE_PROPOSAL_WIRE_ID =
   "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+// Wire identity of the node-signed support attestation Torii drafts.
+const RUNTIME_SUPPORT_ATTESTATION_WIRE_ID = "iroha.runtime.support.attest.v1";
 // `ChangeSetStatusV1` variants that record the height at which they took hold.
 const RUNTIME_CHANGE_SET_HEIGHT_STATUSES = new Set(["Activated", "Lapsed", "Cancelled"]);
 
@@ -15020,8 +15088,15 @@ function normalizeRuntimeNotice(value, context) {
   };
 }
 
-/** Admit the one drafted `ProposeRuntimeUpgradeProposal` instruction of a propose/cancel draft. */
-function normalizeRuntimeUpgradeTxResponse(payload, context) {
+/**
+ * Admit the one drafted instruction of a runtime draft: the `ProposeRuntimeUpgradeProposal` of a
+ * propose/cancel draft, or the `AttestRuntimeSupportV1` of an attest draft.
+ */
+function normalizeRuntimeUpgradeTxResponse(
+  payload,
+  context,
+  wireId = RUNTIME_UPGRADE_PROPOSAL_WIRE_ID,
+) {
   const record = requireExactGovernanceProposalRecord(
     payload,
     ["ok", "tx_instructions"],
@@ -15043,18 +15118,116 @@ function normalizeRuntimeUpgradeTxResponse(payload, context) {
     ["wire_id", "payload_hex"],
     instructionContext,
   );
-  if (instruction.wire_id !== RUNTIME_UPGRADE_PROPOSAL_WIRE_ID) {
-    rejectType(`${instructionContext}.wire_id must be ${RUNTIME_UPGRADE_PROPOSAL_WIRE_ID}`);
+  if (instruction.wire_id !== wireId) {
+    rejectType(`${instructionContext}.wire_id must be ${wireId}`);
   }
   return {
     ok: true,
     tx_instructions: [{
-      wire_id: RUNTIME_UPGRADE_PROPOSAL_WIRE_ID,
+      wire_id: wireId,
       payload_hex: requireExactLowerEvenHexString(
         instruction.payload_hex,
         `${instructionContext}.payload_hex`,
       ),
     }],
+  };
+}
+
+/** Admit the `GET /v1/runtime/release` report. */
+function normalizeRuntimeReleaseSupport(payload) {
+  const context = "runtime release response";
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["build", "release_digest_hex", "selection", "scheduled"],
+    context,
+  );
+  const buildContext = `${context}.build`;
+  const build = requireExactGovernanceProposalRecord(
+    record.build,
+    [
+      "version",
+      "git_commit_sha",
+      "dpn_validator_release_commit",
+      "cargo_features",
+      "target_triple",
+      "wire_schema_hash",
+    ],
+    buildContext,
+  );
+  const scheduled = requireGovernanceArray(record.scheduled, `${context}.scheduled`).map(
+    (item, index) => {
+      const itemContext = `${context}.scheduled[${index}]`;
+      const entry = requireExactGovernanceProposalRecord(
+        item,
+        ["id_hex", "effective_height", "successor", "unresolved"],
+        itemContext,
+      );
+      const successor = entry.successor === null
+        ? null
+        : normalizeRuntimeSelectionSupport(entry.successor, `${itemContext}.successor`);
+      const unresolved = requireJsonNullableString(entry.unresolved, `${itemContext}.unresolved`);
+      if ((successor === null) === (unresolved === null)) {
+        rejectType(`${itemContext} must name either a resolved successor or why it is unresolved`);
+      }
+      return {
+        idHex: requireExactLowerHex32String(entry.id_hex, `${itemContext}.id_hex`),
+        effectiveHeight: requireExactJsonUnsignedInteger(
+          entry.effective_height,
+          `${itemContext}.effective_height`,
+          { allowZero: false },
+        ),
+        successor,
+        unresolved,
+      };
+    },
+  );
+  return {
+    build: {
+      version: requireExactString(build.version, `${buildContext}.version`),
+      gitCommitSha: requireExactString(build.git_commit_sha, `${buildContext}.git_commit_sha`),
+      dpnValidatorReleaseCommit: requireExactString(
+        build.dpn_validator_release_commit,
+        `${buildContext}.dpn_validator_release_commit`,
+      ),
+      cargoFeatures: requireExactString(build.cargo_features, `${buildContext}.cargo_features`),
+      targetTriple: requireExactString(build.target_triple, `${buildContext}.target_triple`),
+      wireSchemaHash: requireExactString(
+        build.wire_schema_hash,
+        `${buildContext}.wire_schema_hash`,
+      ),
+    },
+    releaseDigestHex: requireExactLowerHex32String(
+      record.release_digest_hex,
+      `${context}.release_digest_hex`,
+    ),
+    selection: normalizeRuntimeSelectionSupport(record.selection, `${context}.selection`),
+    scheduled,
+  };
+}
+
+function normalizeRuntimeSelectionSupport(value, context) {
+  const record = requireExactGovernanceProposalRecord(
+    value,
+    ["selection_id_hex", "supported", "missing_definition_hex"],
+    context,
+  );
+  const supported = requireExactBoolean(record.supported, `${context}.supported`);
+  const missing = record.missing_definition_hex === null
+    ? null
+    : requireExactLowerHex32String(
+      record.missing_definition_hex,
+      `${context}.missing_definition_hex`,
+    );
+  if (supported !== (missing === null)) {
+    rejectType(`${context} must name the missing definition exactly when unsupported`);
+  }
+  return {
+    selectionIdHex: requireExactLowerHex32String(
+      record.selection_id_hex,
+      `${context}.selection_id_hex`,
+    ),
+    supported,
+    missingDefinitionHex: missing,
   };
 }
 
