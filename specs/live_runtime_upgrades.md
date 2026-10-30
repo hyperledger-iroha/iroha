@@ -320,10 +320,11 @@ return only as committed State.
 5. **Stop the unsupported.** A node whose release cannot execute the successor selection stops voting
    and executing before the boundary, reports the selection and height in `/status` and telemetry,
    and resumes after its release is replaced. It never classifies a valid upgraded block as invalid.
-   Block start returns `StateStorageAdmissionError::UnsupportedRuntime`, which consensus classifies
-   as recovery-required: the node halts with `PublicationRecoveryRequired(height)`, served by
-   `/v1/sumeragi/status` and telemetry. A halt reason that names the unsupported selection is still
-   open.
+   Block start returns `StateStorageAdmissionError::UnsupportedRuntime`, whose reason names the
+   selection and the first definition the release lacks; consensus classifies it as
+   recovery-required, so the node halts with `PublicationRecoveryRequired(height)`, served by
+   `/v1/sumeragi/status` and telemetry. `GET /v1/runtime/release` names an unsupported scheduled
+   successor before the boundary.
 
 - **All `n`.** Attestation comes from every validator, not a quorum: of `q = n − f` reports, `f` may
   be Byzantine, leaving `q − f` honest upgraded validators, fewer than `q`. One Byzantine validator
@@ -718,11 +719,11 @@ not a date: it happens once everything its first selection needs is implemented 
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
    adopted State carries (triggers, multisig, AMX), expectations and deferred consent, stable
    rejection codes and event envelopes. Done for the universal root: change sets with proposal
-   through Parliament, the committed notice policy, all-`n` attestation bound to the committee,
-   scheduling, activation and lapse at block start, the unsupported-node stop, stable rejection
-   codes and lifecycle events. Still open: committed provenance policy, handshake profiles,
-   completion capabilities and obligation kinds, expectations and deferred consent, node-side
-   attestation and a halt reason naming the unsupported selection.
+   through Parliament, the committed notice policy, all-`n` attestation bound to the committee
+   and signed by each node for its own release, scheduling, activation and lapse at block start,
+   the unsupported-node stop with a reason naming the selection, stable rejection codes and
+   lifecycle events. Still open: committed provenance policy, handshake profiles, completion
+   capabilities and obligation kinds, expectations and deferred consent.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented

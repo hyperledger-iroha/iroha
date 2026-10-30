@@ -41,7 +41,14 @@ deleted.
    the change set, its predecessor and successor, network, root, the digest of the current
    committee as a set of keys, the tested checkpoint, a validity interval and the release digest.
    The signer must be a current committee member; a newer attestation replaces the validator's
-   earlier one (`Attested`).
+   earlier one (`Attested`). The node decides support, not its operator
+   (`iroha_core::runtime::attestation`): it resolves the successor the change set produces from
+   committed State, refuses unless its release implements every definition that selection relies
+   on and its key is a committee member, and signs with its own validator key, which never leaves
+   it. The attestation counts exactly at the effective height and binds the release digest,
+   `H(RELEASE_DOMAIN ‖ build status ‖ every definition the release implements)`. Until checkpoints
+   exist, its tested checkpoint is the committed height whose State the node resolved the
+   successor against.
 4. **Activate or lapse.** At the start of the effective height, before ordinary execution, a
    scheduled change set activates only if every committee member attested for this committee, the
    attestations count at that height, the committed block time satisfies the frozen notice and it
@@ -51,9 +58,11 @@ deleted.
    implement, block start fails with `StateStorageAdmissionError::UnsupportedRuntime`, which
    consensus classifies as recovery-required: the node halts with
    `PublicationRecoveryRequired(height)` before judging the block (served by
-   `/v1/sumeragi/status` and `sumeragi_halted{reason="publication_recovery_required"}`, with the
-   missing definition in the log) and resumes once a release that executes the selection
-   replaces it.
+   `/v1/sumeragi/status` and `sumeragi_halted{reason="publication_recovery_required"}`; the halt
+   reason names the selection and the first definition the release lacks) and resumes once a
+   release that executes the selection replaces it. `GET /v1/runtime/release` reports the same
+   before the boundary: for the committed selection and the successor of each scheduled change
+   set, whether this release executes it and, if not, the definition it lacks.
 
 IVM admission accepts a contract only when its ABI hash is one of the host profiles the committed
 selection activates.
@@ -106,9 +115,12 @@ The type's defaults are the production values of the design (3,600 blocks; 14 da
 | `GET /v1/runtime/upgrades` | Committed selection and its identity, committee keys and digest, every change-set record |
 | `POST /v1/runtime/upgrades/propose` | Body: `ChangeSetV1`. Drafts the `Schedule` proposal for local signing |
 | `POST /v1/runtime/upgrades/cancel/{id}` | Drafts the `Cancel` proposal for local signing |
+| `POST /v1/runtime/upgrades/attest/{id}` | The node signs its support with its validator key and drafts the `AttestRuntimeSupportV1` instruction; refused unless its release executes the successor and its key is a committee member |
+| `GET /v1/runtime/release` | Build, release digest, and whether the release executes the committed selection and each scheduled successor, naming the first definition it lacks |
 | `GET /v1/runtime/containments` | Every containment record by authorization height |
 
-The same routes back the `iroha.runtime.*` MCP tools.
+The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tools, beside the
+`iroha.runtime.abi.*` and `iroha.runtime.metrics` tools.
 
 ## CLI
 
@@ -116,10 +128,9 @@ The same routes back the `iroha.runtime.*` MCP tools.
 - `iroha runtime upgrade list`
 - `iroha runtime upgrade propose --file <change_set.json>`
 - `iroha runtime upgrade cancel --id <hex>`
-- `iroha runtime upgrade attest --id <hex> --validator-key-file <path> --release <hex>
-  --tested-checkpoint <h> [--valid-from <h>] [--valid-until <h>]` signs with the validator key,
-  read from the file at run time, and submits `AttestRuntimeSupportV1`. The interval defaults to
-  exactly the effective height.
+- `iroha runtime upgrade attest --id <hex>` has the node sign its support and submits the
+  drafted `AttestRuntimeSupportV1`; the operator never handles the validator key.
+- `iroha runtime release` shows the node's release support.
 
 ## Telemetry
 
@@ -128,7 +139,6 @@ The same routes back the `iroha.runtime.*` MCP tools.
 ## Still open
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
-node-side attestation, a dedicated halt reason naming the unsupported selection, the bound ratification
-case and review progress for renewals, obligations and
+the bound ratification case and review progress for renewals, obligations and
 completion capabilities, migrations and storage capabilities, checkpoints and the startup floor,
 and the governed adoption on Taira.

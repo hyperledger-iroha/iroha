@@ -353,14 +353,18 @@ fn block_start_stops_a_release_that_cannot_execute_the_successor() {
         .try_block(header_at(150))
         .err()
         .expect("this release does not implement the added instruction");
+    let crate::state::StateBlockStartError::Storage(
+        crate::state::StateStorageAdmissionError::UnsupportedRuntime {
+            height: 150,
+            reason,
+        },
+    ) = &error
+    else {
+        panic!("{error:?}");
+    };
     assert!(
-        matches!(
-            error,
-            crate::state::StateBlockStartError::Storage(
-                crate::state::StateStorageAdmissionError::UnsupportedRuntime { height: 150, .. }
-            )
-        ),
-        "{error:?}"
+        reason.contains(&change.successor.to_string()),
+        "the halt names the unsupported selection: {reason}"
     );
     assert_eq!(
         *state.world.runtime_selection.view().get(),

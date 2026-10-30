@@ -174,6 +174,25 @@ where
     let id = change_set
         .id()
         .map_err(|error| Error::Conversion(error.to_string()))?;
+    successor(change_set, id, current, scheduled, published)?;
+    Ok(id)
+}
+
+/// The successor selection `change_set` produces: applied to the selection it will meet,
+/// `current` advanced by every scheduled change set due before its effective height.
+///
+/// # Errors
+/// A scheduled change set or `change_set` itself no longer applies.
+pub(crate) fn successor<S>(
+    change_set: &ChangeSetV1,
+    id: ChangeSetId,
+    current: &RootSelectionV1,
+    scheduled: &BTreeMap<ChangeSetId, ChangeSetRecordV1>,
+    published: &PublishedDefinitions<'_, S>,
+) -> Result<RootSelectionV1, Error>
+where
+    S: StorageReadOnly<DefinitionId, DefinitionDescriptorV1>,
+{
     let (meets, staged) =
         projected_selection(current, scheduled, change_set.effective_height, published)?;
     let lookup = Staged {
@@ -182,8 +201,8 @@ where
     };
     change_set
         .apply(&meets, &lookup)
-        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
-    Ok(id)
+        .map(|applied| applied.selection)
+        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))
 }
 
 /// Check one validator's attestation of a scheduled change set (§6, "Attest").
@@ -325,11 +344,19 @@ pub(crate) fn activate_due(
             reason: error.to_string(),
         }
     })?;
-    if let Some(definition) = catalog.unsupported(wtx.runtime_selection.get()) {
+    let selection = wtx.runtime_selection.get();
+    if let Some(definition) = catalog.unsupported(selection) {
+        let named = selection.id().map_or_else(
+            |error| format!("whose identity cannot be encoded ({error})"),
+            |id| id.to_string(),
+        );
         return Err(
             crate::state::StateStorageAdmissionError::UnsupportedRuntime {
                 height,
-                reason: format!("definition {definition} is not implemented by this release"),
+                reason: format!(
+                    "selection {named} relies on definition {definition}, which this release does \
+                     not implement"
+                ),
             },
         );
     }

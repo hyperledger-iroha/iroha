@@ -2570,6 +2570,8 @@ struct AppState {
     da_receipt_signer: KeyPair,
     torii_proxy_bridge_signer: KeyPair,
     vpn_operator_signer: Option<KeyPair>,
+    /// The node's validator key pair, which signs its runtime support attestations.
+    runtime_attestation_signer: Option<KeyPair>,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -13316,6 +13318,51 @@ async fn handler_runtime_cancel_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_cancel_upgrade(id).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+async fn handler_runtime_attest_upgrade(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    id: AxPath<String>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/upgrades/attest",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_runtime_attest_upgrade(
+        app.state.clone(),
+        &app.build_status,
+        app.runtime_attestation_signer.as_ref(),
+        id,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+async fn handler_runtime_release(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/runtime/release", true).await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload =
+        crate::runtime::handle_runtime_release(app.state.clone(), &app.build_status).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_zk_roots(
@@ -35367,6 +35414,7 @@ pub struct Torii {
     da_receipt_signer: KeyPair,
     proxy_bridge_signer: KeyPair,
     vpn_operator_signer: Option<KeyPair>,
+    runtime_attestation_signer: Option<KeyPair>,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -35581,6 +35629,7 @@ pub struct ToriiRuntimeDeps {
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     torii_proxy_bridge_signer: Option<KeyPair>,
     vpn_operator_signer: Option<KeyPair>,
+    runtime_attestation_signer: Option<KeyPair>,
 }
 impl ToriiRuntimeDeps {
     /// Construct dependencies from the owning executable identity and telemetry.
@@ -35676,6 +35725,7 @@ impl ToriiRuntimeDeps {
             vpn_relay_trust: None,
             torii_proxy_bridge_signer: None,
             vpn_operator_signer: None,
+            runtime_attestation_signer: None,
         }
     }
 
@@ -36176,6 +36226,14 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_vpn_operator_signer(mut self, signer: KeyPair) -> Self {
         self.vpn_operator_signer = Some(signer);
+        self
+    }
+    /// Attach the node's validator key pair, with which the node signs its runtime support
+    /// attestations (`specs/live_runtime_upgrades.md` §6, "Attest"). Torii returns only signed
+    /// attestations; the key never leaves the node.
+    #[must_use]
+    pub fn with_runtime_attestation_signer(mut self, signer: KeyPair) -> Self {
+        self.runtime_attestation_signer = Some(signer);
         self
     }
 }
@@ -38876,6 +38934,8 @@ impl Torii {
             RUNTIME_UPGRADES => operator_get(handler_runtime_upgrades_list, app_state);
             RUNTIME_UPGRADE_PROPOSE => operator_post(handler_runtime_propose_upgrade, app_state);
             RUNTIME_UPGRADE_CANCEL => operator_post(handler_runtime_cancel_upgrade, app_state);
+            RUNTIME_UPGRADE_ATTEST => operator_post(handler_runtime_attest_upgrade, app_state);
+            RUNTIME_RELEASE => operator_get(handler_runtime_release, app_state);
             RUNTIME_CONTAINMENTS => operator_get(handler_runtime_containments_list, app_state);
         );
         #[cfg(feature = "app_api")]
@@ -39328,6 +39388,7 @@ impl Torii {
             .torii_proxy_bridge_signer
             .unwrap_or_else(|| da_receipt_signer.clone());
         let vpn_operator_signer = runtime_deps.vpn_operator_signer;
+        let runtime_attestation_signer = runtime_deps.runtime_attestation_signer;
         let app_query_limits = routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
@@ -40686,6 +40747,7 @@ ingress,
             da_receipt_signer,
             proxy_bridge_signer: torii_proxy_bridge_signer,
             vpn_operator_signer,
+            runtime_attestation_signer,
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams,
             #[cfg(feature = "app_api")]
@@ -41620,6 +41682,7 @@ ingress,
             da_receipt_signer: self.da_receipt_signer.clone(),
             torii_proxy_bridge_signer: self.proxy_bridge_signer.clone(),
             vpn_operator_signer: self.vpn_operator_signer.clone(),
+            runtime_attestation_signer: self.runtime_attestation_signer.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             #[cfg(feature = "app_api")]
@@ -42227,6 +42290,13 @@ ingress,
                     &self.events,
                     shutdown_signal.clone(),
                 ),
+            });
+            critical_workers.push(ToriiCriticalWorker {
+                name: "finality_prefix_ladder",
+                task: tokio::spawn(finality_interval::keep_prefix_ladder_warm(
+                    app_state.clone(),
+                    shutdown_signal.clone(),
+                )),
             });
         }
         if let Some(runtime) = self.iso_bridge.as_ref() {

@@ -21535,6 +21535,37 @@ impl Client {
         )?;
         Self::decode_json_ok(resp, "Failed to cancel runtime upgrade")
     }
+    /// POST `/v1/runtime/upgrades/attest/:id` (change-set id hex in path): the node signs, with
+    /// its own validator key, its support for the scheduled change set, and the response drafts
+    /// the `AttestRuntimeSupportV1` instruction that records it.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the node refuses to attest
+    /// (its release cannot execute the successor, or it is not a committee member), or JSON
+    /// deserialization fails.
+    pub fn post_runtime_attest_upgrade_json(&self, id_hex: &str) -> Result<norito::json::Value> {
+        let path = format!("v1/runtime/upgrades/attest/{id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, Vec::new())?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to attest runtime upgrade")
+    }
+    /// GET `/v1/runtime/release`: this node's release digest and whether it executes the committed
+    /// selection and the successor of each scheduled change set.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn get_runtime_release_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/release");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to get runtime release support")
+    }
     /// List attachments via `/v1/zk/attachments`. Returns JSON array of metadata objects.
     /// # Errors
     /// Returns an error if canonical request signing or HTTP fails, the response is non-OK, or JSON deserialization fails.

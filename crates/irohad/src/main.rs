@@ -4536,6 +4536,7 @@ impl Iroha {
         let runtime_deps = (|| {
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
+            .with_runtime_attestation_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
         let runtime_deps = runtime_deps
             .with_private_settlement_availability_signer(private_settlement_availability_signer)

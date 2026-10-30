@@ -2870,6 +2870,7 @@ fn mk_app_state_for_tests_with_native_scope(
             checked_torii_test_ed25519_keypair(0xb5, "derive Torii proxy bridge fixture signer")
         }),
         vpn_operator_signer: None,
+        runtime_attestation_signer: None,
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]

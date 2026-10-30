@@ -6,6 +6,7 @@
 //! universal root executes. Execution resolves every instruction against that selection, and the
 //! State commitment covers exactly the storage it installs.
 
+pub mod attestation;
 pub mod catalog;
 pub(crate) mod change_set;
 pub(crate) mod containment;

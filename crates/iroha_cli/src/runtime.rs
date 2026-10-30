@@ -13,6 +13,9 @@ pub enum Command {
     /// Emergency containment by the runtime emergency panel
     #[command(subcommand)]
     Contain(ContainCommand),
+    /// Show this node's release and whether it executes the committed selection and the
+    /// successor of each scheduled change set
+    Release,
     /// Show runtime metrics/status summary
     Status,
     /// Fetch node capability advert (ABI + crypto manifest)
@@ -24,6 +27,11 @@ impl Run for Command {
             Command::Abi(cmd) => cmd.run(context),
             Command::Upgrade(cmd) => cmd.run(context),
             Command::Contain(cmd) => cmd.run(context),
+            Command::Release => {
+                let client = context.client_from_config()?;
+                let value = client.get_runtime_release_json()?;
+                context.print_data(&value)
+            }
             Command::Status => {
                 let client = context.client_from_config()?;
                 let value = client.get_runtime_metrics_json()?;
@@ -126,7 +134,8 @@ pub enum UpgradeCommand {
     Propose(ProposeArgs),
     /// Draft the Parliament proposal that withdraws a scheduled change set
     Cancel(CancelArgs),
-    /// Sign this validator's support for a scheduled change set and submit it
+    /// Have the node sign its support for a scheduled change set with its validator key, then
+    /// submit the attestation
     Attest(AttestArgs),
 }
 impl Run for UpgradeCommand {
@@ -176,82 +185,47 @@ pub struct AttestArgs {
     /// Change-set id (hex)
     #[arg(long, value_name = "HEX")]
     id: String,
-    /// File holding the validator's private key (multihash hex); it is read at run time and
-    /// never printed
-    #[arg(long, value_name = "PATH")]
-    validator_key_file: std::path::PathBuf,
-    /// Digest of the release the validator runs (32 bytes, hex)
-    #[arg(long, value_name = "HEX")]
-    release: String,
-    /// Checkpoint height the release was tested from
-    #[arg(long, value_name = "HEIGHT")]
-    tested_checkpoint: u64,
-    /// First height at which the attestation counts [default: the effective height]
-    #[arg(long, value_name = "HEIGHT")]
-    valid_from: Option<u64>,
-    /// Height from which the attestation no longer counts [default: the effective height + 1]
-    #[arg(long, value_name = "HEIGHT")]
-    valid_until: Option<u64>,
 }
 impl Run for AttestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        use iroha::data_model::{
-            isi::{InstructionBox, runtime_upgrade::AttestRuntimeSupportV1},
-            runtime::lifecycle::{ChangeSetId, ChangeSetRecordV1, SupportAttestationV1},
-        };
-        let id = ChangeSetId(decode_hex_32("change-set id", &self.id)?);
-        let release = decode_hex_32("release digest", &self.release)?;
-        let key = read_private_key(&self.validator_key_file)?;
-        let validator = iroha::crypto::KeyPair::from(key.clone())
-            .public_key()
-            .clone();
-
+        let id = decode_hex_32("change-set id", &self.id)?;
         let client = context.client_from_config()?;
-        let listing = client.get_runtime_upgrades_json()?;
-        let committee = decode_hex_32(
-            "committee digest",
-            listing
-                .get("committee_digest_hex")
-                .and_then(norito::json::Value::as_str)
-                .ok_or_else(|| eyre!("the node did not report its committee digest"))?,
-        )?;
-        let id_hex = hex::encode(id.0);
-        let record = listing
-            .get("items")
-            .and_then(norito::json::Value::as_array)
-            .and_then(|items| {
-                items.iter().find(|item| {
-                    item.get("id_hex").and_then(norito::json::Value::as_str)
-                        == Some(id_hex.as_str())
-                })
-            })
-            .and_then(|item| item.get("record"))
-            .ok_or_else(|| eyre!("change set {id_hex} is not recorded"))?;
-        let record: ChangeSetRecordV1 =
-            norito::json::from_value(record.clone()).wrap_err("malformed change-set record")?;
-        let change_set = &record.change_set;
-        let effective_height = change_set.effective_height;
-        let attestation = SupportAttestationV1 {
-            network: change_set.network,
-            root: change_set.root,
-            change_set: id,
-            predecessor: change_set.predecessor,
-            successor: change_set.successor,
-            committee,
-            tested_checkpoint: self.tested_checkpoint,
-            valid_from: self.valid_from.unwrap_or(effective_height),
-            valid_until: self
-                .valid_until
-                .unwrap_or_else(|| effective_height.saturating_add(1)),
-            release,
-            validator,
-        }
-        .sign(&key)
-        .map_err(|error| eyre!("failed to sign the attestation: {error}"))?;
-        context.finish(vec![InstructionBox::from(AttestRuntimeSupportV1 {
-            attestation,
-        })])
+        // The node decides support and signs with its own validator key; the operator only
+        // relays the attestation (`specs/live_runtime_upgrades.md` §6, "Attest").
+        let draft = client.post_runtime_attest_upgrade_json(&hex::encode(id))?;
+        context.finish(drafted_attestation(&draft)?)
     }
+}
+/// The one `AttestRuntimeSupportV1` instruction a node drafted.
+fn drafted_attestation(
+    draft: &norito::json::Value,
+) -> Result<Vec<iroha::data_model::isi::InstructionBox>> {
+    use iroha::data_model::isi::runtime_upgrade::AttestRuntimeSupportV1;
+    let [instruction] = draft
+        .get("tx_instructions")
+        .and_then(norito::json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    else {
+        return Err(eyre!("the node did not draft exactly one instruction"));
+    };
+    let field = |name: &str| {
+        instruction
+            .get(name)
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("the drafted instruction has no {name}"))
+    };
+    let wire_id = field("wire_id")?;
+    if wire_id != AttestRuntimeSupportV1::WIRE_ID {
+        return Err(eyre!(
+            "the node drafted {wire_id}, not a runtime support attestation"
+        ));
+    }
+    let payload = hex::decode(field("payload_hex")?)
+        .map_err(|_| eyre!("the drafted instruction payload is not hex"))?;
+    let instruction = iroha::data_model::isi::decode_instruction_from_pair(wire_id, &payload)
+        .map_err(|error| eyre!("malformed drafted attestation: {error}"))?;
+    Ok(vec![instruction])
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum ContainCommand {

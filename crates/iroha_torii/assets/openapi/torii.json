@@ -93627,6 +93627,52 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/runtime/release": {
+      "get": {
+        "description": "This node's build and release digest, whether its release executes the committed runtime selection, and for each scheduled change set whether it executes the successor selection, naming the first definition the release lacks. A node whose release cannot execute the selection due at a height stops before that height.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Report this release's runtime support.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.release"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/runtime/upgrades": {
       "get": {
         "description": "The committed runtime selection and its identity, the attesting committee and its digest, and every recorded change set by effective height then identity.",
@@ -93669,6 +93715,73 @@
           "authentication": "operator_signature",
           "schemaVersion": 1,
           "stableRouteId": "operator.runtime.upgrade.list"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/upgrades/attest/{id}": {
+      "post": {
+        "description": "Sign, with this node's validator key, its attestation that its release executes the successor selection of the scheduled change set with the given 32-byte hex identity, bound to the current committee, and return the instruction that records it for an operator to submit. Refused when the change set is not scheduled, this node is not a committee member, or its release cannot execute the successor selection.",
+        "parameters": [
+          {
+            "description": "Change-set identity, 32-byte hex.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Draft this node's runtime support attestation.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.upgrade.attest"
         },
         "x-iroha-tool-effect": "operator"
       }

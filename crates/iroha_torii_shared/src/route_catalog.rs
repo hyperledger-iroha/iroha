@@ -2923,6 +2923,14 @@ pub mod runtime_governance {
         "operator.runtime.upgrade.cancel",
         "/v1/runtime/upgrades/cancel/{id}",
     );
+    /// Sign this node's support attestation of a scheduled runtime change set.
+    pub const RUNTIME_UPGRADE_ATTEST: RouteDescriptor = operator_post(
+        "operator.runtime.upgrade.attest",
+        "/v1/runtime/upgrades/attest/{id}",
+    );
+    /// This release's support for the committed and the scheduled runtime selections.
+    pub const RUNTIME_RELEASE: RouteDescriptor =
+        operator_get("operator.runtime.release", "/v1/runtime/release");
     /// Every recorded emergency containment of runtime definitions.
     pub const RUNTIME_CONTAINMENTS: RouteDescriptor = operator_get(
         "operator.runtime.containment.list",
@@ -3124,6 +3132,8 @@ pub mod runtime_governance {
         RUNTIME_UPGRADES,
         RUNTIME_UPGRADE_PROPOSE,
         RUNTIME_UPGRADE_CANCEL,
+        RUNTIME_UPGRADE_ATTEST,
+        RUNTIME_RELEASE,
         RUNTIME_CONTAINMENTS,
         MINISTRY_AGENDA_DRAFT,
         MINISTRY_AGENDA_GET,

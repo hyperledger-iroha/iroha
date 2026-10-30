@@ -109,7 +109,7 @@ pub enum StateStorageAdmissionError {
     UnsupportedRuntime {
         /// First height the selection applies to.
         height: u64,
-        /// What the release lacks.
+        /// The selection, and the first definition it relies on that the release lacks.
         reason: String,
     },
 }
