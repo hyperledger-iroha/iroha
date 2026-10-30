@@ -1018,6 +1018,21 @@ impl PrivateDirectory {
             .open_exact_lock(checked_name(name.as_ref())?, false)
     }
 
+    /// Recheck an original private lock descriptor against this directory's current name.
+    ///
+    /// The caller retains the held lock. This shares the original directory and ancestor
+    /// handles with [`OwnerDirectory::require_same_lock`], preserving their private custody
+    /// policies without creating a missing lock or opening a replacement writable lock.
+    ///
+    /// # Errors
+    /// Refuses changed lock identity, unsafe private custody and native observation errors.
+    pub fn require_same_lock(&self, name: impl AsRef<OsStr>, original: &File) -> io::Result<()> {
+        OwnerDirectory {
+            inner: self.inner.clone(),
+        }
+        .require_same_lock(name, original)
+    }
+
     /// Remove this exact empty directory and durably publish its absence in the parent.
     ///
     /// All descendant handles must be dropped first. Nonempty directories are refused.

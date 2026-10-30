@@ -340,12 +340,19 @@ fn retain_prepared_activation(
     Ok(())
 }
 
-fn attachment_turn_deadline(directory: &PrivateDirectory) -> Result<Instant> {
+fn attachment_turn_deadline(
+    directory: &PrivateDirectory,
+    parent_confirmed: bool,
+) -> Result<Instant> {
     match directory.read_optional(ACTIVATION, MAX_METADATA)? {
         Some(bytes) => {
             let activation: Activation = decode(&bytes)?;
             let milliseconds = activation.deadline_ms.saturating_sub(now_ms()?);
-            if milliseconds > 0 {
+            // Registration consumes the original foreground budget. Once this live owner
+            // has independently confirmed it, new anchors get their own bounded turn;
+            // they must not inherit the last milliseconds of startup's budget.
+            // Still decode the retained activation above to preserve custody validation.
+            if !parent_confirmed && milliseconds > 0 {
                 Ok(Instant::now() + Duration::from_millis(milliseconds).min(MAX_ATTACH))
             } else {
                 Ok(Instant::now() + RELAY_TURN)
@@ -925,6 +932,17 @@ struct RelayControl<'a> {
     cancelled: &'a Arc<AtomicBool>,
 }
 
+fn can_relay_in_turn(progress: ProvisioningProgress, parent_confirmed: bool) -> bool {
+    // Reopening may first reveal an independently confirmed registration after this
+    // turn selected its startup budget. Record that fact, then let the next turn use
+    // its full background budget before preparing any new anchor.
+    (parent_confirmed || progress.confirmed.is_none())
+        && matches!(
+            progress.stage,
+            ProvisioningStage::Registering | ProvisioningStage::Attached
+        )
+}
+
 fn relay_turn(
     directory: &PrivateDirectory,
     bootstrap_path: &Path,
@@ -943,7 +961,12 @@ fn relay_turn(
     let profile = profiles
         .select(&binding.profile.name)
         .map_err(ManagedAttachmentFailure::from)?;
-    let deadline = attachment_turn_deadline(directory)?;
+    let parent_confirmed = status
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .parent_confirmed
+        .is_some();
+    let deadline = attachment_turn_deadline(directory, parent_confirmed)?;
     let retained = bind_installed_profile(directory, profile, deadline)?;
     if retained.spec != binding.spec
         || retained.account_alias != binding.account_alias
@@ -998,10 +1021,7 @@ fn relay_turn(
             }
         }
     };
-    if matches!(
-        progress.stage,
-        ProvisioningStage::Registering | ProvisioningStage::Attached
-    ) {
+    if can_relay_in_turn(progress, parent_confirmed) {
         let relay = service
             .relay_once(&bootstrap, deadline)
             .map_err(ManagedAttachmentFailure::from)?;

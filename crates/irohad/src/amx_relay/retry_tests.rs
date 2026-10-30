@@ -34,11 +34,12 @@ impl Source for RetrySource {
                 }))
         })
     }
-    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>> {
+    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>> {
         Box::pin(async move {
             self.proofs
                 .get(&height.get())
                 .cloned()
+                .map(|proof| ProofInput::Fixture(Box::new(proof)))
                 .ok_or_else(|| eyre!("no unrelated successor exists"))
         })
     }
@@ -193,15 +194,18 @@ async fn replacement_case(rejections: &[bool]) {
             sent,
         }),
         dispatch: account.clone(),
-        verifier: Mutex::new(verifier),
+        custody: PendingCustody::for_test(&verifier, account.transactions[0].authority().clone()),
+        original: verifier.into_genesis_verifier(),
         network: fixture.network_id(),
         authority: account.transactions[0].authority().clone(),
         fee_payment: account.transactions[0].fee_payment_intent().clone(),
-        instruction: Mutex::new(None),
-        approval: Mutex::new(None),
-        handoff_scan: Mutex::new(HandoffScan::default()),
+        instruction: Mutex::new(None).into(),
+        approval: Mutex::new(None).into(),
+        source_plan: Mutex::new(None).into(),
+        handoff: Mutex::new(None).into(),
+        test_lease: Mutex::new(None).into(),
         max_reads: 8,
-        reads: AtomicUsize::new(0),
+        reads: AtomicUsize::new(0).into(),
     });
     let directory = tempfile::tempdir().unwrap();
     let storage =
@@ -231,7 +235,7 @@ async fn replacement_case(rejections: &[bool]) {
         retry_rejected_step: true,
     };
     for (index, rejected) in rejections.iter().enumerate() {
-        ledger.begin_observation(digest, None).unwrap();
+        ledger.begin_test_observation(digest, None).unwrap();
         let driver = ReauthenticatedDriver {
             payload: Mutex::new(Some(
                 norito::encode_canonical(account.transactions[index].payload()).unwrap(),

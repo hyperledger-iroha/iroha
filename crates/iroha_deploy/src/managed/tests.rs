@@ -297,9 +297,14 @@ fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spaw
     request.startup_timeout = Duration::from_secs(120);
     let spec = private_spec();
     let error = store.up_private_root(&request, &spec).unwrap_err();
+    // The test executable exits instead of adopting the worker's reserved listeners.
+    let expected = format!(
+        "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+        Error::Timeout(request.startup_timeout)
+    );
     assert!(
-        matches!(error, Error::Timeout(timeout) if timeout == request.startup_timeout),
-        "expected original-budget worker-start failure after genuine preparation: {error}"
+        matches!(&error, Error::Invalid(message) if message == &expected),
+        "expected owned worker exit during listener handoff after genuine preparation: {error}"
     );
     let prepared = store
         .prepared("private")

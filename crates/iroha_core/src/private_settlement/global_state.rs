@@ -1801,6 +1801,24 @@ impl PrivateSettlementGlobalStateErrorV1 {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl crate::state::WorldBlock<'_> {
+    /// Seed trusted terminal rows for a World-to-HTTP component fixture.
+    ///
+    /// This deliberately does not execute or authenticate a payment. Callers must
+    /// not use this fixture as evidence of a valid proof, carrier or certified block.
+    pub fn seed_private_settlement_terminal_read_fixture(
+        &mut self,
+        receipt: PrivateSettlementReceiptV1,
+        abort: PrivateSettlementAbortReceiptV1,
+    ) {
+        self.private_settlement_receipts
+            .insert(receipt.manifest.bundle_id, receipt);
+        self.private_settlement_aborts
+            .insert(abort.bundle_id, abort);
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -3262,6 +3280,255 @@ pub mod tests {
     }
 
     #[test]
+    fn same_signed_private_register_ignores_node_local_validity_limits() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(false, false, false);
+    }
+
+    #[test]
+    fn same_signed_private_finalize_ignores_node_local_validity_limits() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(true, false, false);
+    }
+
+    #[test]
+    fn committed_register_refuses_the_first_byte_beyond_reserved_continuation_capacity() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(false, true, false);
+    }
+
+    #[test]
+    fn original_registered_finalize_uses_its_reservation_after_admission_tightening() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(true, true, false);
+    }
+
+    #[test]
+    fn original_expired_abort_survives_committed_admission_closure() {
+        assert_same_signed_private_carrier_ignores_node_local_validity_limits(false, true, true);
+    }
+
+    fn assert_same_signed_private_carrier_ignores_node_local_validity_limits(
+        is_finalize: bool,
+        tightened: bool,
+        is_abort: bool,
+    ) {
+        use crate::{
+            private_settlement::carrier::signed_private_settlement_carrier_binding_v1,
+            query::store::LiveQueryStore, smartcontracts::Execute as _, state::State,
+        };
+        use iroha_crypto::Algorithm;
+        use iroha_data_model::{
+            account::AccountId,
+            block::BlockHeader,
+            isi::private_settlement::{
+                AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+                RegisterAtomicPrivateSettlementPrepareV1,
+            },
+            nexus::{
+                DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+                PrivateSettlementCommitBundleV1,
+            },
+            transaction::TransactionBuilder,
+        };
+        use iroha_model_base::chain::ChainId;
+        use std::num::{NonZeroU32, NonZeroU64};
+
+        // The fixture has actual participant quorum signatures and public state
+        // transitions; its synthetic proof bytes do not qualify STARK execution.
+        let (original, receipt, sidecar) = fixture();
+        let receipt = recertify_receipt_with_validator_keys(receipt, &sidecar.validator_keys);
+        let sponsor = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+        assert_eq!(
+            receipt.manifest.sponsor,
+            AccountId::new(sponsor.public_key().clone())
+        );
+        let register = RegisterAtomicPrivateSettlementPrepareV1::new(
+            prepare_barrier_from_receipt_v1(&receipt).expect("exact all-Prepare barrier"),
+        );
+        let abort = AbortAtomicPrivateSettlementV1::new(
+            receipt.manifest.clone(),
+            iroha_data_model::nexus::PrivateSettlementAbortReasonV1::Expired,
+        );
+        let finalize = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
+            version: receipt.version,
+            manifest: receipt.manifest.clone(),
+            authority_catalog: receipt.authority_catalog.clone(),
+            legs: receipt.legs.clone(),
+        });
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(
+                receipt
+                    .manifest
+                    .legs
+                    .iter()
+                    .map(|leg| leg.route.lane_id.as_u32())
+                    .max()
+                    .expect("participants")
+                    + 1,
+            )
+            .expect("non-zero lane bound"),
+            std::iter::once(LaneConfig::default())
+                .chain(receipt.manifest.legs.iter().map(|leg| LaneConfig {
+                    id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                    alias: format!("private-policy-{}", leg.route.lane_id.as_u32()),
+                    ..LaneConfig::default()
+                }))
+                .collect(),
+        )
+        .expect("original catalog");
+        let dataspaces = DataSpaceCatalog::new(
+            DataSpaceCatalog::default()
+                .entries()
+                .iter()
+                .cloned()
+                .chain(receipt.manifest.legs.iter().map(|leg| DataSpaceMetadata {
+                    id: leg.route.dataspace_id,
+                    alias: format!("private-policy-{}", leg.route.dataspace_id.as_u64()),
+                    description: None,
+                    fault_tolerance: 1,
+                }))
+                .collect(),
+        )
+        .expect("original data spaces");
+
+        {
+            let instruction: iroha_data_model::isi::InstructionBox = if is_abort {
+                abort.clone().into()
+            } else if is_finalize {
+                finalize.clone().into()
+            } else {
+                register.clone().into()
+            };
+            let mut builder = TransactionBuilder::new(
+                receipt.manifest.network_id,
+                receipt.manifest.sponsor.clone(),
+                receipt.manifest.public_fee_intent.clone(),
+            )
+            .with_instructions([instruction]);
+            builder.set_nonce(NonZeroU32::new(7).expect("original nonce"));
+            let signed = builder.sign(sponsor.private_key());
+            let mut observations = Vec::new();
+            for local_cap in [1_u64, u64::MAX] {
+                let mut private_state = original.clone();
+                if is_finalize || is_abort {
+                    register_receipt_prepare(&mut private_state, &receipt)
+                        .expect("original registered obligation");
+                }
+                let mut nexus = iroha_config::parameters::actual::Nexus::default();
+                nexus.lane_catalog = lane_catalog.clone();
+                nexus.dataspace_catalog = dataspaces.clone();
+                nexus.atomic_private_settlement.sidecar_max_total_bytes =
+                    NonZeroU64::new(local_cap).expect("positive local capacity");
+                nexus.atomic_private_settlement.sidecar_max_records =
+                    NonZeroU32::new(if local_cap == 1 { 1 } else { u32::MAX }).unwrap();
+                let mut world = world_from_private_settlement_state(private_state);
+                let required =
+                    iroha_data_model::nexus::private_settlement_required_continuation_bytes_v1(
+                        &signed,
+                        &register.barrier,
+                    )
+                    .unwrap();
+                let mut policy =
+                    iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default();
+                policy.current_limits.private_settlement.max_carrier_bytes =
+                    if tightened { required - 1 } else { required };
+                policy.validate().unwrap();
+                world.privacy_consensus_policy = mv::cell::Cell::new(policy);
+                if (is_finalize || is_abort) && tightened {
+                    use iroha_data_model::privacy::{
+                        IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+                        PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1,
+                    };
+                    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+                    world.privacy_protocol_policies.insert(
+                        PrivacyProtocolPolicyKeyV1::new(protocol),
+                        PrivacyProtocolPolicyV1 {
+                            protocol_id: protocol,
+                            current_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                                IvmPrivateNoteLimitsV1 {
+                                    max_input_count: 1,
+                                    max_output_count: 1,
+                                },
+                            ),
+                            pending_update: None,
+                        },
+                    );
+                }
+                let (state, _kura) =
+                    State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                        world,
+                        nexus,
+                        LiveQueryStore::start_test(),
+                        ChainId::from("private-policy-component"),
+                        receipt.manifest.network_id,
+                    );
+                install_private_settlement_authority_fixture(
+                    &state,
+                    &receipt,
+                    &sidecar.validator_keys,
+                );
+                let height = if is_abort {
+                    receipt.manifest.expiry_height + 1
+                } else if is_finalize {
+                    receipt.finalized_height
+                } else {
+                    receipt.manifest.authority_context_height
+                };
+                let mut block = state.block(BlockHeader::new(
+                    NonZeroU64::new(height).expect("actual phase height"),
+                    None,
+                    None,
+                    0,
+                    0,
+                ));
+                let mut transaction = block.transaction();
+                transaction.bind_private_settlement_carrier_v1(
+                    signed_private_settlement_carrier_binding_v1(&signed)
+                        .expect("original signed binding"),
+                );
+                let before = private_settlement_transaction_bytes(&transaction);
+                let result = if is_abort {
+                    abort
+                        .clone()
+                        .execute(&receipt.manifest.sponsor, &mut transaction)
+                } else if is_finalize {
+                    finalize
+                        .clone()
+                        .execute(&receipt.manifest.sponsor, &mut transaction)
+                } else {
+                    register
+                        .clone()
+                        .execute(&receipt.manifest.sponsor, &mut transaction)
+                };
+                let after = private_settlement_transaction_bytes(&transaction);
+                if result.is_err() {
+                    assert_eq!(
+                        after, before,
+                        "rejected carrier must leave every table intact"
+                    );
+                } else {
+                    assert_ne!(
+                        after, before,
+                        "positive carrier must produce its real state effect"
+                    );
+                }
+                observations.push((result.is_ok(), after));
+            }
+            assert_eq!(
+                observations[0].0,
+                is_finalize || is_abort || !tightened,
+                "committed boundary and original continuation control"
+            );
+            assert_eq!(
+                observations[0].0, observations[1].0,
+                "same signed carrier and committed World must agree; finalize={is_finalize}"
+            );
+            assert_eq!(
+                observations[0].1, observations[1].1,
+                "accepted carriers must produce the same private state; finalize={is_finalize}"
+            );
+        }
+    }
+
+    #[test]
     fn state_transaction_applies_all_legs_only_at_atomic_commit_boundaries() {
         use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
         use iroha_data_model::{
@@ -3343,7 +3610,7 @@ pub mod tests {
 
         let protocol_id =
             iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(protocol_id);
+        let policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol_id);
         let profile = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
             .expect("actual compiled IVM private-note profile");
         block.world.privacy_protocol_policies.insert(
@@ -3418,11 +3685,22 @@ pub mod tests {
             let mut transaction = block.transaction();
             let before = private_settlement_transaction_bytes(&transaction);
             assert_eq!(
-                transaction.apply_private_settlement_receipt_v1(receipt.clone()),
+                transaction.apply_private_settlement_prepare_locks_v1(
+                    &prepare_barrier_from_receipt_v1(&receipt).unwrap(),
+                ),
                 Err(PrivateSettlementGlobalStateErrorV1::Capability),
-                "ordinary limits insufficient for settlement must reject before any leg mutates"
+                "closed current admission must refuse new Prepare registration without mutation"
             );
             assert_eq!(private_settlement_transaction_bytes(&transaction), before);
+            assert_eq!(
+                transaction.apply_private_settlement_receipt_v1(receipt.clone()),
+                Ok(PrivateSettlementGlobalStateOutcomeV1::Applied),
+                "a valid admission closure cannot revoke the original registered obligation"
+            );
+            assert_eq!(
+                transaction.private_settlement_receipt_v1(&receipt.manifest.bundle_id),
+                Some(&receipt)
+            );
         }
         block.world.privacy_protocol_policies.remove(policy_key);
         assert_eq!(
@@ -3442,12 +3720,16 @@ pub mod tests {
             let mut transaction = block.transaction();
             let before = private_settlement_transaction_bytes(&transaction);
             let mut wrong_network = receipt.clone();
-            wrong_network.manifest.network_id = iroha_data_model::NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            wrong_network.manifest.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
                     iroha_crypto::Hash::new(b"different settlement network"),
-                ),
+                ));
+            assert_ne!(
+                wrong_network.manifest.network_id,
+                receipt.manifest.network_id
             );
-            assert_ne!(wrong_network.manifest.network_id, receipt.manifest.network_id);
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(wrong_network),
                 Err(PrivateSettlementGlobalStateErrorV1::Network),

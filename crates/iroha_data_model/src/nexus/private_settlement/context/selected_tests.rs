@@ -1,5 +1,6 @@
 //! Genuine finality over explicit public fixture preimages; no native execution claim.
 use super::*;
+use crate::privacy::PrivacyProtocolLimitsUpdateV1;
 use crate::{
     consensus::ConsensusKeyStatus,
     sumeragi_finality::{
@@ -79,6 +80,8 @@ fn fixture() -> (PrivateSettlementPoolKeyV1, PrivateSettlementContextProofV1) {
     });
     let mut proof = PrivateSettlementContextProofV1 {
         pool,
+        privacy_policy: PrivacyConsensusPolicyV1::taira_default(),
+        protocol_policy: None,
         lanes,
         committee_keys,
     };
@@ -91,9 +94,24 @@ fn refresh(proof: &mut PrivateSettlementContextProofV1) {
             "world.sumeragi_lanes",
             "world.consensus_keys",
             "world.consensus_keys_by_pk",
+            "world.privacy_consensus_policy",
+            "world.privacy_protocol_policies",
         ]
         .contains(&entry.field_id.as_str())
     });
+    proof.pool.world.entries.push(WorldStateSnapshotEntryV1 {
+        field_id: "world.privacy_consensus_policy".into(),
+        kind: WorldStateElementKindV1::Cell,
+        key_hash: None,
+        value_hash: world_state_value_hash_v1(&proof.privacy_policy).unwrap(),
+    });
+    if let Some(policy) = &proof.protocol_policy {
+        proof.pool.world.entries.push(entry(
+            "world.privacy_protocol_policies",
+            &PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1),
+            policy,
+        ));
+    }
     proof.pool.world.entries.push(WorldStateSnapshotEntryV1 {
         field_id: "world.sumeragi_lanes".into(),
         kind: WorldStateElementKindV1::Cell,
@@ -150,6 +168,8 @@ fn private_context_authenticates_same_cut_assignment_pending_activation_and_exac
             &proof.pool.governance,
             &proof.pool.pool,
         ),
+        &proof.privacy_policy,
+        proof.protocol_policy.as_ref(),
         &proof.lanes,
         std::array::from_fn(|i| {
             PrivateSettlementCommitteeKeyProofRefV1::new(
@@ -270,6 +290,8 @@ fn private_context_batch_preserves_one_cut_all_selectors_and_borrowed_codec() {
                         &proof.pool.governance,
                         &proof.pool.pool,
                     ),
+                    &proof.privacy_policy,
+                    proof.protocol_policy.as_ref(),
                     &proof.lanes,
                     std::array::from_fn(|i| {
                         PrivateSettlementCommitteeKeyProofRefV1::new(
@@ -420,6 +442,8 @@ fn private_context_json_preserves_four_originals_and_bounded_borrowed_writing() 
             &proof.pool.governance,
             &proof.pool.pool,
         ),
+        &proof.privacy_policy,
+        proof.protocol_policy.as_ref(),
         &proof.lanes,
         std::array::from_fn(|i| {
             PrivateSettlementCommitteeKeyProofRefV1::new(
@@ -524,5 +548,156 @@ fn private_context_json_rejects_nonfour_arrays_unknown_root_and_key_fields() {
         row.insert("unexpected_key_field".into(), Value::Bool(true));
         fields.insert("committee_keys".into(), Value::Array(rows));
         rejected(Value::Object(fields));
+    }
+}
+
+#[test]
+fn private_context_authenticates_policy_value_absence_and_original_drain() {
+    let (key, mut proof) = fixture();
+    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let current = PrivacyProtocolLimitsV1::canonical_default_v1(protocol);
+    let mut next = current;
+    let PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(ref mut limits) = next else {
+        unreachable!()
+    };
+    limits.max_input_count = 1;
+    let drain = proof
+        .privacy_policy
+        .current_limits
+        .private_settlement
+        .max_expiry_blocks;
+    let deadline = FIXTURE_CONTEXT_HEIGHT + drain + 1;
+    proof.protocol_policy = Some(PrivacyProtocolPolicyV1 {
+        protocol_id: protocol,
+        current_limits: current,
+        pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height: FIXTURE_CONTEXT_HEIGHT,
+            effective_at_height: deadline,
+            next_limits: next,
+            private_settlement_drain_blocks: Some(drain),
+        }),
+    });
+    refresh(&mut proof);
+    let (network, block) = certify(&proof);
+    let selected = proof
+        .verify(network, proof.pool.world.schema_hash, key, &block)
+        .unwrap();
+    assert_eq!(
+        selected.admission_limits(),
+        &proof.privacy_policy.current_limits.private_settlement
+    );
+    assert_eq!(selected.admission_deadline(), Some(deadline));
+    let mut missing = proof.clone();
+    missing.protocol_policy = None;
+    assert!(
+        missing
+            .verify(network, proof.pool.world.schema_hash, key, &block)
+            .is_err(),
+        "an omitted governed row cannot claim canonical-default absence"
+    );
+    let mut changed = proof.clone();
+    changed
+        .privacy_policy
+        .current_limits
+        .private_settlement
+        .max_carrier_bytes -= 1;
+    assert!(
+        changed
+            .verify(network, proof.pool.world.schema_hash, key, &block)
+            .is_err(),
+        "caller-supplied admission limits are not authenticated by their own DTO"
+    );
+    let mut changed = proof.clone();
+    changed
+        .protocol_policy
+        .as_mut()
+        .unwrap()
+        .pending_update
+        .as_mut()
+        .unwrap()
+        .private_settlement_drain_blocks = Some(drain - 1);
+    assert!(
+        changed
+            .verify(network, proof.pool.world.schema_hash, key, &block)
+            .is_err()
+    );
+
+    let (key, absent) = fixture();
+    let (network, block) = certify(&absent);
+    absent
+        .verify(network, absent.pool.world.schema_hash, key, &block)
+        .unwrap();
+    let mut forged = absent.clone();
+    forged.protocol_policy = proof.protocol_policy;
+    assert!(
+        forged
+            .verify(network, absent.pool.world.schema_hash, key, &block)
+            .is_err(),
+        "an uncommitted row cannot override authenticated canonical absence"
+    );
+}
+
+#[test]
+fn private_context_openings_enforce_the_authenticated_auditor_floor() {
+    let (key, mut proof) = fixture();
+    let (policy, _) = super::super::super::tests::policy(key.route.dataspace_id);
+    let mut body = policy.body;
+    body.activation_height = 1;
+    body.retirement_height = None;
+    let policy = PrivateSettlementAuditPolicyV1::new(body).unwrap();
+    assert_eq!(policy.body.min_approvals, 1);
+    let asset = AssetDefinitionId::from_uuid_bytes([
+        0x51, 0x51, 0x51, 0x51, 0x51, 0x51, 0x41, 0x51, 0x81, 0x51, 0x51, 0x51, 0x51, 0x51, 0x51,
+        0x51,
+    ])
+    .unwrap();
+    let salt = [0xa1; 32];
+    let governance = PrivateSettlementPoolGovernanceV1::from_restricted_mapping(
+        key.route,
+        key.pool_id,
+        asset.clone(),
+        salt,
+        &policy,
+        proof.pool.governance.lifecycle,
+    )
+    .unwrap();
+    proof.pool.governance.asset_binding_commitment = governance.body.asset_binding_commitment;
+    proof.pool.governance.audit_policy_digest = governance.body.audit_policy_digest;
+    proof.pool.governance.governance_digest = governance.governance_digest;
+    proof.pool.pool.restricted_pool_policy_digest = governance.governance_digest;
+    proof.pool.world.entries.retain(|entry| {
+        ![
+            "world.private_settlement_governance",
+            "world.private_settlement_pools",
+        ]
+        .contains(&entry.field_id.as_str())
+    });
+    proof.pool.world.entries.push(entry(
+        "world.private_settlement_governance",
+        &key,
+        &proof.pool.governance,
+    ));
+    proof.pool.world.entries.push(entry(
+        "world.private_settlement_pools",
+        &key,
+        &proof.pool.pool,
+    ));
+    for floor in [1, 2] {
+        proof
+            .privacy_policy
+            .current_limits
+            .private_settlement
+            .min_auditor_approvals = floor;
+        refresh(&mut proof);
+        let (network, block) = certify(&proof);
+        let selected = proof
+            .verify(network, proof.pool.world.schema_hash, key, &block)
+            .unwrap();
+        assert_eq!(
+            selected
+                .verify_openings(&governance, &policy, &asset, salt, 9)
+                .is_ok(),
+            floor == 1
+        );
     }
 }

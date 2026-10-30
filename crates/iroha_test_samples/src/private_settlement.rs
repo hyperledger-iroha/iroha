@@ -444,6 +444,8 @@ pub fn context_fixture(
         }
     });
     PrivateSettlementContextProofV1 {
+        privacy_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default(),
+        protocol_policy: None,
         pool: PrivateSettlementPoolCutProofV1 {
             world: WorldStateSnapshotV1 {
                 schema_hash: Hash::new(b"storage fixture"),

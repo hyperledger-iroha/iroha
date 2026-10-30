@@ -91,17 +91,18 @@ const torii = new ToriiClient(TAIRA_TESTNET_PROFILE.toriiBaseUrl, {
 
 Before an account exists, `ToriiClient.getAccountCapabilities({ signal })` and
 the browser client's matching method read public `GET /v1/accounts/capabilities`.
-The closed `AccountCapabilitiesV1` JSON response contains `schema_version: 1`,
-the canonical `network_id`, a u16 `network_prefix`, the current `allowed_signing`
-admission set in canonical algorithm-tag order. Select a locally supported signer
+The `AccountCapabilitiesV1` JSON response requires `schema_version: 1`,
+the canonical `network_id`, a u16 `network_prefix`, and the current `allowed_signing`
+admission set of unique canonical algorithm names. Select a locally supported signer
 from that set; there is no protocol default or implicit Ed25519 member. Array
 ordering and the node's default hash do not express signing preferences.
 Compare the returned network identity with the user's selected network before
 creating an identity. This advert is endpoint discovery, not signed network
 evidence or permission to submit a transaction.
 
-These SDK calls omit configured credentials, reject redirects, accept only the
-exact V1 JSON shape, enforce a 4 KiB streamed response limit, and support abort
+These SDK calls omit configured credentials, reject redirects, validate the required
+V1 fields, ignore unrelated metadata within the existing strict JSON numeric and
+structural constraints, enforce a 4 KiB streamed response limit, and support abort
 through body consumption. The route accepts no query or request body. Standard
 Torii listener access controls still apply. `GET /v1/node/capabilities` is public
 as well: `getNodeCapabilities()` reads it without credentials, and the
@@ -115,7 +116,8 @@ npm run test:local -- --target-dir /absolute/iroha/target/cargo-fast/<existing-l
 ```
 
 The runner requires macOS, Python 3.12, full Xcode selected through
-`DEVELOPER_DIR` or `xcode-select`, stock Rust 1.93.1 and Node. Select an existing
+`DEVELOPER_DIR` or `xcode-select`, the stock Rust toolchain pinned in the repository's
+`rust-toolchain.toml`, and Node. Select an existing
 canonical Cargo lane under `target/cargo-fast` or `target/qualification`; the
 runner does not create a Cargo target. It builds the current native artifact,
 verifies custody, runs the entire `unit` profile and verifies the same producer
@@ -517,6 +519,35 @@ lanes it reads exactly as the reference) and ports the reference unit tests;
 band reader tests and pins the reader's intermediates on the golden captures, and
 `test/petalMerge.test.js` the merge sets. Run them on their own with
 `node --test test/petal.test.js test/petalKana.test.js test/petalMerge.test.js`.
+
+## Native confidential-payment sessions
+
+`@iroha/iroha-js/private-settlement` exposes the native pending-payment owner
+through the verified Node binding. `createPrivateSettlementHost(limits)` requires
+explicit session, original-source, artifact and prepared-material byte limits.
+`host.open(descriptorBytes)` admits the native file descriptor; signing inputs,
+reservations and governed openings remain in native file custody. The descriptor
+must contain independently selected genesis and schema pins. See the
+[native owner](../../crates/iroha_private_settlement/README.md) for the file layouts.
+
+After `await operation.ready()`, `operation.run()` prepares and runs the native
+payment workflow. `operation.recover({ maxFinalityProofReads: 0 })` permits no new
+proof reads. Recovery never provisions inputs; `operation.stageFiles(bytes)` is
+an explicit, separate native command. `prepare()` and `prepared()` expose the
+same native preparation and cached-material operations. Retransmission and
+replacement after authenticated rejection require explicit run options.
+
+The returned outcome is opaque. Inspect `kind`, `failureCode` and redacted
+`progress`; `data()` exports bounded canonical Norito prepared materials or a
+terminal receipt. Exported data alone is not an independent finality proof and
+cannot create a verified outcome. Call `data()` before host shutdown. Always
+await `operation.close()` and `host.shutdown()` before destroying the native
+runtime. Session close drains its accepted commands; host shutdown also drains
+accepted result exports and refuses new ones. Neither operation cancels monetary
+effects or releases escrow.
+
+Source adapter tests cover admission, zero-read forwarding and immediate close
+behavior. Installed-binding and real-network qualification remain open.
 
 ## Atomic private settlement transport
 

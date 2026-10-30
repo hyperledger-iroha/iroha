@@ -29,7 +29,9 @@ use std::{
     time::Duration,
 };
 
-fn prepared(
+mod abort_receipt;
+
+pub(super) fn prepared(
     client: &Client,
 ) -> (
     PrivateSettlementRequest,
@@ -175,7 +177,7 @@ fn phase_certificates(
         })
         .collect()
 }
-fn complete_round(journal: &mut WorkflowJournalV1, index: usize, bytes: Vec<u8>) {
+pub(super) fn complete_round(journal: &mut WorkflowJournalV1, index: usize, bytes: Vec<u8>) {
     let round_id = crate::workflow::round_identity(
         &journal.id(),
         u32::try_from(index).expect("fixture workflow step index fits u32"),
@@ -194,7 +196,7 @@ fn complete_round(journal: &mut WorkflowJournalV1, index: usize, bytes: Vec<u8>)
         )
         .unwrap();
 }
-fn checkpoint(
+pub(super) fn checkpoint(
     request: &PrivateSettlementRequest,
     certificates: &[PrivateSettlementSidecarAvailabilityV1],
 ) -> WorkflowJournalV1 {
@@ -223,7 +225,7 @@ fn checkpoint(
     journal.sequence = 1;
     journal
 }
-fn bundle(
+pub(super) fn bundle(
     request: &PrivateSettlementRequest,
     journal: &WorkflowJournalV1,
 ) -> (
@@ -249,13 +251,28 @@ fn certified(
     VerifiedSumeragiBlock,
     iroha_data_model::query::CommittedTransaction,
 ) {
-    let header = native.next_header();
-    let mut builder = TransactionBuilder::new(
-        client.network_id,
-        client.account.clone(),
+    certified_instructions(
+        native,
+        client,
         bundle.manifest.public_fee_intent.clone(),
+        vec![FinalizeAtomicPrivateSettlementV1::new(bundle).into()],
+        rejected,
     )
-    .with_instructions([FinalizeAtomicPrivateSettlementV1::new(bundle)]);
+}
+
+fn certified_instructions(
+    native: &mut NativeFinalityFixture,
+    client: &Client,
+    fees: iroha_data_model::transaction::FeePaymentIntent,
+    instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    rejected: bool,
+) -> (
+    VerifiedSumeragiBlock,
+    iroha_data_model::query::CommittedTransaction,
+) {
+    let header = native.next_header();
+    let mut builder = TransactionBuilder::new(client.network_id, client.account.clone(), fees)
+        .with_instructions(instructions);
     builder.set_creation_time(Duration::from_millis(header.creation_time_ms - 1));
     let transaction = builder.sign(client.key_pair.private_key());
     let mut builder = BlockBuilder::new(header);
@@ -469,15 +486,35 @@ async fn private_settlement_receipt_locator_recovers_only_successful_matching_fi
         );
         let client = client.with_test_http_transport(transport);
         crate::client::evidence_http_tests::mark_data_model_compatible(&client);
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(
+            FileWorkflowStorage::open_or_create(directory.path().join("journal")).unwrap(),
+        );
+        let finality = Arc::new(
+            FilePrivateSettlementFinality::open(
+                directory.path().join("finality"),
+                &[51; 32],
+                2 * 1024 * 1024,
+            )
+            .unwrap(),
+        )
+        .bind(
+            journal.identity.workflow_id().unwrap(),
+            request.0.digest,
+            &verifier,
+        )
+        .unwrap();
         let ledger = SettlementLedger::new(
             client.account_client().unwrap(),
             request,
-            Arc::new(Mutex::new(Some(PublicContext {
-                barrier: barrier.clone(),
-                phase: FINALIZE,
-            }))),
+            Arc::new(Mutex::new(Some(PublicContext::prepared(
+                barrier.clone(),
+                FINALIZE,
+            )))),
             verifier,
             Arc::new(tokio::sync::Semaphore::new(1)),
+            storage,
+            finality,
         );
         ledger.begin_call(2).unwrap();
         let recovered = ledger.recover_business(&journal).await;
@@ -485,8 +522,18 @@ async fn private_settlement_receipt_locator_recovers_only_successful_matching_fi
             assert!(matches!(recovered, Err(PrivateSettlementError::Binding)));
         } else {
             let recovered = recovered.unwrap().unwrap();
-            assert_eq!(recovered.receipt().manifest, barrier.manifest);
-            assert_eq!(recovered.receipt().finalized_height, block.height());
+            assert_eq!(
+                recovered.settled_receipt().unwrap().receipt().manifest,
+                barrier.manifest
+            );
+            assert_eq!(
+                recovered
+                    .settled_receipt()
+                    .unwrap()
+                    .receipt()
+                    .finalized_height,
+                block.height()
+            );
         }
     }
 }
@@ -533,10 +580,7 @@ async fn private_settlement_restored_unsigned_substitution_never_reaches_signer(
     let guarded = SettlementAccount {
         account: signer.clone(),
         request,
-        state: Arc::new(Mutex::new(Some(PublicContext {
-            barrier,
-            phase: REGISTER,
-        }))),
+        state: Arc::new(Mutex::new(Some(PublicContext::prepared(barrier, REGISTER)))),
     };
     for changed in [
         {
@@ -859,21 +903,60 @@ async fn private_settlement_cancelled_phase_retains_shared_dispatch_capacity() {
         .unwrap();
     let bytes = transaction.encode_wire_v1().unwrap();
     let worker = Arc::new(tokio::sync::Semaphore::new(1));
-    let phases = OnlinePhases::new(client, request.clone(), worker.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("phase-custody");
+    let storage = Arc::new(FileWorkflowStorage::open_or_create(&path).unwrap());
+    let phases = OnlinePhases::new(
+        client.clone(),
+        request.clone(),
+        worker.clone(),
+        storage.clone(),
+    );
+    let mut endpoints = request.0.endpoints.clone();
+    for committee in &mut endpoints {
+        committee.reverse();
+    }
+    let reopened = OnlinePhases::new(
+        client,
+        PrivateSettlementRequest::new(
+            request.materials().to_vec(),
+            endpoints,
+            request.0.max_carrier_bytes,
+        )
+        .unwrap(),
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Arc::new(FileWorkflowStorage::open_or_create(&path).unwrap()),
+    );
+    let verifier = native.verifier();
+    let finality = Arc::new(
+        FilePrivateSettlementFinality::open(
+            directory.path().join("finality"),
+            &[52; 32],
+            2 * 1024 * 1024,
+        )
+        .unwrap(),
+    )
+    .bind(
+        journal.identity.workflow_id().unwrap(),
+        request.0.digest,
+        &verifier,
+    )
+    .unwrap();
     let ledger = SettlementLedger::new(
         account,
         request,
-        Arc::new(Mutex::new(Some(PublicContext {
-            barrier,
-            phase: REGISTER,
-        }))),
-        native.verifier(),
+        Arc::new(Mutex::new(Some(PublicContext::prepared(barrier, REGISTER)))),
+        verifier,
         worker.clone(),
+        storage,
+        finality,
     );
-    let active = tokio::spawn(async move { phases.run(COMMIT, journal, false).await });
+    let original_journal = journal.clone();
+    let active = tokio::spawn(async move { phases.run(COMMIT, original_journal, false).await });
     entered.await.unwrap();
     active.abort();
     assert!(active.await.unwrap_err().is_cancelled());
+    let reopened_error = reopened.run(COMMIT, journal, false).await;
     assert!(
         matches!(
             ledger.dispatch(&bytes, &identity(&transaction)).await,
@@ -895,6 +978,18 @@ async fn private_settlement_cancelled_phase_retains_shared_dispatch_capacity() {
     })
     .await
     .expect("phase exit returns its original shared capacity");
+    assert!(
+        matches!(
+            reopened_error,
+            Err(PrivateSettlementError::Custody(
+                crate::workflow::WorkflowStorageError {
+                    kind: crate::workflow::WorkflowStorageErrorKind::Busy,
+                    ..
+                }
+            ))
+        ),
+        "a reconstructed operation with new endpoints and a new semaphore must retain original phase exclusion"
+    );
 }
 
 #[test]
@@ -991,7 +1086,7 @@ fn private_settlement_step_failure_keeps_binding_and_local_resource_codes() {
             WorkflowErrorCode::BindingMismatch,
         ),
         (
-            PrivateSettlementError::Worker,
+            PrivateSettlementError::Worker(NativeWorkerError::Panicked),
             WorkflowErrorCode::LocalResourceUnavailable,
         ),
         (
@@ -1003,4 +1098,20 @@ fn private_settlement_step_failure_keeps_binding_and_local_resource_codes() {
         assert_eq!(converted.code, code);
         assert_eq!(converted.detail, error.to_string());
     }
+}
+
+#[test]
+fn prepared_material_data_export_counts_exact_frame_before_allocation() {
+    let client = client_with_base_url(base_url());
+    let (request, _) = prepared(&client);
+    let expected = norito::encode_canonical(&request.0.materials).unwrap();
+    assert!(matches!(
+        request.encode_materials(expected.len() - 1),
+        Err(PrivateSettlementError::Capacity)
+    ));
+    assert_eq!(request.encode_materials(expected.len()).unwrap(), expected);
+    let decoded: Vec<PrivateSettlementProvisionalLegMaterialV1> =
+        norito::decode_canonical(&expected).unwrap();
+    assert_eq!(decoded, request.materials());
+    assert_eq!(request.encode_materials(expected.len()).unwrap(), expected);
 }

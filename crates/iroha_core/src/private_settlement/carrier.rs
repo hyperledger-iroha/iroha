@@ -76,6 +76,8 @@ pub struct PrivateSettlementCarrierBindingV1 {
     payload_digest: Hash,
     instruction_digest: Hash,
     signed_transaction_bytes: u64,
+    required_continuation_bytes: u64,
+    continuation: bool,
     consumed: bool,
 }
 
@@ -85,8 +87,15 @@ impl PrivateSettlementCarrierBindingV1 {
             payload_digest,
             instruction_digest,
             signed_transaction_bytes,
+            required_continuation_bytes: 0,
+            continuation: false,
             consumed: false,
         }
+    }
+
+    /// Continuations consume the original admission reservation, including after policy drain.
+    pub(crate) fn is_continuation(&self) -> bool {
+        self.continuation
     }
 
     /// Consume the exact carrier once after all comparisons succeed.
@@ -103,7 +112,10 @@ impl PrivateSettlementCarrierBindingV1 {
             return Err(PrivateSettlementCarrierBindingErrorV1::InstructionMismatch);
         }
         if max_signed_transaction_bytes == 0
-            || self.signed_transaction_bytes > max_signed_transaction_bytes
+            || self
+                .signed_transaction_bytes
+                .max(self.required_continuation_bytes)
+                > max_signed_transaction_bytes
         {
             return Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge);
         }
@@ -212,7 +224,11 @@ pub fn signed_private_settlement_carrier_binding_v1(
     } else {
         return Err(not_permitted());
     };
-    if transaction.authority() != &manifest.sponsor
+    if transaction.signature_count()
+        > iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1
+        || iroha_data_model::privacy::validate_private_settlement_sponsor_v1(&manifest.sponsor)
+            .is_err()
+        || transaction.authority() != &manifest.sponsor
         || transaction.fee_payment_intent() != &manifest.public_fee_intent
     {
         return Err(not_permitted());
@@ -222,16 +238,36 @@ pub fn signed_private_settlement_carrier_binding_v1(
             "failed to encode private-settlement carrier transaction: {error}"
         ))
     })?;
-    let signed_transaction_bytes = u64::try_from(encoded_transaction.len()).map_err(|_| {
+    let canonical_bytes =
+        SignedTransaction::canonical_frame_len_from_wire_len_v1(encoded_transaction.len())
+            .ok_or_else(|| {
+                ValidationFail::InternalError("private carrier frame length overflows".into())
+            })?;
+    let signed_transaction_bytes = u64::try_from(canonical_bytes).map_err(|_| {
         ValidationFail::InternalError(
             "private-settlement carrier transaction is too large".to_owned(),
         )
     })?;
-    Ok(Some(PrivateSettlementCarrierBindingV1::new(
+    let mut binding = PrivateSettlementCarrierBindingV1::new(
         payload_digest,
         instruction_digest,
         signed_transaction_bytes,
-    )))
+    );
+    if let Some(carrier) = instruction.downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>() {
+        binding.required_continuation_bytes =
+            iroha_data_model::nexus::private_settlement_required_continuation_bytes_v1(
+                transaction,
+                &carrier.barrier,
+            )
+            .map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "failed to size private-settlement continuation: {error}"
+                ))
+            })?;
+    } else {
+        binding.continuation = true;
+    }
+    Ok(Some(binding))
 }
 
 fn not_permitted() -> ValidationFail {
@@ -244,6 +280,9 @@ fn not_permitted() -> ValidationFail {
 /// Closed failure while consuming a transaction-scoped carrier binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivateSettlementCarrierBindingErrorV1 {
+    /// Signed genesis configures the initial policy and pools before monetary obligations.
+    #[error("private-settlement monetary carriers are forbidden in genesis")]
+    GenesisCarrier,
     /// No exact direct carrier was installed from the current signed payload.
     #[error("the current signed transaction has no bound private-settlement carrier")]
     MissingBinding,
@@ -271,6 +310,145 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use std::num::{NonZeroU32, NonZeroU64};
+
+    fn original_carrier_instructions(
+        bundle: &PrivateSettlementCommitBundleV1,
+    ) -> [iroha_data_model::isi::InstructionBox; 3] {
+        use iroha_data_model::nexus::{
+            PrivateSettlementAbortReasonV1, PrivateSettlementPrepareBarrierV1,
+        };
+        [
+            RegisterAtomicPrivateSettlementPrepareV1::new(PrivateSettlementPrepareBarrierV1 {
+                version: bundle.version,
+                manifest: bundle.manifest.clone(),
+                authority_catalog: bundle.authority_catalog.clone(),
+                deltas: bundle.legs.iter().map(|leg| leg.delta.clone()).collect(),
+                prepare_certificates: bundle.legs.iter().map(|leg| leg.prepare.clone()).collect(),
+                prepared_bundle_digest: bundle.legs[0].commit.body.prepared_bundle_digest,
+            })
+            .into(),
+            FinalizeAtomicPrivateSettlementV1::new(bundle.clone()).into(),
+            AbortAtomicPrivateSettlementV1::new(
+                bundle.manifest.clone(),
+                PrivateSettlementAbortReasonV1::Expired,
+            )
+            .into(),
+        ]
+    }
+
+    #[test]
+    fn genesis_cannot_consume_any_original_native_monetary_carrier_binding() {
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+        let (bundle, sponsor) = certified_commit_bundle_fixture();
+        for instruction in original_carrier_instructions(&bundle) {
+            let signed = TransactionBuilder::new(
+                bundle.manifest.network_id,
+                bundle.manifest.sponsor.clone(),
+                bundle.manifest.public_fee_intent.clone(),
+            )
+            .with_instructions([instruction])
+            .sign(sponsor.private_key());
+            signed.verify_signature().unwrap();
+            let binding = signed_private_settlement_carrier_binding_v1(&signed)
+                .unwrap()
+                .unwrap();
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut block = state.block(BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                0,
+                0,
+            ));
+            let mut transaction = block.transaction();
+            transaction.bind_private_settlement_carrier_v1(Some(binding));
+            assert_eq!(
+                transaction.consume_private_settlement_carrier_binding_v1(
+                    binding.payload_digest,
+                    binding.instruction_digest
+                ),
+                Err(PrivateSettlementCarrierBindingErrorV1::GenesisCarrier),
+                "genesis cannot admit an original native monetary obligation"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_genesis_refuses_each_native_monetary_carrier() {
+        use crate::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        use iroha_data_model::{Registrable as _, account::Account};
+        let (bundle, sponsor) = certified_commit_bundle_fixture();
+        for instruction in original_carrier_instructions(&bundle) {
+            let authority = bundle.manifest.sponsor.clone();
+            let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
+            let mut config = TestChainConfig::new(world, 0);
+            config.genesis_key = sponsor.clone();
+            config.genesis_instructions.push(instruction);
+            let refused = CertifiedTestChain::start(config)
+                .expect_err("signed genesis cannot publish a private monetary carrier");
+            assert_eq!(
+                crate::state::StateReadOnly::height(&refused.state.view()),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn original_multisig_roster_keeps_sixteen_signer_boundary_and_refuses_seventeen() {
+        use iroha_data_model::{
+            account::{MultisigMember, MultisigPolicy},
+            nexus::PrivateSettlementAbortReasonV1,
+            privacy::PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1,
+        };
+        let (bundle, _) = certified_commit_bundle_fixture();
+        let keys: Vec<_> = (0..=PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1)
+            .map(|i| KeyPair::from_seed(vec![0x91 + i as u8; 32], Algorithm::Ed25519))
+            .collect();
+        let sponsor = AccountId::new_multisig(
+            MultisigPolicy::new(
+                PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u16,
+                keys.iter()
+                    .map(|key| MultisigMember::new(key.public_key().clone(), 1).unwrap())
+                    .collect(),
+            )
+            .unwrap(),
+        );
+        let mut manifest = bundle.manifest;
+        manifest.sponsor = sponsor.clone();
+        manifest.bundle_id = manifest.computed_bundle_id().unwrap();
+        for count in [
+            PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1,
+            PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 + 1,
+        ] {
+            let signed = TransactionBuilder::new(
+                manifest.network_id,
+                sponsor.clone(),
+                manifest.public_fee_intent.clone(),
+            )
+            .with_instructions([AbortAtomicPrivateSettlementV1::new(
+                manifest.clone(),
+                PrivateSettlementAbortReasonV1::Expired,
+            )])
+            .sign_multisig(keys[..count].iter().map(|key| key.private_key()));
+            signed.verify_signature().unwrap();
+            assert_eq!(signed.signature_count(), count);
+            assert_eq!(
+                signed_private_settlement_carrier_binding_v1(&signed).is_ok(),
+                count == PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1
+            );
+        }
+    }
 
     #[test]
     fn one_shot_binding_rejects_substitution_and_replay() {
@@ -320,10 +498,13 @@ mod tests {
         builder.set_nonce(NonZeroU32::new(7).expect("non-zero fixture nonce"));
         let transaction = builder.sign(sponsor_key.private_key());
         let exact_signed_bytes = u64::try_from(
-            transaction
-                .encode_wire_v1()
-                .expect("fixed V1 signed transaction encodes")
-                .len(),
+            SignedTransaction::canonical_frame_len_from_wire_len_v1(
+                transaction
+                    .encode_wire_v1()
+                    .expect("fixed V1 signed transaction encodes")
+                    .len(),
+            )
+            .unwrap(),
         )
         .expect("fixture signed transaction length fits u64");
         assert!(
@@ -372,10 +553,13 @@ mod tests {
         .with_instructions([instruction.clone()])
         .sign(sponsor_key.private_key());
         let exact_signed_bytes = u64::try_from(
-            transaction
-                .encode_wire_v1()
-                .expect("fixed V1 signed registration transaction encodes")
-                .len(),
+            SignedTransaction::canonical_frame_len_from_wire_len_v1(
+                transaction
+                    .encode_wire_v1()
+                    .expect("fixed V1 signed registration transaction encodes")
+                    .len(),
+            )
+            .unwrap(),
         )
         .expect("fixture signed transaction length fits u64");
         let mut binding = signed_private_settlement_carrier_binding_v1(&transaction)
@@ -385,20 +569,36 @@ mod tests {
             private_settlement_prepare_lock_carrier_instruction_digest_v1(&instruction)
                 .expect("registration instruction digest encodes");
         assert_eq!(binding.signed_transaction_bytes, exact_signed_bytes);
-        assert_eq!(
-            binding.consume(
-                barrier.prepared_bundle_digest,
-                instruction_digest,
-                exact_signed_bytes - 1,
-            ),
-            Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge)
+        let required = binding.required_continuation_bytes;
+        assert!(
+            required > exact_signed_bytes,
+            "Register must reserve its future Finalize envelope"
+        );
+        let actual_finalize = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([FinalizeAtomicPrivateSettlementV1::new(bundle)])
+        .sign(sponsor_key.private_key());
+        actual_finalize.verify_signature().unwrap();
+        assert!(
+            SignedTransaction::canonical_frame_len_from_wire_len_v1(
+                actual_finalize.encode_wire_v1().unwrap().len()
+            )
+            .unwrap() as u64
+                <= required
         );
         assert_eq!(
             binding.consume(
                 barrier.prepared_bundle_digest,
                 instruction_digest,
-                exact_signed_bytes,
+                required - 1,
             ),
+            Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge)
+        );
+        assert_eq!(
+            binding.consume(barrier.prepared_bundle_digest, instruction_digest, required,),
             Ok(())
         );
     }
@@ -421,10 +621,13 @@ mod tests {
         .with_instructions([instruction.clone()])
         .sign(sponsor_key.private_key());
         let exact_signed_bytes = u64::try_from(
-            transaction
-                .encode_wire_v1()
-                .expect("fixed V1 signed abort transaction encodes")
-                .len(),
+            SignedTransaction::canonical_frame_len_from_wire_len_v1(
+                transaction
+                    .encode_wire_v1()
+                    .expect("fixed V1 signed abort transaction encodes")
+                    .len(),
+            )
+            .unwrap(),
         )
         .expect("fixture signed transaction length fits u64");
         let mut binding = signed_private_settlement_carrier_binding_v1(&transaction)

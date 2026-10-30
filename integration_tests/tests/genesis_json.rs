@@ -60,7 +60,7 @@ fn load_raw_genesis_transaction() -> RawGenesisTransaction {
 fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
     let chain = iroha_test_network::chain_id();
     let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-    let staking = iroha_test_network::genesis_support::staking_policy(
+    let staking = iroha_genesis::default_staking_policy(
         fees.fee_asset_id,
         fees.fee_sink_account_id.clone(),
         fees.fee_sink_account_id,

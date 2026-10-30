@@ -872,12 +872,13 @@ fn world_with_privacy_updates(
     let_row! { iroha_data_model::privacy::PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
     limits.max_aggregation_count -= 1;
     protocol_policy.pending_update = Some(PrivacyProtocolLimitsUpdateV1 {
+        private_settlement_drain_blocks: None,
         scheduled_at_height: protocol_scheduled_at_height,
         effective_at_height: protocol_effective_at_height,
         next_limits: next_protocol_limits,
     });
     world.privacy_protocol_policies.insert(
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
         ),
         protocol_policy,
@@ -897,7 +898,7 @@ state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
-    let_row! { key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { protocol_policy = *block .world .privacy_protocol_policies .get(&key) .expect("protocol_policy with updated limits") };
     assert_eq!(protocol_policy.current_limits, next_protocol_limits);
     assert_eq!(protocol_policy.pending_update, None);
@@ -924,7 +925,7 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let (world, _, _) = world_with_privacy_updates(99, 399);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let_row! { protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { original_protocol_policy = *world .privacy_protocol_policies .view() .get(&protocol_policy_key) .expect("scheduled protocol_policy") };
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
@@ -947,7 +948,7 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
 
     let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
+    let protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
     );
     let original_protocol_policy = *world

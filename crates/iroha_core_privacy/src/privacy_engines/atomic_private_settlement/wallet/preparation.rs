@@ -1,6 +1,9 @@
 //! General native preparation from authenticated public context and existing wallet secrets.
 //! No plaintext witness is encoded, persisted or returned by this owner.
 use super::*;
+
+#[path = "preparation/custody.rs"]
+mod custody;
 use crate::privacy_engines::{
     atomic_private_settlement::{
         audit::{
@@ -17,6 +20,7 @@ use crate::privacy_engines::{
     },
     prover_randomness::{TryCryptoProverRandomnessErrorV1, derive_healthy_try_crypto_seed_v1},
 };
+pub use custody::*;
 use iroha_data_model::{
     nexus::{
         PrivateSettlementAuditAadV1, PrivateSettlementCapsulePaddingV1,
@@ -156,6 +160,10 @@ pub fn prepare_atomic_private_settlement_leg_v1(
     let governance = context.governance();
     let policy = context.policy();
     let leg = manifest.legs.get(usize::from(ordinal)).ok_or(E::Binding)?;
+    wallet
+        .plaintext
+        .validate_preparation_against_proof_intent(manifest)
+        .map_err(|_| E::Binding)?;
     context
         .context()
         .verify_intent(manifest, ordinal)
@@ -247,6 +255,7 @@ pub fn prepare_atomic_private_settlement_leg_v1(
     {
         return Err(E::Binding);
     }
+    super::super::relation::validate_wallet_authorizations_v1(&plaintext, &statement.nullifiers)?;
     statement.audit_plaintext_commitment = plaintext.commitment().map_err(|_| E::Encoding)?;
     statement.audit_input_commitment =
         atomic_private_settlement_audit_input_commitment_v1(&plaintext.inputs)?;

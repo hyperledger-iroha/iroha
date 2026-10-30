@@ -339,3 +339,51 @@ fn native_bootstrap_refuses_unsupported_owner_before_proofs_or_funding() {
     );
     assert!(raw.requests.lock().unwrap().is_empty());
 }
+
+/// Opt-in public discovery through the installed profile; no wallet or managed store is opened.
+#[test]
+#[ignore = "requires IROHA_TEST_RUNTIME_DIRECTORY and explicit read-only public Taira network access"]
+fn installed_taira_native_bootstrap_read_only() {
+    let runtime_directory = std::path::PathBuf::from(
+        std::env::var_os("IROHA_TEST_RUNTIME_DIRECTORY")
+            .expect("set IROHA_TEST_RUNTIME_DIRECTORY to the matching installed binaries"),
+    );
+    let runtime = crate::managed::InstalledRuntime::from_directory(&runtime_directory)
+        .expect("authenticate the selected native installation");
+    let profiles = runtime
+        .network_profiles()
+        .expect("load the independently installed network profiles");
+    let profile = profiles.select("taira").expect("installed Taira profile");
+    assert_eq!(profile.torii_root().as_str(), "https://taira.sora.org/");
+    assert_eq!(profile.account_chain_discriminant(), 369);
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let bootstrap = discover_native_bootstrap(profile, deadline)
+        .expect("read-only native Taira discovery and certified parent verification");
+    let checkpoint = bootstrap.verifier.checkpoint();
+    let verified_tip = bootstrap
+        .verifier
+        .verified_tip()
+        .expect("retain the authenticated native checkpoint tip");
+    assert_eq!(checkpoint.network_id(), bootstrap.network_id);
+    assert_eq!(checkpoint.chain_id(), profile.chain_id());
+    assert!(checkpoint.height() >= 2);
+    assert_eq!(verified_tip.height(), checkpoint.height());
+    assert_eq!(bootstrap.capabilities.network_id, bootstrap.network_id);
+    assert_eq!(
+        bootstrap.capabilities.network_prefix,
+        profile.account_chain_discriminant()
+    );
+    assert_eq!(bootstrap.faucet.network_id, bootstrap.network_id);
+    assert_eq!(
+        bootstrap.faucet.network_prefix,
+        profile.account_chain_discriminant()
+    );
+    assert!(Instant::now() < deadline);
+    eprintln!(
+        "read-only Taira bootstrap: network={}, checkpoint_height={}, checkpoint_hash={}",
+        bootstrap.network_id,
+        checkpoint.height(),
+        checkpoint.block_hash()
+    );
+}

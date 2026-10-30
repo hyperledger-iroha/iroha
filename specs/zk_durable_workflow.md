@@ -448,19 +448,35 @@ The optional completion record contains six fixed 32-byte fields and one u64
 16 MiB record limit. It stores neither full proof nor block. The journal owner
 publishes this immutable locator by its existing lease/CAS after verification,
 and its presence disables any later dispatch. On every resume the operation
-re-fetches the original proof and independently verifies it again against the
-caller's selected genesis-rooted verifier, then compares every completion field.
+independently verifies retained native evidence or re-fetches the original proof
+against the caller's selected genesis-rooted verifier, then compares every completion field.
 Decoded completion never constructs a verified receipt.
 
 One call defaults to at most 64 full proof reads, one existing bounded transport
 response at a time. The caller can choose another nonzero u16 local read budget.
 A budget refusal, transport failure or original typed decoder resource refusal
-keeps the carrier identity recoverable. Authenticated prefix progress remains in
-the caller's operation; after process restart callers supply independently
-retained genesis/checkpoint trust and online re-fetching rebuilds the prefix.
-TODO: integrate durable authenticated prefix custody with an existing bounded
-content-addressed owner before offering offline proof resume. No raw evidence
-is embedded in the journal and no current transport or storage ceiling grows.
+keeps the carrier identity recoverable. Every operation requires a separate
+`FileNativePaymentFinality` directory, caller-retained encryption key and explicit
+byte allowance. Its one authenticated record binds the original workflow, exact
+request, network, chain, instance, Global root and independently selected initial
+epoch. Three bounded native checkpoint slots hold pending prefix progress, exact
+carrier evidence and immutable business success. A checkpoint retains at most
+three decisions. Publication uses the original observation lease and compare-and-publish
+before installing new in-memory progress. Reopening independently imports and
+checks every retained slot; local authentication alone never establishes a
+payment outcome. A shared `NativePaymentSession` may prune warm decisions without
+discarding another payment's pending obligation. A corrected untrusted locator
+can reset only that payment's pending walk. Return payments use separate custody.
+
+The record ceiling is `3 * MAX_FINALITY_CHECKPOINT_BYTES + 4096` plaintext bytes.
+Physical custody permits one encrypted active record and one bounded atomic
+staging record, plus the empty lock file. Unknown files, excessive records and
+substituted contexts refuse; there are no alternate or historical readers.
+The original async HTTP read retains its requested height, scope and deadline in
+an opaque response. Canonical native decoding, verification and publication run
+under one admitted worker that retains the original observation/session custody
+through cancellation and thread-local destruction. No raw evidence is embedded
+in the workflow journal and no transport or consensus ceiling grows.
 
 `NativePaymentOperation::recover` never builds, signs or dispatches. The final
 successful block carries its own native certificate, so neither verification nor
@@ -489,8 +505,11 @@ original artifact owner if an awaiting call is dropped.
 
 Only successful exact Finalize execution in a Global block verified from
 independently selected genesis constructs `VerifiedPrivateSettlementReceipt`.
-Status and public receipt queries supply locators only. Resume refetches and
-reverifies the original final-tip block without requiring unrelated traffic.
+Status and public receipt queries supply locators only. Mandatory caller-key
+`FilePrivateSettlementFinality` custody retains bounded authenticated prefix and
+original Register/Finalize evidence under the original workflow lease. Resume
+independently reauthenticates that evidence or refetches the original final-tip
+block without requiring unrelated traffic.
 `recover` cannot certify, promote, sign or submit. Promotion preserves the exact
 certificate while requiring `q = n - f` bound upload acknowledgements from the
 authorized endpoints; only the independently verified Prepare QC grants protocol

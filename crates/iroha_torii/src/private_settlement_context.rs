@@ -367,28 +367,43 @@ mod tests {
     }
     #[tokio::test]
     async fn private_context_authentication_refuses_invalid_and_replay_but_preserves_capacity() {
-        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+        use iroha_core::sumeragi::test_chain::native_private_context_route_fixture;
+        use iroha_executor_data_model::permission::query::CanReadAllLedgerData;
         use std::sync::mpsc;
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
-            crate::tests_runtime_handlers::world_with_account(&ALICE_ID),
+        let (chain, key, signer) = native_private_context_route_fixture();
+        let account = AccountId::new(signer.public_key().clone());
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let unique = Arc::get_mut(&mut app).unwrap();
+        unique.state = chain.state().clone();
+        unique.kura = chain.kura().clone();
+        unique.chain_id = Arc::new(chain.state().chain_id_ref().clone());
+        assert!(app.state.authenticated_root_scope().is_some());
+        // Keep the actual signed-genesis/native-execution root owner. The standard test
+        // overlay removes only this reader's grant so valid authentication reaches the
+        // current permission refusal; this is not a distributed revocation fixture.
+        let mut block = app.state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(3).unwrap(),
+            None,
+            None,
+            2_001,
+            0,
+        ));
+        let mut tx = block.transaction();
+        assert!(
+            tx.world_mut_for_testing()
+                .remove_account_permission(&account, &CanReadAllLedgerData.into())
         );
+        tx.apply();
+        block.commit_world_overlay_for_testing().unwrap();
         let uri: Uri = "/v1/nexus/private-settlements/context/2".parse().unwrap();
-        let key = PrivateSettlementPoolKeyV1 {
-            route: iroha_data_model::nexus::PrivateSettlementRouteV1 {
-                dataspace_id: iroha_model_base::topology::DataSpaceId::new(7),
-                lane_id: iroha_model_base::topology::LaneId::new(3),
-                lane_incarnation: Hash::new(b"auth scope"),
-            },
-            pool_id: iroha_data_model::privacy::PrivacyPoolIdV1::new([9; 32]),
-        };
         let body = Bytes::from(
             norito::encode_canonical(&PrivateSettlementContextRequestV1 { pools: vec![key] })
                 .unwrap(),
         );
         let headers = crate::tests_runtime_handlers::signed_network_app_headers(
             app.state.network_id_ref(),
-            &ALICE_ID,
-            &ALICE_KEYPAIR,
+            &account,
+            &signer,
             &Method::POST,
             &uri,
             &body,

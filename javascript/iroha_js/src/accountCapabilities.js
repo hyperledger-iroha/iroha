@@ -4,22 +4,15 @@ import { NetworkId } from "./networkId.js";
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 const RESPONSE_MAX_BYTES = 4 * 1024;
-const ALGORITHM_TAGS = new Map([
-  CRYPTO_ALGORITHMS.ED25519, CRYPTO_ALGORITHMS.SECP256K1,
-  CRYPTO_ALGORITHMS.BLS_NORMAL, CRYPTO_ALGORITHMS.BLS_SMALL, CRYPTO_ALGORITHMS.ML_DSA,
-  CRYPTO_ALGORITHMS.GOST_2012_256_A, CRYPTO_ALGORITHMS.GOST_2012_256_B,
-  CRYPTO_ALGORITHMS.GOST_2012_256_C, CRYPTO_ALGORITHMS.GOST_2012_512_A,
-  CRYPTO_ALGORITHMS.GOST_2012_512_B, CRYPTO_ALGORITHMS.SM2,
-].map((name, tag) => [name, tag]));
+const ALGORITHMS = new Set(Object.values(CRYPTO_ALGORITHMS));
 const FIELDS = ["schema_version", "network_id", "network_prefix", "allowed_signing"];
 const CONTEXT = "account capabilities response";
 
-/** Decode the closed, account-free first-release bootstrap capability contract. */
+/** Validate required account-free discovery fields and ignore unrelated metadata. */
 export function normalizeAccountCapabilitiesV1(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).length !== FIELDS.length
     || FIELDS.some((key) => !Object.hasOwn(value, key))) {
-    throw new TypeError(`${CONTEXT} must contain exactly the V1 fields`);
+    throw new TypeError(`${CONTEXT} must contain the required V1 fields`);
   }
   if (value.schema_version !== 1) throw new TypeError(`${CONTEXT} schema_version must be 1`);
   if (typeof value.network_id !== "string") {
@@ -33,11 +26,10 @@ export function normalizeAccountCapabilitiesV1(value) {
     throw new TypeError(`${CONTEXT} network_prefix must be a u16 integer`);
   }
   if (!Array.isArray(value.allowed_signing) || value.allowed_signing.length === 0
-    || value.allowed_signing.length > ALGORITHM_TAGS.size
-    || value.allowed_signing.some((algorithm) => !ALGORITHM_TAGS.has(algorithm))
-    || value.allowed_signing.some((algorithm, index) => index > 0
-      && ALGORITHM_TAGS.get(value.allowed_signing[index - 1]) >= ALGORITHM_TAGS.get(algorithm))) {
-    throw new TypeError(`${CONTEXT} allowed_signing must contain algorithms in strictly increasing canonical tag order`);
+    || value.allowed_signing.length > ALGORITHMS.size
+    || new Set(value.allowed_signing).size !== value.allowed_signing.length
+    || Array.from(value.allowed_signing).some((algorithm) => !ALGORITHMS.has(algorithm))) {
+    throw new TypeError(`${CONTEXT} allowed_signing must contain unique canonical algorithm names`);
   }
   return Object.freeze({
     schema_version: 1,

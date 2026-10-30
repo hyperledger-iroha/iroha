@@ -129,10 +129,13 @@ async fn online_relay_reads_use_async_transport_inside_the_supervised_runtime() 
         let read = source.proof(NonZeroU64::MIN);
         tokio::pin!(read);
         tokio::select! {
-            result = &mut read => panic!("relay proof must yield to its asynchronous transport before completion: {result:?}"),
+            result = &mut read => panic!("relay proof must yield to its asynchronous transport before completion: {:?}", result.map(|_| ())),
             () = transport.proof_entered.notified() => transport.proof_released.notify_one(),
         }
-        assert_eq!(read.await.unwrap(), transport.proof);
+        assert_eq!(
+            read.await.unwrap().decode_checked().unwrap(),
+            transport.proof
+        );
     }
     assert_eq!(source.applied_height().await.unwrap(), 9);
     let hash = HashOf::from_untyped_unchecked(Hash::new(b"unsubmitted relay carrier"));

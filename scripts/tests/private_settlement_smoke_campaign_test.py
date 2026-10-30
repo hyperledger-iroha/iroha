@@ -313,8 +313,14 @@ def as_cold_fixture(evidence: dict, result: dict) -> None:
     result["kind"] = "cold_one_call"
     result["request_sha256"] = M.sha(M.canonical(req) + b"\n")
     evidence["request.json"] = req
-    modes = [m for phase in ("checkpoint_0", "unaudited", "checkpoint_1", "checkpoint_2", "checkpoint_3", "finish")
-             for m in ("read_only", phase)] + ["read_only"] * 16
+    # Independently spell the current Rust invocation order: preparation without
+    # submission, six paired continuation boundaries, cached terminal calls, then
+    # one recovery after each of the sixteen actual validator restarts.
+    modes = ["read_only", "prepare_only", "prepare_cached_zero_reads",
+             "read_only", "checkpoint_0", "read_only", "unaudited",
+             "read_only", "checkpoint_1", "read_only", "checkpoint_2",
+             "read_only", "checkpoint_3", "read_only", "finish",
+             "finish_cached_zero_reads", "recover_cached_zero_reads"] + ["read_only"] * 16
     children = []
     for index, mode in enumerate(modes):
         report = f"synthetic report {index}; not real Norito evidence".encode()
@@ -328,11 +334,18 @@ def as_cold_fixture(evidence: dict, result: dict) -> None:
             "report_bytes": len(report), "stdout_sha256": M.sha(stdout), "stderr_sha256": M.sha(b""),
             "preparation_id": "c" * 64, "settlement_id": "d" * 64 if index else None,
             "openings": 3 if index == 1 else 0, "reservations": 3 if index == 1 else 0,
-            "read_only_custody_unchanged": mode == "read_only", "original_artifacts_unchanged": index != 0})
+            "reconciliations": 0 if index < 14 else 2 if index == 15 else 1,
+            "stages": 3 if index == 1 else 0,
+            "wallet_consumption_transition": index == 14,
+            "read_only_effects_unchanged": mode == "read_only" or index in (2, 15, 16),
+            "finality_read_allowance": 0 if index in (2, 15, 16) else 64,
+            "original_artifacts_unchanged": index != 0})
     names = ["encrypted-artifacts/" + "e" * 64 + suffix
              for suffix in (".contexts", "-000.prepared", "-001.prepared", "-002.prepared")]
     evidence["sdk-process-custody.json"] = {"version": 1, "operation": "one_call_cold_process",
         "child_test": M.COLD_CHILD_TEST_NAME, "children": children,
+        "wallet_owner": "FilePrivateSettlementWallet", "wallet_index_bound_bytes": M.COLD_WALLET_INDEX_MAX,
+        "wallet_physical_bound_bytes": M.COLD_WALLET_PHYSICAL_MAX,
         "encrypted_originals": [{"name": name, "hash": f"{6001 + 2 * index:064x}"}
                                 for index, name in enumerate(sorted(names))],
         "original_case_limit_ms": 3_600_000, "original_deadline_unix_ms": 1_000_000_000,
@@ -368,7 +381,12 @@ class ColdOneCallEvidenceTests(unittest.TestCase):
 
     def test_distinct_complete_cold_contract_preserves_prepared_controls(self):
         self.assertEqual(self.validate()["continuous_checks"], 64)
-        self.assertEqual(len(M.COLD_ONE_CALL_EVIDENCE_NAMES), len(M.EVIDENCE_NAMES) + 85)
+        self.assertEqual(len(self.evidence["sdk-process-custody.json"]["children"]), 33)
+        self.assertEqual(len(M.COLD_ONE_CALL_EVIDENCE_NAMES), len(M.EVIDENCE_NAMES) + 100)
+        self.assertTrue(all(f"sdk-child-{index:02}{suffix}" in M.COLD_ONE_CALL_EVIDENCE_NAMES
+                            for index in range(33)
+                            for suffix in (".norito", "-stdout.log", "-stderr.log")))
+        self.assertNotIn("sdk-child-33.norito", M.COLD_ONE_CALL_EVIDENCE_NAMES)
         self.assertEqual(M.selected_test("cold_one_call"), M.COLD_ONE_CALL_TEST_NAME)
         M.validate_discovery(f"{M.COLD_ONE_CALL_TEST_NAME}: test\n\n1 test, 0 benchmarks\n", kind="cold_one_call")
         with self.assertRaises(M.release_runner.RunnerError):
@@ -388,7 +406,15 @@ class ColdOneCallEvidenceTests(unittest.TestCase):
             lambda e: e["sdk-process-custody.json"]["children"][2].update(reservations=1),
             lambda e: e["sdk-process-custody.json"]["children"][2].update(settlement_id="f" * 64),
             lambda e: e["sdk-process-custody.json"]["children"][2].update(preparation_id="f" * 64),
-            lambda e: e["sdk-process-custody.json"]["children"][2].update(read_only_custody_unchanged=False),
+            lambda e: e["sdk-process-custody.json"]["children"][2].update(read_only_effects_unchanged=False),
+            lambda e: e["sdk-process-custody.json"]["children"][2].update(reconciliations=1),
+            lambda e: e["sdk-process-custody.json"]["children"][10].update(reconciliations=1),
+            lambda e: e["sdk-process-custody.json"]["children"][14].update(reconciliations=0),
+            lambda e: e["sdk-process-custody.json"]["children"][2].update(stages=1),
+            lambda e: e["sdk-process-custody.json"]["children"][14].update(wallet_consumption_transition=False),
+            lambda e: e["sdk-process-custody.json"]["children"][15].update(wallet_consumption_transition=True),
+            lambda e: e["sdk-process-custody.json"].update(wallet_owner="OriginalReservation"),
+            lambda e: e["sdk-process-custody.json"].update(wallet_physical_bound_bytes=M.COLD_WALLET_PHYSICAL_MAX+1),
             lambda e: e["sdk-process-custody.json"].update(original_case_limit_ms=3_600_001),
             lambda e: e["sdk-process-custody.json"]["encrypted_originals"][0].update(name="../key"),
             lambda e: e.update({"sdk-child-02.norito": b"substituted"}),
@@ -401,6 +427,66 @@ class ColdOneCallEvidenceTests(unittest.TestCase):
                 with self.assertRaises(M.release_runner.RunnerError):
                     self.validate()
 
+    def test_cold_exact_child_population_refuses_first_missing_and_extra_record(self):
+        original = copy.deepcopy(self.evidence)
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                evidence = copy.deepcopy(original)
+                children = evidence["sdk-process-custody.json"]["children"]
+                if missing:
+                    children.pop()
+                else:
+                    extra = copy.deepcopy(children[-1])
+                    extra.update(sequence=33, pid=1033, input_binding=f"{5067:064x}")
+                    children.append(extra)
+                with self.assertRaisesRegex(M.CampaignError, "33 fresh processes"):
+                    M.validate_cold_custody(evidence)
+
+    def test_cold_exact_inventory_refuses_first_missing_and_extra_child_file(self):
+        for suffix in (".norito", "-stdout.log", "-stderr.log"):
+            for missing in (True, False):
+                with self.subTest(suffix=suffix, missing=missing):
+                    evidence, result = copy.deepcopy(self.evidence), copy.deepcopy(self.result)
+                    if missing:
+                        evidence.pop(f"sdk-child-32{suffix}")
+                    else:
+                        evidence[f"sdk-child-33{suffix}"] = evidence[f"sdk-child-32{suffix}"]
+                    with tempfile.TemporaryDirectory(dir=self.root, prefix="inventory-") as temporary:
+                        directory = Path(temporary)
+                        store_evidence(directory, evidence, result)
+                        with self.assertRaisesRegex(M.CampaignError, "incomplete or extra experiment evidence files"):
+                            M.validate_run(directory, result["request"], self.sha, kind="cold_one_call")
+
+    def test_cached_calls_require_exact_zero_read_and_effect_custody_contract(self):
+        original = copy.deepcopy(self.evidence)
+        cases = [(index, field, value)
+                 for index in (2, 15, 16)
+                 for field, value in (("finality_read_allowance", 1),
+                                      ("finality_read_allowance", False),
+                                      ("read_only_effects_unchanged", False),
+                                      ("openings", 1), ("reservations", 1), ("stages", 1))]
+        cases += [(15, "reconciliations", 1), (15, "reconciliations", 3),
+                  (16, "reconciliations", 2), (2, "reconciliations", 1),
+                  (1, "finality_read_allowance", 0), (14, "finality_read_allowance", 65)]
+        for index, field, value in cases:
+            with self.subTest(index=index, field=field, value=value):
+                evidence = copy.deepcopy(original)
+                evidence["sdk-process-custody.json"]["children"][index][field] = value
+                with self.assertRaises(M.release_runner.RunnerError):
+                    M.validate_cold_custody(evidence)
+
+    def test_prepared_identity_is_derived_without_fabricating_a_journal(self):
+        children = self.evidence["sdk-process-custody.json"]["children"]
+        self.assertIsNone(children[0]["settlement_id"])
+        self.assertEqual({child["settlement_id"] for child in children[1:]}, {"d" * 64})
+        M.validate_cold_custody(self.evidence)
+        for index in (1, 2, 3):
+            with self.subTest(index=index):
+                evidence = copy.deepcopy(self.evidence)
+                evidence["sdk-process-custody.json"]["children"][index]["settlement_id"] = None
+                with self.assertRaises(M.CampaignError):
+                    M.validate_cold_custody(evidence)
+
     def test_inner_rehashed_zero_or_duplicate_child_terminal_is_rejected(self):
         for stdout in (b"running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s\n",
                        self.evidence["sdk-child-02-stdout.log"] * 2):
@@ -408,6 +494,12 @@ class ColdOneCallEvidenceTests(unittest.TestCase):
             self.evidence["sdk-process-custody.json"]["children"][2]["stdout_sha256"] = M.sha(stdout)
             with self.assertRaises(M.release_runner.RunnerError):
                 self.validate()
+
+    def test_cold_effect_assertion_has_no_retired_custody_alias(self):
+        child = self.evidence["sdk-process-custody.json"]["children"][2]
+        child["read_only_custody_unchanged"] = child.pop("read_only_effects_unchanged")
+        with self.assertRaises(M.release_runner.RunnerError):
+            self.validate()
 
     def test_post_settlement_unrelated_height_is_rejected(self):
         for row in self.evidence["state-replay.json"]["validators"]:
@@ -578,8 +670,10 @@ class SmokeEvidenceTests(unittest.TestCase):
     def test_size_contract_matches_canonical_rust_owners(self) -> None:
         root = SCRIPT.parent.parent
         model = (root / "crates/iroha_data_model/src/nexus/private_settlement.rs").read_text()
+        policy = (root / "crates/iroha_data_model/src/privacy/private_settlement_policy.rs").read_text()
+        protocol_default = policy.split("pub const fn protocol_default() -> Self {", 1)[1].split("\n    }", 1)[0]
         defaults = (root / "crates/iroha_config/src/parameters/defaults.rs").read_text()
-        private_defaults = defaults.split("pub mod atomic_private_settlement {", 1)[1]
+        private_defaults = defaults.split("pub mod atomic_private_settlement {", 1)[1].split("\n    }", 1)[0]
         def constant(source, name):
             match = re.search(r"pub const " + name + r": (?:usize|u64) = ([0-9_ *]+);", source)
             self.assertIsNotNone(match, f"missing literal canonical constant {name}")
@@ -589,9 +683,18 @@ class SmokeEvidenceTests(unittest.TestCase):
             return result
         self.assertEqual(M.PRIVATE_PROOF_BOUND_BYTES, constant(model, "PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1"))
         self.assertEqual(M.PRIVATE_CARRIER_BOUND_BYTES, constant(model, "PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1"))
-        self.assertEqual(M.PRIVATE_PROOF_BOUND_BYTES, constant(private_defaults, "MAX_PROOF_BYTES"))
-        self.assertEqual(M.PRIVATE_CARRIER_BOUND_BYTES, constant(private_defaults, "MAX_CARRIER_BYTES"))
-        self.assertEqual(M.PRIVATE_CAPSULE_BOUND_BYTES, constant(private_defaults, "MAX_CAPSULE_BYTES"))
+        self.assertIn("max_proof_bytes: PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1 as u64,", protocol_default)
+        self.assertIn("max_carrier_bytes: PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64,", protocol_default)
+        capsule = re.search(r"max_capsule_bytes: ([0-9_ *]+),", protocol_default)
+        self.assertIsNotNone(capsule, "missing committed capsule bound")
+        capsule_bytes = 1
+        for term in capsule.group(1).split("*"):
+            capsule_bytes *= int(term.strip().replace("_", ""))
+        self.assertEqual(M.PRIVATE_CAPSULE_BOUND_BYTES, capsule_bytes)
+        # Local config retains only sidecar custody budgets. Admission values
+        # must not fall through this closed module into unrelated proof defaults.
+        for retired in ("MAX_PROOF_BYTES", "MAX_CARRIER_BYTES", "MAX_CAPSULE_BYTES"):
+            self.assertNotIn(f"pub const {retired}:", private_defaults)
         self.assertEqual(M.HTTP_BODY_BOUND_BYTES, constant(defaults, "TORII_PROXY_MAX_INNER_BODY_BYTES_V1"))
         self.assertIn("pub const MAX_CONTENT_LEN: Bytes = Bytes(TORII_PROXY_MAX_INNER_BODY_BYTES_V1);", defaults)
         harness = (root / "integration_tests/tests/nexus/atomic_private_settlement_prepared_operation.rs").read_text()

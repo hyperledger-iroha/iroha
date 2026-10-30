@@ -274,11 +274,11 @@
         "type": "object"
       },
       "AccountCapabilitiesV1": {
-        "additionalProperties": false,
-        "description": "Public account-bootstrap capability V1; no account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
+        "additionalProperties": true,
+        "description": "Public account-bootstrap capability V1. Clients validate the four required discovery fields and ignore unrelated metadata; metadata never selects a signer or supplies missing required fields. No account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
         "properties": {
           "allowed_signing": {
-            "description": "Current admitted signing algorithms. Ordering conveys no preference.",
+            "description": "Current admitted signing algorithms as unique canonical names. Array order conveys no preference and need not be canonical.",
             "items": {
               "enum": [
                 "ed25519",

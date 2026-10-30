@@ -19,7 +19,7 @@ use iroha_data_model::{
 use iroha_test_samples::private_settlement::{availability_material_fixture_v1, context_fixture};
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug)]
-struct FinalityTransport(SumeragiFinalityProof);
+pub(crate) struct FinalityTransport(pub SumeragiFinalityProof);
 impl HttpTransport for FinalityTransport {
     fn send_blocking(&self, _: TransportRequest) -> eyre::Result<http::Response<Vec<u8>>> {
         panic!("async original finality required")
@@ -105,6 +105,14 @@ impl PrivateSettlementWallet for RefusingWallet {
         self.reserve.fetch_add(1, Ordering::SeqCst);
         panic!("no wallet opening means no witness reservation")
     }
+    fn reconcile_verified(
+        &self,
+        _: Digest32,
+        _: &PrivateSettlementRequest,
+        _: &VerifiedPrivateSettlementOutcome,
+    ) -> Result<(), OneCallPrivateSettlementError> {
+        panic!("a refused wallet opening cannot yield verified settlement")
+    }
 }
 fn row<K: norito::codec::Encode, V: norito::codec::Encode>(
     field: &str,
@@ -118,7 +126,7 @@ fn row<K: norito::codec::Encode, V: norito::codec::Encode>(
         value_hash: world_state_value_hash_v1(value).unwrap(),
     }
 }
-fn context(
+pub(crate) fn context(
     client: &Client,
 ) -> (
     PrivateSettlementContextsProofV1,
@@ -193,6 +201,12 @@ fn context(
         contexts.push(proof);
     }
     add(WorldStateSnapshotEntryV1 {
+        field_id: "world.privacy_consensus_policy".into(),
+        kind: WorldStateElementKindV1::Cell,
+        key_hash: None,
+        value_hash: world_state_value_hash_v1(&template.privacy_policy).unwrap(),
+    });
+    add(WorldStateSnapshotEntryV1 {
         field_id: "world.sumeragi_lanes".into(),
         kind: WorldStateElementKindV1::Cell,
         key_hash: None,
@@ -208,14 +222,22 @@ fn context(
         material.manifest.proof_intent(),
     )
 }
-fn request(
+pub(crate) fn request(
     client: &Client,
     proof: &PrivateSettlementContextsProofV1,
     original: &PrivateSettlementProofIntentV1,
 ) -> OneCallPrivateSettlementRequest {
+    request_at_height(client, proof, original, 2)
+}
+fn request_at_height(
+    client: &Client,
+    proof: &PrivateSettlementContextsProofV1,
+    original: &PrivateSettlementProofIntentV1,
+    height: u64,
+) -> OneCallPrivateSettlementRequest {
     let intent = PrivateSettlementProofIntentV1::new(
         original.network_id,
-        2,
+        height,
         original.expiry_height,
         original.sponsor.clone(),
         original.public_fee_intent.clone(),
@@ -248,7 +270,16 @@ fn request(
             2
         ],
         PrivateSettlementCapsulePaddingV1::KiB16,
-        500,
+        original
+            .expiry_height
+            .checked_add(
+                proof.contexts[0]
+                    .privacy_policy
+                    .current_limits
+                    .private_settlement
+                    .sidecar_retention_blocks,
+            )
+            .unwrap(),
         PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64,
         32 * 1024 * 1024,
         64 * 1024 * 1024,
@@ -258,6 +289,27 @@ fn request(
 #[tokio::test(flavor = "current_thread")]
 async fn private_onecall_cold_reopen_preserves_context_before_wallet_and_never_fetches_replacement()
 {
+    cold_reopen_preparation(false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_prepare_cold_reopen_preserves_original_round_without_monetary_effects() {
+    cold_reopen_preparation(true).await;
+}
+
+async fn prepare_action(
+    operation: &OneCallPrivateSettlementOperation,
+    options: &PrivateSettlementRunOptions,
+    prepare_only: bool,
+) -> Result<(), OneCallPrivateSettlementError> {
+    if prepare_only {
+        operation.prepare(options).await.map(|_| ())
+    } else {
+        operation.run(options).await.map(|_| ())
+    }
+}
+
+async fn cold_reopen_preparation(prepare_only: bool) {
     let mut native = NativeFinalityFixture::start("private-onecall-cold-context");
     let mut builder =
         client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
@@ -293,10 +345,13 @@ async fn private_onecall_cold_reopen_preserves_context_before_wallet_and_never_f
     )
     .unwrap();
     let id = operation.id();
-    let error = operation
-        .run(&PrivateSettlementRunOptions::default())
-        .await
-        .unwrap_err();
+    let error = prepare_action(
+        &operation,
+        &PrivateSettlementRunOptions::default(),
+        prepare_only,
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(error, OneCallPrivateSettlementError::Provider(_)),
         "original context must be durable before the deliberate wallet refusal: {error:?}"
@@ -304,6 +359,8 @@ async fn private_onecall_cold_reopen_preserves_context_before_wallet_and_never_f
     assert_eq!(source.reads.load(Ordering::SeqCst), 1);
     assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
     let journal = operation.handle.journal_snapshot().unwrap().unwrap();
+    assert_eq!(journal.steps.len(), 1);
+    assert!(journal.steps[0].transaction.is_none());
     let round = journal.steps[0].round.as_ref().unwrap().round_id.unwrap();
     let original_path = artifacts.join(format!("{}.contexts", hex::encode(round)));
     let original_bytes = std::fs::read(&original_path).unwrap();
@@ -364,7 +421,7 @@ async fn private_onecall_cold_reopen_preserves_context_before_wallet_and_never_f
         .recover(&PrivateSettlementRunOptions::default())
         .await
         .unwrap();
-    assert!(recovered.receipt.is_none());
+    assert!(recovered.outcome.is_none());
     assert!(recovered.progress.is_some());
     assert_eq!(
         wallet.open.load(Ordering::SeqCst),
@@ -377,13 +434,23 @@ async fn private_onecall_cold_reopen_preserves_context_before_wallet_and_never_f
         "retained exact cut replaces no online source"
     );
     assert!(matches!(
-        rebuilt.run(&PrivateSettlementRunOptions::default()).await,
+        prepare_action(
+            &rebuilt,
+            &PrivateSettlementRunOptions::default(),
+            prepare_only
+        )
+        .await,
         Err(OneCallPrivateSettlementError::Provider(_))
     ));
     assert_eq!(wallet.open.load(Ordering::SeqCst), 2);
     assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
     assert_eq!(absent.reads.load(Ordering::SeqCst), 0);
     assert_eq!(std::fs::read(original_path).unwrap(), original_bytes);
+    assert!(
+        rebuilt.handle.journal_snapshot().unwrap().unwrap().steps[0]
+            .transaction
+            .is_none()
+    );
     assert_eq!(
         rebuilt.handle.journal_snapshot().unwrap().unwrap().steps[0]
             .round
@@ -431,6 +498,14 @@ impl PrivateSettlementWallet for HeldWallet {
         OneCallPrivateSettlementError,
     > {
         panic!("held opening never grants witness reservation")
+    }
+    fn reconcile_verified(
+        &self,
+        _: Digest32,
+        _: &PrivateSettlementRequest,
+        _: &VerifiedPrivateSettlementOutcome,
+    ) -> Result<(), OneCallPrivateSettlementError> {
+        panic!("a held wallet opening cannot yield verified settlement")
     }
 }
 
@@ -526,8 +601,8 @@ async fn private_onecall_cancelled_wallet_worker_keeps_original_round_lease_unti
         .await
         .unwrap()
         .unwrap();
-    // Native worker drops its original lease immediately after the wallet returns; retry is
-    // allowed to observe RunnerBusy until that destructor has completed, never another wallet.
+    // The admitted join owner drops the lease only after native thread exit and
+    // disposal of the cancelled result; retry may observe Busy until that completes.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         match reopened
@@ -535,7 +610,7 @@ async fn private_onecall_cancelled_wallet_worker_keeps_original_round_lease_unti
             .await
         {
             Ok(value) => {
-                assert!(value.receipt.is_none());
+                assert!(value.outcome.is_none());
                 break;
             }
             Err(OneCallPrivateSettlementError::Provider(cause))
@@ -718,12 +793,115 @@ async fn private_onecall_fresh_readonly_recovery_has_no_journal_or_wallet_effect
             .is_none()
     );
     let recovered = operation.recover(&options).await.unwrap();
-    assert!(recovered.progress.is_none() && recovered.receipt.is_none());
+    assert!(recovered.progress.is_none() && recovered.outcome.is_none());
     assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
     assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(std::fs::read_dir(journals).unwrap().count(), 0);
     assert_eq!(std::fs::read_dir(artifacts).unwrap().count(), 0);
+}
+
+#[derive(Debug, Default)]
+struct ZeroReadTransport {
+    requests: AtomicUsize,
+}
+impl HttpTransport for ZeroReadTransport {
+    fn send_blocking(&self, _: TransportRequest) -> eyre::Result<http::Response<Vec<u8>>> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        Err(eyre::eyre!("zero-read fixture forbids HTTP"))
+    }
+
+    fn send(&self, _: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            Err(eyre::eyre!("zero-read fixture forbids HTTP"))
+        })
+    }
+}
+
+fn zero_read_operation() -> (
+    tempfile::TempDir,
+    OneCallPrivateSettlementOperation,
+    Arc<ZeroReadTransport>,
+    Arc<Source>,
+    Arc<RefusingWallet>,
+) {
+    let native = NativeFinalityFixture::start("private-zero-finality-read-allowance");
+    let transport = Arc::new(ZeroReadTransport::default());
+    let mut builder =
+        client_with_base_url(&"http://zero-read.invalid/".parse().unwrap()).to_builder();
+    builder.network_id = native.network_id();
+    builder.chain = native.chain_id().parse().unwrap();
+    let client = builder.http_transport(transport.clone()).build().unwrap();
+    let (proof, intent) = context(&client);
+    let root = tempfile::tempdir().unwrap();
+    let source = Arc::new(Source {
+        proof: None,
+        reads: AtomicUsize::new(0),
+    });
+    let wallet = Arc::new(RefusingWallet::default());
+    let operation = OneCallPrivateSettlementOperation::with_source(
+        client.account_client().unwrap(),
+        request(&client, &proof, &intent),
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("journals")).unwrap()),
+        Arc::new(
+            FilePrivateSettlementArtifacts::open(root.path().join("artifacts"), &[63; 32]).unwrap(),
+        ),
+        source.clone(),
+        wallet.clone(),
+        native.verifier(),
+    )
+    .unwrap();
+    (root, operation, transport, source, wallet)
+}
+
+#[test]
+fn exhausted_finality_allowance_can_handoff_original_cached_settlement() {
+    let (_root, operation, transport, source, wallet) = zero_read_operation();
+    operation.driver.begin_call(0).unwrap();
+    let (_, remaining) = operation
+        .driver
+        .settlement_handoff(&PrivateSettlementRunOptions::default())
+        .expect("zero remaining HTTP reads must preserve the original cached settlement path");
+    assert_eq!(remaining.max_finality_proof_reads, 0);
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zero_finality_allowance_refuses_new_proof_before_http_or_wallet_work() {
+    let (_root, operation, transport, source, wallet) = zero_read_operation();
+    for _ in 0..2 {
+        operation.driver.begin_call(0).unwrap();
+        let failure = operation
+            .handle
+            .run(
+                operation.driver.as_ref(),
+                &PrivateSettlementRunOptions::default().workflow,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.code,
+            iroha::workflow::WorkflowErrorCode::LocalResourceUnavailable
+        );
+        assert!(matches!(
+            operation.driver.take_error().unwrap(),
+            Some(OneCallPrivateSettlementError::Capacity)
+        ));
+    }
+    assert_eq!(transport.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+    let journal = operation.handle.journal_snapshot().unwrap().unwrap();
+    assert!(
+        journal
+            .steps
+            .iter()
+            .all(|step| step.transaction.is_none() && !step.is_done())
+    );
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -848,6 +1026,14 @@ impl PrivateSettlementWallet for ClassifiedRefusingWallet {
         self.reservations.fetch_add(1, Ordering::SeqCst);
         panic!("operational refusal cannot grant original secret reservation")
     }
+    fn reconcile_verified(
+        &self,
+        _: Digest32,
+        _: &PrivateSettlementRequest,
+        _: &VerifiedPrivateSettlementOutcome,
+    ) -> Result<(), OneCallPrivateSettlementError> {
+        panic!("an original operational refusal cannot yield verified settlement")
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -911,14 +1097,14 @@ async fn private_onecall_original_failure_category_survives_store_reopen_without
             .unwrap();
             let options = PrivateSettlementRunOptions::default();
             if reopening {
-                assert!(operation.recover(&options).await.unwrap().receipt.is_none());
+                assert!(operation.recover(&options).await.unwrap().outcome.is_none());
                 assert_eq!(wallet.openings.load(Ordering::SeqCst), 0);
                 assert_eq!(wallet.reservations.load(Ordering::SeqCst), 0);
                 assert_eq!(source.reads.load(Ordering::SeqCst), 0);
             }
             operation
                 .driver
-                .begin_call(options.max_finality_proof_reads.get() as usize)
+                .begin_call(usize::from(options.max_finality_proof_reads))
                 .unwrap();
             // Exercise the actual canonical workflow owner before the public wrapper returns
             // the separately preserved original error. No replacement classifier is used.
@@ -974,5 +1160,879 @@ async fn private_onecall_original_failure_category_survives_store_reopen_without
             assert_eq!(source.reads.load(Ordering::SeqCst), usize::from(!reopening));
             // End scope drops every operation/storage owner before the next pass reopens files.
         }
+    }
+}
+
+#[derive(Debug)]
+struct PrefixTransport {
+    proofs: Vec<SumeragiFinalityProof>,
+    reads: Mutex<Vec<u64>>,
+}
+impl HttpTransport for PrefixTransport {
+    fn send_blocking(&self, _: TransportRequest) -> eyre::Result<http::Response<Vec<u8>>> {
+        panic!("pending preparation uses async finality reads")
+    }
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move {
+            if request.url.path() == "/v1/node/capabilities" {
+                return compatible_capabilities_response();
+            }
+            assert_eq!(request.method, http::Method::GET);
+            let height: u64 = request
+                .url
+                .path()
+                .strip_prefix("/v1/bridge/finality/")
+                .expect("only finality acquisition is permitted")
+                .parse()
+                .unwrap();
+            self.reads.lock().unwrap().push(height);
+            let proof = self
+                .proofs
+                .iter()
+                .find(|proof| proof.height() == height)
+                .expect("selected original proof exists");
+            Ok(http::Response::builder()
+                .status(200)
+                .header("content-type", "application/x-norito")
+                .body(norito::encode_canonical(proof)?)
+                .unwrap())
+        })
+    }
+}
+struct SelectedCutSource {
+    proof: PrivateSettlementContextsProofV1,
+    height: u64,
+    reads: AtomicUsize,
+}
+impl PrivateSettlementContextSource for SelectedCutSource {
+    fn fetch(
+        &self,
+        height: u64,
+        _: PrivateSettlementContextRequestV1,
+    ) -> WorkflowFuture<
+        '_,
+        std::result::Result<PrivateSettlementContextsProofV1, OneCallPrivateSettlementError>,
+    > {
+        Box::pin(async move {
+            assert_eq!(height, self.height);
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.proof.clone())
+        })
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_onecall_pending_prefix_advances_across_cold_genesis_restarts_past_read_budget() {
+    cold_prefix_preparation(false).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_prepare_pending_prefix_reopens_beyond_read_budget_without_a_carrier() {
+    cold_prefix_preparation(true).await;
+}
+
+async fn cold_prefix_preparation(prepare_only: bool) {
+    const SELECTED: u64 = 70;
+    let mut native = NativeFinalityFixture::start("private-pending-prefix");
+    let genesis = native.verifier();
+    let mut builder = client_with_base_url(&"http://prefix.invalid/".parse().unwrap()).to_builder();
+    builder.network_id = native.network_id();
+    builder.chain = native.chain_id().parse().unwrap();
+    let client = builder.build().unwrap();
+    let (context, intent) = context(&client);
+    let mut proofs = Vec::new();
+    for _ in 2..=SELECTED {
+        let block = native.block_with_submitted_work(native.next_header());
+        proofs.push(
+            native.certify_with_world_root(block, context.contexts[0].pool.world.root().unwrap()),
+        );
+    }
+    let transport = Arc::new(PrefixTransport {
+        proofs,
+        reads: Mutex::new(Vec::new()),
+    });
+    let client = client
+        .to_builder()
+        .http_transport(transport.clone())
+        .build()
+        .unwrap();
+    let request = request_at_height(&client, &context, &intent, SELECTED);
+    let root = tempfile::tempdir().unwrap();
+    let journal_path = root.path().join("journals");
+    let artifact_path = root.path().join("artifacts");
+    let source = Arc::new(SelectedCutSource {
+        proof: context,
+        height: SELECTED,
+        reads: AtomicUsize::new(0),
+    });
+    let wallet = Arc::new(RefusingWallet::default());
+    let reopen = || {
+        OneCallPrivateSettlementOperation::with_source(
+            client.account_client().unwrap(),
+            request.clone(),
+            Arc::new(FileWorkflowStorage::open_or_create(&journal_path).unwrap()),
+            Arc::new(FilePrivateSettlementArtifacts::open(&artifact_path, &[41; 32]).unwrap()),
+            source.clone(),
+            wallet.clone(),
+            genesis.clone(),
+        )
+        .unwrap()
+    };
+    let mut original_round = None;
+    for (budget, end) in [(64, 65), (4, 69)] {
+        let operation = reopen();
+        let mut options = PrivateSettlementRunOptions::default();
+        options.max_finality_proof_reads = budget;
+        assert!(matches!(
+            prepare_action(&operation, &options, prepare_only).await,
+            Err(OneCallPrivateSettlementError::Capacity)
+        ));
+        let journal = operation.handle.journal_snapshot().unwrap().unwrap();
+        assert!(journal.steps.iter().all(|step| step.transaction.is_none()));
+        let round = journal.steps[0].round.as_ref().unwrap().round_id.unwrap();
+        assert_eq!(*original_round.get_or_insert(round), round);
+        let saved = FilePrivateSettlementArtifacts::open(&artifact_path, &[41; 32])
+            .unwrap()
+            .read_finality(
+                ArtifactKey {
+                    request: request.0.digest,
+                    round,
+                    ordinal: 0,
+                },
+                request.0.max_artifact_bytes,
+            )
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_eq!(saved.height(), end);
+        assert_eq!(
+            *transport.reads.lock().unwrap(),
+            (2..=end).collect::<Vec<_>>()
+        );
+        assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+        assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+        assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+        drop(operation);
+    }
+    let operation = reopen();
+    assert!(matches!(
+        prepare_action(
+            &operation,
+            &PrivateSettlementRunOptions::default(),
+            prepare_only
+        )
+        .await,
+        Err(OneCallPrivateSettlementError::Provider(_))
+    ));
+    assert_eq!(
+        *transport.reads.lock().unwrap(),
+        (2..=SELECTED).collect::<Vec<_>>()
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+    drop(operation);
+    let operation = reopen();
+    assert!(
+        operation
+            .prepared_request(&PrivateSettlementRunOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        *transport.reads.lock().unwrap(),
+        (2..=SELECTED).collect::<Vec<_>>(),
+        "the selected locally authenticated tip needs no new ledger traffic"
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
+    drop(operation);
+
+    let block = native.block_with_submitted_work(native.next_header());
+    native.certify(block);
+    let newer = OneCallPrivateSettlementOperation::with_source(
+        client.account_client().unwrap(),
+        request.clone(),
+        Arc::new(FileWorkflowStorage::open_or_create(&journal_path).unwrap()),
+        Arc::new(FilePrivateSettlementArtifacts::open(&artifact_path, &[41; 32]).unwrap()),
+        source.clone(),
+        wallet.clone(),
+        native.verifier(),
+    )
+    .unwrap();
+    assert!(
+        newer
+            .prepared_request(&PrivateSettlementRunOptions::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        *transport.reads.lock().unwrap(),
+        (2..=SELECTED).collect::<Vec<_>>(),
+        "a newer caller verifier cannot replace the pending operation's selected cut"
+    );
+    drop(newer);
+
+    let key = ArtifactKey {
+        request: request.0.digest,
+        round: original_round.unwrap(),
+        ordinal: 0,
+    };
+    let store = FilePrivateSettlementArtifacts::open(&artifact_path, &[41; 32]).unwrap();
+    let foreign = NativeFinalityFixture::new();
+    store
+        .publish_finality(key, &foreign.checkpoint(), request.0.max_artifact_bytes)
+        .unwrap();
+    assert!(matches!(
+        prepare_action(
+            &reopen(),
+            &PrivateSettlementRunOptions::default(),
+            prepare_only
+        )
+        .await,
+        Err(OneCallPrivateSettlementError::Binding)
+    ));
+    store
+        .publish_finality(key, &native.checkpoint(), request.0.max_artifact_bytes)
+        .unwrap();
+    assert!(
+        matches!(
+            prepare_action(
+                &reopen(),
+                &PrivateSettlementRunOptions::default(),
+                prepare_only
+            )
+            .await,
+            Err(OneCallPrivateSettlementError::Binding)
+        ),
+        "a valid later checkpoint cannot change the selected cut"
+    );
+    assert_eq!(
+        *transport.reads.lock().unwrap(),
+        (2..=SELECTED).collect::<Vec<_>>()
+    );
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+}
+
+#[derive(Debug)]
+struct RefusePublicationTransport {
+    proof: SumeragiFinalityProof,
+    artifact_path: std::path::PathBuf,
+    handle: Mutex<Option<WorkflowHandle>>,
+    reads: AtomicUsize,
+}
+impl HttpTransport for RefusePublicationTransport {
+    fn send_blocking(&self, _: TransportRequest) -> eyre::Result<http::Response<Vec<u8>>> {
+        panic!("preparation reads are async")
+    }
+    fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+        Box::pin(async move {
+            if request.url.path() == "/v1/node/capabilities" {
+                return compatible_capabilities_response();
+            }
+            assert_eq!(request.url.path(), "/v1/bridge/finality/2");
+            if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                let journal = self
+                    .handle
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .journal_snapshot()
+                    .unwrap()
+                    .unwrap();
+                let round = journal.steps[0].round.as_ref().unwrap().round_id.unwrap();
+                // The read already observed no checkpoint. Refuse its later atomic publication
+                // through actual filesystem custody, without replacing verification or I/O.
+                std::fs::create_dir(
+                    self.artifact_path
+                        .join(format!("{}.preparation-finality", hex::encode(round))),
+                )
+                .unwrap();
+            }
+            Ok(http::Response::builder()
+                .status(200)
+                .header("content-type", "application/x-norito")
+                .body(norito::encode_canonical(&self.proof)?)
+                .unwrap())
+        })
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_pending_finality_publication_refusal_keeps_original_verifier_until_retry() {
+    let mut native = NativeFinalityFixture::start("private-pending-publication-refusal");
+    let genesis = native.verifier();
+    let mut builder =
+        client_with_base_url(&"http://publication.invalid/".parse().unwrap()).to_builder();
+    builder.network_id = native.network_id();
+    builder.chain = native.chain_id().parse().unwrap();
+    let client = builder.build().unwrap();
+    let (context, intent) = context(&client);
+    let block = native.block_with_submitted_work(native.next_header());
+    let proof =
+        native.certify_with_world_root(block, context.contexts[0].pool.world.root().unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let artifact_path = root.path().join("artifacts");
+    let transport = Arc::new(RefusePublicationTransport {
+        proof,
+        artifact_path: artifact_path.clone(),
+        handle: Mutex::new(None),
+        reads: AtomicUsize::new(0),
+    });
+    let client = client
+        .to_builder()
+        .http_transport(transport.clone())
+        .build()
+        .unwrap();
+    let source = Arc::new(Source {
+        proof: Some(context.clone()),
+        reads: AtomicUsize::new(0),
+    });
+    let wallet = Arc::new(RefusingWallet::default());
+    let request = request(&client, &context, &intent);
+    let operation = OneCallPrivateSettlementOperation::with_source(
+        client.account_client().unwrap(),
+        request.clone(),
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("journal")).unwrap()),
+        Arc::new(FilePrivateSettlementArtifacts::open(&artifact_path, &[45; 32]).unwrap()),
+        source.clone(),
+        wallet.clone(),
+        genesis,
+    )
+    .unwrap();
+    *transport.handle.lock().unwrap() = Some(operation.handle.clone());
+    let options = PrivateSettlementRunOptions::default();
+    assert!(matches!(
+        operation.run(&options).await,
+        Err(OneCallPrivateSettlementError::Storage(_))
+    ));
+    assert_eq!(
+        operation
+            .driver
+            .settlement_handoff(&options)
+            .unwrap()
+            .0
+            .authenticated_height(),
+        Some(1),
+        "unpublished progress must not advance the original verifier"
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+    let journal = operation.handle.journal_snapshot().unwrap().unwrap();
+    let round = journal.steps[0].round.as_ref().unwrap().round_id.unwrap();
+    std::fs::remove_dir(artifact_path.join(format!("{}.preparation-finality", hex::encode(round))))
+        .unwrap();
+    assert!(matches!(
+        operation.run(&options).await,
+        Err(OneCallPrivateSettlementError::Provider(_))
+    ));
+    assert_eq!(
+        transport.reads.load(Ordering::SeqCst),
+        2,
+        "retry reauthenticates and republishes the refused cut"
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
+    let store = FilePrivateSettlementArtifacts::open(&artifact_path, &[45; 32]).unwrap();
+    assert_eq!(
+        store
+            .read_finality(
+                ArtifactKey {
+                    request: request.0.digest,
+                    round,
+                    ordinal: 0
+                },
+                request.0.max_artifact_bytes
+            )
+            .unwrap()
+            .unwrap()
+            .0
+            .height(),
+        2
+    );
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+    *transport.handle.lock().unwrap() = None;
+}
+
+struct HeldPanicTls {
+    started: Option<tokio::sync::oneshot::Sender<()>>,
+    release: std::sync::mpsc::Receiver<()>,
+    finished: Option<tokio::sync::oneshot::Sender<()>>,
+}
+impl Drop for HeldPanicTls {
+    fn drop(&mut self) {
+        if let Some(started) = self.started.take() {
+            let _ = started.send(());
+        }
+        // Dropping the test's sender also releases teardown on an assertion failure.
+        // No nested panic is permitted while the native wallet panic is unwinding.
+        let _ = self.release.recv();
+        if let Some(finished) = self.finished.take() {
+            let _ = finished.send(());
+        }
+    }
+}
+std::thread_local! {
+    static WALLET_PANIC_TLS: std::cell::RefCell<Option<HeldPanicTls>> = const { std::cell::RefCell::new(None) };
+}
+struct PanicTlsWallet(Mutex<Option<HeldPanicTls>>);
+impl PrivateSettlementWallet for PanicTlsWallet {
+    fn open_policy(
+        &self,
+        _: &PrivateSettlementProofIntentV1,
+        _: u8,
+        _: &PrivateSettlementBusinessTerms,
+    ) -> std::result::Result<PrivateSettlementRestrictedOpening, OneCallPrivateSettlementError>
+    {
+        let original = self.0.lock().unwrap().take().unwrap();
+        WALLET_PANIC_TLS.with(|slot| {
+            *slot.borrow_mut() = Some(original);
+        });
+        panic!("original wallet panic with retained native TLS");
+    }
+    fn reserve_or_reopen(
+        &self,
+        _: Digest32,
+        _: &PrivateSettlementProofIntentV1,
+        _: u8,
+        _: &PrivateSettlementBusinessTerms,
+    ) -> std::result::Result<
+        AtomicPrivateSettlementAuthorizedWalletLegV1,
+        OneCallPrivateSettlementError,
+    > {
+        panic!("panicking opening never authorizes a reservation")
+    }
+    fn reconcile_verified(
+        &self,
+        _: Digest32,
+        _: &PrivateSettlementRequest,
+        _: &VerifiedPrivateSettlementOutcome,
+    ) -> Result<(), OneCallPrivateSettlementError> {
+        panic!("a panicking wallet opening cannot yield verified settlement")
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_onecall_wallet_panic_retains_round_lease_through_original_tls_exit() {
+    let mut native = NativeFinalityFixture::start("private-wallet-panic-tls");
+    let verifier = native.verifier();
+    let mut builder =
+        client_with_base_url(&"http://panic-tls.invalid/".parse().unwrap()).to_builder();
+    builder.network_id = native.network_id();
+    builder.chain = native.chain_id().parse().unwrap();
+    let client = builder.build().unwrap();
+    let (proof, original_intent) = context(&client);
+    let block = native.block_with_submitted_work(native.next_header());
+    let finality =
+        native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+    let client = client
+        .to_builder()
+        .http_transport(Arc::new(FinalityTransport(finality)))
+        .build()
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let journals = root.path().join("journals");
+    let artifacts = root.path().join("artifacts");
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let (finished, finished_rx) = tokio::sync::oneshot::channel();
+    let original = Arc::new(
+        OneCallPrivateSettlementOperation::with_source(
+            client.account_client().unwrap(),
+            request(&client, &proof, &original_intent),
+            Arc::new(FileWorkflowStorage::open_or_create(&journals).unwrap()),
+            Arc::new(FilePrivateSettlementArtifacts::open(&artifacts, &[47; 32]).unwrap()),
+            Arc::new(Source {
+                proof: Some(proof.clone()),
+                reads: AtomicUsize::new(0),
+            }),
+            Arc::new(PanicTlsWallet(Mutex::new(Some(HeldPanicTls {
+                started: Some(started),
+                release: release_rx,
+                finished: Some(finished),
+            })))),
+            verifier.clone(),
+        )
+        .unwrap(),
+    );
+    let running = original.clone();
+    let task =
+        tokio::spawn(async move { running.run(&PrivateSettlementRunOptions::default()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    // The wallet has already unwound; its original native thread remains inside TLS teardown.
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    drop(original);
+    let wallet = Arc::new(RefusingWallet::default());
+    let source = Arc::new(Source {
+        proof: None,
+        reads: AtomicUsize::new(0),
+    });
+    let reopened = OneCallPrivateSettlementOperation::with_source(
+        client.account_client().unwrap(),
+        request(&client, &proof, &original_intent),
+        Arc::new(FileWorkflowStorage::open_or_create(&journals).unwrap()),
+        Arc::new(FilePrivateSettlementArtifacts::open(&artifacts, &[47; 32]).unwrap()),
+        source.clone(),
+        wallet.clone(),
+        verifier,
+    )
+    .unwrap();
+    let error = reopened
+        .run(&PrivateSettlementRunOptions::default())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, OneCallPrivateSettlementError::Provider(cause)
+        if cause.downcast_ref::<iroha::workflow::WorkflowStorageError>()
+            .is_some_and(|error| error.kind == iroha::workflow::WorkflowStorageErrorKind::Busy)),
+        "a reconstructed operation cannot replace panicked wallet custody before TLS exit: {error:?}"
+    );
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    release.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), finished_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match reopened
+            .recover(&PrivateSettlementRunOptions::default())
+            .await
+        {
+            Ok(result) => {
+                assert!(result.outcome.is_none());
+                break;
+            }
+            Err(OneCallPrivateSettlementError::Provider(cause))
+                if cause
+                    .downcast_ref::<iroha::workflow::WorkflowStorageError>()
+                    .is_some_and(|error| {
+                        error.kind == iroha::workflow::WorkflowStorageErrorKind::Busy
+                    }) =>
+            {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "native custody never retired"
+                );
+                tokio::task::yield_now().await;
+            }
+            other => panic!("unexpected recovery after native TLS exit: {other:?}"),
+        }
+    }
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_onecall_fresh_custody_uses_original_older_cut_from_newer_caller_verifier() {
+    let mut native = NativeFinalityFixture::start("private-fresh-older-cut");
+    let mut builder =
+        client_with_base_url(&"http://older-cut.invalid/".parse().unwrap()).to_builder();
+    builder.network_id = native.network_id();
+    builder.chain = native.chain_id().parse().unwrap();
+    let client = builder.build().unwrap();
+    let (proof, original_intent) = context(&client);
+    let block = native.block_with_submitted_work(native.next_header());
+    let selected =
+        native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+    let block = native.block_with_submitted_work(native.next_header());
+    native.certify(block);
+    assert_eq!(native.verifier().authenticated_height(), Some(3));
+    let transport = Arc::new(PrefixTransport {
+        proofs: vec![selected],
+        reads: Mutex::new(Vec::new()),
+    });
+    let client = client
+        .to_builder()
+        .http_transport(transport.clone())
+        .build()
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let source = Arc::new(Source {
+        proof: Some(proof.clone()),
+        reads: AtomicUsize::new(0),
+    });
+    let wallet = Arc::new(RefusingWallet::default());
+    let operation = OneCallPrivateSettlementOperation::with_source(
+        client.account_client().unwrap(),
+        request(&client, &proof, &original_intent),
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("journals")).unwrap()),
+        Arc::new(
+            FilePrivateSettlementArtifacts::open(root.path().join("artifacts"), &[49; 32]).unwrap(),
+        ),
+        source.clone(),
+        wallet.clone(),
+        native.verifier(),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            operation.run(&PrivateSettlementRunOptions::default()).await,
+            Err(OneCallPrivateSettlementError::Provider(_))
+        ),
+        "the exact authenticated older cut must reach the deliberately refusing wallet"
+    );
+    assert_eq!(
+        *transport.reads.lock().unwrap(),
+        vec![2],
+        "no latest-cut substitution or new ledger traffic"
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        operation
+            .driver
+            .settlement_handoff(&PrivateSettlementRunOptions::default())
+            .unwrap()
+            .0
+            .authenticated_height(),
+        Some(3),
+        "borrowing an older decision must not mutate the original supplied prefix"
+    );
+}
+
+fn request_with_local_limits(
+    original: &OneCallPrivateSettlementRequest,
+    carrier: u64,
+    artifact: usize,
+    total: usize,
+) -> OneCallPrivateSettlementRequest {
+    let original = &original.0;
+    OneCallPrivateSettlementRequest::new(
+        original.intent.clone(),
+        original.terms.clone(),
+        original.schema,
+        original.minimum_context_time_ms,
+        original.endpoints.clone(),
+        original.padding,
+        original.retention_height,
+        carrier,
+        artifact,
+        total,
+    )
+    .unwrap()
+}
+
+#[test]
+fn private_onecall_local_limits_preserve_original_identity_but_semantic_terms_do_not() {
+    let client = client_with_base_url(&"http://context.invalid/".parse().unwrap());
+    let (proof, intent) = context(&client);
+    let original = request(&client, &proof, &intent);
+    let restricted = request_with_local_limits(&original, 1, 1, 1);
+    assert_eq!(original.0.digest, restricted.0.digest);
+    assert_eq!(
+        norito::encode_canonical(&original.plan()).unwrap(),
+        norito::encode_canonical(&restricted.plan()).unwrap()
+    );
+    let binding = AccountWorkflowContext::new(client.account_client().unwrap())
+        .unwrap()
+        .binding();
+    let id = |request: &OneCallPrivateSettlementRequest| {
+        iroha::workflow::WorkflowIdentityV1::new(&request.plan(), &binding)
+            .unwrap()
+            .workflow_id()
+            .unwrap()
+    };
+    assert_eq!(id(&original), id(&restricted));
+    for changed in 0..3 {
+        let source = &original.0;
+        let mut terms = source.terms.clone();
+        if changed == 0 {
+            terms[0].amount += 1;
+        }
+        let modified = OneCallPrivateSettlementRequest::new(
+            source.intent.clone(),
+            terms,
+            if changed == 1 {
+                Hash::new(b"another independent schema")
+            } else {
+                source.schema
+            },
+            source.minimum_context_time_ms,
+            source.endpoints.clone(),
+            if changed == 2 {
+                PrivateSettlementCapsulePaddingV1::KiB64
+            } else {
+                source.padding
+            },
+            source.retention_height,
+            source.max_carrier_bytes,
+            source.max_artifact_bytes,
+            source.max_total_artifact_bytes,
+        )
+        .unwrap();
+        assert_ne!(id(&original), id(&modified));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn private_onecall_larger_local_budget_reopens_original_round_after_capacity_refusal() {
+    let mut native = NativeFinalityFixture::start("private-onecall-local-budget-resume");
+    let mut builder =
+        client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
+    builder.network_id = native.network_id();
+    builder.chain = native.chain_id().parse().unwrap();
+    let client = builder.build().unwrap();
+    let (proof, intent) = context(&client);
+    let original = request(&client, &proof, &intent);
+    let restricted = request_with_local_limits(&original, 1, 1, 1);
+    let selected = native.verifier();
+    let block = native.block_with_submitted_work(native.next_header());
+    let finality =
+        native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+    let client = client
+        .to_builder()
+        .http_transport(Arc::new(FinalityTransport(finality)))
+        .build()
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let source = Arc::new(Source {
+        proof: Some(proof),
+        reads: AtomicUsize::new(0),
+    });
+    let wallet = Arc::new(RefusingWallet::default());
+    let open = |request| {
+        OneCallPrivateSettlementOperation::with_source(
+            client.account_client().unwrap(),
+            request,
+            Arc::new(FileWorkflowStorage::open_or_create(root.path().join("journals")).unwrap()),
+            Arc::new(
+                FilePrivateSettlementArtifacts::open(root.path().join("artifacts"), &[62; 32])
+                    .unwrap(),
+            ),
+            source.clone(),
+            wallet.clone(),
+            selected.clone(),
+        )
+        .unwrap()
+    };
+    let operation = open(restricted);
+    let id = operation.id();
+    assert!(matches!(
+        operation.run(&PrivateSettlementRunOptions::default()).await,
+        Err(OneCallPrivateSettlementError::Capacity)
+    ));
+    let before = operation.handle.journal_snapshot().unwrap().unwrap();
+    let round = before.steps[0].round.as_ref().unwrap().round_id;
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+    drop(operation);
+    let operation = open(original);
+    assert_eq!(operation.id(), id);
+    assert!(matches!(
+        operation.run(&PrivateSettlementRunOptions::default()).await,
+        Err(OneCallPrivateSettlementError::Provider(_))
+    ));
+    let after = operation.handle.journal_snapshot().unwrap().unwrap();
+    assert_eq!(after.steps[0].round.as_ref().unwrap().round_id, round);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.open.load(Ordering::SeqCst), 1);
+    assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_padding_and_retention_refuse_before_original_wallet_effects() {
+    for insufficient_retention in [false, true] {
+        let mut native = NativeFinalityFixture::start("private-selected-policy-before-wallet");
+        let genesis = native.verifier();
+        let mut builder =
+            client_with_base_url(&"http://selected.invalid/".parse().unwrap()).to_builder();
+        builder.network_id = native.network_id();
+        builder.chain = native.chain_id().parse().unwrap();
+        let client = builder.build().unwrap();
+        let (mut proof, intent) = context(&client);
+        if !insufficient_retention {
+            for member in &mut proof.contexts {
+                member
+                    .privacy_policy
+                    .current_limits
+                    .private_settlement
+                    .capsule_padding_classes = 1;
+                let hash = world_state_value_hash_v1(&member.privacy_policy).unwrap();
+                member
+                    .pool
+                    .world
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.field_id == "world.privacy_consensus_policy")
+                    .unwrap()
+                    .value_hash = hash;
+            }
+        }
+        let mut original = request(&client, &proof, &intent);
+        if insufficient_retention {
+            let selected = &original.0;
+            original = OneCallPrivateSettlementRequest::new(
+                selected.intent.clone(),
+                selected.terms.clone(),
+                selected.schema,
+                selected.minimum_context_time_ms,
+                selected.endpoints.clone(),
+                selected.padding,
+                selected.retention_height - 1,
+                selected.max_carrier_bytes,
+                selected.max_artifact_bytes,
+                selected.max_total_artifact_bytes,
+            )
+            .unwrap();
+        }
+        let block = native.block_with_submitted_work(native.next_header());
+        let finality =
+            native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+        let client = client
+            .to_builder()
+            .http_transport(Arc::new(FinalityTransport(finality)))
+            .build()
+            .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let source = Arc::new(Source {
+            proof: Some(proof),
+            reads: AtomicUsize::new(0),
+        });
+        let wallet = Arc::new(RefusingWallet::default());
+        let operation = OneCallPrivateSettlementOperation::with_source(
+            client.account_client().unwrap(),
+            original,
+            Arc::new(FileWorkflowStorage::open_or_create(root.path().join("journals")).unwrap()),
+            Arc::new(
+                FilePrivateSettlementArtifacts::open(root.path().join("artifacts"), &[83; 32])
+                    .unwrap(),
+            ),
+            source.clone(),
+            wallet.clone(),
+            genesis,
+        )
+        .unwrap();
+        assert!(matches!(
+            operation
+                .prepare(&PrivateSettlementRunOptions::default())
+                .await,
+            Err(OneCallPrivateSettlementError::Binding)
+        ));
+        assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(wallet.open.load(Ordering::SeqCst), 0);
+        assert_eq!(wallet.reserve.load(Ordering::SeqCst), 0);
+        let journal = operation.handle.journal_snapshot().unwrap().unwrap();
+        assert!(journal.steps.iter().all(|step| step.transaction.is_none()));
+        assert!(
+            std::fs::read_dir(root.path().join("artifacts"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "prepared"))
+        );
     }
 }

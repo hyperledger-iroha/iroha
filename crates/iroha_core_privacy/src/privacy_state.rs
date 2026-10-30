@@ -79,10 +79,10 @@ const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:pgc-p
 const PRIVACY_PUBLIC_RESERVE_ASSET_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:public-reserve-asset:v1";
 mod protocol_policy;
+use iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1;
 pub use protocol_policy::{
     AdmittedPrivacyProtocolV1, PrivacyAdmissionErrorV1, PrivacyProtocolLimitsPlanErrorV1,
-    PrivacyProtocolPolicyKeyV1, plan_due_privacy_protocol_limits_v1,
-    resolve_admitted_privacy_protocol_v1,
+    plan_due_privacy_protocol_limits_v1, resolve_admitted_privacy_protocol_v1,
     validate_privacy_protocol_policies_at_committed_height_v1,
     validate_privacy_protocol_policies_v1,
 };
@@ -10042,14 +10042,6 @@ fn decode_storage_key<
     }
     Ok(key)
 }
-impl norito::json::JsonKeyCodec for PrivacyProtocolPolicyKeyV1 {
-    fn encode_json_key(&self, out: &mut String) {
-        encode_storage_key(self, out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        decode_storage_key(encoded)
-    }
-}
 macro_rules! impl_validated_json_key {
     ($key:ty) => {
         impl norito::json::JsonKeyCodec for $key {
@@ -11923,8 +11915,9 @@ mod tests {
             policy
         );
         assert_eq!(record.bootle_lantern_issuer_policy(), Some(&policy));
-        validate_persisted_commitments(&commitments)
-            .expect("canonical Bootle/Lantern issuer policy restores without protocol registration");
+        validate_persisted_commitments(&commitments).expect(
+            "canonical Bootle/Lantern issuer policy restores without protocol registration",
+        );
         storage_loader_rejection_cases! {
             |view| load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, view), key;
             wrong_role {} => PrivacyStateItemRecordV1::zk_ace_policy_governance(

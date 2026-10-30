@@ -44,13 +44,18 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod resource_names_state;
-pub use resource_names_state::NativeReadHttpError;
 pub use authority_originals::NativeAuthorityOriginalsReadV1;
+pub use resource_names_state::NativeReadHttpError;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.
 pub mod sccp;
 pub use nexus::Nexus;
 mod native_payment;
+mod native_worker;
+pub use native_worker::{
+    NativeWorkerCommand, NativeWorkerCommandDrain, NativeWorkerError, native_worker_command_scope,
+    run_native_worker,
+};
 mod payment_inbox;
 mod payment_return;
 pub mod status;
@@ -62,7 +67,8 @@ mod transaction_wait;
 mod validator_committee;
 mod verified_payment;
 pub use native_payment::{
-    NativePaymentError, NativePaymentObservationError, NativePaymentOperation,
+    FileNativePaymentFinality, MAX_NATIVE_PAYMENT_FINALITY_BYTES, NativePaymentError,
+    NativePaymentFinalityStorageError, NativePaymentObservationError, NativePaymentOperation,
     NativePaymentRecovery, NativePaymentRequest, NativePaymentRunOptions, NativePaymentSession,
     NativePaymentSettlement,
 };
@@ -72,10 +78,13 @@ pub use payment_return::{
     NativePaymentReturnRecovery, NativePaymentReturnSettlement, VerifiedPaymentReturn,
 };
 pub use private_settlement::{
-    PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1, PrivateSettlementError, PrivateSettlementOperation,
+    FilePrivateSettlementFinality, MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES,
+    PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1, PrivateSettlementError,
+    PrivateSettlementFinalityStorageError, PrivateSettlementOperation,
     PrivateSettlementReceiptError, PrivateSettlementRecovery, PrivateSettlementRequest,
-    PrivateSettlementResult, PrivateSettlementRunOptions, VerifiedPrivateSettlementReceipt,
-    run_private_settlement_worker, validate_private_settlement_committee_endpoints_v1,
+    PrivateSettlementResult, PrivateSettlementRunOptions, VerifiedPrivateSettlementAbort,
+    VerifiedPrivateSettlementOutcome, VerifiedPrivateSettlementReceipt,
+    validate_private_settlement_committee_endpoints_v1,
 };
 pub use transaction_wait::TransactionFinalityFailure;
 pub use verified_payment::{PaymentReceiptVerificationError, VerifiedPaymentReceipt};
@@ -14592,6 +14601,24 @@ impl AccountClient {
     ) -> Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
         self.context
             .get_sumeragi_finality_proof_async(height, expected_scope)
+            .await
+    }
+
+    /// Fetch bounded untrusted finality bytes without decoding on the async caller's stack.
+    /// The opaque response retains this account's original transport deadline and exact
+    /// requested height and scope. Consume it on an admitted native worker, then authenticate
+    /// the decoded proof against independently selected signed genesis.
+    ///
+    /// # Errors
+    /// Returns the deadline, bounded transport and response errors from
+    /// [`Client::read_sumeragi_finality_proof_response_async`].
+    pub async fn read_sumeragi_finality_proof_response_async(
+        &self,
+        height: NonZeroU64,
+        expected_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    ) -> Result<SumeragiFinalityProofResponse> {
+        self.context
+            .read_sumeragi_finality_proof_response_async(height, expected_scope)
             .await
     }
 
@@ -35452,6 +35479,7 @@ mod tests {
                 protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 current_limits: limits(current),
                 pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                    private_settlement_drain_blocks: None,
                     scheduled_at_height: 42,
                     effective_at_height: 43,
                     next_limits: limits(next),
@@ -35600,6 +35628,7 @@ mod tests {
             protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             current_limits: limits,
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                private_settlement_drain_blocks: None,
                 scheduled_at_height: 42,
                 effective_at_height: 43,
                 next_limits: limits,

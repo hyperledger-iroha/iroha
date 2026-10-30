@@ -64,6 +64,15 @@ pub(crate) struct ProofManagedTwoLeafPlanV1 {
     pub(crate) old_root: PrivacyRootV1,
     pub(crate) new_root: PrivacyRootV1,
 }
+
+#[cfg(any(test, feature = "test-utils"))]
+/// Canonical two-origin membership before any output transition is selected.
+pub(crate) struct ProofManagedTwoLeafInputsV1 {
+    pub(crate) initial_commitments: [PrivacyCommitmentV1; 2],
+    pub(crate) input_positions: [u32; 2],
+    pub(crate) authentication_paths: [[[u8; 32]; TREE_DEPTH_V1 as usize]; 2],
+    origin: ProofManagedFrontierPartsV1,
+}
 /// Failure while constructing, restoring, or advancing a note frontier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 #[doc(hidden)]
@@ -297,6 +306,33 @@ pub(crate) fn plan_two_leaf_proof_managed_transition_v1(
     input_commitments: [PrivacyCommitmentV1; 2],
     output_commitments: &[PrivacyCommitmentV1],
 ) -> Result<ProofManagedTwoLeafPlanV1, ProofManagedAccumulatorErrorV1> {
+    let inputs = plan_two_leaf_proof_managed_inputs_v1(namespace, input_commitments)?;
+    let origin = inputs.origin;
+    let successor = append_proof_managed_commitments_v1(
+        namespace,
+        origin.tree_size,
+        origin.leaf,
+        &origin.ommers,
+        origin.root,
+        output_commitments,
+    )?;
+    Ok(ProofManagedTwoLeafPlanV1 {
+        initial_commitments: inputs.initial_commitments,
+        input_positions: inputs.input_positions,
+        authentication_paths: inputs.authentication_paths,
+        old_root: origin.root,
+        new_root: successor.root,
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+/// Plan original two-note membership without pretending an output append occurred.
+/// # Errors
+/// Invalid namespace, zero/duplicate original commitments or canonical frontier refusal.
+pub(crate) fn plan_two_leaf_proof_managed_inputs_v1(
+    namespace: PrivacyNamespaceV1,
+    input_commitments: [PrivacyCommitmentV1; 2],
+) -> Result<ProofManagedTwoLeafInputsV1, ProofManagedAccumulatorErrorV1> {
     let mut initial_commitments = input_commitments;
     initial_commitments.sort_unstable();
     let origin = build_proof_managed_frontier_v1(namespace, &initial_commitments)?;
@@ -340,20 +376,11 @@ pub(crate) fn plan_two_leaf_proof_managed_transition_v1(
             ordered_paths[1]
         }
     });
-    let successor = append_proof_managed_commitments_v1(
-        namespace,
-        origin.tree_size,
-        origin.leaf,
-        &origin.ommers,
-        origin.root,
-        output_commitments,
-    )?;
-    Ok(ProofManagedTwoLeafPlanV1 {
+    Ok(ProofManagedTwoLeafInputsV1 {
         initial_commitments,
         input_positions,
         authentication_paths,
-        old_root: origin.root,
-        new_root: successor.root,
+        origin,
     })
 }
 #[cfg(test)]
@@ -449,6 +476,24 @@ mod tests {
         assert_eq!(plan.initial_commitments, [commitment(1), commitment(2)]);
         assert_eq!(plan.input_positions, [1, 0]);
         assert_ne!(plan.old_root, plan.new_root);
+        let inputs =
+            plan_two_leaf_proof_managed_inputs_v1(namespace, [commitment(2), commitment(1)])
+                .unwrap();
+        assert_eq!(inputs.initial_commitments, plan.initial_commitments);
+        assert_eq!(inputs.input_positions, plan.input_positions);
+        assert_eq!(inputs.authentication_paths, plan.authentication_paths);
+        assert_eq!(inputs.origin.root, plan.old_root);
+        assert!(
+            matches!(
+                plan_two_leaf_proof_managed_transition_v1(
+                    namespace,
+                    [commitment(2), commitment(1)],
+                    &[]
+                ),
+                Err(ProofManagedAccumulatorErrorV1::EmptyCommitments)
+            ),
+            "membership planning must not relax an actual output transition"
+        );
 
         for (input_index, (input, input_position)) in [commitment(2), commitment(1)]
             .into_iter()

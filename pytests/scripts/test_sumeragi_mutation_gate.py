@@ -12109,3 +12109,57 @@ def test_execution_prefix_mutation_pins_actual_retained_charge_and_native_cause(
     assert "ChargedBuffer::new(1" not in source
     advance = named_rust_function(source, "advance")
     assert advance.index("original.read_block") < advance.index("prepare_execution_read_prefix_backing") < advance.index("initialize_execution_read_prefix")
+
+
+@pytest.mark.parametrize("mid,owner,control_owner,selectors,cause", [
+    ("HC488", "admission.rs", "admission.rs", (
+        "amx_relay::admission::tests::completed_early_source_cannot_starve_later_pending_admission",
+        "amx_relay::admission::tests::same_height_original_ordinals_receive_fair_admission",
+    ), "completed early source must not reacquire before the waiting later source"),
+    ("HC489", "ledger.rs", "ledger_tests.rs", (
+        "amx_relay::ledger::proof_tests::cold_journal_reset_cannot_resign_a_retained_unknown_or_applied_identity",
+    ), "original unresolved or applied custody must refuse a fresh signature after journal reset"),
+    ("HC490", "pending_custody.rs", "pending_custody/tests.rs", (
+        "amx_relay::pending_custody::tests::cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group",
+    ), "a full ordinary pool must not strand its prerequisite handoff"),
+])
+def test_pending_amx_mutations_bind_original_daemon_controls(mid, owner, control_owner, selectors, cause):
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
+    source = "crates/irohad/src/amx_relay/" + control_owner
+    assert rule.tests == selectors and not rule.scenarios
+    assert rule.causes == tuple(gate.ExpectedFailure(cause, source) for _ in selectors)
+    assert f'sumeragi_daemon_mutation = "{mid}"' in (ROOT / "crates/irohad/src/amx_relay" / owner).read_text()
+    controls = (ROOT / source).read_text()
+    for selector in selectors:
+        body = named_rust_function(controls, selector.rsplit("::", 1)[1])
+        if mid == "HC488":
+            assert "exercise_pair(" in body
+            assert cause in named_rust_function(controls, "exercise_pair")
+        else:
+            assert cause in body
+
+
+@pytest.mark.parametrize("mid", ["HC488", "HC489", "HC490"])
+@pytest.mark.parametrize("defect", ["none", "unrelated", "wrong-source", "missing-terminal", "survived", "abort", "timeout"])
+def test_pending_amx_mutations_require_completed_original_cause(monkeypatch, tmp_path, mid, defect):
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
+    rows = [(name, "ok" if defect == "survived" else "FAILED") for name in rule.tests]
+    if defect == "missing-terminal":
+        rows.pop()
+    code, output = causal_control_output(rule, rows)
+    if defect == "unrelated":
+        output = output.replace(rule.causes[0].cause, "unrelated fixture failure", 1)
+    elif defect == "wrong-source":
+        output = output.replace(rule.causes[0].source + ":123:", "foreign.rs:123:", 1)
+    elif defect == "abort":
+        code = -6
+    elif defect == "timeout":
+        code = None
+    monkeypatch.setattr(gate, "has_switch", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *_args: gate.Step(status="pass"))
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    result = gate.evaluate(SimpleNamespace(daemon=True, target_dir=tmp_path, timeout_test=900, fast=False), tmp_path, rule)
+    verdict = "killed_by_test" if defect == "none" else "survived" if defect == "survived" else "error"
+    assert result["verdict"] == verdict, result
+    if defect == "none":
+        assert result["named"]["causal_failures"] == dict.fromkeys(rule.tests, True)

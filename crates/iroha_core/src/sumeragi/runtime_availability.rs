@@ -6,7 +6,7 @@
 
 use crate::execution_attempt::ExecutionAttemptError as Attempt;
 use parking_lot::Mutex;
-use std::{io, sync::Arc};
+use std::{io, num::NonZeroUsize, sync::Arc};
 
 use iroha_data_model::{
     NetworkId,
@@ -17,7 +17,7 @@ use iroha_sumeragi::types::{Hash32, HeightConfig};
 
 use super::{
     availability_schedule::AvailabilitySchedule,
-    certified_chain::{CertifiedChain, committed_block},
+    certified_chain::{CertifiedChain, ChainReadError, committed_block},
     crypto::BlsCrypto,
     lanes::{
         incarnation_instance,
@@ -26,7 +26,10 @@ use super::{
 };
 use crate::{
     query::native_receipts::lane_payload::{LaneAuthority, LanePayloadError},
-    state::{State, StateReadOnly, StateViewReleases, WorldReadOnly},
+    state::{
+        AuthenticatedExecutionIdentity, NativeExecutionTip, State, StateReadOnly,
+        StateViewReleases, WorldReadOnly,
+    },
 };
 
 pub mod history;
@@ -63,6 +66,9 @@ pub struct NativeGlobalAvailability {
     state: Arc<State>,
     instance: Hash32,
     crypto: Arc<BlsCrypto>,
+    // Node-local descending progress only, bound to the complete original published tip.
+    // No State view, frame, schedule or certificate verdict survives a call here.
+    parent_cursor: Mutex<Option<(NativeExecutionTip, AuthenticatedExecutionIdentity)>>,
 }
 impl NativeGlobalAvailability {
     /// Bind the supplied instance to State's authenticated signed genesis and configured chain.
@@ -94,6 +100,7 @@ impl NativeGlobalAvailability {
             state,
             instance,
             crypto,
+            parent_cursor: Mutex::new(None),
         })
     }
 
@@ -123,10 +130,61 @@ impl NativeGlobalAvailability {
                 Some(ScheduledSlot::PendingBoundary { .. }) | None => Ok(None),
             };
         }
-        // The original native tip in this same view authenticates execution ancestry. This
-        // reader verifies each parent core hash, R, Iroha hash and executed-frame binding;
-        // local CommitQC bytes are deliberately not the source of deterministic authority.
-        let parent = committed_block(&view, height - 1).map_err(|error| {
+        // The same original native tip authenticates every continuation. Its opaque cursor
+        // only shortens node-local source work; the common native reader still rereads the
+        // selected identity's original journal/frame/core/R/scope and every lower parent.
+        // Copy fixed values before source I/O so callbacks never run beneath this mutex.
+        let parent_height = height - 1;
+        let cursor = *self.parent_cursor.lock();
+        let start = cursor
+            .filter(|(original_tip, parent)| {
+                *original_tip == tip && parent.height() >= parent_height
+            })
+            .map(|(_, parent)| parent)
+            .filter(|_| !cfg!(all(test, sumeragi_core_mutation = "HC974")));
+        let parent = match start {
+            None => committed_block(&view, parent_height),
+            Some(start) => {
+                let index = usize::try_from(parent_height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                    .ok_or_else(|| {
+                        Attempt::Rejected(ChainReadError::NotCommitted {
+                            height: parent_height,
+                        })
+                    });
+                index.and_then(|index| {
+                    let mut parent = None;
+                    view.canonical_history()
+                        .visit_executed_backwards_from_identity(
+                            start,
+                            index,
+                            |_, _| Ok(()),
+                            |receipt| {
+                                if receipt.height() == parent_height {
+                                    parent = Some(receipt);
+                                }
+                                Ok(())
+                            },
+                        )
+                        .map_err(|error| {
+                            error.map_rejection(|error| ChainReadError::Malformed {
+                                height: parent_height,
+                                reason: error.to_string(),
+                            })
+                        })?;
+                    parent.ok_or_else(|| {
+                        Attempt::Rejected(ChainReadError::Malformed {
+                            height: parent_height,
+                            reason:
+                                "requested execution was absent from its authenticated interval"
+                                    .into(),
+                        })
+                    })
+                })
+            }
+        }
+        .map_err(|error| {
             if cfg!(all(test, sumeragi_core_mutation = "HC47")) {
                 invalid(error).into()
             } else {
@@ -141,7 +199,12 @@ impl NativeGlobalAvailability {
         }
         // The requested body is never the source of its own parameters or authority.
         match &parent.commitment().schedule.next {
-            ScheduledSlot::Ready(config) if config.height == height => Ok(Some(config.clone())),
+            ScheduledSlot::Ready(config) if config.height == height => {
+                let config = config.clone();
+                *self.parent_cursor.lock() =
+                    Some((tip, AuthenticatedExecutionIdentity::of(&parent)));
+                Ok(Some(config))
+            }
             _ => Err(invalid("certified parent has no exact next-height authority").into()),
         }
     }

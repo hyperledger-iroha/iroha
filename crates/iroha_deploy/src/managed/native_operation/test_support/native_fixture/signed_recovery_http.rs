@@ -362,7 +362,7 @@ fn response(
                 tip_mismatch: None,
             };
             return Ok((
-                503,
+                failure.reason.http_status_code(),
                 "application/x-norito",
                 norito::encode_canonical(&failure.into_error_envelope()).unwrap(),
             ));
@@ -392,8 +392,9 @@ fn response(
                     network_id: native.chain.network_id(),
                 }),
             };
+            // Torii takes each status from the shared reason; the SDK refuses any other.
             return Ok((
-                409,
+                failure.reason.http_status_code(),
                 "application/x-norito",
                 norito::encode_canonical(&failure.into_error_envelope()).unwrap(),
             ));

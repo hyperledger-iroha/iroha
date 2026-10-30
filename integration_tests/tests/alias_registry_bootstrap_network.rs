@@ -140,7 +140,7 @@ fn staking_custody_account() -> AccountId {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    let definition: AssetDefinitionId = defaults::nexus::staking::stake_asset_id()
+    let definition: AssetDefinitionId = TAIRA_XOR_ASSET_DEFINITION_ID
         .parse()
         .expect("canonical network XOR asset");
     assert_eq!(
@@ -1675,8 +1675,7 @@ fn inspect_certified_bpng_lane_evidence(
             retained,
             &history,
             &predecessor,
-            &body,
-            &certificate,
+            (&body, &certificate),
         )?;
         let batch = LaneBatch::from_payload(body.payload().as_slice())?;
         ensure!(

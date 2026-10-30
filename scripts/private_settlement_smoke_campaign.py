@@ -71,17 +71,20 @@ COLD_ONE_CALL_TEST_NAME = (
 COLD_CHILD_TEST_NAME = (
     "nexus::atomic_private_settlement_localnet::atomic_private_settlement_onecall::child::cold_sdk_child"
 )
-COLD_CHILD_COUNT = 28
+COLD_CHILD_COUNT = 33
 COLD_REPORT_MAX = 512 * 1024
 COLD_LOG_MAX = 1024 * 1024
+COLD_WALLET_INDEX_MAX = 64 * 1024 * 1024
+COLD_WALLET_PHYSICAL_MAX = 2 * (COLD_WALLET_INDEX_MAX + 28)
 RUN_COUNT = 10
 PEER_COUNT = 16
 RAYON_WORKER_THREADS = 8
 WORKER_ENVIRONMENT_KEYS = ("RAYON_NUM_THREADS", "RUST_TEST_THREADS", "CARGO_BUILD_JOBS", "CARGO_INCREMENTAL")
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_TRANSPORT_LOG_BYTES = 64 * 1024 * 1024
-# Current protocol/default owners: nexus/private_settlement.rs and
-# iroha_config/parameters/defaults.rs; source parity is checked by script tests.
+# Current private admission owners: nexus/private_settlement.rs and
+# privacy/private_settlement_policy.rs. HTTP bounds remain in iroha_config;
+# source parity is checked by script tests.
 PRIVATE_PROOF_BOUND_BYTES = 8 * 1024 * 1024
 PRIVATE_CARRIER_BOUND_BYTES = 4 * 1024 * 1024
 PRIVATE_CAPSULE_BOUND_BYTES = 1024 * 1024
@@ -884,26 +887,35 @@ def validate_cold_custody(evidence: dict[str, Any]) -> None:
 
     This is source-bound producer evidence, not an independent Norito/BLS decoder.
     Every report's exact bytes and corresponding selected child terminal are retained.
+    The 33 processes include preparation without submission, zero-read cached
+    preparation and terminal calls, and the original sixteen validator restarts.
     """
     row = fields(evidence["sdk-process-custody.json"], {"version", "operation", "child_test", "children",
         "encrypted_originals", "original_case_limit_ms", "original_deadline_unix_ms",
-        "child_report_bound_bytes", "child_log_bound_bytes", "read_only_before_every_continuation"}, "cold custody")
+        "child_report_bound_bytes", "child_log_bound_bytes", "read_only_before_every_continuation",
+        "wallet_owner", "wallet_index_bound_bytes", "wallet_physical_bound_bytes"}, "cold custody")
     require(type(row["version"]) is int and row["version"] == 1
             and row["operation"] == "one_call_cold_process" and row["child_test"] == COLD_CHILD_TEST_NAME
-            and row["read_only_before_every_continuation"] is True, "cold operation/process contract changed")
+            and row["read_only_before_every_continuation"] is True
+            and row["wallet_owner"] == "FilePrivateSettlementWallet", "cold operation/process contract changed")
     for name, expected in (("original_case_limit_ms", 3_600_000), ("child_report_bound_bytes", COLD_REPORT_MAX),
-                           ("child_log_bound_bytes", COLD_LOG_MAX)):
+                           ("child_log_bound_bytes", COLD_LOG_MAX),
+                           ("wallet_index_bound_bytes", COLD_WALLET_INDEX_MAX),
+                           ("wallet_physical_bound_bytes", COLD_WALLET_PHYSICAL_MAX)):
         integer(row[name], expected, expected, name)
     integer(row["original_deadline_unix_ms"], 1, 2**64 - 1, "original absolute deadline")
-    modes = [value for phase in ("checkpoint_0", "unaudited", "checkpoint_1", "checkpoint_2", "checkpoint_3", "finish")
-             for value in ("read_only", phase)] + ["read_only"] * 16
+    modes = (["read_only", "prepare_only", "prepare_cached_zero_reads"]
+             + [value for phase in ("checkpoint_0", "unaudited", "checkpoint_1", "checkpoint_2", "checkpoint_3", "finish")
+                for value in ("read_only", phase)]
+             + ["finish_cached_zero_reads", "recover_cached_zero_reads"] + ["read_only"] * 16)
     require(isinstance(row["children"], list) and len(row["children"]) == COLD_CHILD_COUNT,
-            "cold operation needs 28 fresh processes")
+            "cold operation needs 33 fresh processes")
     pids, bindings, preparations, settlements = set(), set(), set(), set()
     for index, (value, mode) in enumerate(zip(row["children"], modes, strict=True)):
         child = fields(value, {"sequence", "mode", "pid", "input_binding", "report_sha256", "report_bytes",
             "stdout_sha256", "stderr_sha256", "preparation_id", "settlement_id", "openings", "reservations",
-            "read_only_custody_unchanged", "original_artifacts_unchanged"}, "cold child")
+            "reconciliations", "stages", "wallet_consumption_transition", "read_only_effects_unchanged",
+            "finality_read_allowance", "original_artifacts_unchanged"}, "cold child")
         require(integer(child["sequence"], 0, COLD_CHILD_COUNT - 1, "child sequence") == index
                 and child["mode"] == mode, "cold continuation phase order changed")
         pid = integer(child["pid"], 1, 2**32 - 1, "child PID")
@@ -915,11 +927,24 @@ def validate_cold_custody(evidence: dict[str, Any]) -> None:
         if index == 0:
             require(child["settlement_id"] is None, "fresh readonly child invented settlement identity")
         else:
+            # The ID is derivable from the original prepared material. It does not
+            # claim a lower journal or availability exists during PrepareOnly.
             settlements.add(digest(child["settlement_id"], "original settlement identity"))
-        for counter in ("openings", "reservations"):
+        for counter in ("openings", "stages", "reservations"):
             expected = 3 if index == 1 else 0
             integer(child[counter], expected, expected, "original wallet " + counter)
-        require(child["read_only_custody_unchanged"] is (mode == "read_only")
+        # Checkpoint3 is the Commit round. Finish child14 first settles; the cached
+        # Run child first recovers and then runs, reconciling that same result twice.
+        expected_cleanup = 0 if index < 14 else 2 if mode == "finish_cached_zero_reads" else 1
+        integer(child["reconciliations"], expected_cleanup, expected_cleanup,
+                "verified-success wallet reconciliation")
+        require(child["wallet_consumption_transition"] is (index == 14),
+                "software wallet must publish exactly one verified-success transition")
+        cached = mode in ("prepare_cached_zero_reads", "finish_cached_zero_reads", "recover_cached_zero_reads")
+        expected_reads = 0 if cached else 64
+        integer(child["finality_read_allowance"], expected_reads, expected_reads,
+                "original finality read allowance")
+        require(child["read_only_effects_unchanged"] is (mode == "read_only" or cached)
                 and child["original_artifacts_unchanged"] is (index != 0), "cold custody assertion changed")
         report = evidence[f"sdk-child-{index:02}.norito"]
         require(isinstance(report, bytes) and 0 < len(report) <= COLD_REPORT_MAX

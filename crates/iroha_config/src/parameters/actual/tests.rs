@@ -200,6 +200,32 @@ mod tests {
             "filesystem placement and local worker cadence must not partition validators"
         );
     }
+
+    #[test]
+    fn private_sidecar_capacity_does_not_change_payment_consensus_identity() {
+        let baseline = Nexus::default();
+        let pipeline = Pipeline::default();
+        let policy = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees)).unwrap();
+        let amx =
+            sumeragi_nexus_amx_context_hash(&baseline, Some(&baseline.fees), &pipeline, &[], &[]);
+        let mut records = baseline.clone();
+        records.atomic_private_settlement.sidecar_max_records = NonZeroU32::new(1).unwrap();
+        let mut bytes = baseline;
+        bytes.atomic_private_settlement.sidecar_max_total_bytes = NonZeroU64::new(1).unwrap();
+        for (label, changed) in [("record capacity", records), ("byte capacity", bytes)] {
+            assert_eq!(
+                nexus_consensus_policy_digest(&changed, Some(&changed.fees)).unwrap(),
+                policy,
+                "local private sidecar {label} must not alter payment consensus identity"
+            );
+            assert_eq!(
+                sumeragi_nexus_amx_context_hash(&changed, Some(&changed.fees), &pipeline, &[], &[]),
+                amx,
+                "local private sidecar {label} must not alter AMX authority"
+            );
+        }
+    }
+
     #[test]
     fn nexus_consensus_policy_digest_excludes_lane_operator_metadata() {
         let mut left = Nexus::default();
@@ -1839,7 +1865,6 @@ mod tests {
             }
         }
     }
-
 }
 #[cfg(test)]
 mod sora_profile_tests {
@@ -1891,7 +1916,4 @@ enabled = true
     }
     include!("sora_profile_discovery_disabled_test.rs");
     include!("sora_profile_runtime_tests.rs");
-
-
-
 }

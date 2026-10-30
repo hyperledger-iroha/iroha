@@ -324,3 +324,6 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::maximum_paid_chain_for_testing;

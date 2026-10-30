@@ -5,7 +5,10 @@ use std::{num::NonZeroU64, sync::Arc, time::Duration};
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::{NativePaymentRequest, NativePaymentRunOptions, PaymentCreditStatus, PaymentInbox},
+    client::{
+        FileNativePaymentFinality, MAX_NATIVE_PAYMENT_FINALITY_BYTES, NativePaymentRequest,
+        NativePaymentRunOptions, PaymentCreditStatus, PaymentInbox,
+    },
     collections::{Collection, ListQuery},
     workflow::{FileWorkflowStorage, WorkflowRunOptions},
 };
@@ -86,6 +89,17 @@ fn account_snapshot(
         "account asset pages did not cover the reported total"
     );
     Ok(balances)
+}
+
+/// Open one payment's bounded custody with an explicit test-only key, retained on restart.
+fn payment_finality(
+    directory: impl AsRef<std::path::Path>,
+) -> Result<Arc<FileNativePaymentFinality>> {
+    Ok(Arc::new(FileNativePaymentFinality::open(
+        directory,
+        &[0x78; 32],
+        MAX_NATIVE_PAYMENT_FINALITY_BYTES,
+    )?))
 }
 
 fn key(seed: u8) -> KeyPair {
@@ -295,6 +309,7 @@ fn paid_payment_and_bank_credit_resume_after_all_validators_restart_at_final_tip
         let operation = gateway.account_client().native_payment(
             request.clone(),
             Arc::new(FileWorkflowStorage::open_or_create(root.join("payer"))?),
+            payment_finality(root.join("payer-finality"))?,
             verifier(&genesis_wire, &selected_pins)?,
         )?;
         let settled = rt.block_on(operation.submit(&options))?;
@@ -355,6 +370,7 @@ fn paid_payment_and_bank_credit_resume_after_all_validators_restart_at_final_tip
         let resumed = resumed_gateway.account_client().native_payment(
             request.clone(),
             Arc::new(FileWorkflowStorage::open_or_create(root.join("payer"))?),
+            payment_finality(root.join("payer-finality"))?,
             verifier(&genesis_wire, &selected_pins)?,
         )?;
         let recovered = rt
@@ -389,6 +405,7 @@ fn paid_payment_and_bank_credit_resume_after_all_validators_restart_at_final_tip
             Arc::new(FileWorkflowStorage::open_or_create(
                 root.join("second-gateway"),
             )?),
+            payment_finality(root.join("second-gateway-finality"))?,
             verifier(&genesis_wire, &selected_pins)?,
         )?;
         let repeated = rt.block_on(second_gateway.resume(&options))?;

@@ -59,12 +59,17 @@ All remain open until their complete behavior is demonstrated on the same source
 candidate. Local test networks are in scope; live deployment and value movement
 require a separate request.
 
+Payment recovery in this first release covers pending payments, unresolved
+escrow and restart safety. Retain authenticated progress and authority only as
+needed to resolve those obligations. General historical State restoration and
+backward-compatible storage or wire readers are outside this delivery scope.
+
 | Order / existing owner | Gap and dependency | Runnable completion evidence |
 | --- | --- | --- |
 | 1 — N5, N12; Torii/model/Core | Correctness: resolve ISO settlement from authenticated successful execution, and preserve authenticated decision verification for every unresolved Yes escrow through rotation, pruning and restart. | Torii ISO lifecycle regressions with an included Rejected transfer, authenticated pacs.002 before reconciliation, missing/conflicting evidence and an Applied final payment with no later block; model/native AMX tests with delayed Commit and Abort through multiple handoffs, replay, wrong history, pruning and restart; named mutation regression. |
 | 2 — N5, A3, S4; settlement/SDK/ISO | Integration: support one payment in the existing `SettleAtomic` owner; bind payer, stable intent and exact terms to its consensus receipt. Compose native successful-outcome/finality verification with durable SDK resume. Preserve original settlement and give returns a separate authorized reverse-payment lifecycle. Depends on milestone 1. | A 250,000-unit shared-asset payment with independently verified asset/scope, quantity, recipient, intent and fee outcome; insufficient funds; two gateways, changed terms, controller rotation, TTL expiry, dropped acknowledgement and restart produce one monetary effect. A durable bank inbox/outbox credits once from the verified receipt; a return has its own finality evidence. |
 | 3 — N12 / S6; native AMX/service/SDK | Integration and qualification: verify retained Begin/Prepared/handoff/Decision proofs through the authorized, funded, supervised relay and its bounded durable outbound journal. Recover exact signed identities before retry, with explicit escrow limits and quorum-loss blocking. Depends on milestones 1–2. | One four-validator global root and two independent four-validator bank roots complete PvP, refusal, deadline abort, multiple rotations and crash/restart at every relay boundary. Deterministic loss/delay/duplicate/partition tests plus real-peer recovery; the final payment progresses with no unrelated traffic, no empty blocks and no local-time escrow release. |
-| 4 — N4, N6, N8, C4 / F.4, G.3–G.5, A.1, X.2; State/Core/Kura/proofs | Missing implementation and validation: complete the selected keyed authoritative State commitment and authenticated restore, committed validity policy, finalized-source proof dispatch and coherent resource admission. Shared State/Core/Kura changes have one integration owner. | Full replay equals accelerated restore at the exact native tip; omitted, substituted and extra State refuse. Identical signed inputs under different local caches, budgets and scalar/accelerated paths yield identical outcomes, fees and roots. Actual maximum and one-byte-over transactions/proofs/receipts traverse SDK, Torii, queue, signed RS16, verification and replay under unchanged fixed caps. |
+| 4 — N4, N6, N8, C4 / F.4, A.1, X.2; State/Core/Kura/proofs | Missing implementation and validation: authenticate the retained context needed by pending payments and unresolved escrow across restart, committed validity policy, finalized-source proof dispatch and coherent resource admission. Shared State/Core/Kura changes have one integration owner. | Pending operations resume from their exact authenticated progress and original transaction identities; substituted or incomplete retained authority refuses. Identical signed inputs under different local caches, budgets and scalar/accelerated paths yield identical outcomes, fees and roots. Actual maximum and one-byte-over transactions/proofs/receipts traverse SDK, Torii, queue, signed RS16, verification and restart under unchanged fixed caps. |
 | 5 — N11, C5 / B.2–B.3, S.1–S.6; private settlement/provers/SDKs | Integration: deliver genuine confidential settlement through one asynchronous operation and its prepared form, using authoritative context, encrypted audit material and durable recovery. Consolidate existing STARK consumers under the shared backend. Depends on the authority/resource work actually consumed. | Genuine proofs and money movement, nullifier/capsule/auditor/source/fee/replay negatives and crash recovery; private-settlement N=3 topology with sixteen validators and N=2/3/4/8/16 fault coverage. Measure the unchanged five-second proof-preparation-to-verified-receipt target, p50/p95/p99, throughput, memory and leakage across payload/query/storage/log/transport. |
 
 Qualify the single committed `root_fees_v1` policy across Global and independent
@@ -89,7 +94,10 @@ time expiry, an original-Begin-authenticated funded `ExpireAmxV1` carrier, and
 bounded local Decision recovery before submission. Polling alone never changes
 escrow; participants need the actual certified Abort. The existing exact-carrier
 journal resumes after restart and remains independent of a Decision produced by
-another carrier. Qualify this path with its consensus/resource controls without
+another carrier. Bound the destination verifier's resident decision history while
+retaining progress for each unresolved carrier and handoff; a per-call proof-read
+limit alone does not bound memory, and blind pruning can strand obligations.
+Qualify this path with its consensus/resource controls without
 empty blocks, unrelated transactions or local-time escrow release. It depends on
 the application clock guards in [Sumeragi §4.5](specs/sumeragi.md). Full State roots now forward the certified
 flag into a local vote guard; Global proposal pacing retains future-only work

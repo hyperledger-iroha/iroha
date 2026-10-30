@@ -10,10 +10,9 @@ use std::{num::NonZeroUsize, sync::MutexGuard};
 /// proof-read allowance. Concurrent proof walks are serialized and cancellation keeps
 /// every successfully authenticated decision. No proof blobs are retained.
 ///
-/// Old decisions retire under the explicitly selected local capacity. An operation
-/// requiring retired history returns [`NativePaymentObservationError::HistoryUnavailable`],
-/// which establishes neither absence nor rejection. Recover that original operation
-/// with the same request and storage plus an independently pinned cold verifier.
+/// Old warm decisions retire under the explicit local capacity. Each operation's mandatory
+/// caller-key custody independently retains its pending cursor and exact successful receipt
+/// evidence, so shared-cache pruning cannot retire an unresolved payment obligation.
 #[derive(Clone)]
 pub struct NativePaymentSession {
     pub(super) owner: Arc<SessionOwner>,
@@ -21,7 +20,7 @@ pub struct NativePaymentSession {
 
 pub(super) struct SessionOwner {
     pub(super) verifier: Mutex<SumeragiFinalityVerifier>,
-    pub(super) catch_up: tokio::sync::Mutex<()>,
+    pub(super) catch_up: Arc<tokio::sync::Mutex<()>>,
     pub(super) retained_decisions: usize,
 }
 
@@ -62,7 +61,7 @@ impl NativePaymentSession {
         Ok(Self {
             owner: Arc::new(SessionOwner {
                 verifier: Mutex::new(verifier),
-                catch_up: tokio::sync::Mutex::new(()),
+                catch_up: Arc::new(tokio::sync::Mutex::new(())),
                 retained_decisions: retained_decisions.get(),
             }),
         })
@@ -71,8 +70,9 @@ impl NativePaymentSession {
     pub(super) fn verifier(
         &self,
     ) -> Result<MutexGuard<'_, SumeragiFinalityVerifier>, NativePaymentObservationError> {
-        self.owner.verifier.lock().map_err(|_| {
-            NativePaymentObservationError::Worker("poisoned payment observation owner".into())
-        })
+        self.owner
+            .verifier
+            .lock()
+            .map_err(|_| NativePaymentObservationError::Synchronization)
     }
 }

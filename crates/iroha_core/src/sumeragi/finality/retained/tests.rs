@@ -331,7 +331,7 @@ fn concurrent_current_attestations_share_one_retained_authority() {
     let state = Arc::clone(chain.state());
     let status = status_at(&chain, 12);
     std::thread::scope(|scope| {
-        for index in 0..32_u8 {
+        for index in 1..=32_u8 {
             let state = &state;
             let status = status.clone();
             scope.spawn(move || {

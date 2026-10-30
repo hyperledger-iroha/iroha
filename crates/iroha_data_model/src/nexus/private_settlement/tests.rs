@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "tests/cleanup_envelope.rs"]
+mod cleanup_envelope;
+
 #[test]
 fn proof_digest_helper_is_domain_and_length_separated() {
     let proof = b"atomic-private-settlement-proof";
@@ -329,7 +332,7 @@ pub fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
     }
 }
 
-fn policy(dataspace: DataSpaceId) -> (PrivateSettlementAuditPolicyV1, Vec<KeyPair>) {
+pub(super) fn policy(dataspace: DataSpaceId) -> (PrivateSettlementAuditPolicyV1, Vec<KeyPair>) {
     let signing_keys = vec![
         KeyPair::from_seed(vec![0x61; 32], Algorithm::Ed25519),
         KeyPair::from_seed(vec![0x62; 32], Algorithm::Ed25519),
@@ -2459,7 +2462,9 @@ fn audit_plaintext_checks_fixed_slot_lengths_before_indexing() {
 #[test]
 fn audit_output_authorizations_bind_every_role_and_nonzero_recipient_key() {
     let (_, baseline) = audit_plaintext_fixture();
-    baseline.validate_output_authorizations().unwrap();
+    baseline
+        .validate_output_authorizations(AuditOutputStage::Prepared)
+        .unwrap();
     for index in 0..PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1 {
         for invalid_key in [false, true] {
             let mut changed = baseline.clone();
@@ -2469,7 +2474,7 @@ fn audit_output_authorizations_bind_every_role_and_nonzero_recipient_key() {
                 changed.outputs[index].role = baseline.outputs[(index + 1) % 3].role;
             }
             assert_eq!(
-                changed.validate_output_authorizations(),
+                changed.validate_output_authorizations(AuditOutputStage::Prepared),
                 Err(PrivateSettlementValidationError::InvalidAuditPlaintext),
                 "output {index}, invalid key: {invalid_key}"
             );
@@ -2727,4 +2732,66 @@ fn preproof_fee_projection_uses_the_original_canonical_commitment() {
             .unwrap(),
         expected
     );
+}
+
+#[test]
+fn original_preparation_outputs_defer_only_native_derived_fields() {
+    let (manifest, mut plaintext) = audit_plaintext_fixture();
+    let intent = manifest.proof_intent();
+    let original_commitment = plaintext.commitment().unwrap();
+    plaintext.validate_against_proof_intent(&intent).unwrap();
+    for output in &mut plaintext.outputs {
+        output.note.commitment = PrivacyCommitmentV1::new([0; 32]);
+        output.note.memo_digest = [0; 32];
+    }
+    plaintext
+        .validate_preparation_against_proof_intent(&intent)
+        .unwrap();
+    assert_eq!(
+        plaintext.commitment().unwrap(),
+        original_commitment,
+        "original private terms must not depend on fields native preparation will derive"
+    );
+    assert!(plaintext.validate_against_proof_intent(&intent).is_err());
+    assert!(
+        plaintext.validate().is_err(),
+        "final plaintext still requires actual derived outputs"
+    );
+    let frame = norito::encode_canonical(&plaintext).unwrap();
+    let reopened: PrivateSettlementAuditPlaintextV1 = norito::decode_canonical(&frame).unwrap();
+    assert_eq!(reopened, plaintext);
+    reopened
+        .validate_preparation_against_proof_intent(&intent)
+        .unwrap();
+}
+
+#[test]
+fn original_preparation_rejects_changed_authorized_fields_and_malformed_openings() {
+    let (manifest, mut plaintext) = audit_plaintext_fixture();
+    let intent = manifest.proof_intent();
+    for output in &mut plaintext.outputs {
+        output.note.commitment = PrivacyCommitmentV1::new([0; 32]);
+        output.note.memo_digest = [0; 32];
+    }
+    for mutation in 0..9 {
+        let mut changed = plaintext.clone();
+        match mutation {
+            0 => changed.outputs[0].recipient_view_key[0] ^= 1,
+            1 => changed.outputs[0].note.spending_authority[0] ^= 1,
+            2 => changed.outputs[0].note.active = false,
+            3 => changed.outputs[0].note.rho = [0; 32],
+            4 => changed.outputs[0].note.blinding = [0; 32],
+            5 => changed.outputs[0].note.value += 1,
+            6 => changed.inputs[0].commitment = PrivacyCommitmentV1::new([0; 32]),
+            7 => changed.outputs.pop().map(|_| ()).unwrap(),
+            8 => changed.network_id = network(91),
+            _ => unreachable!(),
+        }
+        assert!(
+            changed
+                .validate_preparation_against_proof_intent(&intent)
+                .is_err(),
+            "mutation {mutation}"
+        );
+    }
 }

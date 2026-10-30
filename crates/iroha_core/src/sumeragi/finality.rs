@@ -5,6 +5,8 @@ mod cursor;
 pub(crate) use cursor::NativeGenesisExecutionV1;
 mod interval;
 mod interval_budget;
+mod profile;
+pub use profile::native_finality_frame_budget_bytes;
 mod proof_destination;
 mod retained;
 pub use compact_source::{
@@ -19,8 +21,8 @@ pub use interval::{
     NativeFinalityProofIntervalLimits, NativeFinalityProofRefusal, NativeFinalityProofSource,
     build_proof_interval,
 };
-pub(crate) use interval_budget::FinalityDecodeWorkspace;
-pub use interval_budget::NativeFinalityProofBudget;
+pub(crate) use interval_budget::{FinalityDecodeWorkspace, metadata_generation_bytes};
+pub use interval_budget::{NativeFinalityProofBudget, native_finality_graph_floor_bytes};
 pub use proof_destination::ProofDestinationError;
 pub(crate) use retained::RetainedAttestation;
 pub use retained::{

@@ -22,6 +22,74 @@ struct World {
     defer_registration_observation: bool,
 }
 struct Transport(Mutex<World>);
+
+#[derive(Debug, thiserror::Error)]
+#[error("restricted-original-phase-cause")]
+struct OriginalPhaseFailure(usize);
+
+struct FailingPhases(AtomicUsize);
+
+impl SettlementPhases for FailingPhases {
+    fn run(
+        &self,
+        _: usize,
+        _: WorkflowJournalV1,
+        _: bool,
+    ) -> WorkflowFuture<'_, std::result::Result<Option<Vec<u8>>, PrivateSettlementError>> {
+        Box::pin(async move {
+            Err(PrivateSettlementError::Protocol(eyre::Report::new(
+                OriginalPhaseFailure(self.0.fetch_add(1, Ordering::SeqCst)),
+            )))
+        })
+    }
+}
+
+#[tokio::test]
+async fn private_settlement_phase_preserves_original_typed_error_without_journaling_it() {
+    let native = NativeFinalityFixture::start("private-settlement-original-phase-error");
+    let mut client = client_with_base_url(base_url());
+    client.network_id = native.network_id();
+    client.chain = native.chain_id().parse().unwrap();
+    crate::client::evidence_http_tests::mark_data_model_compatible(&client);
+    let (request, _) = prepared(&client);
+    let directory = tempfile::tempdir().unwrap();
+    let storage =
+        Arc::new(FileWorkflowStorage::open_or_create(directory.path().join("journal")).unwrap());
+    let finality = Arc::new(
+        FilePrivateSettlementFinality::open(
+            directory.path().join("finality"),
+            &[53; 32],
+            2 * 1024 * 1024,
+        )
+        .unwrap(),
+    );
+    let mut operation = client
+        .account_client()
+        .unwrap()
+        .private_settlement(request, storage.clone(), finality, native.verifier())
+        .unwrap();
+    Arc::get_mut(&mut operation.driver).unwrap().phases =
+        Arc::new(FailingPhases(AtomicUsize::new(0)));
+    for attempt in 0..2 {
+        let error = operation
+            .run(&PrivateSettlementRunOptions::default())
+            .await
+            .unwrap_err();
+        let PrivateSettlementError::Protocol(original) = error else {
+            panic!("original typed phase failure was replaced: {error:?}");
+        };
+        assert_eq!(
+            original.downcast_ref::<OriginalPhaseFailure>().unwrap().0,
+            attempt
+        );
+        let bytes = storage.load(&operation.id()).unwrap().unwrap();
+        assert!(
+            !bytes
+                .windows(b"restricted-original-phase-cause".len())
+                .any(|window| window == b"restricted-original-phase-cause")
+        );
+    }
+}
 impl std::fmt::Debug for Transport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SyntheticPrivateSettlementTransport")
@@ -191,7 +259,7 @@ impl SettlementPhases for Phases {
             );
             if phase == PREPARE {
                 if self.stop_before_promotion.swap(false, Ordering::SeqCst) {
-                    return Err(PrivateSettlementError::Worker);
+                    return Err(PrivateSettlementError::Worker(NativeWorkerError::Panicked));
                 }
                 self.promoted.store(true, Ordering::SeqCst);
                 let manifest = self.request.manifest_with(&self.certificates)?;
@@ -243,10 +311,16 @@ async fn restart_operation(defer_registration_observation: bool) {
     });
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settlement");
+    let finality_path = dir.path().join("finality");
+    let finality_key = [54; 32];
     let open = || {
         let storage = Arc::new(FileWorkflowStorage::open_or_create(&path).unwrap());
+        let finality = Arc::new(
+            FilePrivateSettlementFinality::open(&finality_path, &finality_key, 2 * 1024 * 1024)
+                .unwrap(),
+        );
         let mut operation = account
-            .private_settlement(request.clone(), storage, verifier.clone())
+            .private_settlement(request.clone(), storage, finality, verifier.clone())
             .unwrap();
         Arc::get_mut(&mut operation.driver).unwrap().phases = phases.clone();
         operation
@@ -324,17 +398,37 @@ async fn restart_operation(defer_registration_observation: bool) {
         .run(&PrivateSettlementRunOptions::default())
         .await
         .expect("file-backed unresolved signed Register must reopen before its certificate context is restored");
-    assert_eq!(settled.receipt.receipt().finalized_height, 3);
+    assert_eq!(
+        settled
+            .outcome
+            .settled_receipt()
+            .unwrap()
+            .receipt()
+            .finalized_height,
+        3
+    );
     assert_eq!(transport.0.lock().unwrap().submissions, 2);
     assert_eq!(phases.availability_calls.load(Ordering::SeqCst), 1);
-    let original_hash = settled.receipt.transaction_hash();
+    let original_hash = settled
+        .outcome
+        .settled_receipt()
+        .unwrap()
+        .transaction_hash();
     drop(resumed);
     let restarted = open();
     let recovered = restarted
         .recover(&PrivateSettlementRunOptions::default())
         .await
         .unwrap();
-    assert_eq!(recovered.receipt.unwrap().transaction_hash(), original_hash);
+    assert_eq!(
+        recovered
+            .outcome
+            .unwrap()
+            .settled_receipt()
+            .unwrap()
+            .transaction_hash(),
+        original_hash
+    );
     assert_eq!(
         transport.0.lock().unwrap().submissions,
         2,

@@ -2713,6 +2713,11 @@ fn mk_app_state_for_tests_with_native_scope(
         torii_proxy_max_response_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         query_fanout_working_set_bytes,
+        finality_working_set_bytes: usize::try_from(
+            defaults::torii::FINALITY_MAX_WORKING_SET_BYTES.get(),
+        )
+        .unwrap()
+        .min(query_memory.fanout_pool_bytes),
         query_ingress_envelope: query_memory.ingress,
         torii_proxy_http_ingress_envelope,
         torii_proxy_memory_inflight: Arc::new(tokio::sync::Semaphore::new(1)),

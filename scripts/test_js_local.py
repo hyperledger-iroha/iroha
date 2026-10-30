@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a current Debug N-API artifact and run the complete JavaScript unit profile.
 
-Requires Python 3.12, full Xcode, stock Rust 1.93.1, Node and the repository's
+Requires Python 3.12, full Xcode, the repository's pinned stock Rust, Node and its
 locked dependencies. Select an existing Cargo lane explicitly; this runner
 never creates a Cargo target. Native custody, logs and test output remain in a
 private target/qualification child. This local-unit workflow grants no package,
@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 import native_js_local_unit as unit
 
@@ -42,7 +43,8 @@ def selected_tools(root: Path, environment: dict[str, str]) -> dict[str, str]:
                  and (developer / "usr/bin/xcodebuild").is_file(),
                  "full Xcode is required; select its Contents/Developer directory with "
                  "DEVELOPER_DIR or xcode-select (Command Line Tools alone are insufficient)")
-    rust = Path.home() / ".rustup/toolchains" / ("1.93.1-" + unit.HOSTS[platform.machine()]) / "bin"
+    channel = tomllib.loads((root / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    rust = Path.home() / ".rustup/toolchains" / (channel + "-" + unit.HOSTS[platform.machine()]) / "bin"
     config = {"python": str(Path(sys.executable).resolve(strict=True)),
               **{name: str(rust / name) for name in ("cargo", "rustc", "rustdoc")},
               "clang": str(apple / "clang"), "ld": str(apple / "ld"),

@@ -7,6 +7,11 @@
 pub struct NativeFrameBytes(iroha_allocation::ChargedBuffer<u8>);
 
 impl NativeFrameBytes {
+    /// Transfer the original immutable frame into a same-pool portable destination.
+    pub(crate) fn into_charged(self) -> iroha_allocation::ChargedBuffer<u8> {
+        self.0
+    }
+
     /// Lend the same immutable charged source to the canonical prepared decoder.
     pub(crate) fn charged_source(&self) -> &iroha_allocation::ChargedBuffer<u8> {
         &self.0

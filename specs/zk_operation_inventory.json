@@ -12204,6 +12204,17 @@
   }
  },
  "sdk": {
+  "native_operation_owners": {
+   "scope": "Current typed Rust ownership only. C/JNI/N-API operation codecs and installed language adapters are not delivered; source presence and component tests do not establish SDK or network qualification.",
+   "owners": [
+    {"path": "crates/iroha_private_settlement/src/lib.rs", "symbols": ["OneCallPrivateSettlementOperation::prepare", "OneCallPrivateSettlementOperation::run", "OneCallPrivateSettlementOperation::prepared_request", "OneCallPrivateSettlementOperation::recover"]},
+    {"path": "crates/iroha_private_settlement/src/preparation.rs", "symbols": ["OriginalArtifacts::complete", "PreparationDriver::report", "PreparationDriver::recovered_request"]},
+    {"path": "crates/iroha_private_settlement/src/native_session.rs", "symbols": ["NativePrivateSettlementHost", "NativePrivateSettlementAdmission::open", "NativePrivateSettlementHost::start", "NativePrivateSettlementHost::wait", "NativePrivateSettlementHost::take", "NativePrivateSettlementHost::close", "NativePrivateSettlementHost::shutdown"]},
+    {"path": "crates/iroha_private_settlement/src/native_session/supervisor.rs", "symbols": ["tracked", "execute", "run"]},
+    {"path": "crates/iroha/src/client/native_worker.rs", "symbols": ["run_native_worker", "WorkerJob"]},
+    {"path": "crates/iroha/src/client/native_worker/command_scope.rs", "symbols": ["native_worker_command_scope", "NativeWorkerCommand::run", "NativeWorkerCommandDrain::wait"]}
+   ]
+  },
   "what": "The six SDK families. `operations[].sdk` and `routes.list[].sdk_files` list, per family, the source files that contain the instruction's type name as a whole word, its wire id as a string literal, or the route's path literal. `surface` lists the declarations whose name has a family word. Both are scans: a listed file references the operation; it is not thereby a one-call operation.",
   "families": [
    {
@@ -12456,9 +12467,9 @@
    },
    {
     "family": "rust",
-    "path": "crates/iroha/src/client/private_settlement/operation/worker.rs",
+    "path": "crates/iroha/src/client/native_worker.rs",
     "product": "atomic_settlement",
-    "symbols": ["run_private_settlement_worker"]
+    "symbols": ["run_native_worker"]
    },
    {
     "family": "rust",
