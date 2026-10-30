@@ -474,6 +474,53 @@ fn taira_genesis_declares_public_bpng_lane_five() {
 }
 
 #[test]
+fn pre_policy_genesis_declares_its_dataspace_through_the_retired_context_tail() {
+    let context = NexusAmxContextFixture::taira();
+    let preimage = context.pre_policy_preimage();
+    let declare_pre_policy = |extra: Vec<InstructionBox>| {
+        let fixture = NativeFinalityFixture::start_with_genesis_extension(
+            CHAIN,
+            context.pre_policy_context_hash(),
+            extra,
+        );
+        let (wire, pins) = pins(&fixture);
+        authenticate_signed_genesis_v1(&wire, &pins).unwrap()
+    };
+    let genesis = declare_pre_policy(vec![policy_instruction()]);
+    let authority = verify_genesis_dataspace_v1(&genesis, &preimage, &bpng()).unwrap();
+    assert_eq!(
+        authority.dataspace_id(),
+        DataSpaceId::new(8_648_377_547_929_788_715)
+    );
+    assert_eq!(authority.lane_id(), LaneId::new(5));
+    assert_eq!(
+        authority.nexus_amx_context_sha256(),
+        <[u8; 32]>::from(Sha256::digest(&preimage))
+    );
+    // A genesis that signs either policy committed the current tail.
+    for id in [
+        CryptoAdmissionPolicyV1::parameter_id(),
+        PublicLaneStakingPolicy::parameter_id(),
+    ] {
+        let policy = SetParameter::new(Parameter::Custom(CustomParameter::new(
+            id,
+            iroha_primitives::json::Json::new(norito::json::Value::Null),
+        )))
+        .into();
+        let genesis = declare_pre_policy(vec![policy_instruction(), policy]);
+        assert!(matches!(
+            verify_genesis_dataspace_v1(&genesis, &preimage, &bpng()),
+            Err(GenesisDataspaceError::Context(
+                NexusAmxContextError::UnexpectedTag {
+                    expected: crate::nexus::tag::STAKING_MAX_VALIDATORS,
+                    ..
+                }
+            ))
+        ));
+    }
+}
+
+#[test]
 fn declaration_rejects_foreign_context_and_root_scope() {
     let context = NexusAmxContextFixture::taira();
     let (_, genesis) = declare(&context, vec![policy_instruction()]);
