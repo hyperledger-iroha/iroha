@@ -18,6 +18,9 @@ use iroha_primitives::numeric::Quantity;
 #[path = "asset_uid/wallet_holdings.rs"]
 pub mod wallet_holdings;
 
+#[path = "asset_uid/binding_custody.rs"]
+pub(crate) mod binding_custody;
+
 pub const POLICY_ROOT: &str = "asset_uid_policy_v1/";
 pub const BINDING_ROOT: &str = "asset_uid_binding_v1/";
 pub const USAGE_ROOT: &str = "asset_uid_usage_v1/";
@@ -87,12 +90,17 @@ mod sccp_decode_tests {
         });
     }
 
-    fn binding_fixture() -> AssetUidBindingV1 {
-        AssetUidBindingV1 {
+    fn policy_control_fixture() -> AssetUidPolicyV1 {
+        AssetUidPolicyV1 {
             asset_definition_id: iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id(
             ),
-            account_id: authority(1),
             uid: [7; 32],
+            revision: 1,
+            accounts: BTreeSet::from([authority(1)]),
+            holding_limit: None,
+            daily_window: AssetUidDailyWindowV1::UtcDay,
+            daily_spend_limit: None,
+            daily_outgoing_limit: None,
         }
     }
 
@@ -107,7 +115,7 @@ mod sccp_decode_tests {
         let state = blank_state();
         let mut block = state.block(header(2));
         let tx = block.transaction();
-        let bytes = encode(&binding_fixture()).unwrap();
+        let bytes = encode(&policy_control_fixture()).unwrap();
         let budget = tx
             .world
             .sccp_committee_generations
@@ -126,10 +134,10 @@ mod sccp_decode_tests {
         let foreign_held = foreign.try_reserve_bytes(1).unwrap();
 
         // Header rejection has precedence over control admission, even with no pool capacity.
-        assert!(decode_with_owner::<AssetUidBindingV1>(Some(&tx.world), &bytes[..4]).is_err());
+        assert!(decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes[..4]).is_err());
         assert!(!tx.is_execution_deferred());
         assert!(
-            decode_with_owner::<AssetUidBindingV1>(Some(&tx.world), &bytes).is_err(),
+            decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes).is_err(),
             "HC974 policy decoder controls must refuse on the original exhausted pool"
         );
         let reason = tx.borrow_execution_deferral().unwrap();
@@ -162,8 +170,8 @@ mod sccp_decode_tests {
         let tx = block.transaction();
         let retry_baseline = budget.reserved_bytes();
         assert_eq!(
-            decode_with_owner::<AssetUidBindingV1>(Some(&tx.world), &bytes).unwrap(),
-            binding_fixture()
+            decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes).unwrap(),
+            policy_control_fixture()
         );
         assert_eq!(budget.reserved_bytes(), retry_baseline);
         assert!(!tx.is_execution_deferred());
@@ -172,7 +180,7 @@ mod sccp_decode_tests {
     #[test]
     fn sccp_policy_first_and_second_control_allocator_refusals_refund_original_pool() {
         let _fixture_retirement_pin = crossbeam_epoch::pin();
-        let bytes = encode(&binding_fixture()).unwrap();
+        let bytes = encode(&policy_control_fixture()).unwrap();
         let layout = norito::PreparedCanonicalDecode::allocation_layouts()[0];
         for occurrence in 0..2 {
             let state = blank_state();
@@ -187,7 +195,7 @@ mod sccp_decode_tests {
             let (result, refused) = crate::test_allocations::refuse_layout_occurrence_during(
                 layout,
                 occurrence,
-                || decode_with_owner::<AssetUidBindingV1>(Some(&tx.world), &bytes),
+                || decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes),
             );
             assert!(
                 refused,
@@ -308,22 +316,22 @@ pub fn binding(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<AssetUidBindingV1>, Error> {
-    binding_with_owner(world, definition, account, None)
-}
-
-fn binding_with_owner(
-    world: &impl WorldReadOnly,
-    definition: &AssetDefinitionId,
-    account: &AccountId,
-    owner: Option<&WorldTransaction<'_, '_>>,
-) -> Result<Option<AssetUidBindingV1>, Error> {
     let Some(bytes) = world
         .smart_contract_state()
         .get(&binding_key(definition, account))
     else {
         return Ok(None);
     };
-    let value: AssetUidBindingV1 = decode_with_owner(owner, bytes)?;
+    let value: AssetUidBindingV1 = decode(bytes)?;
+    validate_binding(&value, definition, account)?;
+    Ok(Some(value))
+}
+
+fn validate_binding(
+    value: &AssetUidBindingV1,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+) -> Result<[u8; 32], Error> {
     if &value.asset_definition_id != definition
         || &value.account_id != account
         || value.uid == [0; 32]
@@ -332,7 +340,7 @@ fn binding_with_owner(
             "asset UID membership differs from its canonical key",
         ));
     }
-    Ok(Some(value))
+    Ok(value.uid)
 }
 
 pub fn member_policy(
@@ -350,10 +358,11 @@ pub(super) fn member_policy_with_owner(
     account: &AccountId,
     owner: Option<&WorldTransaction<'_, '_>>,
 ) -> Result<Option<AssetUidPolicyV1>, Error> {
-    let Some(member) = binding_with_owner(world, definition, account, owner)? else {
+    let Some(uid) = binding_custody::binding_uid_with_owner(world, definition, account, owner)?
+    else {
         return Ok(None);
     };
-    let value = policy_with_owner(world, definition, &member.uid, owner)?
+    let value = policy_with_owner(world, definition, &uid, owner)?
         .ok_or_else(|| reject("asset UID membership has no policy"))?;
     if !value.accounts.contains(account) {
         return Err(reject("asset UID membership is absent from policy roster"));

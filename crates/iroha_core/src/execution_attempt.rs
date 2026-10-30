@@ -3,6 +3,9 @@
 use iroha_data_model::ValidationFail;
 use ivm::error::{ExecutionDeferral, VMError};
 
+mod policy_decode;
+pub(crate) use policy_decode::PolicyDecodeControls;
+
 /// Native Core boundary at which an unfinished execution returned to its caller.
 ///
 /// This is non-wire diagnostic context. It grants no retry, execution or finality
@@ -601,6 +604,9 @@ where
         let substituted = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
         #[cfg(all(test, sumeragi_core_mutation = "HC974"))]
         let budget = &substituted;
+        if let Some(original) = owner.policy_decode_controls.as_ref() {
+            return original.decode(budget, bytes, limits);
+        }
         norito::decode_canonical_with_owned_controls(bytes, limits, budget)
     } else {
         norito::core::classify_decode_attempt(|| {
@@ -618,6 +624,16 @@ pub(crate) fn canonical_decode_control_attempt_error<E>(
 ) -> ExecutionAttemptError<E> {
     use norito::CanonicalDecodeControlError;
     match error {
+        CanonicalDecodeControlError::Scope(norito::core::PreparedDecodeScopeError::Allocation(
+            original @ iroha_allocation::PrepaidSharedError::Allocator { .. },
+        )) => ExecutionAttemptError::Deferred(
+            iroha_allocation::AllocatorRefusal::try_from(original)
+                .expect("matched physical retained canonical-control refusal")
+                .into(),
+        ),
+        CanonicalDecodeControlError::Scope(_) => {
+            ExecutionAttemptError::Deferred(ExecutionDeferral::LocalInvariantViolation.into())
+        }
         CanonicalDecodeControlError::Decode(error) => {
             canonical_decode_attempt_error(error, |error| {
                 rejected(CanonicalDecodeControlError::Decode(error))

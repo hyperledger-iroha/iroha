@@ -941,6 +941,31 @@ def test_core_decode_gate_requires_original_source_and_sccp_policy_controls():
          "HC974 policy decoder controls must refuse on the original exhausted pool",
          "crates/iroha_core/src/state/asset_uid.rs"),
     )),
+    ("HC975", (
+        ("state::asset_uid::binding_custody::tests::sccp_binding_graph_capacity_preserves_original_refusal_before_uid_escape",
+         "HC975 transaction binding must refuse its actual account graph on the original pool before returning the UID",
+         "crates/iroha_core/src/state/asset_uid/binding_custody/tests.rs"),
+    )),
+    ("HC976", (
+        ("sumeragi::executor::uid_binding_retry_tests::native_worker_binding_leaf_refusal_keeps_original_bank_and_reuses_controls_after_rollback",
+         "a refused native binding must retain its original execution bank across World rollback",
+         "crates/iroha_core/src/sumeragi/executor_uid_binding_retry_tests.rs"),
+    )),
+    ("HC977", (
+        ("state::asset_uid::binding_custody::retry::tests::native_binding_finish_notifies_original_pool_only_after_bank_unlock",
+         "binding completion callbacks must run after the original bank mutex unlocks",
+         "crates/iroha_core/src/state/asset_uid/binding_custody/retry_tests.rs"),
+    )),
+    ("HC980", (
+        ("state::world_acquisition::admission_tests::world_control_capacity_refusal_stays_pending_until_original_external_release",
+         "World control admission must not satisfy its own original release wait",
+         "crates/iroha_core/src/state/world_acquisition/admission_tests.rs"),
+    )),
+    ("HC982", (
+        ("smartcontracts::isi::sccp::escrow::preflight::tests::complete_release_inputs_refuse_without_refunding_an_admitted_prefix",
+         "SCCP input preparation must not satisfy its own original release wait",
+         "crates/iroha_core/src/smartcontracts/isi/sccp/escrow/preflight.rs"),
+    )),
 ])
 def test_sccp_preflight_mutations_require_exact_owned_causes(identifier, controls):
     rule = gate.index_mutations(gate.CORE_MUTATIONS)[identifier]
@@ -3759,7 +3784,10 @@ def test_native_amx_retry_visibility_is_separate_from_original_byte_custody():
     assert 'generation.checked_add(2)' in control
     assert 'fn original_paid_amx_worker_retry_reauthenticates_changed_native_parent(' in control
     assert 'fresh native successor authentication must reject a changed committed parent result' in control
-    assert 'match Self::native_header_source(&block, state, native_header, native_payload)' in validator
+    assert re.search(
+        r'match Self::native_header_source\(\s*&block,\s*state,\s*native_header,\s*native_payload,\s*successor_context,\s*\)',
+        validator,
+    )
     assert 'source_generation: source.generation' in validator
     assert '.validate_native_pristine_control_owner(' in validator
     assert '| HC167 |' in specification
@@ -11020,11 +11048,21 @@ def test_committed_root_fee_projection_mutation_binds_execution_policy_and_actua
     owners = {path.relative_to(root).as_posix() for path in root.rglob("*.rs")
               if re.search(r'sumeragi_core_mutation\s*=\s*"HC396"', path.read_text())}
     assert owners == {"executor/root_fees.rs"}
-    policy = named_rust_function((root / "executor/root_fees.rs").read_text(), "execution_policy")
+    fee_source = (root / "executor/root_fees.rs").read_text()
+    policy = named_rust_function(fee_source, "captured_execution_policy")
     assert policy.count('sumeragi_core_mutation = "HC396"') == 1
     assert 'if cfg!(all(test, sumeragi_core_mutation = "HC396"))' in policy
-    assert policy.index("return Ok(&transaction.nexus.fees);") < policy.index("execution_parameters(transaction)")
+    assert policy.index("return Ok(local);") < policy.index("original\n")
     assert ".root_fees()" in policy and '.ok_or("original committed root fee policy is absent")' in policy
+    admission = named_rust_function(fee_source, "execution_policy")
+    assert "captured_execution_policy(execution_parameters(transaction), &transaction.nexus.fees)" in admission
+    executor = (root / "executor.rs").read_text()
+    for function in ("charge_nexus_fees", "validate_root_fee_policy"):
+        body = named_rust_function(executor, function)
+        assert "let original_parameters = root_fees::execution_parameters(state_transaction).clone();" in body
+        assert "root_fees::captured_execution_policy(" in body
+        assert "&original_parameters," in body and "&state_transaction.nexus.fees," in body
+        assert body.index("let original_parameters") < body.index("root_fees::captured_execution_policy(") < body.index("root_fees::effective(")
     controls = (ROOT / source).read_text()
     for limit, selector in enumerate(selectors, 1):
         body = named_rust_function(controls, selector.rsplit("::", 1)[-1])

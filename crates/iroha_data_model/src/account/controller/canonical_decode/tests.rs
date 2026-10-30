@@ -245,3 +245,50 @@ fn multisig_direct_decode_validation_preserves_errors_and_recovers_across_layout
         );
     }
 }
+
+#[test]
+fn invalid_multisig_policies_reject_inside_ordinary_and_funded_complete_uid_bindings() {
+    use crate::asset::uid::{
+        AssetUidBindingDecodeError, AssetUidBindingV1, decode_asset_uid_binding_with_owned_controls,
+    };
+    use norito::core::{OwnedPreparedDecodeError, PreparedDecodeError};
+    let invalid = invalid_policies();
+    assert_eq!(
+        invalid.len(),
+        7,
+        "cover every existing semantic invalidity fixture"
+    );
+    for policy in invalid {
+        let value = AssetUidBindingV1 {
+            asset_definition_id: crate::sccp::escrow::sccp_taira_xor_asset_definition_id(),
+            account_id: AccountId::new_multisig(policy),
+            uid: [7; 32],
+        };
+        // Encoding retains a correct header, schema and checksum around malformed
+        // controller semantics. Both decoders must reach the policy validator.
+        let frame = norito::encode_canonical(&value).unwrap();
+        let ordinary = norito::decode_canonical::<AssetUidBindingV1>(&frame).unwrap_err();
+        let pool = iroha_allocation::AllocationBudget::new(1 << 20);
+        let funded = match decode_asset_uid_binding_with_owned_controls(
+            &frame,
+            norito::canonical_decode_limits(frame.len()),
+            &pool,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("funded binding accepted an invalid multisig policy"),
+        };
+        let OwnedPreparedDecodeError::Decode(PreparedDecodeError::Destination(
+            AssetUidBindingDecodeError::Controller(original),
+        )) = funded
+        else {
+            panic!(
+                "malformed policy semantics must reach the shared controller validator: {funded}"
+            )
+        };
+        assert_eq!(
+            ordinary.to_string(),
+            norito::Error::Message(original.to_string()).to_string()
+        );
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+}

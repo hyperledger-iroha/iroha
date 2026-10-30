@@ -1701,11 +1701,15 @@ macro_rules! build_world_transaction_from_fields {
         [$($suffix:ident,)*]
     ) => {{
         let authorization_identities = axt_authorization_identities($state);
+        let uid_binding_execution = $state.uid_binding_run.as_mut().map(|run| run.transaction());
+        let policy_decode_controls = $state.policy_decode_controls.clone();
         // Split fields through one concrete mutable borrow, without repeatedly
         // borrowing the entire prepaid owner through DerefMut.
         let fields = &mut **$state.fields.as_mut().expect("original World block fields");
         Box::new(WorldTransaction {
             execution_deferral: std::cell::RefCell::default(),
+            uid_binding_execution,
+            policy_decode_controls,
             dataspace_catalog: fields.dataspace_catalog.clone(),
             quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation::default(),
             axt_last_authorization_identities: authorization_identities,
@@ -4959,6 +4963,10 @@ pub struct WorldData {
 }
 /// One World execution owner, including joint release of every field writer.
 pub struct WorldBlock<'world> {
+    /// Original native binding decoder bank, independent of rollbackable World fields.
+    pub(crate) uid_binding_run: Option<asset_uid::binding_custody::retry::BindingRun>,
+    /// Original canonical policy counters shared by this native execution attempt.
+    pub(crate) policy_decode_controls: Option<crate::execution_attempt::PolicyDecodeControls>,
     publication: block_field::AggregatePublication,
     // Preserve one allocation through acquisition, execution and publication.
     // Moving State or a runtime result must not copy this complete inventory
@@ -6717,6 +6725,10 @@ impl WorldBlock<'_> {
 /// not copy every store's checkpoint onto each caller's stack. Dropping the box
 /// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
+    /// Original native occurrence owner survives this disposable transaction's rollback.
+    pub(crate) uid_binding_execution: Option<asset_uid::binding_custody::retry::BindingInvocation>,
+    /// Policy decoder controls outlive this disposable transaction journal.
+    pub(crate) policy_decode_controls: Option<crate::execution_attempt::PolicyDecodeControls>,
     /// Sticky local refusal; model-owned instruction APIs cannot serialize this owner.
     pub(crate) execution_deferral:
         std::cell::RefCell<crate::execution_attempt::ExecutionAttemptState>,
@@ -24954,6 +24966,8 @@ impl WorldTransaction<'_, '_> {
         // off its heap allocation before applying the individual fields.
         let Self {
             execution_deferral: _,
+            uid_binding_execution: _,
+            policy_decode_controls: _,
             dataspace_catalog: _,
             quantity_mutation_observation: _,
             retail_fee_now_ms: _,

@@ -4674,13 +4674,17 @@ pub(crate) mod valid {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
             )
         }
         /// Execute the exact original nonempty proposal bound by its native consensus header.
         /// The source is verified before certified lane merges expand its execution inputs.
         /// Transaction validation, deterministic execution and original State generation checks
         /// remain mandatory; the native consensus certificate owns block authentication.
-        /// AMX legs and parent services borrow only the original Worker's completed owners.
+        /// AMX legs, UID binding preparations and parent services retain the original
+        /// Worker's owners across local refusals; current State authority is rechecked.
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_block<'state>(
             block: SignedBlock,
@@ -4694,7 +4698,10 @@ pub(crate) mod valid {
             native_payload: &[u8],
             state: &'state State,
             amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
+            uid_bindings: &crate::state::asset_uid::binding_custody::retry::BindingPreparations,
             parent_service: Option<&crate::sumeragi::certified_chain::ParentServicePreparation>,
+            successor_context: &mut crate::sumeragi::certified_chain::SuccessorContextPreparation,
+            policy_decode_controls: &crate::execution_attempt::PolicyDecodeControls,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if let Err(error) = expansion.validate_publication(state) {
                 return WithEvents::new(Err((
@@ -4702,11 +4709,16 @@ pub(crate) mod valid {
                     Box::new(BlockValidationError::from(error)),
                 )));
             }
-            let source =
-                match Self::native_header_source(&block, state, native_header, native_payload) {
-                    Ok(source) => source,
-                    Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
-                };
+            let source = match Self::native_header_source(
+                &block,
+                state,
+                native_header,
+                native_payload,
+                successor_context,
+            ) {
+                Ok(source) => source,
+                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
+            };
             // Completed AMX legs retain canonical byte custody only. The fresh native
             // source and pristine StateBlock authenticate current authority on every attempt.
             if !block.has_consensus_work() {
@@ -4753,7 +4765,10 @@ pub(crate) mod valid {
                 true,
                 None,
                 amx_legs,
+                Some(uid_bindings),
                 parent_service,
+                Some(successor_context),
+                Some(policy_decode_controls),
             )
             .with_authenticated_rejection(
                 authenticated_header,
@@ -4772,6 +4787,10 @@ pub(crate) mod valid {
             source: PristineNativeSource<'state>,
             profile: &ConsensusValidationProfile,
             genesis_policies: &mut Option<genesis_policies::GenesisPolicies>,
+            successor_context: Option<
+                &crate::sumeragi::certified_chain::SuccessorContextPreparation,
+            >,
+            policy_decode_controls: Option<&crate::execution_attempt::PolicyDecodeControls>,
         ) -> Result<
             (
                 Box<StateBlock<'state>>,
@@ -4786,6 +4805,7 @@ pub(crate) mod valid {
                 .block_with_recorded_pristine_carrier_stage(
                     block,
                     |overlay| {
+                        overlay.world.policy_decode_controls = policy_decode_controls.cloned();
                         overlay
                             .validate_native_pristine_control_owner(
                                 source.state,
@@ -4804,11 +4824,12 @@ pub(crate) mod valid {
                         }
                         {
                             overlay
-                                .request_sumeragi_schedule(
+                                .request_sumeragi_schedule_with_preparation(
                                     crate::sumeragi::startup::GENESIS_HEIGHT,
                                     block,
                                     profile.sumeragi_pulse(),
                                     profile.sumeragi_pulse_context(),
+                                    successor_context,
                                 )
                                 .map_err(BlockValidationError::from)?;
                         }
@@ -4854,7 +4875,14 @@ pub(crate) mod valid {
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
             amx_legs: Option<&mut crate::sumeragi::amx::NativeAmxLegPreparations>,
+            uid_bindings: Option<
+                &crate::state::asset_uid::binding_custody::retry::BindingPreparations,
+            >,
             parent_service: Option<&crate::sumeragi::certified_chain::ParentServicePreparation>,
+            successor_context: Option<
+                &crate::sumeragi::certified_chain::SuccessorContextPreparation,
+            >,
+            policy_decode_controls: Option<&crate::execution_attempt::PolicyDecodeControls>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             let total_start = Instant::now();
             let stateless_start = Instant::now();
@@ -5061,6 +5089,8 @@ pub(crate) mod valid {
                 penalty_index,
                 &validation_profile,
                 &mut genesis_policies,
+                successor_context,
+                policy_decode_controls,
             ) {
                 Ok((mut overlay, guard)) => {
                     overlay.request_sumeragi_lanes(validation_profile.take_sumeragi_lanes());
@@ -5074,6 +5104,23 @@ pub(crate) mod valid {
             };
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
+            }
+            if let Some(original) = uid_bindings {
+                match original.run(
+                    state_block
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                ) {
+                    Ok(run) => state_block.world.uid_binding_run = Some(run),
+                    Err(original) => {
+                        drop(state_block);
+                        return WithEvents::new(Err((
+                            Box::new(block),
+                            Box::new(BlockValidationError::ExecutionDeferred(original)),
+                        )));
+                    }
+                }
             }
             // `validate_static_with_snapshot` above verified (batched and in parallel)
             // the signature of every Network input of this exact block and rejects
