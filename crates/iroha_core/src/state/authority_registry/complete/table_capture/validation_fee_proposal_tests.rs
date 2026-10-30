@@ -111,6 +111,9 @@ fn actual_catalog_rejects_fee_index_corruption_inserted_after_state_construction
 
 #[test]
 fn actual_fee_proposal_capture_preserves_original_pool_refusal_and_final_owner() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let state = state();
     let original = state.ivm_execution_budget();
     let resident = original.reserved_bytes();

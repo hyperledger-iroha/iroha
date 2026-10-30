@@ -384,9 +384,8 @@ impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudMailboxMessag
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);
 impl_direct_instruction_box!(crate::isi::soracloud::ApplySoracloudOrderedMailboxResult);
 // Allow direct boxing of runtime upgrade instructions
-impl_direct_instruction_box!(crate::isi::runtime_upgrade::ProposeRuntimeUpgrade);
-impl_direct_instruction_box!(crate::isi::runtime_upgrade::ActivateRuntimeUpgrade);
-impl_direct_instruction_box!(crate::isi::runtime_upgrade::CancelRuntimeUpgrade);
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::AttestRuntimeSupportV1);
+impl_direct_instruction_box!(crate::isi::runtime_upgrade::ContainRuntimeV1);
 // Allow direct boxing of verifying-keys registry instructions
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
@@ -891,6 +890,12 @@ pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
     let inner = &**instr;
     let type_name = Instruction::id(inner);
     instruction_encoding_entry(type_name).map(|entry| entry.wire_id)
+}
+/// Return the stable registry wire identifier of the instruction type `T`, if it is registered:
+/// the identifier [`instruction_wire_id`] returns for every value of `T`.
+#[must_use]
+pub fn wire_id_of<T: Instruction>() -> Option<&'static str> {
+    instruction_registry().wire_id(std::any::type_name::<T>())
 }
 /// Encode one registered instruction into its stable wire id and exact Norito frame.
 ///
@@ -2312,6 +2317,8 @@ pub mod error {
             ///
             /// i.e. you can't burn last key
             InvariantViolation(Box<str>),
+            /// The root's selection does not admit the instruction: {0}
+            Runtime(#[source] crate::runtime::lifecycle::RuntimeRejectionV1),
         }
         /// Typed asset-transfer policy failure.
         ///
@@ -2999,6 +3006,39 @@ mod generated_box_identity_tests;
 
 #[cfg(test)]
 pub(crate) mod generated_record_identity_tests;
+
+#[cfg(test)]
+mod wire_id_of_tests {
+    //! The type-level wire identifier agrees with the identifier of a value.
+    use super::*;
+
+    #[test]
+    fn a_registered_type_names_the_wire_id_of_its_values() {
+        let escrow_id = crate::escrow::EscrowId(iroha_crypto::Hash::prehashed([7; 32]));
+        let release = crate::isi::escrow::ReleaseAssetEscrow { escrow_id };
+        let cancel = crate::isi::escrow_control::CancelControlledAssetLockV1 {
+            cancel: crate::isi::escrow::CancelAssetLock {
+                escrow_id,
+                expected_remaining_amount: iroha_primitives::numeric::Quantity::one(),
+            },
+            waterfall: None,
+        };
+        let release_id = wire_id_of::<crate::isi::escrow::ReleaseAssetEscrow>();
+        assert!(release_id.is_some(), "a built-in instruction is registered");
+        assert_eq!(
+            release_id,
+            instruction_wire_id(&InstructionBox::from(release))
+        );
+        assert_eq!(
+            wire_id_of::<crate::isi::escrow_control::CancelControlledAssetLockV1>(),
+            instruction_wire_id(&InstructionBox::from(cancel))
+        );
+        assert_ne!(
+            release_id,
+            wire_id_of::<crate::isi::escrow_control::CancelControlledAssetLockV1>()
+        );
+    }
+}
 
 #[cfg(test)]
 mod checked_container_cleanup_tests {

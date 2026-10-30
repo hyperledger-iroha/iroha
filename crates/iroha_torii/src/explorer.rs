@@ -23,9 +23,8 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
         RemoveAssetKeyValue, RemoveKeyValueBox, RevokeBox, SetAssetKeyValue, SetKeyValueBox,
-        SetParameter, TransferAssetBatch, TransferBox, UnregisterBox, Upgrade,
-        mint_burn::BurnBox,
-        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        SetParameter, TransferAssetBatch, TransferBox, UnregisterBox, Upgrade, mint_burn::BurnBox,
+        runtime_upgrade::AttestRuntimeSupportV1,
     },
     nft::{NftEntry, NftId},
     rwa::{RwaEntry, RwaId, RwaParentRef},
@@ -936,11 +935,7 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
         id if id == RevokeBox::WIRE_ID => ExplorerInstructionKind::Revoke,
         id if id == ExecuteTrigger::WIRE_ID => ExplorerInstructionKind::ExecuteTrigger,
         id if id == SetParameter::WIRE_ID => ExplorerInstructionKind::SetParameter,
-        id if id == Upgrade::WIRE_ID
-            || id == ProposeRuntimeUpgrade::WIRE_ID
-            || id == ActivateRuntimeUpgrade::WIRE_ID
-            || id == CancelRuntimeUpgrade::WIRE_ID =>
-        {
+        id if id == Upgrade::WIRE_ID || id == AttestRuntimeSupportV1::WIRE_ID => {
             ExplorerInstructionKind::Upgrade
         }
         id if id == Log::WIRE_ID => ExplorerInstructionKind::Log,
@@ -980,9 +975,7 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
             } else if any.downcast_ref::<SetParameter>().is_some() {
                 ExplorerInstructionKind::SetParameter
             } else if any.downcast_ref::<Upgrade>().is_some()
-                || any.downcast_ref::<ProposeRuntimeUpgrade>().is_some()
-                || any.downcast_ref::<ActivateRuntimeUpgrade>().is_some()
-                || any.downcast_ref::<CancelRuntimeUpgrade>().is_some()
+                || any.downcast_ref::<AttestRuntimeSupportV1>().is_some()
             {
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {

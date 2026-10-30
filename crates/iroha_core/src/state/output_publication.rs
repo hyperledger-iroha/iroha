@@ -860,19 +860,31 @@ mod tests {
         use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
         let state = state();
         let nexus = state.nexus_snapshot();
-        let source = LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
+        let source = LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        );
         let mut statuses = source.statuses();
-        statuses[0].privacy_commitments.push(LanePrivacyCommitment::merkle(
-            LaneCommitmentId::new(1), MerkleCommitment::from_root_bytes([0x12; 32], 16),
-        ));
+        statuses[0]
+            .privacy_commitments
+            .push(LanePrivacyCommitment::merkle(
+                LaneCommitmentId::new(1),
+                MerkleCommitment::from_root_bytes([0x12; 32], 16),
+            ));
         let pool = state.ivm_execution_budget();
         let owner = LanePrivacyRegistry::try_from_statuses(&statuses, &pool).unwrap();
         let separate = LanePrivacyRegistry::try_from_statuses(&statuses, &pool).unwrap();
         assert_eq!(owner, separate, "same deterministic protocol projection");
         let shared = owner.clone();
-        assert_eq!(PrivacyOwnerIdentity(owner.clone()), PrivacyOwnerIdentity(shared));
-        assert_ne!(PrivacyOwnerIdentity(owner), PrivacyOwnerIdentity(separate),
-            "an independently allocated equal graph cannot replace the captured owner");
+        assert_eq!(
+            PrivacyOwnerIdentity(owner.clone()),
+            PrivacyOwnerIdentity(shared)
+        );
+        assert_ne!(
+            PrivacyOwnerIdentity(owner),
+            PrivacyOwnerIdentity(separate),
+            "an independently allocated equal graph cannot replace the captured owner"
+        );
     }
-
 }

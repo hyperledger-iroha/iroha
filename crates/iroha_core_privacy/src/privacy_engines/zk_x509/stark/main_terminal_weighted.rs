@@ -1072,16 +1072,40 @@ mod tests {
         let independent =
             (12 * (1 << 19) + 384 + 4) * 8 + (2 * ((1 << 19) + 1816) + 1816) * 32 + 16 * 1024;
         assert_eq!(payload, independent);
-        let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
-            &layout,
-            288_345_698,
-        )
-        .unwrap();
-        let adjusted = policy.reserve_additional_v1(payload).unwrap();
-        // Backend-independent resource admission is exercised even on CPU hosts.
-        // The required four-column device payload remains below the free budget.
-        adjusted.reserve_additional_v1(119_095_420).unwrap();
-        assert!(policy.reserve_additional_v1(usize::MAX).is_err());
+        let buffers = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+        let ceiling =
+            super::super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
+                as usize;
+        let public_owners = MainTerminalLinkPlanV1::public_owner_charge_v1()
+            + main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1()
+            + main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1();
+        for assembly in [288_345_698, 215_244_730] {
+            let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+                &layout, assembly,
+            )
+            .unwrap();
+            let adjusted = policy.reserve_additional_v1(payload).unwrap();
+            let remaining = ceiling
+                - buffers.check_before_sources_v1(assembly).unwrap()
+                - public_owners
+                - payload;
+            let exhausted = adjusted.reserve_additional_v1(remaining).unwrap();
+            assert!(exhausted.reserve_additional_v1(1).is_err());
+            assert!(adjusted.reserve_additional_v1(remaining + 1).is_err());
+            assert!(policy.reserve_additional_v1(usize::MAX).is_err());
+            if assembly == 215_244_730 {
+                // The measured maximum fixture admits four native columns with
+                // the actual single-staging Metal forecast on every host. The
+                // larger synthetic assembly may deterministically use the CPU.
+                let rows = 1 << 19;
+                let columns = 4;
+                let staging = fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(rows, columns).unwrap()
+                    + rows * columns * core::mem::size_of::<u64>()
+                    + columns * core::mem::size_of::<Vec<u64>>()
+                    + core::mem::size_of::<PrivateTableV1<Vec<u64>>>();
+                adjusted.reserve_additional_v1(staging).unwrap();
+            }
+        }
     }
 
     #[test]

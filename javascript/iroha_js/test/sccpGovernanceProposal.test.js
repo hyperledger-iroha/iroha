@@ -158,9 +158,10 @@ function actionPayload(action, network = "bsc_mainnet") {
       return { ...key, duration_ms: 0 };
     case "set_parameters":
       return { next: parameters() };
-    default:
-      // The complex action bodies remain outside this normalizer's validation scope.
+    case "freeze_light_client":
       return key;
+    default:
+      throw new Error(`missing SCCP action fixture: ${action}`);
   }
 }
 

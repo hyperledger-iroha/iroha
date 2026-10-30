@@ -24,12 +24,15 @@ use std::fmt;
 pub enum CapturedExecution {
     Boundary(FrozenEpochBoundary),
     Ordinary(RetainedPayload<NativeExecutionInputs>),
+    /// Ordinary native capture lent from its original pre-World bank.
+    Retained(super::continuation::ContinuationLease),
 }
 impl CapturedExecution {
     fn inputs(&self) -> &NativeExecutionInputs {
         match self {
             Self::Boundary(boundary) => boundary.execution_inputs(),
             Self::Ordinary(inputs) => inputs.get(),
+            Self::Retained(lease) => lease.get(),
         }
     }
     #[allow(
@@ -44,13 +47,16 @@ impl CapturedExecution {
         self,
         params: ChainParamsRecord,
         pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
-    ) -> RetainedPayload<NativeExecutionInputs> {
+    ) -> CompletedExecution {
         match self {
-            Self::Boundary(boundary) => boundary.into_execution_inputs(params, pulse),
+            Self::Boundary(boundary) => {
+                CompletedExecution::Standalone(boundary.into_execution_inputs(params, pulse))
+            }
+            Self::Retained(lease) => CompletedExecution::Retained(lease.complete(params, pulse)),
             Self::Ordinary(inputs) => {
                 // SAFETY: every original nested allocation moves unchanged. Only fixed-size
                 // post-state lag-two parameters and verified pulse fields are assigned.
-                unsafe {
+                CompletedExecution::Standalone(unsafe {
                     inputs.map_payload(|mut inputs| {
                         if inputs.schedule.height == 1 {
                             set_params(&mut inputs.schedule.next, params);
@@ -59,15 +65,37 @@ impl CapturedExecution {
                         inputs.beacon = pulse;
                         inputs
                     })
-                }
+                })
             }
         }
     }
 }
-fn set_params(slot: &mut super::ScheduledSlot, next: ChainParamsRecord) {
+pub(super) fn set_params(slot: &mut super::ScheduledSlot, next: ChainParamsRecord) {
     match slot {
         super::ScheduledSlot::Ready(config) => config.params = next,
         super::ScheduledSlot::PendingBoundary { params, .. } => *params = next,
+    }
+}
+
+/// Completed original inputs keep their rollback lease through every output-seal finalizer.
+pub enum CompletedExecution {
+    /// Standalone/genesis and boundary paths retain their existing original graph owner.
+    Standalone(RetainedPayload<NativeExecutionInputs>),
+    /// Native ordinary execution returns this same graph if its World is abandoned.
+    Retained(super::continuation::ContinuationLease),
+}
+impl CompletedExecution {
+    pub(crate) fn get(&self) -> &NativeExecutionInputs {
+        match self {
+            Self::Standalone(value) => value.get(),
+            Self::Retained(value) => value.get(),
+        }
+    }
+    pub(crate) fn into_inputs(self) -> RetainedPayload<NativeExecutionInputs> {
+        match self {
+            Self::Standalone(value) => value,
+            Self::Retained(value) => value.into_inputs(),
+        }
     }
 }
 
@@ -90,8 +118,8 @@ pub enum ScheduleStep {
         /// Fixed-width transported proof authenticated against that same original cut.
         pulse: epoch_beacon::VerifiedEpochPulse,
     },
-    /// Exact canonical inputs moved into the result after all finalizer checks succeeded.
-    Done(RetainedPayload<NativeExecutionInputs>),
+    /// Schedule finalized; its original lease still spans subsequent output-seal checks.
+    Done(CompletedExecution),
 }
 impl fmt::Debug for ScheduleStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -174,6 +202,33 @@ pub fn authenticate_successor_context(
     header: &iroha_data_model::block::BlockHeader,
     expected: &GlobalThresholdBeaconPulseContextV1,
 ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
+    require_successor_cut(state, header)?;
+    let height = header.height().get();
+    // Canonical committed reads exclude differences in local QC signer subsets.
+    let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)
+        .map_err(|error| error.map_rejection(ScheduleError::from))?;
+    // The executed parent above supplies original current R. Root identity needs
+    // only this cut's independently authenticated durable signed genesis, never
+    // its unsigned result-only preimage or another full historical reverse walk.
+    #[cfg(all(test, sumeragi_core_mutation = "HC139"))]
+    let instance = {
+        let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)
+            .map_err(|error| error.map_rejection(ScheduleError::from))?;
+        crate::sumeragi::node::root_instance(genesis.block(), &state.chain_id().to_string())
+            .map_err(|error| error.map_rejection(ScheduleError::Epoch))?
+    };
+    #[cfg(not(all(test, sumeragi_core_mutation = "HC139")))]
+    let instance = crate::sumeragi::certified_chain::CertifiedChain::new(state)
+        .map_err(|error| error.map_rejection(ScheduleError::from))?
+        .instance();
+    compare_successor_context(state, header, expected, &parent, instance)
+}
+
+/// The common current-State predecessor check, before any history preparation.
+pub(crate) fn require_successor_cut(
+    state: &(impl StateReadOnly + ?Sized),
+    header: &iroha_data_model::block::BlockHeader,
+) -> Result<(), ExecutionAttemptError<ScheduleError>> {
     let height = header.height().get();
     if height <= 1
         || u64::try_from(state.block_hashes().hash_count())
@@ -193,23 +248,18 @@ pub fn authenticate_successor_context(
         )
         .into());
     }
-    // Canonical committed reads exclude differences in local QC signer subsets.
-    let parent = crate::sumeragi::certified_chain::committed_block(state, height - 1)
-        .map_err(|error| error.map_rejection(ScheduleError::from))?;
-    // The executed parent above supplies original current R. Root identity needs
-    // only this cut's independently authenticated durable signed genesis, never
-    // its unsigned result-only preimage or another full historical reverse walk.
-    #[cfg(all(test, sumeragi_core_mutation = "HC139"))]
-    let instance = {
-        let genesis = crate::sumeragi::certified_chain::committed_block(state, 1)
-            .map_err(|error| error.map_rejection(ScheduleError::from))?;
-        crate::sumeragi::node::root_instance(genesis.block(), &state.chain_id().to_string())
-            .map_err(|error| error.map_rejection(ScheduleError::Epoch))?
-    };
-    #[cfg(not(all(test, sumeragi_core_mutation = "HC139")))]
-    let instance = crate::sumeragi::certified_chain::CertifiedChain::new(state)
-        .map_err(|error| error.map_rejection(ScheduleError::from))?
-        .instance();
+    Ok(())
+}
+
+/// Compare authenticated original history with the current schedule and transported context.
+pub(crate) fn compare_successor_context(
+    state: &(impl StateReadOnly + ?Sized),
+    header: &iroha_data_model::block::BlockHeader,
+    expected: &GlobalThresholdBeaconPulseContextV1,
+    parent: &crate::sumeragi::certified_chain::CommittedBlock,
+    instance: iroha_sumeragi::types::Hash32,
+) -> Result<(), ExecutionAttemptError<ScheduleError>> {
+    let height = header.height().get();
     let current = &state.world().consensus_schedule().ready(height)?.epoch;
     expected
         .validate()
@@ -243,6 +293,29 @@ impl StateBlock<'_> {
         source: &SignedBlock,
         supplied_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
         expected_context: Option<GlobalThresholdBeaconPulseContextV1>,
+    ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
+        self.request_sumeragi_schedule_with_preparation(
+            genesis_height,
+            source,
+            supplied_pulse,
+            expected_context,
+            None,
+        )
+    }
+
+    /// Capture the same pristine schedule using the native attempt's retained history.
+    /// Standalone callers use the same authentication kernel through the ordinary read.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the supplied pulse is transferred into the original native schedule result"
+    )]
+    pub(crate) fn request_sumeragi_schedule_with_preparation(
+        &mut self,
+        genesis_height: u64,
+        source: &SignedBlock,
+        supplied_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+        expected_context: Option<GlobalThresholdBeaconPulseContextV1>,
+        successor: Option<&crate::sumeragi::certified_chain::SuccessorContextPreparation>,
     ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
         if !matches!(self.sumeragi_schedule, ScheduleStep::Off) {
             return Err(
@@ -283,7 +356,11 @@ impl StateBlock<'_> {
                     "native successor lacks its authenticated header context".into(),
                 )
             })?;
-            authenticate_successor_context(self, &self._curr_block, expected)?;
+            if let Some(original) = successor {
+                original.recheck(self, &self._curr_block, expected)?;
+            } else {
+                authenticate_successor_context(self, &self._curr_block, expected)?;
+            }
         }
         let root_scope = if height == genesis_height {
             iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(source)
@@ -373,6 +450,13 @@ impl StateBlock<'_> {
                     ScheduleError::Epoch("required native boundary was not captured".into())
                 })?;
                 CapturedExecution::Boundary(frozen)
+            } else if let Some(original) = successor {
+                CapturedExecution::Retained(original.lend_continuation(
+                    self,
+                    &self._curr_block,
+                    root_scope,
+                    &pulse,
+                )?)
             } else {
                 CapturedExecution::Ordinary(
                     epoch_election::capture_continuation(
@@ -475,7 +559,7 @@ impl StateBlock<'_> {
 }
 
 /// Retain local boundary refusal evidence before projecting deterministic schedule failures.
-fn boundary_capture_attempt_error(
+pub(super) fn boundary_capture_attempt_error(
     error: impl Into<
         crate::execution_attempt::ExecutionAttemptError<epoch_election::BoundaryCaptureError>,
     >,

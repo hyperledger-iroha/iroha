@@ -2726,11 +2726,27 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn public_receipt_preserves_disabled_service_and_digest_errors_without_runtime() {
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    async fn public_receipt_preserves_unavailable_profile_and_digest_errors_without_runtime() {
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let digest = Hash::new(b"unknown receipt bundle");
-        let disabled = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
-        assert_eq!(disabled.status(), StatusCode::NOT_FOUND);
+        let available = handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(
+            available.status(),
+            StatusCode::OK,
+            "the native default profile serves public pending receipts without a sidecar runtime"
+        );
+        let chain = configured_private_settlement_chain_for_test(Some(
+            iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                iroha_data_model::privacy::IvmPrivateNoteLimitsV1 {
+                    max_input_count: 1,
+                    max_output_count: 2,
+                },
+            ),
+        ));
+        Arc::get_mut(&mut app).expect("unique receipt app").state = Arc::clone(chain.state());
+        let unavailable =
+            handler_bundle_receipt(State(app.clone()), Path(digest.to_string())).await;
+        assert_eq!(unavailable.status(), StatusCode::NOT_FOUND);
         let malformed = handler_bundle_receipt(State(app), Path("invalid-digest".to_owned())).await;
         assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
     }

@@ -322,6 +322,17 @@ fun sccpReservePriorBalance(incomingValue: coins) {
     reserveGramsOnBalance(contract.getOriginalBalance() - incomingValue, RESERVE_MODE_AT_MOST);
 }
 
+/// [sccpReservePriorBalance] for a bounce. A bounce is credited before its
+/// storage phase, so storage it paid can leave the balance below its value; the
+/// reserve is then zero rather than negative, so a bounce handler cannot throw
+/// here after its custody update.
+fun sccpReserveBouncePriorBalance(incomingValue: coins) {
+    reserveGramsOnBalance(
+        max(0, contract.getOriginalBalance() - incomingValue),
+        RESERVE_MODE_AT_MOST,
+    );
+}
+
 /// Storage the minter would pay for `SCCP_STORAGE_GRACE_SECONDS` at its
 /// maximal size: the slack every quote adds (§5.3.5).
 fun sccpMinterStorageGrace(): coins {

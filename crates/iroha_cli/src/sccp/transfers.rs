@@ -295,7 +295,7 @@ pub(super) fn burn(context: &mut impl RunContext, args: &BurnArgs) -> Result<()>
         )?;
         let profiles = original.light_client_profiles(&client)?;
         let query_id = u64::from_be_bytes(flow.id().id[..8].try_into()?);
-        flows::ton(
+        flows::ton_guarded(
             context,
             flows::FlowStep {
                 original: &original,
@@ -336,6 +336,10 @@ pub(super) fn burn(context: &mut impl RunContext, args: &BurnArgs) -> Result<()>
                     },
                 )
             },
+            || {
+                burn_guard::preflight(&client, &original, network, args.revision, &recipient)
+                    .map(drop)
+            },
         )?;
         return Ok(());
     }
@@ -347,7 +351,16 @@ pub(super) fn burn(context: &mut impl RunContext, args: &BurnArgs) -> Result<()>
         Some(args.revision),
         &args.rpc_url,
     )?;
-    if flows::recover_evm(context, &original, &flow, Action::Burn, &destination)? {
+    // A burn journaled by an earlier run is dispatched or rebroadcast only after the guard
+    // accepts the current route, light client, recipient and cut again (§7.2 step 1).
+    if flows::recover_evm_guarded(
+        context,
+        &original,
+        &flow,
+        Action::Burn,
+        &destination,
+        || burn_guard::preflight(&client, &original, network, args.revision, &recipient).map(drop),
+    )? {
         return Ok(());
     }
     let mut evidence =

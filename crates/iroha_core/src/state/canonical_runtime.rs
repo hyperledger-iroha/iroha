@@ -45,8 +45,9 @@ impl<E: std::fmt::Debug> From<CanonicalRuntimeAcquisitionError> for StateBlockSt
     fn from(error: CanonicalRuntimeAcquisitionError) -> Self {
         match error {
             CanonicalRuntimeAcquisitionError::Admission(original) => original.into(),
-            CanonicalRuntimeAcquisitionError::Runtime(LaneLifecycleError::ParameterDeferred(original)) =>
-                Self::ExecutionDeferred(original),
+            CanonicalRuntimeAcquisitionError::Runtime(LaneLifecycleError::ParameterDeferred(
+                original,
+            )) => Self::ExecutionDeferred(original),
             CanonicalRuntimeAcquisitionError::Runtime(invalid) => Self::Policy(invalid.to_string()),
         }
     }
@@ -56,10 +57,12 @@ impl From<CanonicalRuntimeAcquisitionError> for MergeLedgerCommitError {
     fn from(error: CanonicalRuntimeAcquisitionError) -> Self {
         match error {
             CanonicalRuntimeAcquisitionError::Admission(original) => original.into(),
-            CanonicalRuntimeAcquisitionError::Runtime(LaneLifecycleError::ParameterDeferred(original)) =>
-                Self::ExecutionDeferred(original),
-            CanonicalRuntimeAcquisitionError::Runtime(invalid) =>
-                Self::ExecutionStatePublication(invalid.to_string()),
+            CanonicalRuntimeAcquisitionError::Runtime(LaneLifecycleError::ParameterDeferred(
+                original,
+            )) => Self::ExecutionDeferred(original),
+            CanonicalRuntimeAcquisitionError::Runtime(invalid) => {
+                Self::ExecutionStatePublication(invalid.to_string())
+            }
         }
     }
 }
@@ -515,9 +518,13 @@ impl State {
             // All constructors use the same order. Every guard is dropped before
             // retry; a World-only generation check cannot bind the predecessor.
             // Hash construction detaches its private tree before waiting for World.
-            let block_hashes = self.block_hashes.try_next_block(replacement)
+            let block_hashes = self
+                .block_hashes
+                .try_next_block(replacement)
                 .map_err(StateAdmissionError::from)?;
-            let membership = self.transactions.prepare_next_block(replacement)
+            let membership = self
+                .transactions
+                .prepare_next_block(replacement)
                 .map_err(StateAdmissionError::from)?;
             // Projection payloads outlive joint physical retirement on refusal
             // and unwind. Every Cell slot remains in this caller while initializing.
@@ -555,7 +562,10 @@ impl State {
             // admits this exact manifest projection, under its original World pool.
             let privacy = match LanePrivacyRegistry::try_from_manifest_registry(
                 &prepared.manifests,
-                pending.world().sccp_committee_generations.allocation_budget(),
+                pending
+                    .world()
+                    .sccp_committee_generations
+                    .allocation_budget(),
             ) {
                 Ok(privacy) => privacy,
                 Err(original) => {

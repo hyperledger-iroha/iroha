@@ -502,8 +502,11 @@ fn set_parameter_installs_and_changes_the_policy_and_rejects_invalid_payloads() 
         observed[4..],
         "genesis and later blocks agree"
     );
-    assert!(
-        observed[0].contains("not a canonical V1 policy"),
+    // The funded parameter reader rejects a JSON string at its object boundary,
+    // before semantic ZK policy validation can run.
+    assert_eq!(
+        observed[0],
+        r#"InvalidParameter(SmartContract("json error: JSON error: expected object start at byte 0 (line 1, col 1)"))"#,
         "{observed:?}"
     );
     assert!(

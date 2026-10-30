@@ -73,16 +73,16 @@ pub fn available_goldilocks_transform_backend_v1() -> Option<GoldilocksTransform
     None
 }
 
-// Shared with Metal's actual pool policy when this module is wired. Charging
-// the complete pool independently of this request also covers oversized cache
-// entries reused for a smaller request. The same cache also holds factorized
-// exact-root tables; charge its largest entry regardless of the current layout.
+// Shared with Metal's actual pool policy when this module is wired. Live pooled
+// allocations have exactly the requested page capacity, independently of a full
+// idle pool. The separate twiddle cache also holds factorized exact-root tables;
+// charge its largest entry regardless of the current layout.
 use crate::gpu_memory::{METAL_PAGE_BYTES, METAL_POOL_MAX_CACHED_BYTES};
 
 /// Conservative additional host/shared payload for one bounded Metal FFT.
 ///
-/// The caller's columns are excluded. The returned allowance includes original
-/// rollback-sized reserve, rounded shared staging, the complete 64MiB
+/// The caller's columns are excluded. The returned allowance includes one
+/// rounded private staging allocation shared without copying with Metal, the complete 64MiB
 /// pool cache, all cached stage twiddles, and 1MiB for dispatch metadata. It does
 /// not replace a process reserve for allocator/driver/thread overhead or imply
 /// a measured RSS bound. CUDA has a different pool and is deliberately outside
@@ -106,9 +106,13 @@ pub fn metal_goldilocks_transform_extra_payload_v1(
     let column_bytes = rows
         .checked_mul(8)
         .ok_or(GoldilocksTransformErrorV1::InvalidShape)?;
+    // Exact-root dispatch owns one unpublished PooledBuffer; its Metal buffer
+    // retains the same pages through newBufferWithBytesNoCopy. The caller is
+    // mutated only after that sole batch completes, so neither this path nor
+    // the facade allocates a rollback snapshot. Ordinary multi-batch FFT APIs
+    // have different owners and must not use this exact-root payload forecast.
     let private = column_bytes
         .checked_mul(columns)
-        .and_then(|n| n.checked_mul(2))
         .ok_or(GoldilocksTransformErrorV1::InvalidShape)?;
     let padding = columns
         .checked_mul(METAL_PAGE_BYTES - 1)
@@ -406,16 +410,15 @@ mod tests {
     }
 
     #[test]
-    fn metal_payload_forecast_charges_cache_snapshots_staging_and_rejects_shapes() {
-        for columns in [1, 2, 4, 8] {
-            let bytes = metal_goldilocks_transform_extra_payload_v1(1 << 22, columns).unwrap();
+    fn metal_payload_forecast_charges_one_staging_full_caches_and_rejects_shapes() {
+        for (rows, columns) in [2, 1 << 8, 1 << 19, 1 << 22]
+            .into_iter()
+            .flat_map(|rows| [1, 2, 4, 8].into_iter().map(move |columns| (rows, columns)))
+        {
+            let bytes = metal_goldilocks_transform_extra_payload_v1(rows, columns).unwrap();
             assert_eq!(
                 bytes,
-                2 * columns * (1 << 22) * 8
-                    + columns * 16383
-                    + (64 << 20)
-                    + 66 * 4 * 256 * 8
-                    + (1 << 20)
+                columns * rows * 8 + columns * 16383 + (64 << 20) + 66 * 4 * 256 * 8 + (1 << 20)
             );
         }
         for (rows, columns) in [(0, 1), (1, 1), (3, 1), (8, 0), (8, 9), (usize::MAX, 1)] {

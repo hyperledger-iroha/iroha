@@ -9,11 +9,14 @@
 use ff::Field;
 use iroha_pasta::{Ep, Fp};
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{GlueChip, UintChip, Word, bytes::tape::BytesChip};
+use iroha_plonk_gadgets::{GlueChip, UintChip, bytes::tape::BytesChip};
 use iroha_plonk_recursion::{obligation::ledger::Variant, verifier::VerifierChip};
 
 use super::{
-    SignatureProofCells, context::ContextObjectSpec, load_receipt::LoadReceiptCells, own::OwnPolicy,
+    SignatureProofCells,
+    context::{ContextObjectCells, ContextObjectSpec},
+    load_receipt::LoadReceiptCells,
+    own::OwnPolicy,
 };
 use crate::{
     operation_relation::{
@@ -32,6 +35,7 @@ use crate::{
 pub struct LoadObjects {
     receipt: LoadReceiptCells,
     objects: [SignedObjectCells; 1],
+    context: [ContextObjectCells; 2],
 }
 /// State and authenticated Q outputs consumed by Load's signed-object relation.
 #[derive(Clone, Copy)]
@@ -40,13 +44,13 @@ pub struct LoadInputs<'a> {
     pub predecessor: MapState<'a>,
     /// Canonical successor state and public prefix retained by A.
     pub successor: MapState<'a>,
-    /// Own exact statement constrained directly by the single terminal A.
+    /// Own exact statement, committed by the stage context.
     pub statement: &'a StatementCells,
     /// Own Advance receipt slot, present only in the receipt stage.
     pub signatures: &'a [SignatureProofCells],
 }
 impl LoadObjects {
-    /// Fixed object schema for the plan and native checkpoint identity, including raw signatures.
+    /// Fixed ordered context object schema, including raw signatures.
     ///
     /// # Errors
     /// An impossible size conversion in the fixed schema.
@@ -73,6 +77,7 @@ impl LoadObjects {
         region: &mut Region<'_, Fp>,
         source: [&[Value<u8>]; 2],
     ) -> Result<Self, Error> {
+        let specs = Self::context_specs()?;
         let run = bytes.run(
             region,
             source[0],
@@ -81,6 +86,8 @@ impl LoadObjects {
         )?;
         let (mut uint, hash) = chip.uint_and_hasher()?;
         let receipt = LoadReceiptCells::from_run(&mut uint, hash, region, &run)?;
+        let receipt_context =
+            ContextObjectCells::from_exact_run(chip, region, specs[0], receipt.digest(), &run)?;
         let kind = ObjectKind::Receipt;
         let run = bytes.run(
             region,
@@ -96,18 +103,21 @@ impl LoadObjects {
             kind,
             &run,
         )?;
+        let object_context =
+            ContextObjectCells::from_exact_run(chip, region, specs[1], object.digest(), &run)?;
         Ok(Self {
             receipt,
             objects: [object],
+            context: [receipt_context, object_context],
         })
     }
-    /// Exact ordinary receipt parsed from its original byte tape.
+    /// Same-tape object commitments the one terminal stage binds.
+    pub const fn context(&self) -> &[ContextObjectCells; 2] {
+        &self.context
+    }
+    /// Exact ordinary receipt parsed from the immutable stage context.
     pub const fn receipt(&self) -> &LoadReceiptCells {
         &self.receipt
-    }
-    /// Signed own Advance digest derived from the same tape used for authentication.
-    pub fn own_receipt_digest(&self) -> &Word<Fp> {
-        self.objects[0].digest()
     }
 
     /// Bind every monetary projection to the exact ordinary receipt.
@@ -285,11 +295,11 @@ impl LoadStagePlan {
         }
         Ok(Self { context })
     }
-    /// Immutable task, Q and object schema of the single terminal stage.
+    /// Context the one terminal stage binds.
     pub const fn context(&self) -> &super::context::ContextPlan {
         &self.context
     }
-    /// Execute the fixed stage's operation tasks on the same directly assigned cells.
+    /// Execute precisely the fixed stage's operation tasks on context-bound cells.
     /// # Errors
     /// Wrong stage, missing/extraneous recovery path, or any failed constraint.
     #[allow(clippy::too_many_arguments)] // One fixed stage and its same-cell operation inputs.

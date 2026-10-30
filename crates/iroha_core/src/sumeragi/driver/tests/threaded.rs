@@ -892,13 +892,27 @@ fn serving_flood_does_not_delay_the_nodes_fetch() {
         probe: None,
         echo: None,
     };
+    let status = WireMessage::Status(Box::new(status));
+    let mut status_admitted = false;
+    // Exercise an actual local ingress refusal before the peer retries the same
+    // Status. The lock is released immediately after that first delivery attempt.
+    let mut initial_status_lock = Some(handle.shared.pending_admission.lock());
     let asked = Instant::now();
-    handle.deliver_message(vals.key(1), WireMessage::Status(Box::new(status)));
     wait_until("the body request", Duration::from_secs(3), || {
-        network.sent().iter().any(|(to, msg)| {
-            *to == vals.key(1)
-                && matches!(msg, WireMessage::PayloadRequest(r) if r.block_hash == hash(&b1))
-        })
+        // Local ingress contention may refuse this unchanged peer response before
+        // Core sees its CommitQC. Retain it until the original delivery is admitted.
+        if !status_admitted {
+            status_admitted = handle.deliver_message(vals.key(1), status.clone());
+            if let Some(locked) = initial_status_lock.take() {
+                assert!(!status_admitted, "the first Status encounters busy ingress");
+                drop(locked);
+            }
+        }
+        status_admitted
+            && network.sent().iter().any(|(to, msg)| {
+                *to == vals.key(1)
+                    && matches!(msg, WireMessage::PayloadRequest(r) if r.block_hash == hash(&b1))
+            })
     });
     assert!(asked.elapsed() < Duration::from_secs(3));
     let backlog = handle.backlog();

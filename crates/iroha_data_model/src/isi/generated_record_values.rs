@@ -21,7 +21,6 @@ use crate::{
         PublicLaneMonetaryScopeV1, PublicLaneMonetarySlashV1, PublicLaneMonetaryUnbondV1,
         PublicLaneUnbonding, public_lane_unbonding_commitment,
     },
-    runtime::{RuntimeUpgradeId, RuntimeUpgradeManifest},
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
 };
 use iroha_model_base::metadata::Metadata;
@@ -71,26 +70,61 @@ fn confidential_values() -> Vec<Value> {
     ]
 }
 
+/// The populated values of the live-upgrade instructions absent from the first capture.
+pub(super) fn runtime_record_values() -> Vec<Value> {
+    runtime_values()
+}
+
 fn runtime_values() -> Vec<Value> {
-    let manifest = RuntimeUpgradeManifest {
-        name: "fixture-release".into(),
-        description: "Codec fixture with the first-release ABI".into(),
-        abi_version: 1,
-        abi_hash: [0x31; 32],
-        added_syscalls: Vec::new(),
-        added_pointer_types: Vec::new(),
-        start_height: 10,
-        end_height: 20,
-        sbom_digests: Vec::new(),
-        slsa_attestation: b"synthetic-codec-artifact".to_vec(),
-        provenance: Vec::new(),
+    use crate::runtime::{
+        definition::{DefinitionId, SelectionId},
+        lifecycle::{
+            ChangeSetId, ContainmentKindV1, ContainmentV1, EndorsementV1, RootScopeV1,
+            SupportAttestationV1,
+        },
     };
-    let manifest_bytes = norito::to_bytes(&manifest).expect("typed manifest bytes");
-    let id = RuntimeUpgradeId(*Hash::new(&manifest_bytes).as_ref());
+    let validator = keypair(0x52);
+    let attestation = SupportAttestationV1 {
+        network: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0x31; 32]),
+        )),
+        root: RootScopeV1::Universal,
+        change_set: ChangeSetId([0x32; 32]),
+        predecessor: SelectionId([0x33; 32]),
+        successor: SelectionId([0x34; 32]),
+        committee: [0x35; 32],
+        tested_checkpoint: 10,
+        valid_from: 11,
+        valid_until: 20,
+        release: [0x36; 32],
+        validator: validator.public_key().clone(),
+    }
+    .sign(validator.private_key())
+    .expect("fixture attestation signs");
+    let containment = ContainmentV1 {
+        network: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::prehashed([0x31; 32]),
+        )),
+        root: RootScopeV1::Universal,
+        incident: [0x37; 32],
+        targets: vec![DefinitionId([0x38; 32]), DefinitionId([0x39; 32])],
+        kind: ContainmentKindV1::AdmissionClosed,
+        lease_until_ms: 172_800_000,
+    };
+    let member = keypair(0x53);
+    let endorsement = EndorsementV1::sign(
+        containment.id().expect("fixture containment identity"),
+        1_000,
+        member.public_key().clone(),
+        member.private_key(),
+    )
+    .expect("fixture endorsement signs");
     vec![
-        capture(runtime_upgrade::ProposeRuntimeUpgrade { manifest_bytes }),
-        capture(runtime_upgrade::ActivateRuntimeUpgrade { id }),
-        capture(runtime_upgrade::CancelRuntimeUpgrade { id }),
+        capture(runtime_upgrade::AttestRuntimeSupportV1 { attestation }),
+        capture(runtime_upgrade::ContainRuntimeV1 {
+            containment,
+            endorsements: vec![endorsement],
+        }),
     ]
 }
 
@@ -382,7 +416,7 @@ pub(super) fn values() -> Vec<Value> {
         .expect("canonical pin-outbox generated record fixture");
     records.push(capture(pin_outbox_advance));
     records.extend(bond_values());
-    assert_eq!(records.len(), 39);
+    assert_eq!(records.len(), 38);
     records
 }
 

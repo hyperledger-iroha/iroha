@@ -100,8 +100,8 @@ pub struct ConfigCompatibilityV1 {
     /// Ready reports bind authenticated signed-genesis fees as the handshake does;
     /// pending reports encode actual absence of a signed monetary authority.
     pub nexus_policy_digest: String,
-    /// Digest of this build's IVM gas schedule (handshake-bound).
-    pub gas_schedule_hash: String,
+    /// Host profiles this release implements, lowercase hex identities (handshake-bound).
+    pub host_profiles: Vec<String>,
     /// Boot execution-policy identity the signed genesis commits to.
     pub execution_policy_hash: Option<String>,
     /// Nexus/AMX context commitment the signed genesis commits to.
@@ -233,7 +233,12 @@ pub fn config_compatibility_v1(
         protocol_version: PROTOCOL_VERSION,
         wire_schema_hash: hex::encode(iroha_core::release_identity::wire_schema_hash()),
         nexus_policy_digest: hex::encode(caps.nexus_policy_digest),
-        gas_schedule_hash: hex::encode(caps.ivm_gas_schedule_hash),
+        host_profiles: caps
+            .host_profiles
+            .as_slice()
+            .iter()
+            .map(hex::encode)
+            .collect(),
         execution_policy_hash,
         nexus_amx_context_hash,
     })

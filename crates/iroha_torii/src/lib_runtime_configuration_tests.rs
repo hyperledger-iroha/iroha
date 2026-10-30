@@ -46,8 +46,17 @@ mod account_capabilities_tests {
 
     #[tokio::test]
     async fn account_capabilities_need_no_account_and_bind_current_network() {
-        let app = mk_app_state_for_tests();
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let network_id = *app.state.network_id_ref();
+        let expected_signing = app
+            .state
+            .transaction_admission_parameters()
+            .require_crypto_policy()
+            .expect("original signed-genesis crypto policy")
+            .allowed_algorithms()
+            .iter()
+            .map(|algorithm| algorithm.as_static_str().to_owned())
+            .collect::<Vec<_>>();
         let response = handler_accounts_capabilities(
             State(app),
             axum::http::HeaderMap::new(),
@@ -72,7 +81,7 @@ mod account_capabilities_tests {
         let value: iroha_torii_shared::account_capabilities::AccountCapabilitiesV1 =
             norito::json::from_slice(&bytes).expect("capabilities JSON");
         assert_eq!(value.network_id, network_id);
-        assert_eq!(value.allowed_signing, ["ed25519", "secp256k1"]);
+        assert_eq!(value.allowed_signing, expected_signing);
         assert!(
             value
                 .allowed_signing
@@ -93,24 +102,40 @@ mod account_capabilities_tests {
             .expect("fixture app has no shared consumers")
             .state = Arc::new(pristine);
         let error = handler_accounts_capabilities(
-            State(app),
+            State(Arc::clone(&app)),
             axum::http::HeaderMap::new(),
             "/v1/accounts/capabilities".parse().unwrap(),
             axum::extract::ConnectInfo("127.0.0.1:8080".parse().unwrap()),
             axum::body::Bytes::new(),
         )
         .await
-        .expect_err("initial policy is unavailable");
+        .expect_err("initial listener root is unavailable");
         assert!(
-            matches!(&error, Error::TransactionAdmissionDeferred(original)
-            if original.reason() == ivm::error::ExecutionDeferral::CryptoAdmissionPolicyUnavailable)
+            matches!(
+                &error,
+                Error::AppServiceUnavailable {
+                    code: "native_root_scope_unavailable",
+                    ..
+                }
+            ),
+            "pristine State has no authenticated listener root: {error:?}"
+        );
+        assert!(app.state.authenticated_root_scope().is_none());
+        assert!(
+            app.state
+                .transaction_admission_parameters()
+                .require_crypto_policy()
+                .is_err()
         );
         let response = error.into_response();
         assert_eq!(
             response.status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
-        assert!(response.headers().get("x-iroha-reject-code").is_none());
+        assert_eq!(
+            response.headers()["x-iroha-reject-code"],
+            "native_root_scope_unavailable"
+        );
     }
 
     #[tokio::test]

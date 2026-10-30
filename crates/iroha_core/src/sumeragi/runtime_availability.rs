@@ -141,7 +141,7 @@ impl NativeGlobalAvailability {
                 *original_tip == tip && parent.height() >= parent_height
             })
             .map(|(_, parent)| parent)
-            .filter(|_| !cfg!(all(test, sumeragi_core_mutation = "HC974")));
+            .filter(|_| !cfg!(all(test, sumeragi_core_mutation = "HC493")));
         let parent = match start {
             None => committed_block(&view, parent_height),
             Some(start) => {

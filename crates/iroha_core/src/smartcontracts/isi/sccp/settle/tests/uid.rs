@@ -1,18 +1,21 @@
 //! SCCP composition with exact native UID holdings, activity and enrollment policies.
 
 use super::*;
-use crate::state::asset_uid;
+use crate::state::{asset_uid, asset_uid_enrollment};
 use iroha_data_model::{
     asset::{
+        fi_link::AssetFiV1,
         uid::{AssetUidDailyWindowV1, AssetUidPolicyV1},
         uid_enrollment::AssetUidSystemAccountV1,
     },
     isi::{
+        asset_fi::SetAssetFiV1,
         asset_uid::SetAssetUidPolicyV1,
         asset_uid_enrollment::{ActivateAssetUidEnrollmentV1, SetAssetUidSystemAccountV1},
     },
 };
 use iroha_primitives::numeric::Quantity;
+use mv::storage::StorageReadOnly as _;
 use std::collections::BTreeSet;
 
 fn policy(
@@ -146,6 +149,7 @@ fn uid_recipient_holding_refusal_is_pending_and_retries_without_movement() {
 #[test]
 fn uid_shared_recipient_fee_cap_holds_before_either_credit_and_retries() {
     let state = state();
+    set_original_fee_sink(&state, &authority(63));
     let mut block = state.block(header(5));
     let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-uid-shared-fee"));
     install(&mut tx);
@@ -188,6 +192,7 @@ fn uid_shared_recipient_fee_cap_holds_before_either_credit_and_retries() {
 fn uid_source_activity_prefix_holds_both_ceilings_without_consuming_usage() {
     for outgoing_only in [false, true] {
         let state = state();
+        set_original_fee_sink(&state, &authority(65));
         let mut block = state.block(header(5));
         let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-uid-source-activity"));
         install(&mut tx);
@@ -339,4 +344,149 @@ fn enrollment_refusal_retains_new_recipient_registration_and_retries() {
     assert_eq!(xor_balance(&*tx.world, &recipient), 2 * ONE_XOR);
     assert_escrow_invariant(&*tx.world, "enrollment retry");
     assert_pending_counts(&tx, "enrollment retry");
+}
+
+#[test]
+fn sccp_enrolled_precheck_retains_original_decode_refusal_without_movement() {
+    let state = state();
+    let mut block = state.block(header(5));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-enrollment-decode"));
+    install(&mut tx);
+    fund(&mut tx, ETH, 1, 10 * ONE_XOR);
+    let route_escrow = escrow_of(&tx, ETH);
+    let recipient = authority(68);
+    recipients::ensure_registered(&mut tx, &recipient).unwrap();
+    for account in [&holder(), &route_escrow, &recipient] {
+        enroll_system(&mut tx, account);
+    }
+    let definition = sccp_taira_xor_asset_definition_id();
+    ActivateAssetUidEnrollmentV1 {
+        asset_definition_id: definition.clone(),
+    }
+    .execute(&holder(), &mut tx)
+    .unwrap();
+    escrow::precheck_release(&tx, ETH, &recipient, ONE_XOR)
+        .expect("the fully enrolled release is valid");
+    assert!(!tx.is_execution_deferred());
+
+    // Malformed committed bytes are a completed policy error, not a local refusal.
+    let key = asset_uid_enrollment::enrollment_key(&definition);
+    let original = tx.world.smart_contract_state.get(&key).unwrap().clone();
+    tx.world.smart_contract_state.insert(key.clone(), vec![0]);
+    escrow::precheck_release(&tx, ETH, &recipient, ONE_XOR).unwrap_err();
+    assert!(!tx.is_execution_deferred());
+    tx.world.smart_contract_state.insert(key, original);
+    let before: Vec<_> = tx
+        .world
+        .smart_contract_state
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let events = sccp_events(&tx);
+
+    // Only nesting is constrained: funded AccountId copies and quantity storage
+    // must succeed so the first state decoder, the enrollment gate, is exercised.
+    let result = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+        || escrow::precheck_release(&tx, ETH, &recipient, ONE_XOR),
+    );
+    assert!(result.is_err());
+    assert!(tx.is_execution_deferred());
+    assert!(matches!(
+        tx.borrow_execution_deferral()
+            .unwrap()
+            .decode_refusal()
+            .unwrap()
+            .resource_error(),
+        norito::core::DecodeResourceError::NestingDepthExceeded { limit: 0, .. }
+    ));
+    let after: Vec<_> = tx
+        .world
+        .smart_contract_state
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    assert_eq!(before, after, "the refused precheck installs no state");
+    assert_eq!(xor_balance(&*tx.world, &route_escrow), 10 * ONE_XOR);
+    assert_eq!(xor_balance(&*tx.world, &recipient), 0);
+    assert_eq!(liability(&tx, ETH, 1), 10 * ONE_XOR);
+    assert_eq!(store::pending_count(&*tx.world, &(ETH, 1)), (0, 0));
+    assert_eq!(sccp_events(&tx), events);
+    assert_escrow_invariant(&*tx.world, "enrollment decoder refused locally");
+}
+
+#[test]
+fn sccp_enrollment_categories_forward_original_uid_fi_and_system_decode_refusals() {
+    use asset_uid_enrollment::BeneficialEnrollment;
+
+    for category in 0..3 {
+        let state = state();
+        let mut block = state.block(header(5));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new("sccp-category-decode"));
+        let account = authority(69);
+        recipients::ensure_registered(&mut tx, &account).unwrap();
+        let definition = sccp_taira_xor_asset_definition_id();
+        match category {
+            0 => policy(
+                &mut tx,
+                69,
+                1,
+                std::slice::from_ref(&account),
+                None,
+                None,
+                None,
+            ),
+            1 => SetAssetFiV1 {
+                fi: AssetFiV1 {
+                    asset_definition_id: definition.clone(),
+                    fi_account_id: account.clone(),
+                    revision: 1,
+                    enabled: true,
+                },
+            }
+            .execute(&holder(), &mut tx)
+            .unwrap(),
+            _ => enroll_system(&mut tx, &account),
+        }
+        let world = tx.world();
+        for owner in [None, Some(world)] {
+            let actual =
+                asset_uid_enrollment::beneficial_with_owner(world, &definition, &account, owner)
+                    .unwrap();
+            assert!(matches!(
+                (category, actual),
+                (0, Some(BeneficialEnrollment::Retail))
+                    | (1, Some(BeneficialEnrollment::Fi { enabled: true }))
+                    | (2, Some(BeneficialEnrollment::System { enabled: true }))
+            ));
+        }
+        let result = norito::with_decode_limits_scope(
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+            || {
+                asset_uid_enrollment::beneficial_with_owner(
+                    world,
+                    &definition,
+                    &account,
+                    Some(world),
+                )
+            },
+        );
+        assert!(
+            result.is_err(),
+            "category {category} must reach its decoder"
+        );
+        assert!(
+            tx.is_execution_deferred(),
+            "category {category} lost its owner"
+        );
+        assert!(matches!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .decode_refusal()
+                .unwrap()
+                .resource_error(),
+            norito::core::DecodeResourceError::NestingDepthExceeded { limit: 0, .. }
+        ));
+        assert_eq!(xor_balance(&*tx.world, &account), 0);
+    }
 }

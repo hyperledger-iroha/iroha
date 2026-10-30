@@ -1779,6 +1779,137 @@ mod tests {
             "the fresh Taira catalog routes bpng by target dataspace only"
         );
     }
+    /// The field-level view walks every field the writer emits, names each node value by its
+    /// configuration key, and a changed node value differs in exactly that key.
+    #[test]
+    fn sumeragi_nexus_amx_context_fields_name_each_changed_config_key() {
+        use iroha_data_model::nexus::{
+            NexusAmxContextFieldOriginV1::{Genesis, NodeConfig},
+            diff_nexus_amx_context_v1, nexus_amx_context_fields_v1,
+        };
+        let pipeline = Pipeline::default();
+        let preimage = |nexus: &Nexus,
+                        validators: &[GenesisActiveNexusLaneRecord],
+                        lineage: &[SumeragiLaneLifecycleEntry]| {
+            sumeragi_nexus_amx_context_preimage(
+                nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                validators,
+                lineage,
+            )
+        };
+        for (label, nexus, validators, lineage) in [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ] {
+            let fields = nexus_amx_context_fields_v1(&preimage(&nexus, &validators, &lineage))
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let value = |path: &str| {
+                fields
+                    .iter()
+                    .find(|field| field.path == path)
+                    .map(|field| (field.origin, field.value.clone()))
+            };
+            assert_eq!(
+                value("nexus.lane_count"),
+                Some((
+                    NodeConfig,
+                    nexus.lane_catalog.lane_count().get().to_string()
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.fusion.exit_teu"),
+                Some((NodeConfig, nexus.fusion.exit_teu.to_string())),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.autoscale.scale_out_latency_ratio"),
+                Some((
+                    NodeConfig,
+                    format!("{:?}", nexus.autoscale.scale_out_latency_ratio)
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.da.audit.interval_ms"),
+                Some((NodeConfig, nexus.da.audit.interval.as_millis().to_string())),
+                "{label}"
+            );
+            for dataspace in nexus.dataspace_catalog.entries() {
+                assert_eq!(
+                    value(&format!(
+                        "nexus.dataspace_catalog[id={}].alias",
+                        dataspace.id
+                    )),
+                    Some((NodeConfig, format!("{:?}", dataspace.alias))),
+                    "{label}"
+                );
+            }
+            for field in &fields {
+                let genesis = [
+                    "nexus.lane_lifecycle[",
+                    "nexus.autoscale.last_transition_height",
+                    "root.",
+                    "staged.",
+                    "pipeline.",
+                ]
+                .iter()
+                .any(|prefix| field.path.starts_with(prefix))
+                    || (field.path.starts_with("nexus.lane_catalog[")
+                        && (field.path.ends_with(".version") || field.path.ends_with(".metadata")));
+                let origin = if genesis { Genesis } else { NodeConfig };
+                assert_eq!(field.origin, origin, "{label}: {}", field.path);
+            }
+        }
+        let validators = golden_validators();
+        let lineage = golden_lineage();
+        let taira = taira_eight_lane_nexus();
+        let mut node = taira.clone();
+        node.fusion.exit_teu = node.fusion.exit_teu.checked_add(1).unwrap();
+        node.autoscale.cooldown_blocks = node.autoscale.cooldown_blocks.checked_add(1).unwrap();
+        node.da.rotation.latency_decay /= 2.0;
+        let diffs = diff_nexus_amx_context_v1(
+            &preimage(&taira, &validators, &lineage),
+            &preimage(&node, &validators, &lineage),
+        )
+        .expect("both contexts come from the writer");
+        assert_eq!(
+            diffs
+                .iter()
+                .map(|diff| (diff.path.as_str(), diff.origin, diff.actual.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "nexus.fusion.exit_teu",
+                    NodeConfig,
+                    Some(node.fusion.exit_teu.to_string())
+                ),
+                (
+                    "nexus.autoscale.cooldown_blocks",
+                    NodeConfig,
+                    Some(node.autoscale.cooldown_blocks.to_string())
+                ),
+                (
+                    "nexus.da.rotation.latency_decay",
+                    NodeConfig,
+                    Some(format!("{:?}", node.da.rotation.latency_decay))
+                ),
+            ]
+        );
+    }
     /// Emit the actual default/Sora/Taira test-owner preimages without rewriting golden pins.
     /// Explicit authored fee recipes here are test inputs, never runtime policy fallbacks.
     #[test]

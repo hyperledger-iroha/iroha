@@ -230,7 +230,7 @@ async fn heavy_route_auth_errors_for_test(app: SharedAppState, headers: HeaderMa
 #[tokio::test]
 async fn bridge_finality_read_routes_fail_closed_on_empty_or_duplicate_tokens() {
     for duplicate in [false, true] {
-        let mut app = mk_app_state_for_tests();
+        let mut app = mk_native_app_state_for_tests();
         let app_mut = Arc::get_mut(&mut app).expect("unique Torii app fixture");
         app_mut.require_api_token = true;
         app_mut.api_token_digests = if duplicate {

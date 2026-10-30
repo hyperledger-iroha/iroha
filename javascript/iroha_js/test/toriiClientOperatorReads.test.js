@@ -43,6 +43,7 @@ const OPERATOR_READS = [
     "/v1/sumeragi/evidence/count",
     (client) => client.getSumeragiEvidenceCount(),
   ],
+  ["/v1/runtime/upgrades", (client) => client.listRuntimeUpgrades()],
 ];
 
 for (const [path, invoke] of OPERATOR_READS) {
@@ -155,6 +156,65 @@ test("Sumeragi evidence signs the final query target exactly once", async () => 
     /requires an immutable OperatorSigningContext/u,
   );
   assert.equal(missingContextCalls, 0);
+});
+
+test("runtime change-set drafts sign the exact POST target and body once", async () => {
+  const changeSet = {
+    network: NETWORK_ID.toString(),
+    root: { kind: "Universal", content: null },
+    predecessor: "01".repeat(32),
+    successor: "02".repeat(32),
+    effective_height: 120,
+    publish: [],
+    transitions: [{ kind: "Activate", content: "0a".repeat(32) }],
+    qualification: "03".repeat(32),
+  };
+  const cancelPath = `/v1/runtime/upgrades/cancel/0x${"ab".repeat(32)}`;
+  for (const [path, invoke, body] of [
+    [
+      "/v1/runtime/upgrades/propose",
+      (client) => client.proposeRuntimeUpgrade(changeSet),
+      Buffer.from(JSON.stringify({ change_set: changeSet, provenance: [] })),
+    ],
+    [cancelPath, (client) => client.cancelRuntimeUpgrade("ab".repeat(32)), Buffer.alloc(0)],
+  ]) {
+    const calls = [];
+    const client = new ToriiClient(BASE_URL, {
+      operatorSigningContext: signingContext(),
+      maxRetries: 5,
+      retryStatuses: [503],
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init });
+        return new Response(null, { status: 503 });
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => invoke(client));
+    assert.equal(calls.length, 1, path);
+    const { url, init } = calls[0];
+    assert.equal(url, `${BASE_URL}${path}`);
+    assert.equal(init.method, "POST");
+    assert.equal(init.redirect, "error");
+    assert.deepEqual(Buffer.from(init.body ?? ""), body, path);
+    const canonical = canonicalRequestMessage({ method: "POST", path, query: "", body });
+    const message = Buffer.concat([
+      Buffer.from("iroha.operator.http-request.network.v1\0"),
+      Buffer.from(networkIdBytes(NETWORK_ID)),
+      canonical,
+      Buffer.from(
+        `\n${header(init.headers, "x-iroha-operator-timestamp-ms")}\n${header(init.headers, "x-iroha-operator-nonce")}`,
+      ),
+    ]);
+    assert.equal(
+      verifyEd25519(
+        message,
+        Buffer.from(header(init.headers, "x-iroha-operator-signature"), "base64"),
+        PUBLIC_KEY,
+      ),
+      true,
+      path,
+    );
+  }
 });
 
 test("operator reads generate a fresh nonce instead of replaying a request", async () => {

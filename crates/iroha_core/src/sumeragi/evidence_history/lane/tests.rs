@@ -1238,6 +1238,14 @@ fn reported_original_lane_equivocation(context: &LaneEvidenceContext) -> Evidenc
     report
 }
 
+fn original_lane_fee_policy() -> iroha_data_model::block::consensus::RootFeePolicy {
+    iroha_data_model::block::consensus::RootFeePolicy {
+        fee_asset_id: iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id,
+        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    }
+}
+
 fn fund_original_validator_in_signed_genesis(
     config: &mut crate::sumeragi::test_chain::TestChainConfig,
 ) {
@@ -1281,6 +1289,15 @@ fn fund_original_validator_in_signed_genesis(
     );
     let definition = iroha_data_model::parameter::system::SumeragiNposParameters::default()
         .xor_asset_definition_id;
+    // These scenarios exercise paid ordinary work. Author its positive schedule
+    // in the original signed genesis instead of the helper's zero-rate default.
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            original_lane_fee_policy()
+                .into_custom_parameter()
+                .expect("complete original signed fee author input"),
+        ));
     let mut staking = crate::sumeragi::test_chain::staking_fixture_policy(definition.clone());
     staking.max_slash_bps = 1_000;
     staking.slash_sink_account_id = sink.clone();
@@ -1432,6 +1449,11 @@ fn funded_original_lane_slashing_scenario(complete_replacement: bool) {
             .get(&stake_key)
             .unwrap()
             .0;
+        assert_eq!(
+            view.world().parameters().root_fees(),
+            Some(&original_lane_fee_policy()),
+            "paid staking operations use the exact original signed fee schedule"
+        );
         let committed_policy = view.world().parameters().staking_policy().unwrap();
         assert_eq!(
             committed_policy.max_slash_bps, 1_000,

@@ -85,7 +85,7 @@ The test runtime enables assertions, and Java consumers compile against JDK 8.
   with `-PnoritoJavaVersion=...` to publish the `org.hyperledger.iroha:norito-java`
   artifact for local consumption.
 - Packaging guidance for the JNI backend:
-  1. Consume the transitive `com.github.luben:zstd-jni:1.5.7-24` dependency from `norito-java` and
+  1. Consume the transitive `com.github.luben:zstd-jni:1.5.7-25` dependency from `norito-java` and
      keep any centrally constrained version aligned.
   2. For Android, align the application ABI filters with the shipped native
      libraries and keep debug symbols for `libzstd-jni.so` when useful for

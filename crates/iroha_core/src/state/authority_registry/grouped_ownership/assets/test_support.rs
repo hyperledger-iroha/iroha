@@ -248,7 +248,12 @@ pub(in crate::state) fn full_work(
     rows: &impl RawStorageImages<AssetId, AssetValue>,
     definitions: &impl RawStorageImages<AssetDefinitionId, AssetDefinition>,
     domains: &impl RawStorageImages<DomainId, Domain>,
-    (by_definition, by_domain, holders, nonzero): (&impl RawStorageImages<(AssetDefinitionId, AssetId), ()>, &impl RawStorageImages<(DomainId, AssetId), ()>, &impl RawStorageImages<(AssetDefinitionId, AccountId), ()>, &impl RawStorageImages<(AssetDefinitionId, AccountId), ()>),
+    (by_definition, by_domain, holders, nonzero): (
+        &impl RawStorageImages<(AssetDefinitionId, AssetId), ()>,
+        &impl RawStorageImages<(DomainId, AssetId), ()>,
+        &impl RawStorageImages<(AssetDefinitionId, AccountId), ()>,
+        &impl RawStorageImages<(AssetDefinitionId, AccountId), ()>,
+    ),
     counts: &impl RawStorageImages<AssetDefinitionId, u64>,
 ) -> u64 {
     let mut total = group_cost(rows, by_definition, AssetId::definition);
@@ -322,19 +327,25 @@ pub(in crate::state) fn world_work(world: &World) -> u64 {
             .asset_definitions
             .try_committed_view_nonblocking()
             .unwrap(),
-        &world.domains.try_committed_view_nonblocking().unwrap(),(&world
-            .asset_definition_assets
-            .try_committed_view_nonblocking()
-            .unwrap(), &world
-            .assets_by_domain
-            .try_committed_view_nonblocking()
-            .unwrap(), &world
-            .asset_definition_holders
-            .try_committed_view_nonblocking()
-            .unwrap(), &world
-            .asset_definition_nonzero_holders
-            .try_committed_view_nonblocking()
-            .unwrap()),
+        &world.domains.try_committed_view_nonblocking().unwrap(),
+        (
+            &world
+                .asset_definition_assets
+                .try_committed_view_nonblocking()
+                .unwrap(),
+            &world
+                .assets_by_domain
+                .try_committed_view_nonblocking()
+                .unwrap(),
+            &world
+                .asset_definition_holders
+                .try_committed_view_nonblocking()
+                .unwrap(),
+            &world
+                .asset_definition_nonzero_holders
+                .try_committed_view_nonblocking()
+                .unwrap(),
+        ),
         &world
             .asset_definition_asset_counts
             .try_committed_view_nonblocking()

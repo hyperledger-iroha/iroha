@@ -512,6 +512,17 @@ impl SccpPendingIndexV1 {
             SccpAdmissionKeysV1::derive_key(SccpExemptClassV1::Keepalive, "exclusive", authority);
         self.exclusive.get(&key).copied()
     }
+    /// Borrow the queued holder of the exclusive key that `class` derives from `parts`
+    /// ([`SccpAdmissionKeysV1::with_exclusive`]).
+    #[must_use]
+    pub fn exclusive_holder(
+        &self,
+        class: SccpExemptClassV1,
+        parts: &impl Encode,
+    ) -> Option<HashOf<TransactionEntrypoint>> {
+        let key = SccpAdmissionKeysV1::derive_key(class, "exclusive", parts);
+        self.exclusive.get(&key).copied()
+    }
     /// Check whether `hash` may claim `keys` without mutating the index.
     ///
     /// # Errors
@@ -872,6 +883,55 @@ mod tests {
         index.clear();
         assert!(index.is_empty());
         assert_eq!(index.class_of(&entry(7)), None);
+    }
+
+    #[test]
+    fn exclusive_holder_names_the_queued_claimant_until_release() {
+        let mut index = SccpPendingIndexV1::default();
+        let triple = (1_u64, [7_u8; 32], 0b111_u32);
+        let forgery = SccpAdmissionKeysV1::new(SccpExemptClassV1::ForgeryEvidence)
+            .with_exclusive(&triple)
+            .with_content(&triple);
+        assert_eq!(
+            index.exclusive_holder(SccpExemptClassV1::ForgeryEvidence, &triple),
+            None
+        );
+        index.claim(entry(1), forgery).expect("claim");
+        assert_eq!(
+            index.exclusive_holder(SccpExemptClassV1::ForgeryEvidence, &triple),
+            Some(entry(1))
+        );
+        // Class, parts and role all bind the key.
+        assert_eq!(
+            index.exclusive_holder(SccpExemptClassV1::SelfClaim, &triple),
+            None
+        );
+        assert_eq!(
+            index.exclusive_holder(
+                SccpExemptClassV1::ForgeryEvidence,
+                &(1_u64, [7_u8; 32], 0b1011_u32)
+            ),
+            None
+        );
+        index
+            .claim(
+                entry(2),
+                SccpAdmissionKeysV1::new(SccpExemptClassV1::ForgeryEvidence)
+                    .with_content(&(2_u64, [7_u8; 32], 0b111_u32)),
+            )
+            .expect("content-only claim");
+        assert_eq!(
+            index.exclusive_holder(
+                SccpExemptClassV1::ForgeryEvidence,
+                &(2_u64, [7_u8; 32], 0b111_u32)
+            ),
+            None
+        );
+        index.release(&entry(1));
+        assert_eq!(
+            index.exclusive_holder(SccpExemptClassV1::ForgeryEvidence, &triple),
+            None
+        );
     }
 
     #[test]

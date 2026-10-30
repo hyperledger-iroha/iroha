@@ -319,6 +319,8 @@ state_test! { sync da_hydration_capacity_refusal_preserves_indexes_and_original_
     use std::{future::Future as _, task::{Context, Poll, Waker}};
 
     for rewind in [false, true] {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(
             crate::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000),
         ).expect("funded canonical genesis");

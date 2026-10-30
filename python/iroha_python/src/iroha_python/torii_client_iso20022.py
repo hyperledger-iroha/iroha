@@ -227,6 +227,28 @@ class ToriiClientIsoOperatorContextMixin:
             context=context,
         )
 
+    def _operator_post(
+        self,
+        path: str,
+        body: bytes,
+        *,
+        content_type: str = "application/json",
+        headers: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+        context: str = "operator POST",
+    ) -> Any:
+        """Sign and dispatch one exact-network operator POST of ``body`` without redirect or retry."""
+
+        return operator_post(
+            self,
+            path,
+            body,
+            content_type=content_type,
+            headers=headers,
+            timeout=timeout,
+            context=context,
+        )
+
 
 def _require_profile(value: Optional[str], context: str) -> Optional[str]:
     if value is None:
@@ -343,6 +365,40 @@ def operator_get(
         allow_redirects=False,
     )
     return response
+
+
+def operator_post(
+    client: Any,
+    path: str,
+    body: bytes,
+    *,
+    content_type: str,
+    headers: Optional[Mapping[str, str]],
+    timeout: Optional[float],
+    context: str,
+) -> Any:
+    """Sign and dispatch one exact-path operator POST; the signature covers the exact body."""
+
+    if not isinstance(path, str) or not path.startswith("/") or "#" in path:
+        raise ValueError(f"{context} path must be an absolute-path reference without a fragment")
+    if type(body) is not bytes:
+        raise TypeError(f"{context} body must be exact immutable bytes")
+    _reject_retired_auth(client, context, headers)
+    final_headers = _signed_headers(client, "POST", path, body, context)
+    final_headers["Content-Type"] = content_type
+    final_headers["Accept"] = "application/json"
+    if headers is not None:
+        for name, value in headers.items():
+            final_headers[str(name)] = str(value)
+    return client._request(
+        "POST",
+        path,
+        data=body,
+        headers=final_headers,
+        timeout=timeout,
+        allow_retry=False,
+        allow_redirects=False,
+    )
 
 
 def submit_iso_message(

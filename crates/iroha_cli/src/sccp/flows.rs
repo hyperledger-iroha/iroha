@@ -5,7 +5,7 @@ use eyre::ensure;
 use iroha::client::PreparedTransactionPayload;
 use iroha_data_model::transaction::{Executable, SignedTransaction};
 use iroha_sccp_wallet::{
-    flow::{SccpFlowActionV1, SccpFlowV1, drive_step_with_rebroadcast},
+    flow::{SccpFlowActionV1, SccpFlowV1, drive_step_guarded, drive_step_with_rebroadcast},
     journal::{
         SccpEvidenceItemV1, SccpFlowIdV1, SccpFlowKindV1, SccpJournalOutcomeV1,
         SccpJournalRecordV1, SccpJournalRoot, SccpJournalStep, SccpStepOutcomeKindV1,
@@ -222,7 +222,62 @@ pub(super) fn taira<C: RunContext>(
     flow: &Flow,
     action: SccpFlowActionV1,
     instructions: Vec<InstructionBox>,
+    items: Vec<SccpEvidenceItemV1>,
+) -> Result<Option<SccpJournalOutcomeV1>> {
+    taira_signed(context, original, flow, action, instructions, items, None)
+}
+
+/// [`taira`] whose new signature lets the transaction execute no later than `expiry_ms` (Unix
+/// milliseconds), whatever TTL the client configures: the step's checks assumed inclusion by
+/// then. A retained original keeps the lifetime it was signed with.
+pub(super) fn taira_expiring<C: RunContext>(
+    context: &mut C,
+    original: &origin::AuthenticatedOrigin,
+    flow: &Flow,
+    action: SccpFlowActionV1,
+    instructions: Vec<InstructionBox>,
+    items: Vec<SccpEvidenceItemV1>,
+    expiry_ms: u64,
+) -> Result<Option<SccpJournalOutcomeV1>> {
+    taira_signed(
+        context,
+        original,
+        flow,
+        action,
+        instructions,
+        items,
+        Some(expiry_ms),
+    )
+}
+
+/// Quote and sign one Taira transaction, its lifetime bounded by `expiry_ms` when given.
+pub(super) fn quote_and_sign(
+    client: &BlockingClient,
+    executable: Executable,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    metadata: iroha_model_base::metadata::Metadata,
+    expiry_ms: Option<u64>,
+) -> Result<(SignedTransaction, iroha_torii_shared::FeeQuoteResponse)> {
+    match expiry_ms {
+        Some(expiry_ms) => crate::quote_and_sign_transaction_with_expiry(
+            client,
+            executable,
+            fee_payment,
+            metadata,
+            expiry_ms,
+        ),
+        None => crate::quote_and_sign_transaction(client, executable, fee_payment, metadata),
+    }
+}
+
+fn taira_signed<C: RunContext>(
+    context: &mut C,
+    original: &origin::AuthenticatedOrigin,
+    flow: &Flow,
+    action: SccpFlowActionV1,
+    instructions: Vec<InstructionBox>,
     mut items: Vec<SccpEvidenceItemV1>,
+    expiry_ms: Option<u64>,
 ) -> Result<Option<SccpJournalOutcomeV1>> {
     ensure!(
         !context.input_instructions(),
@@ -248,11 +303,12 @@ pub(super) fn taira<C: RunContext>(
             "recover the original pending flow step before preparing another"
         );
         let client = blocking(context)?;
-        let (transaction, quote) = crate::quote_and_sign_transaction(
+        let (transaction, quote) = quote_and_sign(
             &client,
             Executable::from(instructions),
             context.transaction_fee_payment()?,
             context.transaction_metadata().cloned().unwrap_or_default(),
+            expiry_ms,
         )?;
         bind_intent(&mut items, digest);
         bind_flow(flow, &mut items);
@@ -360,17 +416,20 @@ fn checked_outcome(outcome: Option<SccpJournalOutcomeV1>) -> Result<Option<SccpJ
     Ok(outcome)
 }
 
+/// Reconcile, then dispatch once `guard` accepts the first dispatch or an explicit rebroadcast,
+/// and wait for the outcome. Waiting never asks the guard again.
 fn drive_and_wait(
     context: &impl RunContext,
     step: &SccpJournalStep,
     rebroadcast: bool,
+    guard: impl FnOnce() -> Result<()>,
     mut observe: impl FnMut(&SccpJournalRecordV1) -> Result<Option<SccpJournalOutcomeV1>>,
     dispatch: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<Option<SccpJournalOutcomeV1>> {
     let config = context.sccp_config()?;
     let started = std::time::Instant::now();
     let mut observe = |record: &SccpJournalRecordV1| checked_outcome(observe(record)?);
-    let mut outcome = drive_step_with_rebroadcast(step, rebroadcast, &mut observe, dispatch)?;
+    let mut outcome = drive_step_guarded(step, rebroadcast, &mut observe, guard, dispatch)?;
     while outcome.is_none() {
         let Some(remaining) = config.confirmation_timeout.checked_sub(started.elapsed()) else {
             break;
@@ -405,6 +464,7 @@ fn run_taira_step(
         context,
         step,
         rebroadcast,
+        || Ok(()),
         |_| native_receipt::observe(&native, original, &transaction),
         |wire| {
             ensure!(
@@ -510,7 +570,7 @@ pub(super) fn evm_call<C: RunContext>(
         "the retained call belongs to another network"
     );
     destination.retained_hash(&step.record().submission, &calldata)?;
-    run_evm_step(context, original, flow, &step, destination)
+    run_evm_step(context, original, flow, &step, destination, || Ok(()))
 }
 
 /// Reconcile retained bytes before requesting a fresh bundle that may now be stale.
@@ -524,6 +584,27 @@ pub(super) fn recover_evm(
     recover_evm_call(context, original, flow, action, &destination.transport())
 }
 
+/// [`recover_evm`] for a burn: a retained transaction that an earlier run journaled is
+/// dispatched for the first time, or rebroadcast, only after `guard` accepts it again. The
+/// guard is refusal-only; the retained evidence and signed bytes stay those of the original.
+pub(super) fn recover_evm_guarded(
+    context: &mut impl RunContext,
+    original: &origin::AuthenticatedOrigin,
+    flow: &Flow,
+    action: SccpFlowActionV1,
+    destination: &super::evm::EvmDestination,
+    guard: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    recover_evm_step(
+        context,
+        original,
+        flow,
+        action,
+        &destination.transport(),
+        guard,
+    )
+}
+
 pub(super) fn recover_evm_call(
     context: &mut impl RunContext,
     original: &origin::AuthenticatedOrigin,
@@ -531,10 +612,21 @@ pub(super) fn recover_evm_call(
     action: SccpFlowActionV1,
     destination: &super::evm::EvmTransport<'_>,
 ) -> Result<bool> {
+    recover_evm_step(context, original, flow, action, destination, || Ok(()))
+}
+
+fn recover_evm_step(
+    context: &mut impl RunContext,
+    original: &origin::AuthenticatedOrigin,
+    flow: &Flow,
+    action: SccpFlowActionV1,
+    destination: &super::evm::EvmTransport<'_>,
+    guard: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
     let Some(step) = flow.latest(action)? else {
         return Ok(false);
     };
-    let outcome = run_evm_step(context, original, flow, &step, destination)?;
+    let outcome = run_evm_step(context, original, flow, &step, destination, guard)?;
     if outcome.is_some()
         && (action == SccpFlowActionV1::Checkpoint || retry_allowed(flow, action, &step)?)
     {
@@ -549,6 +641,7 @@ fn run_evm_step(
     flow: &Flow,
     step: &SccpJournalStep,
     destination: &super::evm::EvmTransport<'_>,
+    guard: impl FnOnce() -> Result<()>,
 ) -> Result<Option<SccpJournalOutcomeV1>> {
     check_flow(flow, step)?;
     let signed = iroha_sccp_wallet::pure::evm::SignedEip1559V1::decode(&step.record().submission)
@@ -560,6 +653,7 @@ fn run_evm_step(
         context,
         step,
         flow.rebroadcast,
+        guard,
         |_| {
             let Some((receipt, mut proof_items)) =
                 destination.receipt(&blocking(context)?, original, &step.record().submission)?
@@ -639,6 +733,30 @@ pub(super) fn ton(
     )
 }
 
+/// [`ton`] for a burn: `prepare` runs the guard before a new envelope is signed, and an envelope
+/// that an earlier run retained is dispatched for the first time, or rebroadcast, only after
+/// `guard` accepts it again. The guard is refusal-only; the retained evidence stays the original's.
+pub(super) fn ton_guarded(
+    context: &mut impl RunContext,
+    selected: FlowStep<'_>,
+    lite: &iroha_sccp_rpc::ton::LiteClient,
+    items: Vec<SccpEvidenceItemV1>,
+    prepare: impl FnOnce(&mut Vec<SccpEvidenceItemV1>) -> Result<Vec<u8>>,
+    observe: impl FnMut(&SccpJournalStep) -> Result<Option<Vec<SccpEvidenceItemV1>>>,
+    guard: impl FnOnce() -> Result<()>,
+) -> Result<Option<SccpJournalOutcomeV1>> {
+    ton_step(
+        context,
+        selected,
+        lite,
+        items,
+        prepare,
+        observe,
+        SccpStepOutcomeKindV1::Confirmed,
+        guard,
+    )
+}
+
 /// Maintenance progress can supersede the need to retry; it does not prove mint/burn completion.
 pub(super) fn ton_observed(
     context: &mut impl RunContext,
@@ -646,8 +764,34 @@ pub(super) fn ton_observed(
     lite: &iroha_sccp_rpc::ton::LiteClient,
     items: Vec<SccpEvidenceItemV1>,
     prepare: impl FnOnce(&mut Vec<SccpEvidenceItemV1>) -> Result<Vec<u8>>,
+    observe: impl FnMut(&SccpJournalStep) -> Result<Option<Vec<SccpEvidenceItemV1>>>,
+    kind: SccpStepOutcomeKindV1,
+) -> Result<Option<SccpJournalOutcomeV1>> {
+    ton_step(
+        context,
+        selected,
+        lite,
+        items,
+        prepare,
+        observe,
+        kind,
+        || Ok(()),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one TON step owns its original custody, discovery, outcome kind and dispatch guard"
+)]
+fn ton_step(
+    context: &mut impl RunContext,
+    selected: FlowStep<'_>,
+    lite: &iroha_sccp_rpc::ton::LiteClient,
+    items: Vec<SccpEvidenceItemV1>,
+    prepare: impl FnOnce(&mut Vec<SccpEvidenceItemV1>) -> Result<Vec<u8>>,
     mut observe: impl FnMut(&SccpJournalStep) -> Result<Option<Vec<SccpEvidenceItemV1>>>,
     kind: SccpStepOutcomeKindV1,
+    guard: impl FnOnce() -> Result<()>,
 ) -> Result<Option<SccpJournalOutcomeV1>> {
     let FlowStep {
         original,
@@ -668,10 +812,11 @@ pub(super) fn ton_observed(
         }
         other => other,
     };
-    let step = if let Some(step) = previous {
-        step
+    // An envelope prepared by this run already passed the checks of `prepare`.
+    let (step, retained) = if let Some(step) = previous {
+        (step, true)
     } else {
-        prepare_ton_original(flow, action, items, prepare)?
+        (prepare_ton_original(flow, action, items, prepare)?, false)
     };
     check_flow(flow, &step)?;
     ensure!(
@@ -687,6 +832,7 @@ pub(super) fn ton_observed(
         context,
         &step,
         flow.rebroadcast,
+        || if retained { guard() } else { Ok(()) },
         |_| {
             retired_ton_outcome(observe(&step)?, kind, hash, || {
                 super::ton::wallet_retirement(

@@ -25,15 +25,15 @@
       "limit": 260000
     },
     "5.4 inline finalize n=31": {
-      "gas": 189473,
+      "gas": 189429,
       "limit": 550000
     },
     "5.4 inline finalize n=4": {
-      "gas": 125393,
+      "gas": 125349,
       "limit": 550000
     },
     "5.4 inline finalize n=7": {
-      "gas": 132497,
+      "gas": 132453,
       "limit": 550000
     },
     "5.4 inline void n=31": {
@@ -157,23 +157,23 @@
       "limit": 250000
     },
     "finalize checkpoint": {
-      "gas": 50170,
+      "gas": 50126,
       "limit": 550000
     },
     "finalize inline n=31": {
-      "gas": 194935,
+      "gas": 194891,
       "limit": 550000
     },
     "finalize inline n=4": {
-      "gas": 130855,
+      "gas": 130811,
       "limit": 550000
     },
     "finalize inline worst case n=31": {
-      "gas": 258949,
+      "gas": 258905,
       "limit": 550000
     },
     "finalize inline worst case n=4": {
-      "gas": 194869,
+      "gas": 194825,
       "limit": 550000
     },
     "limit apply control n=31": {
@@ -201,15 +201,15 @@
       "limit": 250000
     },
     "limit finalize n=31": {
-      "gas": 480963,
+      "gas": 480919,
       "limit": 550000
     },
     "limit finalize n=4": {
-      "gas": 414354,
+      "gas": 414310,
       "limit": 550000
     },
     "limit finalize n=7": {
-      "gas": 421951,
+      "gas": 421907,
       "limit": 550000
     },
     "limit void n=31": {
@@ -225,19 +225,19 @@
       "limit": 535000
     },
     "minter bounced mint dispatch": {
-      "gas": 10573,
+      "gas": 13497,
       "limit": 60000
     },
     "minter failed mint retained": {
-      "gas": 10573,
+      "gas": 13497,
       "limit": 60000
     },
     "minter range reply": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "minter rejected consume recovery": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "minter retry activation": {
@@ -249,11 +249,11 @@
       "limit": 80000
     },
     "minter sccp_consumed mint": {
-      "gas": 19256,
+      "gas": 19584,
       "limit": 80000
     },
     "minter sccp_consumed void": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "recovery bucket confirm at 512 receipts": {
@@ -277,7 +277,7 @@
       "limit": 300000
     },
     "recovery minter admission at 512 rows n=31": {
-      "gas": 197003,
+      "gas": 196959,
       "limit": 550000
     },
     "recovery minter confirm retry at 63 dictionary forks": {
@@ -285,11 +285,11 @@
       "limit": 80000
     },
     "recovery minter consume acknowledgement at 512 rows": {
-      "gas": 26506,
+      "gas": 26834,
       "limit": 80000
     },
     "recovery minter consume completion at 63 dictionary forks": {
-      "gas": 64931,
+      "gas": 65259,
       "limit": 80000
     },
     "recovery minter failed retry at 63 dictionary forks": {
@@ -297,15 +297,15 @@
       "limit": 80000
     },
     "recovery minter mint acknowledgement at 512 rows": {
-      "gas": 22435,
+      "gas": 22567,
       "limit": 80000
     },
     "recovery minter original bounce at 63 dictionary forks": {
-      "gas": 49948,
+      "gas": 52872,
       "limit": 60000
     },
     "recovery minter prepared at 63 dictionary forks": {
-      "gas": 55736,
+      "gas": 55868,
       "limit": 80000
     },
     "recovery wallet confirm at 512 receipts": {
@@ -361,7 +361,7 @@
       "limit": 80000
     },
     "step minter already consumed": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "step minter burn": {
@@ -369,11 +369,11 @@
       "limit": 48000
     },
     "step minter consumed mint": {
-      "gas": 19256,
+      "gas": 19584,
       "limit": 80000
     },
     "step minter consumed void": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "step minter deploy 16 buckets": {
@@ -381,11 +381,11 @@
       "limit": 800000
     },
     "step minter range consumed": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "step minter range rejected": {
-      "gas": 16361,
+      "gas": 16493,
       "limit": 80000
     },
     "step wallet burn": {

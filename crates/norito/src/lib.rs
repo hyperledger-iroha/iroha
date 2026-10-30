@@ -9735,6 +9735,65 @@ fn checked_canonical_header(bytes: &[u8]) -> Result<core::Header, Error> {
     Ok(header)
 }
 
+/// Validate only the canonical header policy before admitting caller-owned source storage.
+///
+/// This uses the same header kernel and error precedence as canonical decoding,
+/// without allocating decoder controls or inspecting payload fields. It checks
+/// header syntax, compression and flags only. Schema, padding, payload extent,
+/// checksum and field canonicality remain unauthenticated until the actual
+/// canonical decoder completes; success grants no authority to interpret a payload.
+///
+/// # Errors
+/// Preserves the original typed canonical header failure without formatting it.
+pub fn validate_canonical_header(bytes: &[u8]) -> Result<(), core::DecodeAttemptError> {
+    core::classify_decode_attempt(|| checked_canonical_header(bytes).map(|_| ()))
+}
+
+#[cfg(test)]
+mod canonical_header_policy_tests {
+    use super::*;
+
+    #[test]
+    fn header_policy_matches_canonical_header_precedence_before_pool_admission() {
+        let bytes = encode_canonical(&19_u32).unwrap();
+        validate_canonical_header(&bytes).unwrap();
+        assert_eq!(decode_canonical::<u32>(&bytes).unwrap(), 19);
+        let exhausted = iroha_allocation::AllocationBudget::new(0);
+        let mut invalid = bytes.clone();
+        invalid[0] ^= 0x80;
+        for malformed in [&invalid[..], &bytes[..4]] {
+            let expected = validate_canonical_header(malformed)
+                .unwrap_err()
+                .into_error();
+            let CanonicalDecodeControlError::Decode(actual) =
+                decode_canonical_with_owned_controls::<u32>(
+                    malformed,
+                    canonical_decode_limits(malformed.len()),
+                    &exhausted,
+                )
+                .unwrap_err()
+            else {
+                panic!("malformed header must precede original pool admission");
+            };
+            assert_eq!(
+                format!("{:?}", actual.into_error()),
+                format!("{expected:?}")
+            );
+        }
+        assert_eq!(exhausted.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn header_policy_never_authenticates_the_payload_or_complete_frame() {
+        let mut bytes = encode_canonical(&19_u32).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        validate_canonical_header(&bytes).unwrap();
+        assert!(decode_canonical::<u32>(&bytes).is_err());
+        validate_canonical_header(&bytes[..core::Header::SIZE]).unwrap();
+        assert!(decode_canonical::<u32>(&bytes[..core::Header::SIZE]).is_err());
+    }
+}
+
 /// Borrow the payload of one uncompressed canonical-layout frame without decoding its graph.
 ///
 /// This authenticates only the version, flags, schema, exact padding, length and checksum.
@@ -9824,7 +9883,9 @@ where
 }
 
 mod prepared_canonical;
-pub use prepared_canonical::PreparedCanonicalDecode;
+pub use prepared_canonical::{
+    CanonicalDecodeControlError, PreparedCanonicalDecode, decode_canonical_with_owned_controls,
+};
 
 enum CanonicalDecodeScope<'a> {
     Ordinary(DecodeLimits),

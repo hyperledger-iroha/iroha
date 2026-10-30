@@ -600,16 +600,22 @@ fn quartic_replay_degree_work_and_scoped_residency_fit_unchanged_limits() {
         134_217_728
     );
     assert_eq!(MainShaUnionPlanV1::private_owner_charge_v1(), 268_444_160);
-    let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
-        &AggregateProofLayoutV1::for_full_profile_v1().unwrap(),
-        288_345_698,
-    )
-    .unwrap();
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
     assert!(
-        policy
-            .reserve_additional_v1(MainShaUnionPlanV1::private_owner_charge_v1())
+        joint
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::ShaUnion)
             .is_ok()
     );
+    let policy =
+        main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
+            .unwrap();
+    // This reproduces the old double charge that rejected the measured fixture
+    // after all49 registrations: union work is now inside the arithmetic phase.
+    assert!(matches!(
+        policy.reserve_additional_v1(MainShaUnionPlanV1::private_owner_charge_v1()),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
     assert_eq!(MainShaUnionPlanV1::public_owner_charge_v1(), 7_528);
 }
 
@@ -751,4 +757,97 @@ fn projection_union_batch_keeps_and_erases_every_private_allocation() {
     let mut short = vec![vec![F(3); 4]; 5];
     assert!(prepare_union_batch_v1(&mut short, 5).is_err());
     assert!(short.iter().flatten().all(|value| *value == F(3)));
+}
+
+#[test]
+fn union_construction_refuses_unadmitted_accumulator_shape_before_source_replay() {
+    let (layout, plan) = plan_v1();
+    let policy = main_bounded_transform::MainBoundedTransformPolicyV1::cpu_v1();
+    let alphas = [E::ONE; UNION_QUOTIENTS_V1];
+    let mut oversized_lane = Vec::with_capacity(COMPOSITION_DEGREE_CHUNKS + 1);
+    oversized_lane.resize_with(COMPOSITION_DEGREE_CHUNKS, Vec::new);
+    for mut accumulator in [
+        Vec::new(),
+        vec![vec![]],
+        vec![oversized_lane],
+        vec![vec![Vec::new(); COMPOSITION_DEGREE_CHUNKS + 1]],
+    ] {
+        let mut source_calls = 0;
+        assert_eq!(
+            plan.accumulate_with_v1(&layout, &alphas, policy, &mut accumulator, |_, _| {
+                source_calls += 1;
+                Err(ZkX509StarkErrorV1::InternalInvariant)
+            }),
+            Err(ZkX509StarkErrorV1::ProfileMismatch)
+        );
+        assert_eq!(source_calls, 0);
+    }
+}
+
+#[test]
+#[ignore = "full-shape SHA union construction, 416 native FFTs and one log22 Fp4 inverse"]
+fn measured_maximum_assembly_constructs_full_sha_union_with_exact_known_coefficients() {
+    let (layout, plan) = plan_v1();
+    let policy =
+        main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
+            .unwrap();
+    let cap = layout
+        .as_shared()
+        .unwrap()
+        .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+        .unwrap();
+    let mut accumulator = ZeroizingExtensionLanesV1::new(
+        vec![
+            (0..COMPOSITION_DEGREE_CHUNKS)
+                .map(|_| Vec::with_capacity(cap))
+                .collect(),
+        ],
+        zeroize_extension_lanes_v1,
+    );
+    let mut alphas = [E::ONE; UNION_QUOTIENTS_V1];
+    alphas[20] = E::canonical([2, 3, 5, 7]).unwrap();
+    let mask = F(11);
+    let mut replay_calls = 0;
+    let start = std::time::Instant::now();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(20)
+        .build()
+        .unwrap()
+        .install(|| {
+            plan.accumulate_with_v1(&layout, &alphas, policy, &mut accumulator, |column, _| {
+                replay_calls += 1;
+                let native_rows = 1 << layout.trace_groups[column.group].native_trace_log2;
+                let mut original = zeroed_main_trace_column_v1(native_rows + MASK_DEGREE + 1)?;
+                original.0[0] = F::ONE;
+                if column == plan.projection[0] {
+                    // Native values remain1; an independent original mask
+                    // adds11*(X^32768-1). The resulting endpoint quotient is
+                    // exactly11*(1+X+...+X^32767), with no other contribution.
+                    original.0[0] = F::ONE.sub(mask);
+                    original.0[native_rows] = mask;
+                }
+                Ok(vec![original])
+            })
+            .unwrap();
+        });
+    assert_eq!(replay_calls, 52);
+    let expected = alphas[20].mul_base(mask);
+    assert!(accumulator[0][0].len() >= 1 << 15);
+    for (chunk_index, chunk) in accumulator[0].iter().enumerate() {
+        for (degree, actual) in chunk.iter().enumerate() {
+            assert_eq!(
+                *actual,
+                if chunk_index == 0 && degree < 1 << 15 {
+                    expected
+                } else {
+                    E::ZERO
+                },
+                "chunk {chunk_index}, coefficient {degree}"
+            );
+        }
+    }
+    eprintln!(
+        "full_sha_union_construction assembly=215244730 native_forward=416 original_replays={replay_calls} log22_inverse=1 elapsed_seconds={:.6}",
+        start.elapsed().as_secs_f64()
+    );
 }

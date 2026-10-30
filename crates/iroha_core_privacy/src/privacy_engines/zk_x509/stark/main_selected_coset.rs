@@ -30,6 +30,24 @@ pub(super) fn prefer_horner_v1(
         && selected_count <= 2176
 }
 
+/// The measured eight-column query batch shares public DIF traversal/twiddles.
+/// Singleton batches retain the device route; only public shape selects work.
+pub(super) fn prefer_pruned_fft_v1(
+    native_log: u8,
+    common_log: u8,
+    coefficient_count: usize,
+    selected_count: usize,
+    columns: usize,
+) -> bool {
+    common_log == 22
+        && matches!(native_log, 15 | 16 | 18 | 19)
+        && columns == 8
+        && coefficient_count > 0
+        && coefficient_count <= (1usize << native_log) + MASK_DEGREE + 1
+        && selected_count > 0
+        && selected_count <= 272
+}
+
 /// Evaluate unchanged masked coefficients at the selected canonical coset rows.
 /// Full input validation precedes private writes; output/index storage is reused
 /// so the only field allocations are `rows` scratch plus `selected.len()` output.
@@ -245,6 +263,30 @@ fn prune_v1<const INNER_PARALLEL: bool>(
 #[cfg(test)]
 #[path = "main_selected_coset_tests.rs"]
 mod tests;
+
+#[path = "main_selected_batch.rs"]
+mod batch;
+
+/// Evaluate the measured selected batch with one interleaved scratch matrix.
+/// Every coefficient, including the complete mask tail, keeps its original value.
+pub(super) fn evaluate_batched_v1(
+    coefficients: &[Column],
+    native_log: u8,
+    common_log: u8,
+    selected: &[usize],
+) -> Result<Vec<Column>, AggregateStarkErrorV1> {
+    batch::evaluate_batch_v1(coefficients, native_log, common_log, selected)
+}
+
+#[cfg(test)]
+pub(super) fn observe_batch_clear_v1<T>(
+    operation: impl FnOnce() -> T,
+) -> (
+    T,
+    Vec<crate::privacy_engines::zk_x509::private_table::inspection::ErasureObservationV1>,
+) {
+    batch::observe_clear_v1(operation)
+}
 
 /// Evaluate requested public points without allocating a full-domain FFT output.
 /// Output chunks contain 128 public points, avoiding recursive FFT task wakes;

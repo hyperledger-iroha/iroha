@@ -7,11 +7,18 @@
 //! client must join against (lanes, dataspaces, routing rules and the autoscale range) and
 //! treats every other field as opaque bytes. Every decoded value must re-encode to its exact
 //! original bytes. Golden tests in `iroha_config` keep the writer and this grammar aligned:
-//! a field added to the projection must also be added to [`tag`] and to the grammar here.
+//! a field added to the projection must also be added to [`tag`], to the grammar here and to
+//! the field-level rendering in [`nexus_amx_context_fields_v1`].
 use super::{LaneConsensusProjectionV1, LaneVisibility};
 use iroha_model_base::topology::{DataSpaceId, LaneId};
 use norito::codec::{Decode, Encode};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt};
+
+mod fields;
+pub use fields::{
+    NexusAmxContextFieldDiffV1, NexusAmxContextFieldOriginV1, NexusAmxContextFieldV1,
+    diff_nexus_amx_context_v1, nexus_amx_context_fields_v1,
+};
 
 /// Domain prefix of every Nexus/AMX context preimage.
 pub const NEXUS_AMX_CONTEXT_DOMAIN_V1: &[u8] = b"sumeragi:nexus-amx-context\0v1";
@@ -257,6 +264,41 @@ impl NexusAmxContextWriterV1 {
     #[must_use]
     pub fn finish(self) -> Vec<u8> {
         self.0
+    }
+}
+
+/// The exact Nexus/AMX context preimage a node derived, retained by a refusal as evidence.
+///
+/// `Debug` shows its length and hash, not its bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct NexusAmxContextPreimageV1(Vec<u8>);
+
+impl NexusAmxContextPreimageV1 {
+    /// Retain derived preimage bytes.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// The exact preimage bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// The commitment of the preimage, as signed genesis records it.
+    #[must_use]
+    pub fn hash(&self) -> iroha_crypto::Hash {
+        iroha_crypto::Hash::new(&self.0)
+    }
+}
+
+impl fmt::Debug for NexusAmxContextPreimageV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NexusAmxContextPreimageV1")
+            .field("len", &self.0.len())
+            .field("hash", &self.hash())
+            .finish()
     }
 }
 
@@ -1042,5 +1084,33 @@ mod tests {
             decode_nexus_amx_context_v1(&out),
             Err(NexusAmxContextError::Structure(_))
         ));
+    }
+    #[test]
+    fn retired_staking_and_fee_tags_are_rejected_by_the_canonical_grammar() {
+        let preimage = sample();
+        let fields = Fields::tokenize(&preimage).unwrap().fields;
+        for (expected, retired) in [
+            (
+                tag::STAKING_MAX_VALIDATORS,
+                "nexus.staking.min_validator_stake",
+            ),
+            (tag::ROOT_FEE_POLICY, "nexus.fees.asset"),
+        ] {
+            let mut changed = NEXUS_AMX_CONTEXT_DOMAIN_V1.to_vec();
+            for &(field, value) in &fields {
+                let field = if field == expected { retired } else { field };
+                changed.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
+                changed.extend_from_slice(field.as_bytes());
+                changed.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
+                changed.extend_from_slice(value);
+            }
+            assert_eq!(
+                decode_nexus_amx_context_v1(&changed),
+                Err(NexusAmxContextError::UnexpectedTag {
+                    expected,
+                    found: Some(retired.to_owned()),
+                })
+            );
+        }
     }
 }

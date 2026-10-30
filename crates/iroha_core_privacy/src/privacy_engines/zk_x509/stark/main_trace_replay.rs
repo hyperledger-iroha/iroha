@@ -1253,8 +1253,9 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 }
 
 impl MainTraceReplaySourcesV1<'_, '_> {
-    /// Extract each DER, SHA and arithmetic/value base or bound auxiliary run once, preserving
-    /// public group/registration order and the closed base/bound phase.
+    /// Extract each grouped native run once, including P-256 arithmetic/value
+    /// and window/sink auxiliary batches, preserving public registration order
+    /// and the closed base/bound phase.
     pub(super) fn native_columns_v1(
         &self,
         layout: &AggregateProofLayoutV1,
@@ -1615,6 +1616,45 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                             &mut targets[..count],
                         )?;
                     }
+                }
+                output.extend(batch);
+                first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
+                continue;
+            }
+            if registration.trace_group == 3
+                && matches!(kind, MainTraceColumnKindV1::Aux)
+                && let Self::Bound { log19, .. } = self
+            {
+                let provider = MainP256Log16TraceGroupSourceV1::for_bound_v1(layout, &log19.p256)?;
+                let binding = provider.binding_v1(registration)?;
+                let end = columns.end.min(registration.aux_end()?);
+                if end <= first {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let mut batch = (first..end)
+                    .map(|_| zeroed_main_trace_column_v1(registration.segment.trace_size()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                {
+                    let count = batch.len();
+                    let mut targets: [&mut [F]; aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1] =
+                        core::array::from_fn(|_| -> &mut [F] { &mut [] });
+                    for (target, column) in targets.iter_mut().zip(batch.iter_mut()) {
+                        *target = &mut **column;
+                    }
+                    log19.p256.fill_log16_aux_columns_v1(
+                        binding.p256,
+                        local,
+                        &mut targets[..count],
+                    )?;
+                }
+                if batch
+                    .iter()
+                    .flat_map(|column| column.iter())
+                    .any(|value| F::canonical(value.0).is_none())
+                {
+                    return Err(ZkX509StarkErrorV1::P256Witness);
                 }
                 output.extend(batch);
                 first = end;

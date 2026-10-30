@@ -757,6 +757,8 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
         measurement_context,
         harness_directory,
     );
+    #[cfg(target_os = "macos")]
+    fastpq_prover::enable_queue_depth_stats(true);
     let start = Instant::now();
     let public_capture = PublicFixtureDiagnosticGuardV1::begin_v1(&directory);
     let produced = catch_private_prover_panic_v1(|| {
@@ -772,6 +774,20 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     });
     drop(public_capture);
     let prove_elapsed = start.elapsed();
+    #[cfg(target_os = "macos")]
+    {
+        let staging = fastpq_prover::take_column_staging_stats();
+        fastpq_prover::enable_queue_depth_stats(false);
+        if let Some(staging) = staging {
+            let fft = staging.fft();
+            record(format!(
+                "metal_fft_staging_batches={}\nmetal_fft_flatten_seconds={:.6}\nmetal_fft_wait_seconds={:.6}",
+                fft.batches,
+                fft.flatten_ms / 1_000.0,
+                fft.wait_ms / 1_000.0,
+            ));
+        }
+    }
     // A failed producer is retained in the shared record as a raw failure;
     // only these two literals are recorded, never the error payload.
     match &produced {

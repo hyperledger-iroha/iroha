@@ -31,6 +31,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 
+pub(in crate::smartcontracts::isi) mod preflight;
+pub(super) use preflight::PreparedReleases;
+
 /// Decimal scale of Taira XOR; every SCCP amount is in these Taira units (§0, §3.2).
 pub const SCCP_XOR_SCALE: u32 = 9;
 
@@ -186,21 +189,8 @@ pub(super) fn precheck_releases(
     network: SccpNetworkV1,
     credits: &[Option<(&AccountId, u128)>; 2],
 ) -> Result<(), (usize, Error)> {
-    if credits.iter().all(Option::is_none) {
-        return Ok(());
-    }
-    let escrow = escrow_asset(&*state_transaction.world, network).map_err(|error| (0, error))?;
-    // The type bounds the batch to two credits; compact occupied slots in their
-    // original order and finish every conversion before running any movement guard.
-    let mut converted = [None, None];
-    for (index, (to, amount)) in credits.iter().flatten().enumerate() {
-        let amount = xor_quantity(*amount).map_err(|error| (index, error))?;
-        converted[index] = Some((
-            AssetId::of(escrow.definition().clone(), (*to).clone()),
-            amount,
-        ));
-    }
-    asset_isi::precheck_sccp_escrow_releases(state_transaction, &escrow, &converted)
+    PreparedReleases::new(state_transaction, network, credits)?
+        .map_or(Ok(()), |prepared| prepared.check(state_transaction))
 }
 
 /// Book `amount` Taira units that stay in `network`'s escrow as `stranded(route)` (§4.16).
@@ -232,6 +222,19 @@ pub fn strand(
 #[must_use]
 pub fn is_escrow(world: &(impl WorldReadOnly + ?Sized), account: &AccountId) -> bool {
     store::routes::iter(world).any(|(_, route)| route.escrow == *account)
+}
+
+/// Return whether `account` is the escrow id of one of `network_id`'s routes. Escrow ids
+/// derive from the `NetworkId` alone, so this holds before `InitializeSccpV1` creates them.
+///
+/// Parameters naming accounts that protocol custody credits or debits without the escrow
+/// guards (the staking slash sink and stake escrow, the moderation challenge custody) refuse
+/// these ids when they are set, so no penalty can move value in or out of an escrow (§4.15).
+#[must_use]
+pub fn is_route_escrow_id(network_id: &NetworkId, account: &AccountId) -> bool {
+    SCCP_ROUTE_NETWORKS_V1
+        .into_iter()
+        .any(|network| escrow_account(network_id, network).as_ref() == Some(account))
 }
 
 #[cfg(test)]

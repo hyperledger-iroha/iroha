@@ -13729,11 +13729,6 @@
             "governance.slash_ineligible_proof_bps",
             "governance.alias_teu_minimum",
             "governance.jdg_signature_schemes",
-            "governance.runtime_upgrade_provenance.mode",
-            "governance.runtime_upgrade_provenance.require_sbom",
-            "governance.runtime_upgrade_provenance.require_slsa",
-            "governance.runtime_upgrade_provenance.trusted_signers",
-            "governance.runtime_upgrade_provenance.signature_threshold",
             "governance.viral.incentive_pool_account",
             "governance.viral.escrow_account",
             "governance.viral.reward_asset_definition_id",
@@ -15342,8 +15337,9 @@
       },
       {
         "path": "crates/iroha_config/src/parameters/defaults.rs",
-        "reason": "Local storage budgets of a Nexus node (hot WSV memory, the enforcement scan interval, the pending evidence peer-key pool) and the retry and backlog limits of its relay worker: process-local pools and schedules that the consensus-policy digest leaves out. Exhausting one defers local work.",
+        "reason": "Local storage budgets of a Nexus node (the cap on filesystem headroom reserved from automatic storage sizing, hot WSV memory, the enforcement scan interval, the pending evidence peer-key pool) and the retry and backlog limits of its relay worker: process-local pools and schedules that the consensus-policy digest leaves out. Exhausting one defers local work.",
         "symbols": [
+          "AUTO_STORAGE_HEADROOM_MAX_BYTES",
           "BUDGET_ENFORCE_INTERVAL_BLOCKS",
           "MAX_WSV_MEMORY_BYTES",
           "CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES"
@@ -15352,6 +15348,7 @@
           "pub mod nexus {"
         ],
         "exprs": {
+          "AUTO_STORAGE_HEADROOM_MAX_BYTES": "64 * 1024 * 1024 * 1024",
           "BUDGET_ENFORCE_INTERVAL_BLOCKS": "10",
           "MAX_WSV_MEMORY_BYTES": "Bytes(8 * 1024 * 1024 * 1024)",
           "CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES": "4 * 31 * iroha_data_model::sumeragi_lanes::MAX_LANE_CUSTODY_SIGNERS * CONSENSUS_EVIDENCE_PENDING_PEER_KEY_BYTES"
@@ -15719,6 +15716,16 @@
         "exprs": {
           "P2P_ENCRYPTION_OVERHEAD_BYTES": "core::mem::size_of::<Nonce<ChaCha20Poly1305>>() + core::mem::size_of::<Tag<ChaCha20Poly1305>>()",
           "MAX_WIRE_ENCRYPTED_FRAME_BYTES": "u32::MAX as usize"
+        }
+      },
+      {
+        "path": "crates/iroha_p2p/src/lib.rs",
+        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md §6, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
+        "symbols": [
+          "MAX_HANDSHAKE_HOST_PROFILES"
+        ],
+        "exprs": {
+          "MAX_HANDSHAKE_HOST_PROFILES": "8"
         }
       },
       {
@@ -21799,7 +21806,7 @@
         ]
       },
       {
-        "reason": "Durations compared by name: lifetimes, TTLs, grace periods and a cache-prune interval, in milliseconds or seconds, and the longest Parliament lifecycle window, enactment delay, ballot notice and casting window (seven days). A time window is not a byte, count or work bound.",
+        "reason": "Durations compared by name: lifetimes, TTLs, grace periods and a cache-prune interval, a local finality-read retry pause cap, in milliseconds or seconds, and the longest Parliament lifecycle window, enactment delay, ballot notice and casting window (seven days). A time window is not a byte, count or work bound.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/sorafs/moderation_ledger.rs",
@@ -21864,6 +21871,15 @@
             "exprs": {
               "MAX_VOTE_NOTICE_MS": "604_800_000",
               "MAX_CASTING_WINDOW_MS": "604_800_000"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/finality_interval.rs",
+            "symbols": [
+              "LADDER_STEP_RETRY_CAP"
+            ],
+            "exprs": {
+              "LADDER_STEP_RETRY_CAP": "Duration::from_secs(300)"
             }
           }
         ]
@@ -25418,7 +25434,6 @@
           {
             "exprs": {
               "MAX_LEAD": "16",
-              "RECENT": "64",
               "MAX_ADVANCE": "1_024",
               "MAX_COVERAGE_AGE": "Duration::from_secs(30 * 60)",
               "SCRUB_CHUNK": "128"
@@ -25426,7 +25441,6 @@
             "path": "crates/iroha_core/src/sumeragi/finality/retained.rs",
             "symbols": [
               "MAX_LEAD",
-              "RECENT",
               "MAX_ADVANCE",
               "MAX_COVERAGE_AGE",
               "SCRUB_CHUNK"
@@ -25548,6 +25562,68 @@
         "exprs": {
           "NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES": "16 * 1024"
         }
+      },
+      {
+        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof.",
+        "files": [
+          {
+            "path": "crates/iroha_data_model/src/parameter/runtime_upgrade_policy.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "1_024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/parameter/runtime_emergency_panel.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "16 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/parameter/runtime_provenance_policy.rs",
+            "symbols": [
+              "MAX_PAYLOAD_BYTES"
+            ],
+            "exprs": {
+              "MAX_PAYLOAD_BYTES": "16 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/runtime/definition.rs",
+            "symbols": [
+              "MAX_DEFINITION_TEXT_BYTES",
+              "MAX_DEFINITION_REFERENCES",
+              "MAX_CARRIER_NODES",
+              "MAX_CARRIER_DEPTH",
+              "MAX_CARRIER_MEMBERS",
+              "MAX_CARRIER_LENGTH_BOUND",
+              "MAX_INITIAL_BYTES"
+            ],
+            "exprs": {
+              "MAX_DEFINITION_TEXT_BYTES": "192",
+              "MAX_DEFINITION_REFERENCES": "4096",
+              "MAX_CARRIER_NODES": "256",
+              "MAX_CARRIER_DEPTH": "16",
+              "MAX_CARRIER_MEMBERS": "64",
+              "MAX_CARRIER_LENGTH_BOUND": "1 << 20",
+              "MAX_INITIAL_BYTES": "64 * 1024"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/runtime/lifecycle.rs",
+            "symbols": [
+              "ENDORSEMENT_LIFETIME_MS"
+            ],
+            "exprs": {
+              "ENDORSEMENT_LIFETIME_MS": "30 * 60 * 1000"
+            }
+          }
+        ]
       }
     ],
     "literals": {
@@ -26560,6 +26636,12 @@
               "path": "crates/iroha_core_zk/src/bin/kagemusha_wallet_artifacts/session.rs",
               "sites": {
                 "(1..=3600).contains(&request.token_lifetime_seconds)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/finality_interval.rs",
+              "sites": {
+                "(pause * 2).min(LADDER_STEP_RETRY_CAP)": 1
               }
             }
           ]
@@ -29134,6 +29216,23 @@
               "path": "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/scheduling/archive_admission.rs",
               "sites": {
                 "count >= 16": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Runtime governance record rules of the live-upgrade foundation: the emergency panel's threshold must be at least two thirds of each panel (the literals are the terms of that ratio), and a runtime definition's names, wire IDs, namespaces and codecs are printable ASCII (the literals are the code points 0x20 and 0x7E). A quorum fraction and a character class bound no size, count or work.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/parameter/runtime_emergency_panel.rs",
+              "sites": {
+                "3 * threshold < 2 * size": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/runtime/definition.rs",
+              "sites": {
+                "(0x20..=0x7e).contains(&byte)": 1
               }
             }
           ]

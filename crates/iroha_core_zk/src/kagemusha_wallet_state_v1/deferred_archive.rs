@@ -6,6 +6,10 @@
 
 use super::*;
 
+// Native Request setup rejects the zero identity. The current authenticated sessions
+// map selects this bounded metadata leaf without changing the fixed Manifest layout.
+const DEFERRED_INDEX_KEY: [u8; 32] = [0; 32];
+
 mod clock;
 mod drain;
 pub use drain::{DeferredArchiveDrainV1, DeferredArchiveWaitV1};
@@ -182,6 +186,38 @@ impl DeferredIndex {
 }
 
 impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
+    pub(super) fn deferred_archive_index(
+        &mut self,
+        manifest: &manifest::Manifest,
+    ) -> Result<DeferredIndex, Error> {
+        let Some(bytes) = manifest
+            .sessions
+            .get(&mut self.archive, &DEFERRED_INDEX_KEY)?
+        else {
+            // Only authenticated absence means no deferred intake was ever selected.
+            return Ok(DeferredIndex::default());
+        };
+        let index: DeferredIndex = archive::decode(&bytes)?;
+        index.validate()?;
+        Ok(index)
+    }
+
+    fn select_deferred_archive_index(
+        &mut self,
+        manifest: &mut manifest::Manifest,
+        index: &DeferredIndex,
+    ) -> Result<(), Error> {
+        index.validate()?;
+        manifest.sessions = manifest.sessions.set(
+            &mut self.archive,
+            DEFERRED_INDEX_KEY,
+            &archive::encode(index)?,
+        )?;
+        // This stages an immutable path only. The caller's existing compare-and-publish
+        // barrier must durably select it before acknowledging any queue transition.
+        Ok(())
+    }
+
     fn deferred_handle(&self, identity: [u8; 32]) -> DeferredArchiveReceiptV1 {
         DeferredArchiveReceiptV1 {
             scheme: self.scheme_id,
@@ -296,17 +332,17 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Err(Error::Invalid("deferred Credited size"));
         }
         let (selected, mut manifest) = self.sync_manifest()?;
-        manifest.deferred_archive.validate()?;
+        let mut index = self.deferred_archive_index(&manifest)?;
         let binding = self.committed_send_binding(send_request)?;
         let identity =
             NativeIntentV1::archive_identity(&binding.capsule, &self.wallet_id, original);
-        if let Some((_, held)) = self.deferred_receipt(&manifest.deferred_archive, &identity)? {
+        if let Some((_, held)) = self.deferred_receipt(&index, &identity)? {
             if held != original {
                 return Err(Error::OperationConflict);
             }
             return Ok(self.deferred_handle(identity));
         }
-        let ordinal = manifest.deferred_archive.next_intake_ordinal()?;
+        let ordinal = index.next_intake_ordinal()?;
         self.require_deferred_archive_capacity(original.len(), false)?;
         let first_unix_ms = observe();
         let original = self
@@ -322,17 +358,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             first_unix_ms,
             state: ReceiptState::Unverified,
         };
-        manifest.deferred_archive.receipts = manifest.deferred_archive.receipts.set(
-            &mut self.archive,
-            identity,
-            &archive::encode(&record)?,
-        )?;
-        manifest.deferred_archive.unverified = manifest.deferred_archive.unverified.set(
-            &mut self.archive,
-            order_key(ordinal),
-            &identity,
-        )?;
-        manifest.deferred_archive.next_ordinal = ordinal;
+        index.receipts =
+            index
+                .receipts
+                .set(&mut self.archive, identity, &archive::encode(&record)?)?;
+        index.unverified =
+            index
+                .unverified
+                .set(&mut self.archive, order_key(ordinal), &identity)?;
+        index.next_ordinal = ordinal;
+        self.select_deferred_archive_index(&mut manifest, &index)?;
         // This source-selection barrier drains grouped object writes before acknowledging
         // custody. A successful raw put alone would leave an undiscoverable staged receipt.
         self.publish_manifest(selected, &manifest)?;
@@ -344,7 +379,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     /// Pending custody, unavailable or missing selected receipt/index objects never mean empty.
     pub fn next_deferred_credited(&mut self) -> Result<Option<DeferredArchiveReceiptV1>, Error> {
         let (_, manifest) = self.sync_manifest()?;
-        let index = &manifest.deferred_archive;
+        let index = self.deferred_archive_index(&manifest)?;
         index.validate()?;
         let Some((key, value)) = index
             .unverified
@@ -356,7 +391,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             .try_into()
             .map_err(|_| Error::WitnessLost("deferred intake locator"))?;
         let receipt = self.deferred_handle(identity);
-        let (record, _) = self.require_deferred_receipt(index, &receipt)?;
+        let (record, _) = self.require_deferred_receipt(&index, &receipt)?;
         if record.state != ReceiptState::Unverified || order_key(record.ordinal) != key {
             return Err(Error::WitnessLost("deferred intake order"));
         }
@@ -369,11 +404,11 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         state: ReceiptState,
     ) -> Result<(), Error> {
         let (selected, mut manifest) = self.sync_manifest()?;
-        let (mut record, _) = self.require_deferred_receipt(&manifest.deferred_archive, receipt)?;
+        let mut index = self.deferred_archive_index(&manifest)?;
+        let (mut record, _) = self.require_deferred_receipt(&index, receipt)?;
         if record.state != ReceiptState::Unverified {
             return Err(Error::WitnessLost("deferred verification state changed"));
         }
-        let index = &mut manifest.deferred_archive;
         if index
             .unverified
             .get(&mut self.archive, &order_key(record.ordinal))?
@@ -382,7 +417,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         {
             return Err(Error::WitnessLost("deferred verification intake"));
         }
-        if state == ReceiptState::Verified && self.deferred_send(index, &record.capsule)?.is_none()
+        if state == ReceiptState::Verified && self.deferred_send(&index, &record.capsule)?.is_none()
         {
             index.insert_ready(
                 &mut self.archive,
@@ -400,7 +435,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         index.unverified = index
             .unverified
             .remove(&mut self.archive, &order_key(record.ordinal))?;
-        index.validate()?;
+        self.select_deferred_archive_index(&mut manifest, &index)?;
         self.publish_manifest(selected, &manifest)?;
         Ok(())
     }
@@ -416,12 +451,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         receipt: &DeferredArchiveReceiptV1,
     ) -> Result<CreditProjectionV1, Error> {
         let (_, manifest) = self.sync_manifest()?;
-        let (record, original) =
-            self.require_deferred_receipt(&manifest.deferred_archive, receipt)?;
+        let index = self.deferred_archive_index(&manifest)?;
+        let (record, original) = self.require_deferred_receipt(&index, receipt)?;
         if record.state == ReceiptState::Rejected {
             return Err(Error::ReceiptRejected("deferred Credited rejected"));
         }
-        let existing = self.deferred_send(&manifest.deferred_archive, &record.capsule)?;
+        let existing = self.deferred_send(&index, &record.capsule)?;
         if record.state == ReceiptState::Unverified {
             self.require_deferred_archive_capacity(0, existing.is_none())?;
         }
@@ -454,11 +489,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 return Err(Error::ReceiptRejected("deferred Credited scheme"));
             }
             let anchor = if let Some(send) = &existing {
-                self.require_deferred_receipt(
-                    &manifest.deferred_archive,
-                    &self.deferred_handle(send.anchor),
-                )?
-                .1
+                self.require_deferred_receipt(&index, &self.deferred_handle(send.anchor))?
+                    .1
             } else {
                 original.clone()
             };
@@ -471,10 +503,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 return Err(Error::ReceiptRejected("deferred Credited Send binding"));
             }
             if let Some(send) = &existing {
-                let (_, anchor) = self.require_deferred_receipt(
-                    &manifest.deferred_archive,
-                    &self.deferred_handle(send.anchor),
-                )?;
+                let (_, anchor) =
+                    self.require_deferred_receipt(&index, &self.deferred_handle(send.anchor))?;
                 self.verified_delivery_with_anchor(&record.send_request, &anchor, &original)
             } else {
                 self.verified_delivery_projection(&record.send_request, &original)
@@ -535,7 +565,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
 
     fn selected_deferred_archive(&mut self) -> Result<SelectedDeferredArchive, Error> {
         let (_, manifest) = self.sync_manifest()?;
-        let index = &manifest.deferred_archive;
+        let index = self.deferred_archive_index(&manifest)?;
         index.validate()?;
         let first = index.ready.predecessor(&mut self.archive, &[255; 32])?;
         let (oldest, first_time) = if let Some((key, value)) = first {
@@ -543,10 +573,10 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 .try_into()
                 .map_err(|_| Error::WitnessLost("deferred ready locator"))?;
             let send = self
-                .deferred_send(index, &capsule)?
+                .deferred_send(&index, &capsule)?
                 .ok_or(Error::WitnessLost("deferred ready Send"))?;
             let receipt = self.deferred_handle(send.anchor);
-            let (record, original) = self.require_deferred_receipt(index, &receipt)?;
+            let (record, original) = self.require_deferred_receipt(&index, &receipt)?;
             if send.complete || key != order_key(record.ordinal) {
                 return Err(Error::WitnessLost("deferred ready order"));
             }
@@ -583,10 +613,10 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     ) -> Result<RequestStatusV1, Error> {
         self.status()?;
         let (_, manifest) = self.manifest()?;
-        let (record, original) =
-            self.require_deferred_receipt(&manifest.deferred_archive, &entry.receipt)?;
+        let index = self.deferred_archive_index(&manifest)?;
+        let (record, original) = self.require_deferred_receipt(&index, &entry.receipt)?;
         let send = self
-            .deferred_send(&manifest.deferred_archive, &record.capsule)?
+            .deferred_send(&index, &record.capsule)?
             .ok_or(Error::WitnessLost("deferred reconciliation Send"))?;
         if send.anchor != entry.receipt.identity
             || record.send_request != entry.send_request
@@ -600,9 +630,9 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(outcome);
         }
         let (selected, mut manifest) = self.sync_manifest()?;
-        let index = &mut manifest.deferred_archive;
+        let mut index = self.deferred_archive_index(&manifest)?;
         let mut current = self
-            .deferred_send(index, &record.capsule)?
+            .deferred_send(&index, &record.capsule)?
             .ok_or(Error::WitnessLost("deferred reconciliation binding"))?;
         if current.anchor != send.anchor || current.ordinal != send.ordinal || current.complete {
             return Err(Error::WitnessLost("deferred reconciliation changed"));
@@ -620,7 +650,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             record.capsule,
             &archive::encode(&current)?,
         )?;
-        index.validate()?;
+        self.select_deferred_archive_index(&mut manifest, &index)?;
         self.publish_manifest(selected, &manifest)?;
         Ok(outcome)
     }

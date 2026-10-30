@@ -1,4 +1,4 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+//! Native finite-field arithmetic for Iroha's standard-library builds.
 #![warn(
     unused,
     future_incompatible,

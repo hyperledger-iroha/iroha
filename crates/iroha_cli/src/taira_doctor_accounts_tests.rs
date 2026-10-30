@@ -37,6 +37,11 @@ mod doctor_account_tests {
             let report = run_doctor(&server.base_url, scope).unwrap();
             let requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("ok"));
+            assert!(
+                !requests
+                    .iter()
+                    .any(|request| path_only(&request.path) == "/v1/sccp/governance/readiness")
+            );
             for path in ["/v1/accounts/capabilities", "/v1/accounts/faucet/policy"] {
                 let request = requests
                     .iter()
@@ -201,6 +206,244 @@ mod doctor_account_tests {
             .find(|check| check["name"].as_str() == Some(name))
             .unwrap_or_else(|| panic!("doctor check {name}"))
     }
+    fn parliament_readiness() -> Value {
+        use iroha_sccp::api::{SccpGovernanceBodySizesV1, SccpGovernanceReadinessV1};
+        json::to_value(&SccpGovernanceReadinessV1 {
+            committed_height: 42,
+            eligible_citizens: None,
+            body_sizes: SccpGovernanceBodySizesV1 {
+                rules_committee: 5,
+                agenda_council: 5,
+                interest_panel: 5,
+                review_panel: 5,
+                coordination_council: 5,
+                policy_jury: 17,
+                confirmation_jury: 0,
+                oversight_committee: 5,
+                mpc_committee: 5,
+                fma_committee: 5,
+                alternates: 3,
+            },
+            active_beacon_session: Some([0x51; 32]),
+            beacon_matches_current_roster: true,
+            parliament_binding_ballot_available: false,
+            reconciliation_available: false,
+            attempt_latency_ms: None,
+            active_attempts: Vec::new(),
+        })
+        .unwrap()
+    }
+    fn run_parliament_response(response: MockResponse) -> (Result<()>, Value, Vec<MockRequest>) {
+        let server = spawn_mock_http(32, move |request| {
+            if path_only(&request.path) == "/v1/sccp/governance/readiness" {
+                MockResponse {
+                    status: response.status,
+                    content_type: response.content_type,
+                    headers: response.headers.clone(),
+                    body: response.body.clone(),
+                }
+            } else {
+                doctor_mock_response(request, None)
+            }
+        });
+        let mut output = WriterReportOutput {
+            write: Vec::new(),
+            output_format: CliOutputFormat::Json,
+        };
+        let result = Doctor {
+            public_root: server.base_url.clone(),
+            scope: DoctorScope::Basic,
+            parliament: true,
+            json: true,
+        }
+        .run_with_output(&mut output);
+        let requests = finish_mock(server);
+        let report = json::from_slice(&output.write).expect("doctor must emit its failure report");
+        (result, report, requests)
+    }
+    #[test]
+    fn doctor_parliament_reads_live_body_sizes_and_beacon_without_a_signer() {
+        let (result, report, requests) =
+            run_parliament_response(MockResponse::json(200, &parliament_readiness()));
+        result.unwrap();
+        assert_eq!(report_status(&report), Some("ok"));
+        let requests: Vec<_> = requests
+            .iter()
+            .filter(|request| path_only(&request.path) == "/v1/sccp/governance/readiness")
+            .collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        for header in [
+            "authorization",
+            "x-iroha-account",
+            "x-iroha-signature",
+            "x-iroha-onboarding-token",
+        ] {
+            assert!(requests[0].header_values(header).is_empty());
+        }
+        let body_sizes = doctor_check(&report, "parliament_body_sizes");
+        assert_eq!(body_sizes["ok"].as_bool(), Some(true));
+        let detail = body_sizes["detail"].as_str().unwrap();
+        assert!(detail.contains("42"));
+        assert!(detail.contains("\"policy_jury\":17"));
+        assert!(detail.contains("not a seating verdict"));
+        let beacon = doctor_check(&report, "parliament_global_beacon_session");
+        assert_eq!(beacon["ok"].as_bool(), Some(true));
+        assert!(
+            beacon["detail"]
+                .as_str()
+                .unwrap()
+                .contains(&hex::encode([0x51; 32]))
+        );
+        let warnings = report["warnings"].as_array().unwrap();
+        for name in [
+            "parliament_eligible_citizens",
+            "parliament_live_profile",
+            "parliament_attempt_progress",
+        ] {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|warning| warning.as_str().unwrap().starts_with(name))
+            );
+        }
+        assert!(warnings.iter().any(|warning| {
+            let warning = warning.as_str().unwrap();
+            warning.starts_with("parliament_launch: unavailable")
+                && warning.contains("binding_ballot_available=false")
+                && warning.contains("reconciliation_available=false")
+        }));
+    }
+    #[test]
+    fn doctor_parliament_missing_or_mismatched_beacon_fails_the_command_and_report() {
+        for (session, matches) in [
+            (Value::Null, false),
+            (Value::Null, true),
+            (json::to_value(&[0x51_u8; 32]).unwrap(), false),
+        ] {
+            let mut body = parliament_readiness();
+            body.as_object_mut()
+                .unwrap()
+                .insert("active_beacon_session".into(), session);
+            body.as_object_mut()
+                .unwrap()
+                .insert("beacon_matches_current_roster".into(), Value::from(matches));
+            let (result, report, _) = run_parliament_response(MockResponse::json(200, &body));
+            assert!(result.is_err());
+            assert_eq!(report_status(&report), Some("fail"));
+            assert_eq!(
+                doctor_check(&report, "parliament_global_beacon_session")["ok"].as_bool(),
+                Some(false)
+            );
+            assert!(
+                report["failures"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|failure| failure
+                        .as_str()
+                        .unwrap()
+                        .contains("parliament_global_beacon_session"))
+            );
+        }
+    }
+    #[test]
+    fn doctor_parliament_reports_each_closed_launch_gate_without_claiming_authorization() {
+        for (ballot, reconciliation) in [(false, true), (true, false), (true, true)] {
+            let mut body = parliament_readiness();
+            body.as_object_mut().unwrap().insert(
+                "parliament_binding_ballot_available".into(),
+                Value::from(ballot),
+            );
+            body.as_object_mut().unwrap().insert(
+                "reconciliation_available".into(),
+                Value::from(reconciliation),
+            );
+            let (result, report, _) = run_parliament_response(MockResponse::json(200, &body));
+            result.unwrap();
+            let warnings = report["warnings"].as_array().unwrap();
+            assert_eq!(
+                warnings.iter().any(|warning| warning
+                    .as_str()
+                    .unwrap()
+                    .starts_with("parliament_launch: unavailable")),
+                !ballot || !reconciliation
+            );
+            assert!(warnings.iter().any(|warning| {
+                warning
+                    .as_str()
+                    .unwrap()
+                    .contains("diagnostics do not authorize launch")
+            }));
+        }
+    }
+    #[test]
+    fn doctor_parliament_rejects_unavailable_and_malformed_readiness() {
+        let mut missing_census = parliament_readiness();
+        missing_census
+            .as_object_mut()
+            .unwrap()
+            .remove("eligible_citizens");
+        let mut wrong_body_size = parliament_readiness();
+        wrong_body_size
+            .get_mut("body_sizes")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("policy_jury".into(), Value::from("9"));
+        for response in [
+            MockResponse::text(503, "unavailable"),
+            MockResponse::text(404, "missing"),
+            MockResponse::text(200, "not JSON"),
+            MockResponse::json(200, &missing_census),
+            MockResponse::json(200, &wrong_body_size),
+        ] {
+            let status = response.status;
+            let (result, report, _) = run_parliament_response(response);
+            assert!(result.is_err());
+            assert_eq!(report_status(&report), Some("fail"));
+            let check = doctor_check(&report, "parliament_readiness");
+            assert_eq!(check["ok"].as_bool(), Some(false));
+            assert_eq!(check["http_status"].as_u64(), Some(u64::from(status)));
+            assert!(!report["failures"].as_array().unwrap().is_empty());
+            assert!(
+                !report["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|check| check["name"].as_str() == Some("parliament_body_sizes"))
+            );
+        }
+    }
+    #[test]
+    fn doctor_parliament_transport_failure_still_emits_a_failed_report() {
+        let mut response = MockResponse::json(200, &parliament_readiness());
+        // The mock writes its real Content-Length first; this conflicting header makes the
+        // HTTP transport reject the response before JSON decoding.
+        response.headers.push(("Content-Length", "1".into()));
+        let (result, report, _) = run_parliament_response(response);
+        assert!(result.is_err());
+        assert_eq!(report_status(&report), Some("fail"));
+        let check = doctor_check(&report, "parliament_readiness");
+        assert_eq!(check["ok"].as_bool(), Some(false));
+        assert_eq!(check["http_status"].as_u64(), Some(0));
+        assert!(!report["failures"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn doctor_parliament_rejects_oversized_readiness() {
+        let response = MockResponse {
+            status: 200,
+            content_type: "application/json",
+            headers: Vec::new(),
+            body: vec![b' '; 16 * 1024 * 1024 + 1],
+        };
+        let (result, report, _) = run_parliament_response(response);
+        assert!(result.is_err());
+        assert_eq!(report_status(&report), Some("fail"));
+        let check = doctor_check(&report, "parliament_readiness");
+        assert_eq!(check["http_status"].as_u64(), Some(200));
+        assert!(check["detail"].as_str().unwrap().contains("byte limit"));
+    }
     #[test]
     fn doctor_checks_the_canonical_bond_against_the_live_faucet() {
         let seated = run_doctor_with_faucet_amount(None);
@@ -338,7 +581,7 @@ mod doctor_account_tests {
         for name in [
             "parliament_eligible_citizens",
             "parliament_live_profile",
-            "parliament_global_beacon_session",
+            "parliament_attempt_progress",
         ] {
             assert!(
                 warnings
@@ -355,9 +598,5 @@ mod doctor_account_tests {
         );
         // The report stays within the public-reset qualification bound for warnings.
         assert!(warnings.iter().all(|warning| warning.len() <= 1_024));
-        let mut report = norito::json!({"warnings": ["existing"]});
-        doctor_accounts::append_parliament_warnings(&mut report).unwrap();
-        assert_eq!(report["warnings"].as_array().unwrap().len(), 4);
-        assert!(doctor_accounts::append_parliament_warnings(&mut norito::json!({})).is_err());
     }
 }

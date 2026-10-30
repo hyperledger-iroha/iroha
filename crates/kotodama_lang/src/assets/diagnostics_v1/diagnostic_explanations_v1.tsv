@@ -1,6 +1,6 @@
 kotodama-diagnostic-explanations-v1	311
 code	phase	summary	help	bad_example	fixed_example
-E_ACCESS_INCOMPLETE	Semantic	the compiler could not prove a complete access set	The runtime must serialize conservatively; remove dynamic or opaque access if parallel execution is required.	-	-
+E_ACCESS_INCOMPLETE	Semantic	production access metadata could not be derived	For a literal trigger specification, supply an object with a valid `id` or a base64 JSON string containing a canonical Norito Trigger frame. Supported dynamic access uses conservative metadata; an undecodable literal is rejected in production.	-	-
 E_AMBIGUOUS_EXPORT	Resolve	multiple modules define the same declared package export	Keep exactly one module definition for each exported function.	-	-
 E_ASSET_NAME_INVALID	Semantic	an asset display name literal is not a valid asset name	Use a non-blank name of at most 128 characters without `#`, `@`, or control characters.	-	-
 E_AUTHORIZATION_STRING	Parse	authorization was written as an arbitrary string	Declare `permission Admin;` and use `authorize(Admin)`, or explicitly choose `authorize(anyone)`.	-	-

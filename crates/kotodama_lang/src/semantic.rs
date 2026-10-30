@@ -71,6 +71,7 @@ mod effect_sites;
 mod id_literals;
 #[cfg(test)]
 mod multifile_tests;
+pub(crate) mod trigger_literals;
 mod trigger_lowering;
 mod type_help;
 mod value_traits;
@@ -4411,6 +4412,13 @@ fn capture_builtin_argument_help(
     args: &[Expr],
     argument_types: &[Type],
 ) {
+    if error.code == "E_ACCESS_INCOMPLETE"
+        && builtin == Builtin::RegisterTrigger
+        && let Some(argument) = args.first()
+    {
+        context.capture_diagnostic(context.expression_source(argument), None);
+        return;
+    }
     if matches!(
         error.code,
         "E_INVALID_POINTER_LITERAL" | "E_POINTER_LITERAL_REQUIRED"
@@ -9728,6 +9736,15 @@ fn analyze_surface_builtin_call(
         | Builtin::TestActorPublicKey
         | Builtin::TestActorSign => {
             unreachable!("test helpers are validated before generic builtin analysis")
+        }
+        Builtin::RegisterTrigger => {
+            let call = analyze_fixed_builtin_call(builtin, arg_typed)?;
+            if !context.test_builtins_enabled
+                && let ExprKind::Call { args, .. } = call.kind()
+            {
+                trigger_literals::validate_registration_literal(&args[0])?;
+            }
+            Ok(call)
         }
         Builtin::BuildSubmitBallotInline => {
             let call = analyze_fixed_builtin_call(builtin, arg_typed)?;
@@ -19628,7 +19645,7 @@ mod tests {
             } }" => "parse ledger amount call", "whole literal must coerce exactly at a quantity boundary"; }
     #[rustfmt::skip]
     analyze_ok_tests! { canonical_trigger_operations_type_check: "fn f() { \
-                ledger::trigger::register(trigger_spec: Json::parse(\"{}\")); \
+                ledger::trigger::register(trigger_spec: Json::parse(\"{\\\"id\\\":\\\"wake\\\"}\")); \
                 ledger::trigger::unregister(trigger: Name::parse(\"wake\")); \
             }" => "parse canonical trigger operations", "analyze canonical trigger operations"; }
     include!("semantic/tests/trigger_semantics_tests.rs");

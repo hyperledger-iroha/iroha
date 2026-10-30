@@ -2467,54 +2467,6 @@ impl_default!(ViralIncentives => {
             campaign_cap: defaults::governance::viral_campaign_cap(),
         }
 });
-/// Runtime-upgrade provenance enforcement modes (actual layer).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeUpgradeProvenanceMode {
-    /// Provenance is optional; when provided it is verified.
-    Optional,
-    /// Provenance is required for runtime upgrade manifests.
-    Required,
-}
-impl RuntimeUpgradeProvenanceMode {
-    /// Return whether provenance is required.
-    #[inline]
-    #[must_use]
-    pub const fn is_required(self) -> bool {
-        matches!(self, Self::Required)
-    }
-}
-impl From<user::RuntimeUpgradeProvenanceMode> for RuntimeUpgradeProvenanceMode {
-    fn from(mode: user::RuntimeUpgradeProvenanceMode) -> Self {
-        match mode {
-            user::RuntimeUpgradeProvenanceMode::Optional => Self::Optional,
-            user::RuntimeUpgradeProvenanceMode::Required => Self::Required,
-        }
-    }
-}
-/// Runtime-upgrade provenance policy (actual layer).
-#[derive(Debug, Clone)]
-pub struct RuntimeUpgradeProvenancePolicy {
-    /// Enforcement mode for provenance.
-    pub mode: RuntimeUpgradeProvenanceMode,
-    /// Require at least one SBOM digest entry when provenance is present/required.
-    pub require_sbom: bool,
-    /// Require a non-empty SLSA attestation when provenance is present/required.
-    pub require_slsa: bool,
-    /// Trusted signer public keys.
-    pub trusted_signers: BTreeSet<PublicKey>,
-    /// Minimum number of trusted signatures required.
-    pub signature_threshold: usize,
-}
-impl_default!(RuntimeUpgradeProvenancePolicy => {
-        Self {
-            mode: RuntimeUpgradeProvenanceMode::Optional,
-            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
-            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            trusted_signers: BTreeSet::new(),
-            signature_threshold:
-                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
-        }
-});
 /// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParliamentTimedOvn {
@@ -2715,8 +2667,6 @@ pub struct Governance {
     pub debug_trace_pipeline: bool,
     /// Allowed JDG signature schemes for attestation validation.
     pub jdg_signature_schemes: BTreeSet<JdgSignatureScheme>,
-    /// Runtime upgrade provenance enforcement policy.
-    pub runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy,
     /// Viral incentive policy for social rewards.
     pub viral_incentives: ViralIncentives,
     /// `SoraFS` pin policy constraints enforced during manifest admission.
@@ -2823,7 +2773,6 @@ impl_default!(Governance => {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy::default(),
             viral_incentives: ViralIncentives::default(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
@@ -4341,30 +4290,6 @@ pub fn execution_policy_digest_v1(
             .iter()
             .map(|scheme| scheme.scheme_id())
             .collect::<Vec<_>>(),
-    );
-    let provenance = &governance.runtime_upgrade_provenance;
-    policy.push(
-        "governance.runtime_upgrade_provenance.mode",
-        &match provenance.mode {
-            RuntimeUpgradeProvenanceMode::Optional => 1_u8,
-            RuntimeUpgradeProvenanceMode::Required => 2,
-        },
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.require_sbom",
-        &provenance.require_sbom,
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.require_slsa",
-        &provenance.require_slsa,
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.trusted_signers",
-        &execution_policy_canonical_set(provenance.trusted_signers.iter()),
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.signature_threshold",
-        &execution_policy_usize(provenance.signature_threshold),
     );
     let viral = &governance.viral_incentives;
     policy.push(
@@ -10460,8 +10385,9 @@ pub struct StreamingCodec {
     pub cabac_mode: CabacMode,
     /// Trellis-enabled block sizes (empty until claim-avoidance ships).
     pub trellis_block_sizes: Vec<u16>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact.
-    pub rans_tables_path: PathBuf,
+    /// Operator-selected `SignedRansTablesV1` artefact. `None` uses the canonical tables compiled
+    /// into the binary ([`defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML`]).
+    pub rans_tables_path: Option<PathBuf>,
     /// Entropy mode advertised by manifests/headers.
     pub entropy_mode: EntropyMode,
     /// Bundle width used when `entropy_mode` enables bundled rANS.
@@ -10482,7 +10408,7 @@ impl StreamingCodec {
         Self {
             cabac_mode: CabacMode::Disabled,
             trellis_block_sizes: defaults::streaming::codec::trellis_blocks(),
-            rans_tables_path: defaults::streaming::codec::rans_tables_path(),
+            rans_tables_path: None,
             entropy_mode: EntropyMode::RansBundled,
             bundle_width: defaults::streaming::codec::bundle_width(),
             bundle_accel: BundleAcceleration::None,

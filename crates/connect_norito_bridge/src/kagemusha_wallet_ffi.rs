@@ -127,8 +127,8 @@ pub struct Failure {
     /// For unavailable/uncertain: 0 locked, 1 before first unlock, 2 busy, 3 I/O,
     /// 4 platform, 5 unusable key, 6 permanently invalidated. For custody loss:
     /// 100-105 lost-custody kind, 110-114 unavailable custody kind, 120 unexpected
-    /// entry. For invalid input/state: 200-209 state refusal, 220-241 provider
-    /// archive/marker refusal; see the C header's closed table. Otherwise -1.
+    /// entry, 130-168 state witness refusal. For invalid input/state: 200-209 state refusal,
+    /// 220-241 provider archive/marker refusal; see the C header's closed table. Otherwise -1.
     pub reason: i32,
     /// Original OS/platform error code; zero when inapplicable.
     pub platform_code: i32,
@@ -260,7 +260,50 @@ impl From<state::Error> for Failure {
                 _ => -1,
             }),
             E::Collected => Self::invalid(209),
-            E::WitnessLost(_) => Self::code(CUSTODY_LOST),
+            // Observe only the already-produced refusal. These static predicates cover
+            // coordinator initialization and its archive/index/fold reads during open.
+            // Unknown labels collapse to one code; never expose the label or touch custody.
+            E::WitnessLost(object) => Self::custody(match object {
+                "canonical archive record" => 131,
+                "provider archive authentication" => 132,
+                "archive manifest digest" => 133,
+                "archive manifest binding" => 134,
+                "archive manifest publication" => 135,
+                "manifest before bootstrap" => 136,
+                "manifest ahead of custody" => 137,
+                "manifest head conflict" => 138,
+                "indexed boundary" => 139,
+                "indexed boundary head" => 140,
+                "capsule chain" => 141,
+                "duplicate committed operation" => 142,
+                "duplicate committed Send" => 143,
+                "duplicate committed Receive" => 144,
+                "bootstrap boundary" => 145,
+                "selected capsule" => 146,
+                "capsule binding" => 147,
+                "released completion" => 148,
+                "completion binding" => 149,
+                "step metadata" => 150,
+                "indexed sequence" => 151,
+                "step index" => 152,
+                "selected preparation source snapshot" => 153,
+                "changed source custody" => 154,
+                "index object" => 155,
+                "index object digest" => 156,
+                "index node hash" => 157,
+                "index leaf size" => 158,
+                "index branch" => 159,
+                "index publication digest" => 160,
+                "duplicate committed fee claim" => 161,
+                "fee Request original" => 162,
+                "earned fee originals size" => 163,
+                "earned fee originals binding" => 164,
+                "fold head binding" => 165,
+                "fold index gap" => 166,
+                "recorded Ω" => 167,
+                "source-bound Ω identity" => 168,
+                _ => 130,
+            }),
             E::CreditConflict | E::OperationConflict => Self::code(CONFLICT),
             E::FoldRequired => Self::code(FOLD_REQUIRED),
             E::ArchiveAdmission(error) => {

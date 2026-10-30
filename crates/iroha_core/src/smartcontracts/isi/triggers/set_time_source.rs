@@ -19,7 +19,8 @@ use norito::core::EncodeWorkLimits;
 
 use super::{
     BorrowedTriggerFilter, BorrowedTriggerSourceReadOnly, ExecutableRef, SetTransaction, TriggerId,
-    contract_relation::{MergeKey, TriggerContractError, Work}, TriggeringEventType,
+    TriggeringEventType,
+    contract_relation::{MergeKey, TriggerContractError, Work},
 };
 
 /// Cumulative source admission for one enclosing operation; no clone or reset.

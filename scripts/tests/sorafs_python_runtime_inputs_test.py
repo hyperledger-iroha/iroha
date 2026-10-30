@@ -204,7 +204,7 @@ def test_fixed_dependency_pins_are_source_coupled_and_opaque(tmp_path):
     assert tuple(w.module for w in manifest.wheels)==dependencies.MODULES
     requirements=(ROOT/'scripts/requirements.txt').read_text()
     for name,version in dependencies.DIRECT_VERSIONS.items(): assert name+'=='+version in requirements
-    assert b'pytest==8.4.2' in (ROOT/'python/iroha_python/requirements-ci.lock').read_bytes()
+    assert b'pytest==9.2.0' in (ROOT/'python/iroha_python/requirements-ci.lock').read_bytes()
     assert not hasattr(manifest,'installed') and not hasattr(manifest,'qualified')
 
 

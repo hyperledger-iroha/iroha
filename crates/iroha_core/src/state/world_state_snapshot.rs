@@ -335,6 +335,7 @@ fn capture(
         accumulator: WorldStateAccumulator::empty(),
         direction: Direction::Capture,
         visited: vec![false; index.canonical],
+        installation: installation(index, world, Direction::Capture)?,
         snapshot: Some(snapshot),
         snapshot_field: None,
     };
@@ -349,7 +350,7 @@ fn capture(
         .snapshot
         .take()
         .ok_or("World snapshot collector is absent")?
-        .finish(index.schema)
+        .finish(selection_schema(world.runtime_selection.get())?)
 }
 
 // Complete reconstruction uses only private native journal preimages. The
@@ -359,7 +360,6 @@ fn reconstruct(
     cut: &CutCapsule,
     budget: &AllocationBudget,
 ) -> Result<CapturedSnapshot, WorldStateSnapshotError> {
-    let index = field_index().as_ref().map_err(Clone::clone)?;
     let count = usize::try_from(cut.entries).map_err(|e| e.to_string())?;
     let mut collector = SnapshotCollector::new(budget, count, 0)?;
     let mut seen = ChargedBuffer::new(cut.changes().len(), budget)?;
@@ -398,7 +398,9 @@ fn reconstruct(
             Some(_) => {}
         }
     }
-    let reconstructed = collector.finish(index.schema)?;
+    // Selections change at block start, never in an apply-time tail, so the cut keeps the
+    // captured World's schema.
+    let reconstructed = collector.finish(captured.snapshot.schema_hash)?;
     if reconstructed.snapshot.root().map_err(|e| e.to_string())? != cut.root {
         return Err("World cut complete preimages do not reconstruct certified R".into());
     }
@@ -649,7 +651,9 @@ impl State {
                 .try_block(&execution_budget)
                 .map_err(WorldStateSnapshotError::Acquisition)?;
             let expected = world.state_accumulator.get();
-            if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
+            if expected.root(world.runtime_selection.get())? != cut.applied_root
+                || expected.entries() != cut.applied_entries
+            {
                 return Err("World snapshot acquired another complete applied World".into());
             }
             require_names_read_authority(&world, authority)?;
@@ -666,13 +670,16 @@ impl State {
         })
     }
 
-    /// Exact schema commitment of this build's canonical native World registry.
-    /// Consumers must compare it with the authenticated snapshot before assigning
-    /// typed meaning to a field or proving that a typed key is absent.
+    /// Schema commitment `S` of the baseline selection a World of this release is founded on
+    /// (`specs/live_runtime_upgrades.md` §5.5). A snapshot taken after a change set installed
+    /// storage carries the `S` of the selection at its height instead; consumers compare a
+    /// snapshot's schema with the selection they trust before assigning typed meaning to a field
+    /// or proving that a typed key is absent.
     /// # Errors
-    /// The compiled registry has an invalid or inconsistent canonical schema.
+    /// The release catalog or its commitment profile is invalid.
     pub fn native_world_schema_hash_v1() -> Result<Hash, String> {
-        Ok(field_index().as_ref().map_err(Clone::clone)?.schema)
+        let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+        selection_schema(&catalog.baseline)
     }
 
     /// Publish complete current-state evidence and exact provider authority originals.
@@ -1111,7 +1118,9 @@ impl State {
                 .try_block(&execution_budget)
                 .map_err(WorldStateSnapshotError::Acquisition)?;
             let expected = world.state_accumulator.get();
-            if expected.root()? != cut.applied_root || expected.entries() != cut.applied_entries {
+            if expected.root(world.runtime_selection.get())? != cut.applied_root
+                || expected.entries() != cut.applied_entries
+            {
                 return Err("World snapshot acquired another complete applied World".into());
             }
             if let Some(authority) = read_authority {

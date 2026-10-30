@@ -630,7 +630,12 @@ pub fn curve_point_outside_g2() -> [u8; SIGNATURE_LEN] {
     let (y0, y1) = fq2_coordinates(&y);
     // The uncompressed Zcash form stores each coordinate as `c1 ‖ c0`.
     let mut uncompressed = [0_u8; EVM_SIGNATURE_LEN];
-    for (target, source) in uncompressed.chunks_exact_mut(FP_LEN).zip([x1, x0, y1, y0]) {
+    for (target, source) in uncompressed
+        .as_chunks_mut::<FP_LEN>()
+        .0
+        .iter_mut()
+        .zip([x1, x0, y1, y0])
+    {
         target.copy_from_slice(&source);
     }
     let point = G2Affine::from_uncompressed_unchecked(&uncompressed)

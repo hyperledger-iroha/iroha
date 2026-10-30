@@ -153,9 +153,9 @@ fn world_refuses_publication_before_complete_original_preparation() {
 #[test]
 fn world_publication_handle_keeps_one_allocation_across_moves_and_phases() {
     // The handle contains the publication phase, the actual budgeted
-    // OriginalWorldFields control owner and the original deferred-refund scope.
+    // OriginalWorldFields control owner, native binding run and deferred-refund scope.
     // The fields owner retains its backing charge and initialization cursor.
-    // Account for exactly these three declared fields and their alignment; the
+    // Account for these handles, shared policy controls and their alignment; the
     // complete World inventory must remain in the same external allocation.
     let handle_layout =
         std::alloc::Layout::new::<Option<world_acquisition::OriginalWorldFields<'_>>>()
@@ -167,6 +167,16 @@ fn world_publication_handle_keeps_one_allocation_across_moves_and_phases() {
             >())
             .expect("original World deferred-refund scope layout")
             .0
+            .extend(std::alloc::Layout::new::<
+                Option<asset_uid::binding_custody::retry::BindingRun>,
+            >())
+            .expect("retained binding run layout")
+            .0
+            .extend(std::alloc::Layout::new::<
+                Option<crate::execution_attempt::PolicyDecodeControls>,
+            >())
+            .expect("retained policy decoder control layout")
+            .0
             .pad_to_align();
     assert_eq!(std::mem::size_of::<WorldBlock<'_>>(), handle_layout.size());
     assert_eq!(
@@ -177,6 +187,8 @@ fn world_publication_handle_keeps_one_allocation_across_moves_and_phases() {
     let world = World::default();
     let block = world.block();
     let WorldBlock {
+        uid_binding_run: _,
+        policy_decode_controls: _,
         publication: _,
         fields: _,
         _refund_scope: _,

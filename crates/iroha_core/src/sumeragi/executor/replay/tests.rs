@@ -78,6 +78,9 @@ fn completed_replay_rejects_altered_certificate_and_source_without_losing_exact_
 
 #[test]
 fn completed_replay_retains_exact_receipt_through_original_pool_scratch_refusal() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     use std::task::{Context, Waker};
 
     publication_tests::with_worker(|chain, worker, blocks, events| {

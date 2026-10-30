@@ -248,9 +248,9 @@ fn actual_set_parameter_rejects_intrinsic_and_pending_zk_failures_without_public
             "intrinsic and retained-count failures are deterministic"
         );
         if !intrinsic {
-            let InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message),
-            ) = &error
+            let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) = &error
             else {
                 panic!("expected deterministic pending-transition rejection, got {error:?}")
             };

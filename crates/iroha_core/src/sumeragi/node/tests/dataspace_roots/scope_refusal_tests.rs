@@ -54,7 +54,7 @@ fn signed_private_work_keeps_scope_decode_refusal_local_and_retries_original_car
     .unwrap();
     assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
     let state = Arc::clone(chain.state());
-    let before = state.world.state_accumulator.view().get().root();
+    let before = state.world.state_accumulator.view().get().baseline_root();
     // Read the same committed metadata once to identify a late refusal without guessing
     // its graph size. A failing over-limit reservation observes usage without charging it.
     let view = state.view();
@@ -141,7 +141,10 @@ fn signed_private_work_keeps_scope_decode_refusal_local_and_retries_original_car
         ));
         assert_eq!(state.view().height(), 1);
         assert_eq!(chain.kura().blocks_count(), 1);
-        assert_eq!(state.world.state_accumulator.view().get().root(), before);
+        assert_eq!(
+            state.world.state_accumulator.view().get().baseline_root(),
+            before
+        );
         assert!(!state.has_committed_entrypoint(signed.hash_as_entrypoint()));
     }
     // Retry through the real native executor with its original captured route and fee owner.

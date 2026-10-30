@@ -694,6 +694,8 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
 
     // Successful decode is followed by the shared projection's structure check.
     // Its final counted JSON allocation must keep the *same* cumulative owner.
+    // Measure at callback entry: the final coherent-cut recheck also decodes
+    // parameters, but happens after the producer has already borrowed its rows.
     let measured = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
         usize::MAX,
         usize::MAX,
@@ -701,6 +703,7 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
         usize::MAX,
         usize::MAX,
     ));
+    let producer_bytes = Cell::new(0);
     measured
         .with(|| {
             chain.state().with_native_account_alias_originals_v1(
@@ -708,11 +711,15 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
                 &account,
                 &name,
                 &budget,
-                |_, _, _, _| Ok(()),
+                |_, _, _, _| {
+                    producer_bytes.set(measured.consumed_allocated_bytes());
+                    Ok(())
+                },
             )
         })
         .unwrap();
-    let original_bytes = usize::try_from(measured.consumed_allocated_bytes()).unwrap();
+    assert!(measured.consumed_allocated_bytes() >= producer_bytes.get());
+    let original_bytes = usize::try_from(producer_bytes.get()).unwrap();
     assert!(original_bytes > 0);
     let context = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
         usize::MAX,

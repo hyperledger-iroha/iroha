@@ -2862,15 +2862,26 @@ mod tests {
             [Asset::new(source_asset.clone(), amount.clone())],
             [],
         );
-        // This permissioned-chain fixture supplies the same initial staking policy
-        // as its application consumers; it does not declare an NPoS consensus mode.
-        let mut initial = config.world.block();
-        initial
-            .set_parameter_for_testing(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .expect("valid fixture parameters");
-        initial.commit();
+        // Author the NPoS mode and matching election schedule in the same signed
+        // genesis as staking. A preseeded parent election policy would require
+        // already committed staking before these instructions execute.
+        config.consensus_mode = SumeragiConsensusMode::Npos;
+        let election = SumeragiNposParameters::default();
+        config.genesis_parameters.extend([
+            Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+                election.epoch_length_blocks,
+            )),
+            Parameter::Custom(election.clone().into_custom_parameter()),
+        ]);
+        assert!(
+            config
+                .world
+                .view()
+                .sumeragi_npos_parameters()
+                .unwrap()
+                .is_none()
+        );
+        assert!(config.world.view().parameters().staking_policy().is_none());
         config.genesis_instructions.push(
             RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
@@ -2890,6 +2901,11 @@ mod tests {
         let chain = CertifiedTestChain::start(config)
             .expect("original topology must precede peer-dependent genesis instructions");
         assert_eq!(
+            chain.validated_genesis().consensus_metadata().mode,
+            SumeragiConsensusMode::Npos,
+            "staking uses the original signed election mode",
+        );
+        assert_eq!(
             chain
                 .state()
                 .view()
@@ -2898,6 +2914,15 @@ mod tests {
                 .require_staking_policy()
                 .unwrap(),
             &monetary,
+        );
+        assert_eq!(
+            chain
+                .state()
+                .view()
+                .world()
+                .sumeragi_npos_parameters()
+                .unwrap(),
+            Some(election),
         );
         assert_eq!(chain.height(), 1);
         assert!(

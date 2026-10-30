@@ -499,9 +499,98 @@ mod fault_injection_tests {
         assert_eq!(instructions.as_ref(), [injected]);
     }
     #[test]
+    fn result_swap_covers_every_output_kind_and_preserves_lifecycle_evidence() {
+        use crate::block::{
+            execution_output::{
+                ExecutionOutputV1, NetworkExecutionOutputV2, PipelineEventPositionV1,
+                PipelineExecutionOutputV1, PipelineExecutionOutputV2, PipelineInvocationV1,
+                TimeExecutionOutputV1, TimeExecutionOutputV2, TimeInvocationV1,
+                TriggerLifecycleEffectsV1, TriggerUseV1,
+            },
+            output_test_support,
+        };
+
+        let ExecutionOutputV1::Network(network) = output_test_support::network(0, Ok(Vec::new()))
+        else {
+            unreachable!()
+        };
+        let time = TimeExecutionOutputV1 {
+            invocation: TimeInvocationV1 {
+                schedule_index: 0,
+                event: crate::events::time::TimeEvent {
+                    interval: crate::events::time::TimeInterval {
+                        since_ms: 100,
+                        length_ms: 20,
+                    },
+                },
+                trigger: TriggerUseV1 {
+                    trigger_id: "fault_timer".parse().unwrap(),
+                    registered_at_height: 1,
+                    action_hash: Hash::new(b"untrusted fault fixture action"),
+                },
+            },
+            result: Ok(Vec::new()).into(),
+            failure_root: None,
+            completions: Vec::new(),
+        };
+        let pipeline = PipelineExecutionOutputV1 {
+            invocation: PipelineInvocationV1 {
+                event: PipelineEventPositionV1::BlockApproved,
+                candidate_index: 0,
+                trigger: time.invocation.trigger.clone(),
+            },
+            result: Ok(Vec::new()).into(),
+            failure_root: None,
+            completions: Vec::new(),
+        };
+        let lifecycle = TriggerLifecycleEffectsV1::Complete {
+            effects: Vec::new(),
+        };
+        let outputs = [
+            ExecutionOutputV1::Network(network.clone()),
+            ExecutionOutputV1::Pipeline(pipeline.clone()),
+            ExecutionOutputV1::Time(time.clone()),
+            ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                execution: network,
+                trigger_lifecycle: lifecycle.clone(),
+            }),
+            ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                execution: pipeline,
+                trigger_lifecycle: lifecycle.clone(),
+            }),
+            ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                execution: time,
+                trigger_lifecycle: lifecycle,
+            }),
+        ];
+        for output in outputs {
+            let mut tx = fixture();
+            tx.output = output.clone();
+            tx.output_hash = HashOf::new(&tx.output);
+            let original_hash = tx.output_hash;
+            let original_proof = tx.output_proof.clone();
+
+            tx.swap_result();
+            assert!(tx.result().0.is_err());
+            assert_ne!(tx.output_hash, original_hash);
+            assert_eq!(tx.output_hash, HashOf::new(&tx.output));
+            assert_eq!(tx.output.trigger_lifecycle(), output.trigger_lifecycle());
+            assert_eq!(tx.output_proof, original_proof);
+
+            tx.swap_result();
+            assert_eq!(tx.output, output);
+            assert_eq!(tx.output_hash, original_hash);
+            assert_eq!(tx.output_proof, original_proof);
+        }
+    }
+    #[test]
     fn result_swap_preserves_independent_batch_receipts_as_untrusted_fault_evidence() {
         let mut tx = fixture();
-        let authority = tx.entrypoint.authority_opt().expect("signed fixture").clone();
+        let authority = tx
+            .entrypoint
+            .authority_opt()
+            .expect("signed fixture")
+            .clone();
         let outcome = AssetBatchTransferOutcome {
             leg_index: 0,
             leg_id: "fault".into(),

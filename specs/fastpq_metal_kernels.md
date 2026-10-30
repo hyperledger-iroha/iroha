@@ -7,9 +7,9 @@ title: FASTPQ Metal Kernel Suite
 The Apple Silicon backend requires one privately admitted immutable compiled
 `fastpq.metallib`. Discovery and the common loader check its independently reviewed
 length/digest, eight ordered source inputs, target/language/producer identity and
-all sixteen entry points before device setup or private staging. No genuine
-approved bytes/pins are supplied in the current source: the bundle is `None`, so
-Metal eligibility is absent. Ordinary builds and runtime never compile Metal
+all sixteen entry points before device setup or private staging. The source includes a pinned `aarch64-apple-darwin` bundle. These pins establish
+local source and compiled-byte integrity, not signed provenance or complete
+hardware qualification. Ordinary builds and runtime never compile Metal
 source or resolve a library path.
 
 The canonical sources remain under `crates/fastpq_prover/metal/`. Their sole
@@ -36,7 +36,7 @@ an end-to-end prover or production performance qualification.
 | ----------- | --------- | --------------- | -------------- | ----- |
 | `exact_root_bit_reverse_v1` | Exact-root FFT preparation | 256 threads | — | Each lower index swaps its disjoint reversed-index pair once. A device resource barrier precedes tile evaluation. |
 | `exact_root_local_tiles_v1` | Exact-root FFT/IFFT local stages | 256 threads | 8 stages | Each group owns one 256-word tile. Small transforms apply inverse normalization in this final tile. |
-| `exact_root_global_stage_v1` | One exact-root FFT/IFFT global stage | 256 threads | — | Each group owns at most 2048 independent butterflies. The host inserts a resource barrier between stages; the last stage applies inverse normalization. |
+| `exact_root_global_stage_v1` | Two fused exact-root FFT/IFFT global stages | 256 threads | — | Each group owns 1024 disjoint radix-four cells; an unpaired final stage uses 2048 radix-two butterflies. The host inserts a resource barrier between dispatches; the last dispatch applies inverse normalization. |
 | `fastpq_fft_columns` | Forward FFT over trace columns | 256 threads | 8 stages | Uses shared-memory tiles for the first stages and applies inverse scaling when the planner requests an IFFT mode.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:223】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_fft_post_tiling` | Completes FFT/IFFT/LDE after the tile depth is reached | 256 threads | — | Runs the remaining butterflies directly out of device memory and handles the final coset/inverse factors before returning to the host.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:447】【crates/fastpq_prover/src/metal.rs:262】
 | `fastpq_lde_columns` | Low-degree extension across columns | 256 threads | 8 stages | Copies coefficients into the evaluation buffer, executes tiled stages with the configured coset, and leaves the final stages to `fastpq_fft_post_tiling` when needed.【crates/fastpq_prover/metal/kernels/ntt_stage.metal:341】【crates/fastpq_prover/src/metal.rs:262】
@@ -63,13 +63,38 @@ tiles, and the remaining stages; explicit resource barriers separate every
 dependent dispatch. Threadgroup barriers are used only within a tile. The
 implementation is `src/metal_exact_root.rs` and `metal/kernels/exact_root.metal`.
 
+Adjacent global stages share four values within one register-owned radix-four
+cell. No other thread reads those intermediate values, so those two stages need
+only one global read/write pass. A log22 transform uses seven global dispatches
+after the eight local stages; log19 uses six, including its unpaired final stage.
+Bit reversal uses a fixed five-step public bit permutation. Forward transforms
+skip multiplication by the public normalization value one. The upper radix-four
+twiddle uses an exact Goldilocks shift for the public fourth roots `+/-2^48`.
+These changes preserve supplied roots, canonical output order and the existing
+clearing staging allocation; performance requires actual device measurement.
+
 One clearing shared buffer holds all accepted columns (at most eight). Caller
 columns are copied back only after successful completion of the entire command,
 so a drained failure leaves every original input intact. The existing bounded
 ticket owner drains abandoned commands; uncertain completion retains device
-ownership and makes subsequent bounded-prover admission fail. The public Metal
-payload allowance remains conservative: it reserves both a rollback-sized
-payload and staging, although this path only needs unpublished staging. This
+ownership and makes subsequent bounded-prover admission fail. The existing
+completion callback wakes a bounded condition-variable wait; every wake rechecks
+the command status before publication. A missing or spurious callback retains
+the shared absolute drain deadline and at most 1ms requested fallback intervals
+for status and quarantine checks. The public Metal
+payload allowance charges that sole unpublished staging allocation: the Metal
+view retains the same pages through `newBufferWithBytesNoCopy`, and no rollback
+snapshot exists on this path. Per-column page padding, the complete 64MiB backing
+pool allowance, the full twiddle cache and 1MiB metadata allowance remain
+charged separately from the caller's columns and process reserves. The pool can
+retain individual allocations up to 32MiB, including native19 with eight columns
+and common22 with one column, while its aggregate capacity stays capped at 64MiB.
+Entries above 16MiB are reused only for exactly matching page counts, so a
+concurrent pool refill cannot introduce new oversized active staging. Existing
+smaller best-fit loans leave the idle pool before becoming active; sequential
+exact-root dispatch charges their combined active and remaining idle capacity
+within the unchanged pool allowance. Sensitive initialized pages are cleared
+before recycling, and eviction counts allocation capacity. This
 arithmetic implementation does not activate a proof profile or establish whole
 prover performance. The existing profile FFT/LDE callers still use their own
 dispatchers; their migration needs separate shape, coset and lifetime controls.

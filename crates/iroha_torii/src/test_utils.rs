@@ -1123,6 +1123,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
             verification_public_key: None,
             signing_private_key: None,
+            upgrade_checkpoint: Default::default(),
         },
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,
@@ -1404,7 +1405,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-            runtime_upgrade_provenance: A::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: A::SorafsPenaltyPolicy::default(),
             sorafs_telemetry: A::SorafsTelemetryPolicy::default(),
@@ -1504,7 +1504,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             codec: A::StreamingCodec {
                 cabac_mode: A::CabacMode::Disabled,
                 trellis_block_sizes: defaults::streaming::codec::trellis_blocks(),
-                rans_tables_path: defaults::streaming::codec::rans_tables_path(),
+                rans_tables_path: None,
                 entropy_mode: norito::streaming::EntropyMode::RansBundled,
                 bundle_width: defaults::streaming::codec::bundle_width(),
                 bundle_accel: A::BundleAcceleration::None,

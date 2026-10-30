@@ -2440,6 +2440,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                     actual_execution,
                     expected_nexus,
                     actual_nexus,
+                    ..
                 }) if *expected_execution == Hash::prehashed(unbound_parameters.execution_policy_hash)
                     && *expected_nexus == Hash::prehashed(unbound_parameters.nexus_amx_context_hash)
                     && actual_execution != expected_execution
@@ -2542,6 +2543,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual_execution,
             expected_nexus,
             actual_nexus,
+            ..
         }) = nexus_error.downcast_ref::<iroha_core::block::BlockValidationError>()
         else {
             panic!("unexpected Nexus/AMX tamper error: {nexus_error:#}");
@@ -2577,6 +2579,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual_execution,
             expected_nexus,
             actual_nexus,
+            ..
         }) = execution_error.downcast_ref::<iroha_core::block::BlockValidationError>()
         else {
             panic!("unexpected execution-policy tamper error: {execution_error:#}");

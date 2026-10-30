@@ -690,23 +690,41 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
     let document = generate_spec();
     let path = "/v1/bridge/finality/attestation/{height}";
     let operation = openapi_operation(&document, path, "get");
-    let progress_response = &operation["responses"]["409"];
+    assert_eq!(Reason::TipChanged.http_status_code(), 503);
+    assert_eq!(Reason::ConflictingState.http_status_code(), 409);
+    let progress_response = &operation["responses"]["503"];
     let description = progress_response["description"].as_str().unwrap();
     for distinction in [
-        "FinalityAttestationFailure",
+        "details.finality_attestation_failure",
+        "TipChanged",
         "tip_mismatch",
         "existing deadline",
         "not finality proof",
-        "missing/corrupt proofs",
-        "CommitQC",
         "not all equal",
+        "genesis scaling still treats TipChanged as non-retryable conflict",
     ] {
         assert!(
             description.contains(distinction),
             "missing progress distinction: {distinction}"
         );
     }
-    let content = response_content(operation, "409");
+    let conflict = operation["responses"]["409"]["description"]
+        .as_str()
+        .unwrap();
+    for distinction in [
+        "details.finality_attestation_failure",
+        "ConflictingState",
+        "missing/corrupt proofs",
+        "CommitQC",
+        "signature failures",
+        "never grant retryable progress",
+    ] {
+        assert!(
+            conflict.contains(distinction),
+            "missing fixed-conflict distinction: {distinction}"
+        );
+    }
+    let content = response_content(operation, "503");
     assert_eq!(
         content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from(["application/json", "application/x-norito"])
@@ -723,6 +741,7 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
     let schemas = component_schemas(&document);
     let schema = &schemas["BridgeFinalityAttestationTipMismatchV1"];
     assert_eq!(schema["additionalProperties"], Value::Bool(false));
+    assert!(schema["description"].as_str().unwrap().contains("HTTP 503"));
     let key =
         iroha_crypto::KeyPair::try_from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal)
             .unwrap();

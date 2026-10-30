@@ -1,7 +1,7 @@
-//! Physically prepaid counter controls for one synchronous canonical decode.
+//! Physically prepaid counter controls reused across synchronous canonical decodes.
 
 use iroha_allocation::{
-    AllocationBudget, AllocationCharge, AllocationReservation, ChargedShared,
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedShared,
     InsufficientReservation, PrepaidSharedError, SharedFromChargeError,
 };
 
@@ -168,6 +168,83 @@ impl PreparedDecodeWorkspace {
         self.derived.belongs_to(budget) && self.explicit.belongs_to(budget)
     }
 
+    fn begin_attempt(&mut self) -> Result<(), PreparedDecodeScopeError> {
+        let attempt = self
+            .attempt
+            .checked_add(1)
+            .ok_or(PreparedDecodeScopeError::AttemptExhausted)?;
+        self.attempt = attempt;
+        for counters in [&self.derived, &self.explicit] {
+            counters.total_elements.store(0, Ordering::Relaxed);
+            counters.total_allocated_bytes.store(0, Ordering::Relaxed);
+            counters.attempt.store(attempt, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// Decode a complete canonical value using these same two original controls.
+    ///
+    /// Header policy, payload checks, field decoding and streaming canonical
+    /// comparison use the ordinary canonical kernel. Header failure precedes
+    /// workspace reuse. The default scope encloses the complete operation; the
+    /// explicit schema scope encloses payload decoding, as in the ordinary entry.
+    /// Different frame sizes, value types and limits may share these controls.
+    /// Each use has a checked new attempt identity: retained errors keep their
+    /// original classification, family and attempt, without acquiring authority
+    /// from a later decode. No control allocation or pool admission occurs here.
+    ///
+    /// This owns only counter controls. Input frames, decoded graphs and custom
+    /// serializer scratch still require their own physical allocation custody.
+    ///
+    /// # Errors
+    /// Returns the unchanged canonical error with its original enclosing-limit
+    /// provenance, or a local scope invariant when attempt identities exhaust.
+    pub fn decode_canonical<T>(
+        &mut self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<T, crate::CanonicalDecodeControlError>
+    where
+        T: NoritoSerialize,
+        for<'de> T: NoritoDeserialize<'de>,
+    {
+        use crate::{CanonicalDecodeControlError, CanonicalDecodeScope};
+
+        let header = classify_decode_attempt(|| crate::checked_canonical_header(bytes))
+            .map_err(CanonicalDecodeControlError::Decode)?;
+        self.begin_attempt()
+            .map_err(CanonicalDecodeControlError::Scope)?;
+        let depth = DECODE_NESTING_DEPTH.with(Cell::get);
+        let context =
+            |limits, counters: &ChargedShared<DecodeBudgetCounters>| DecodeBudgetContext {
+                layer: ActiveDecodeBudgetLayer {
+                    budget: DecodeBudgetLayer {
+                        limits,
+                        counters: CounterOwner::Prepared(counters.clone()),
+                    },
+                    base_depth: depth,
+                },
+                depth,
+            };
+        let defaults = context(crate::canonical_decode_limits(bytes.len()), &self.derived);
+        let schema = context(limits, &self.explicit);
+        let mut slot = TypedFieldSlot::<T>::new();
+        classify_decode_attempt(|| {
+            decode_attempt::note_fresh_budget(&defaults.layer.budget.counters);
+            crate::decode_canonical_with_scopes_into_slot(
+                bytes,
+                header,
+                &mut slot,
+                CanonicalDecodeScope::Prepared(&defaults),
+                CanonicalDecodeScope::Prepared(&schema),
+            )?;
+            // Keep the actual value in its slot until the observer retires.
+            slot.value().map(|_| ())
+        })
+        .map_err(CanonicalDecodeControlError::Decode)?;
+        Ok(crate::finish_canonical_admission(&mut slot, |value| value))
+    }
+
     /// Run under the original derived/explicit protocol ceilings without allocating.
     ///
     /// This is synchronous scope custody, not a decoder or an authentication
@@ -186,16 +263,7 @@ impl PreparedDecodeWorkspace {
         explicit: DecodeLimits,
         body: impl FnOnce() -> R,
     ) -> Result<R, PreparedDecodeScopeError> {
-        let attempt = self
-            .attempt
-            .checked_add(1)
-            .ok_or(PreparedDecodeScopeError::AttemptExhausted)?;
-        self.attempt = attempt;
-        for counters in [&self.derived, &self.explicit] {
-            counters.total_elements.store(0, Ordering::Relaxed);
-            counters.total_allocated_bytes.store(0, Ordering::Relaxed);
-            counters.attempt.store(attempt, Ordering::Relaxed);
-        }
+        self.begin_attempt()?;
         let depth = DECODE_NESTING_DEPTH.with(Cell::get);
         let layers = [
             ActiveDecodeBudgetLayer {
@@ -219,6 +287,8 @@ impl PreparedDecodeWorkspace {
 }
 
 #[cfg(test)]
+mod canonical_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod value_tests;
@@ -237,6 +307,17 @@ pub enum PreparedDecodeError<E> {
     Scope(PreparedDecodeScopeError),
 }
 
+/// A prepared destination attempt with header-first original control admission.
+#[derive(Debug, thiserror::Error)]
+pub enum OwnedPreparedDecodeError<E> {
+    /// The original finite pool refused both actual counter controls.
+    #[error(transparent)]
+    Admission(AllocationRefusal),
+    /// The existing canonical, destination, or physical-control failure.
+    #[error(transparent)]
+    Decode(PreparedDecodeError<E>),
+}
+
 /// The real ordinary owning entry whose record bounds this prepared caller preserves.
 #[derive(Clone, Copy)]
 enum PreparedRecordRoot {
@@ -245,6 +326,69 @@ enum PreparedRecordRoot {
 }
 
 impl PreparedDecodeWorkspace {
+    /// Decode into original leaf owners after checking the canonical header and
+    /// funding both exact scope controls from their original finite pool.
+    ///
+    /// This is the same derived field, canonical framing and final streaming
+    /// comparison kernel as [`Self::decode_canonical_into`]. Destinations own
+    /// their actual graph allocations; this entry funds only the two controls.
+    /// The caller retains the same workspace on success and failure; a late leaf
+    /// refusal cannot refund its own controls or satisfy its own pool wait. Retry
+    /// reuses those controls and preserves their checked per-attempt identities.
+    /// A refusal resets validity without retiring any destination backing.
+    ///
+    /// # Errors
+    /// Malformed canonical headers precede pool admission. Returns the original
+    /// pool, allocator, enclosing scope or destination cause without formatting.
+    pub fn decode_canonical_into_with_owned_controls<T, D>(
+        bytes: &[u8],
+        limits: DecodeLimits,
+        budget: &AllocationBudget,
+        workspace: &mut Option<Self>,
+        destination: &mut D,
+    ) -> Result<(), OwnedPreparedDecodeError<D::Error>>
+    where
+        T: NoritoSerialize + DecodeRecordFields<D>,
+        D: PreparedRecordDestination<T>,
+    {
+        destination.reset();
+        let result = (|| {
+            let header = classify_decode_attempt(|| crate::checked_canonical_header(bytes))
+                .map_err(|error| {
+                    OwnedPreparedDecodeError::Decode(PreparedDecodeError::Codec(error))
+                })?;
+            if let Some(original) = workspace.as_ref() {
+                if !original.belongs_to(budget) {
+                    return Err(OwnedPreparedDecodeError::Decode(
+                        PreparedDecodeError::Scope(PreparedDecodeScopeError::ForeignPool),
+                    ));
+                }
+            } else {
+                let mut reservation = budget
+                    .try_reserve_layouts(Self::allocation_layouts())
+                    .map_err(OwnedPreparedDecodeError::Admission)?;
+                *workspace = Some(Self::from_reservation(budget, &mut reservation).map_err(
+                    |error| OwnedPreparedDecodeError::Decode(PreparedDecodeError::Scope(error)),
+                )?);
+            }
+            workspace
+                .as_mut()
+                .expect("original prepared controls are installed")
+                .decode_canonical_record_with_root::<T, D>(
+                    bytes,
+                    limits,
+                    destination,
+                    PreparedRecordRoot::CanonicalField,
+                    Some(header),
+                )
+                .map_err(OwnedPreparedDecodeError::Decode)
+        })();
+        if result.is_err() {
+            destination.reset();
+        }
+        result
+    }
+
     /// Fill one prepared destination using the sole derived field walk and
     /// authenticate its complete original canonical frame by streaming comparison.
     ///
@@ -276,6 +420,7 @@ impl PreparedDecodeWorkspace {
             limits,
             destination,
             PreparedRecordRoot::CanonicalField,
+            None,
         )
     }
 
@@ -310,6 +455,7 @@ impl PreparedDecodeWorkspace {
             limits,
             destination,
             PreparedRecordRoot::ArchiveView,
+            None,
         )
     }
 
@@ -344,6 +490,7 @@ impl PreparedDecodeWorkspace {
             bytes,
             limits,
             PreparedRecordRoot::CanonicalField,
+            None,
             |payload| {
                 let (value, used) = T::decode_value_fields(payload, destination)?;
                 let checked = validate_decode_consumption(payload, used)
@@ -367,22 +514,44 @@ impl PreparedDecodeWorkspace {
         limits: DecodeLimits,
         destination: &mut D,
         root: PreparedRecordRoot,
+        header: Option<Header>,
     ) -> Result<(), PreparedDecodeError<D::Error>>
     where
         T: NoritoSerialize + DecodeRecordFields<D>,
         D: PreparedRecordDestination<T>,
     {
         destination.reset();
-        let result = self.decode_canonical_with_root::<T, _, _>(bytes, limits, root, |payload| {
-            let (_, used) = T::decode_fields(payload, destination)?;
-            validate_decode_consumption(payload, used)?;
-            compare_prepared_frame::<T, D>(bytes, destination)?;
-            Ok(())
-        });
+        let result = self.decode_canonical_record_with_root::<T, D>(
+            bytes,
+            limits,
+            destination,
+            root,
+            header,
+        );
         if result.is_err() {
             destination.reset();
         }
         result
+    }
+
+    fn decode_canonical_record_with_root<T, D>(
+        &mut self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+        destination: &mut D,
+        root: PreparedRecordRoot,
+        header: Option<Header>,
+    ) -> Result<(), PreparedDecodeError<D::Error>>
+    where
+        T: NoritoSerialize + DecodeRecordFields<D>,
+        D: PreparedRecordDestination<T>,
+    {
+        self.decode_canonical_with_root::<T, _, _>(bytes, limits, root, header, |payload| {
+            let (_, used) = T::decode_fields(payload, destination)?;
+            validate_decode_consumption(payload, used)?;
+            compare_prepared_frame::<T, D>(bytes, destination)?;
+            Ok(())
+        })
     }
 
     fn decode_canonical_with_root<T, R, E>(
@@ -390,14 +559,18 @@ impl PreparedDecodeWorkspace {
         bytes: &[u8],
         limits: DecodeLimits,
         root: PreparedRecordRoot,
+        header: Option<Header>,
         decode: impl FnOnce(&[u8]) -> Result<R, DecodeIntoError<E>>,
     ) -> Result<R, PreparedDecodeError<E>>
     where
         T: NoritoSerialize,
     {
         decode_attempt::observe(|| {
-            let header = crate::checked_canonical_header(bytes)
-                .map_err(|error| PreparedDecodeError::Codec(decode_attempt::capture(error)))?;
+            let header = match header {
+                Some(header) => header,
+                None => crate::checked_canonical_header(bytes)
+                    .map_err(|error| PreparedDecodeError::Codec(decode_attempt::capture(error)))?,
+            };
             // ArchiveView authenticates its complete frame and type before entering
             // the payload-derived scope. Preserve that ordering without constructing
             // an archived payload or running a second decoder.

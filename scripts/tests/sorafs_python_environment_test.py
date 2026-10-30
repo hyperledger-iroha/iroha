@@ -114,13 +114,13 @@ def test_requirements_use_escaped_local_uris_and_independent_hashes():
 
 def test_distribution_inventory_requires_private_exact_owners():
     root = Path("/private/environment")
-    wanted = [{"module": "pytest", "version": "9.0.3", "root": str(root / "lib/python3.12/site-packages")}]
+    wanted = [{"module": "pytest", "version": "9.2.0", "root": str(root / "lib/python3.12/site-packages")}]
     encode = lambda rows: canonical_json({"distributions": rows})
-    assert verify_distributions(encode(wanted), {"pytest": "9.0.3"}, root) == wanted
+    assert verify_distributions(encode(wanted), {"pytest": "9.2.0"}, root) == wanted
     for key, value in (("module", "foreign"), ("version", "8.4.2"), ("root", "/usr/site-packages")):
         rows = copy.deepcopy(wanted); rows[0][key] = value
-        with pytest.raises(ArtifactError): verify_distributions(encode(rows), {"pytest": "9.0.3"}, root)
-    with pytest.raises(ArtifactError): verify_distributions(encode(wanted * 2), {"pytest": "9.0.3"}, root)
+        with pytest.raises(ArtifactError): verify_distributions(encode(rows), {"pytest": "9.2.0"}, root)
+    with pytest.raises(ArtifactError): verify_distributions(encode(wanted * 2), {"pytest": "9.2.0"}, root)
 
 
 def test_actual_without_pip_environment_and_runtime_probe(tmp_path):

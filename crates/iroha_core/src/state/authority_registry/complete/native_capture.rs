@@ -226,6 +226,7 @@ mod tests {
         ) {
             return;
         }
+        let construction_pin = crossbeam_epoch::pin();
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),
@@ -255,7 +256,7 @@ mod tests {
             state.crypto.observe_release(),
             state.state_write_lock.observe_release(),
         ];
-        let initial_bytes = native_tip_bytes
+        let control_bytes = native_tip_bytes
             + crate::state::initial_custody_test_support::world_live_bytes()
             + lock_releases.len()
                 * iroha_allocation::release::ReleaseNotification::allocation_layout::<
@@ -264,8 +265,16 @@ mod tests {
                 .size();
         // These observations must not keep controls alive after State drops.
         drop(lock_releases);
-        // State readmits AMX into its original pool; drain the replaced empty
-        // generations so this census measures live owners, independent of EBR timing.
+        // The constructor pin makes both replaced Cell pairs observable. The
+        // remaining graph payload is attributed to its exact original owners
+        // below, including a separate final-owner refund after State retires.
+        let initial_bytes = budget.reserved_bytes()
+            - crate::state::initial_custody_test_support::fresh_state_constructor_retired_bytes();
+        let parameter_bytes = initial_bytes.checked_sub(control_bytes).unwrap();
+        assert!(parameter_bytes > 0);
+        let parameter_graphs =
+            crate::state::initial_custody_test_support::retain_parameter_graphs(&state.world);
+        drop(construction_pin);
         crate::state::initial_custody_test_support::reclaim_to(&budget, initial_bytes);
         assert_eq!(budget.reserved_bytes(), initial_bytes);
         budget.set_limit_bytes(0);
@@ -318,11 +327,13 @@ mod tests {
         retirement_pin.flush();
         assert_eq!(
             budget.reserved_bytes(),
-            captured_bytes + retired_generations,
-            "the live epoch retains every original funded World and native-tip generation after State drops",
+            captured_bytes + retired_generations + parameter_bytes,
+            "the live epoch retains every original funded World and native-tip generation and their parameter graphs after State drops",
         );
         drop(retirement_pin);
-        collect_original_ebr_until(&budget, captured_bytes);
+        collect_original_ebr_until(&budget, captured_bytes + parameter_bytes);
+        assert_eq!(budget.reserved_bytes(), captured_bytes + parameter_bytes);
+        drop(parameter_graphs);
         assert_eq!(budget.reserved_bytes(), captured_bytes);
         drop(captured);
         assert_eq!(budget.reserved_bytes(), 0);

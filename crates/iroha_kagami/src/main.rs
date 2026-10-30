@@ -25,6 +25,8 @@ mod genesis;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
+mod network;
+mod node;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
@@ -53,6 +55,8 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami context list\n",
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
+    "  kagami node init --dir ./node --public-address 203.0.113.7:1337\n",
+    "  kagami network create --validator PUBLIC_KEY@HOST:PORT=POP_HEX ... --out-dir ./network\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
@@ -124,6 +128,12 @@ enum Command {
     /// Start and manage a persistent localnet without supplying configuration
     #[command(subcommand)]
     Localnet(developer::LocalnetCommand),
+    /// Prepare one node directory (keys and starter config) for an existing or new network
+    #[command(subcommand)]
+    Node(node::NodeCommand),
+    /// Sign genesis for validators that hold their own keys and write the files nodes share
+    #[command(subcommand)]
+    Network(network::NetworkCommand),
     /// Run an owner-private local dataspace attached to an installed remote network
     #[command(subcommand)]
     Dataspace(developer::DataspaceCommand),
@@ -185,6 +195,8 @@ impl<T: Write> RunArgs<T> for Command {
         match self {
             Wizard(args) => args.run(writer),
             Localnet(args) => args.run(writer),
+            Node(args) => args.run(writer),
+            Network(args) => args.run(writer),
             Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),
@@ -433,6 +445,16 @@ mod tests {
                 "kagami advanced client-configs --base-config ./client.toml --names alice --seed-prefix demo"
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn network_create_requires_a_roster_and_an_output_directory() {
+        assert!(parse("kagami network").is_err());
+        assert!(parse("kagami network create --out-dir ./network").is_err());
+        assert!(
+            parse("kagami network create --out-dir ./network --validator ea0130@host:1337=00")
+                .is_err(),
+            "roster entries are validated while parsing"
         );
     }
     #[test]

@@ -669,6 +669,10 @@ fn original_signer_state_constructor_refuses_before_cloning_unfunded_world() {
     // before admission so the original lane cause wins after pool preflight.
     let pool = world.sccp_committee_generations.allocation_budget().clone();
     let generations = original_world_generation_bytes(&world);
+    let parameters = world.parameters.view().get().clone();
+    assert!(parameters.same_version(world.parameters.view().get()));
+    assert!(parameters.belongs_to(&pool));
+    assert!(world.parameters.predecessor_view().get().is_none());
     pool.set_limit_bytes(0);
     let retirement_pin = crossbeam_epoch::pin();
     let result = crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
@@ -686,13 +690,19 @@ fn original_signer_state_constructor_refuses_before_cloning_unfunded_world() {
         Err(crate::state::MergeLedgerCommitError::NativeLaneCustodyAdmission(_))
     ));
     retirement_pin.flush();
-    assert_eq!(
-        pool.reserved_bytes(),
-        generations,
-        "consuming refusal retains exactly the original World generations while pinned"
-    );
+    let pinned_bytes = pool.reserved_bytes();
+    let parameter_bytes = pinned_bytes.checked_sub(generations).unwrap();
+    assert!(parameter_bytes > 0);
     drop(retirement_pin);
-    collect_constructor_world_generations(&pool);
+    collect_constructor_world_generations(&pool, parameter_bytes);
+    assert_eq!(
+        pinned_bytes - pool.reserved_bytes(),
+        generations,
+        "consuming refusal refunds every independently counted World Cell shell after its epoch pin releases"
+    );
+    // This exact original graph outlives the consumed World and its Cell shells.
+    // Its final owner must refund the complete remaining payload custody.
+    drop(parameters);
     assert_eq!(pool.reserved_bytes(), 0);
     assert_eq!(source.as_slice().as_ptr(), pointer);
 }
@@ -746,6 +756,10 @@ fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
     // before admission so the original lane cause wins after pool preflight.
     let pool = world.sccp_committee_generations.allocation_budget().clone();
     let generations = original_world_generation_bytes(&world);
+    let parameters = world.parameters.view().get().clone();
+    assert!(parameters.same_version(world.parameters.view().get()));
+    assert!(parameters.belongs_to(&pool));
+    assert!(world.parameters.predecessor_view().get().is_none());
     pool.set_limit_bytes(0);
     let retirement_pin = crossbeam_epoch::pin();
     let result = crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
@@ -767,13 +781,19 @@ fn original_sample_state_constructor_refuses_with_typed_sample_cause() {
         )
     ));
     retirement_pin.flush();
-    assert_eq!(
-        pool.reserved_bytes(),
-        generations,
-        "consuming refusal retains exactly the original World generations while pinned"
-    );
+    let pinned_bytes = pool.reserved_bytes();
+    let parameter_bytes = pinned_bytes.checked_sub(generations).unwrap();
+    assert!(parameter_bytes > 0);
     drop(retirement_pin);
-    collect_constructor_world_generations(&pool);
+    collect_constructor_world_generations(&pool, parameter_bytes);
+    assert_eq!(
+        pinned_bytes - pool.reserved_bytes(),
+        generations,
+        "consuming refusal refunds every independently counted World Cell shell after its epoch pin releases"
+    );
+    // This exact original graph outlives the consumed World and its Cell shells.
+    // Its final owner must refund the complete remaining payload custody.
+    drop(parameters);
     assert_eq!(pool.reserved_bytes(), 0);
     assert_eq!(
         source.as_ptr(),
@@ -1245,6 +1265,7 @@ fn original_world_generation_bytes(world: &World) -> usize {
             .sum()
     }
     pair(&world.sumeragi_amx_participant)
+        + pair(&world.parameters)
         + pair(&world.musubi_replication_shortfall_releases)
         + pair(&world.sccp_committee_current)
         + pair(&world.sccp_liability_clock)
@@ -1253,12 +1274,12 @@ fn original_world_generation_bytes(world: &World) -> usize {
         + pair(&world.sccp_forgery_max_generation)
 }
 
-fn collect_constructor_world_generations(pool: &AllocationBudget) {
+fn collect_constructor_world_generations(pool: &AllocationBudget, retained_graph_bytes: usize) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while pool.reserved_bytes() != 0 {
+    while pool.reserved_bytes() != retained_graph_bytes {
         assert!(
-            std::time::Instant::now() < deadline,
-            "consumed original World generations did not retire"
+            pool.reserved_bytes() >= retained_graph_bytes && std::time::Instant::now() < deadline,
+            "consumed original World generations did not retire to the retained graph custody"
         );
         crossbeam_epoch::pin().flush();
         std::thread::yield_now();

@@ -383,7 +383,8 @@ pub struct SendArgs {
     /// XOR amount, for example `1.5`.
     #[arg(long)]
     pub amount: String,
-    /// Recipient on the target: `0x`-hex (EVM, 20 bytes) or `0:<64 hex>` (TON raw address).
+    /// Recipient on the target: `0x`-hex (EVM, 20 bytes; mixed case must pass EIP-55), or a TON
+    /// raw `0:<64 hex>` or user-friendly address (checksum, mainnet flags and workchain 0 checked).
     #[arg(long)]
     pub recipient: String,
     /// Route revision to record on; defaults to the route's `Bidirectional` revision.
@@ -485,15 +486,21 @@ pub fn parse_proof_height(text: &str) -> Result<SccpProofHeightV1> {
 /// Encode `text` as the target network's recipient bytes (§3.1).
 pub fn parse_recipient(network: SccpNetworkV1, text: &str) -> Result<Vec<u8>> {
     let bytes = if network == SccpNetworkV1::TonMainnet {
-        let account = text
-            .strip_prefix("0:")
-            .ok_or_else(|| eyre!("a TON recipient is a raw `0:<64 hex>` address"))?;
-        let id = hex::decode(account).wrap_err("TON account id is not hex")?;
+        // A user-friendly address must carry a valid checksum, mainnet flags and workchain 0.
+        let id = iroha_sccp_wallet::pure::ton_address::parse_ton_account(text)?;
         let mut bytes = vec![0_u8; 4];
         bytes.extend(id);
         bytes
     } else {
-        hex::decode(text.strip_prefix("0x").unwrap_or(text)).wrap_err("recipient is not hex")?
+        let digits = text.strip_prefix("0x").unwrap_or(text);
+        let bytes = hex::decode(digits).wrap_err("recipient is not hex")?;
+        // A minted message cannot be voided, so a mistyped recipient loses the value for good.
+        if !eip55_checksum_holds(digits, &bytes) {
+            return Err(eyre!(
+                "recipient fails its EIP-55 checksum; check the address or give it in one case"
+            ));
+        }
+        bytes
     };
     let codec = iroha_sccp::v1::network::account_codec(network);
     if !iroha_sccp::v1::payload::is_valid_account(codec, &bytes) {
@@ -503,6 +510,36 @@ pub fn parse_recipient(network: SccpNetworkV1, text: &str) -> Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
+}
+
+/// Whether the hex `digits` of the EVM address `bytes` are all one case or carry a valid
+/// EIP-55 checksum: each letter is upper case exactly when the matching nibble of
+/// `keccak256(lowercase hex)` is at least 8.
+fn eip55_checksum_holds(digits: &str, bytes: &[u8]) -> bool {
+    let mixed = digits.bytes().any(|digit| digit.is_ascii_lowercase())
+        && digits.bytes().any(|digit| digit.is_ascii_uppercase());
+    if !mixed {
+        return true;
+    }
+    let lower = hex::encode(bytes);
+    let hash = iroha_sccp::v1::hashes::keccak256(&[lower.as_bytes()]);
+    digits
+        .bytes()
+        .zip(lower.bytes())
+        .enumerate()
+        .all(|(index, (given, expected))| {
+            let nibble = if index % 2 == 0 {
+                hash[index / 2] >> 4
+            } else {
+                hash[index / 2] & 0x0f
+            };
+            given
+                == if nibble >= 8 {
+                    expected.to_ascii_uppercase()
+                } else {
+                    expected
+                }
+        })
 }
 
 /// This machine's Unix time in milliseconds.
@@ -1533,6 +1570,24 @@ mod tests {
         .expect("evm");
         assert_eq!(evm, vec![0x11; 20]);
         assert!(parse_recipient(SccpNetworkV1::EthereumMainnet, &"00".repeat(20)).is_err());
+        // EIP-55 test vector: checksummed, lower-case and upper-case spellings are accepted;
+        // one flipped letter case is refused.
+        let checksummed = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+        let expected =
+            parse_recipient(SccpNetworkV1::EthereumMainnet, checksummed).expect("valid checksum");
+        for spelling in [
+            checksummed.to_ascii_lowercase(),
+            format!("0x{}", checksummed[2..].to_ascii_uppercase()),
+        ] {
+            assert_eq!(
+                parse_recipient(SccpNetworkV1::BscMainnet, &spelling).expect("one case"),
+                expected
+            );
+        }
+        let mistyped = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD";
+        let error = parse_recipient(SccpNetworkV1::EthereumMainnet, mistyped)
+            .expect_err("a flipped case bit fails the checksum");
+        assert!(error.to_string().contains("EIP-55"), "{error}");
         for network in [SccpNetworkV1::EthereumMainnet, SccpNetworkV1::BscMainnet] {
             assert!(
                 parse_recipient(network, &format!("41{}", "22".repeat(20))).is_err(),
@@ -1544,6 +1599,30 @@ mod tests {
         assert_eq!(&ton[..4], &[0; 4]);
         assert_eq!(ton.len(), 36);
         assert!(parse_recipient(SccpNetworkV1::TonMainnet, &"33".repeat(32)).is_err());
+        // The raw and user-friendly spellings of one account name the same recipient; one
+        // flipped character of the user-friendly form fails its checksum.
+        let raw = "0:83dfd552e63729b472fcbcc8c45ebcc6691702558b68ec7527e1ba403a0f31a8";
+        let friendly = "EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N";
+        let expected = parse_recipient(SccpNetworkV1::TonMainnet, raw).expect("raw");
+        assert_eq!(
+            parse_recipient(SccpNetworkV1::TonMainnet, friendly).expect("user-friendly"),
+            expected
+        );
+        let flipped = friendly.replacen('D', "E", 1);
+        let error = parse_recipient(SccpNetworkV1::TonMainnet, &flipped)
+            .expect_err("one flipped character fails the checksum");
+        assert!(error.to_string().contains("checksum"), "{error}");
+        assert!(
+            parse_recipient(
+                SccpNetworkV1::TonMainnet,
+                "kQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqKYH"
+            )
+            .is_err(),
+            "a testnet-only address is no mainnet recipient"
+        );
+        assert!(
+            parse_recipient(SccpNetworkV1::TonMainnet, &format!("0:{}", "00".repeat(32))).is_err()
+        );
     }
 
     #[test]

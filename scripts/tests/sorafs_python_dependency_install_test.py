@@ -131,7 +131,7 @@ def test_dependency_archive_rejects_structurally_valid_substitutions(harness, tm
         elif mutation == "parent-case": entries.extend((member("_pytest/Sub/a.py"),member("_pytest/sub/b.py")))
         elif mutation == "file-parent": entries.extend((member("_pytest/sub"),member("_pytest/sub/b.py")))
         elif mutation == "metadata-name": entries = [(info, raw.replace(b"Name: pytest", b"Name: pip")) for info,raw in entries]
-        elif mutation == "metadata-version": entries = [(info, raw.replace(b"Version: 9.0.3", b"Version: 9.0.2")) for info,raw in entries]
+        elif mutation == "metadata-version": entries = [(info, raw.replace(b"Version: 9.2.0", b"Version: 9.0.2")) for info,raw in entries]
         elif mutation == "preseed": entries.append(member(dist+"/INSTALLER",b"pip\n"))
         elif mutation == "entry-group": entries = [(info,raw+b"[pytest11]\nevil=evil:start\n" if info.filename.endswith("entry_points.txt") else raw) for info,raw in entries]
         elif mutation == "entry-traversal": entries = [(info,raw.replace(b"pytest=pytest:", b"../pytest=pytest:")) for info,raw in entries]

@@ -545,6 +545,9 @@ fn native_control_binds_component_cause_paid_rollback_and_current_fields_to_orig
 
 #[test]
 fn native_control_capacity_preserves_original_wait_retry_and_unwind_custody() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let (chain, _) = control_chain(false);
     let stop = AtomicBool::new(false);
     let view = chain.state().view();

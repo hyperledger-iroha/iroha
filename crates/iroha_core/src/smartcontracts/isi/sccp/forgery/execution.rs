@@ -46,7 +46,7 @@ pub enum ForgeryExecutionError {
     /// Recomputed exact parent relation, never an ingress admission receipt.
     #[error(transparent)]
     Verification(#[from] ForgeryVerificationError),
-    /// Every slashable G6 member already has a permanent offence for this generation.
+    /// No slashable G6 member is new and recorded evidence already names this generation.
     #[error("SCCP forgery evidence duplicate")]
     EvidenceDuplicate,
     /// Original fixed-pool map/key admission or source join refusal.
@@ -163,6 +163,7 @@ impl ForgeryExecutionError {
 
 struct PreparedExecution {
     keys: [Option<OffenceKey>; 31],
+    generation: u64,
     record: RetainedEvidenceRecord,
     evidence_id: [u8; 32],
     events: event_graph::FundedForgeryEvents,
@@ -237,15 +238,14 @@ fn prepare_execution(
         VerificationControl::Synchronous,
     )?;
     let mut keys: [Option<OffenceKey>; 31] = std::array::from_fn(|_| None);
-    let new_signers = super::new_signers(
+    // Zero new signers still records while no evidence names this generation (step 7).
+    let new_signers = super::new_offenders(
         &*stx.world,
         candidate.generation(),
         candidate.qc().signers,
         stx.world.sccp_forgery_offences.allocation_budget(),
-    )?;
-    if new_signers == 0 {
-        return Err(ForgeryExecutionError::EvidenceDuplicate);
-    }
+    )?
+    .ok_or(ForgeryExecutionError::EvidenceDuplicate)?;
     let mut unslashable = 0_u32;
     for (signer, _, member) in candidate.signers() {
         let Some(member) = member else {
@@ -295,6 +295,7 @@ fn prepare_execution(
     let record = prepared.into_record(stx)?;
     Ok(PreparedExecution {
         keys,
+        generation: candidate.generation().generation,
         record,
         evidence_id,
         events,
@@ -307,6 +308,7 @@ fn publish(
 ) -> Result<(), ForgeryExecutionError> {
     let PreparedExecution {
         keys,
+        generation,
         record,
         evidence_id,
         events,
@@ -328,6 +330,8 @@ fn publish(
             }
         }
     }
+    // A record without offenders names its generation too: the §4.10 hold reads this maximum.
+    store::raise_forgery_max_generation(stx, generation);
     if stx
         .world
         .consensus_evidence

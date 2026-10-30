@@ -90,7 +90,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.nexus.SpaceDirectoryInstructionBuilderTests",
         "org.hyperledger.iroha.android.nexus.UaidJsonParserTests",
         "org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests",
-        "org.hyperledger.iroha.android.runtime.RuntimeUpgradeInstructionTests",
         "org.hyperledger.iroha.android.sorafs.SorafsCapacityMarketplaceInstructionTests",
         "org.hyperledger.iroha.android.sorafs.SorafsCapacityTelemetryInstructionTests",
         "org.hyperledger.iroha.android.sorafs.SorafsGatewayClientTests",

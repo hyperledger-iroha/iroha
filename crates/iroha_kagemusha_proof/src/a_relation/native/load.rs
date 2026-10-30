@@ -824,10 +824,7 @@ impl StageCircuit {
             },
             incoming: None,
             q_instances: &q_instances,
-            // This single-stage closer binds Q/predecessor/successor cells directly;
-            // no continuation consumes circuit object commitments. The native
-            // checkpoint identity separately binds both exact original tapes.
-            objects: &[],
+            objects: objects.context(),
             modes: &[],
             pallas_corrections: &[],
             vesta_corrections: &[],

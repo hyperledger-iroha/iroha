@@ -572,5 +572,123 @@ class TairaDevnetCitizenHelperTests(unittest.TestCase):
             self.assertEqual(subcommands[:2], ("gov", "parliament"))
 
 
+class TairaDevnetGovernanceDriverTests(unittest.TestCase):
+    """The optional driver spends fees only through the selected managed citizen."""
+
+    def setUp(self) -> None:
+        self.network = SeatedNetwork()
+        sandbox = self.network.target.parent.resolve()
+        self.root = devnet.managed_root(sandbox / "managed", create=True)
+        self.target = self.root / "network"
+        self.network.target.rename(self.target)
+        for name in ("genesis.expected_hash", "start.sh", "stop.sh"):
+            (self.target / name).write_text("fixture\n", encoding="utf-8")
+        (self.target / devnet.RUNTIME_SIGNER_DIRECTORY).mkdir(mode=0o700)
+        for path in devnet.runtime_signer_paths(self.target):
+            path.write_bytes(b"x" * devnet.RUNTIME_SIGNER_FILE_BYTES)
+            path.chmod(0o600)
+        self.iroha = sandbox / "iroha"
+        self.iroha.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        self.iroha.chmod(0o700)
+
+    def tearDown(self) -> None:
+        self.network.close()
+
+    def arguments(self, *extra: str):
+        return devnet.parser().parse_args(
+            ["--dir", str(self.root), "governance-drive", "--iroha", str(self.iroha), *extra]
+        )
+
+    def test_one_poll_uses_exactly_one_generated_citizen_config(self) -> None:
+        for extra, index in (((), 0), (("--citizen", "15"), 15)):
+            with self.subTest(index=index):
+                args = self.arguments(*extra)
+                self.assertIs(args.handler, devnet.governance_drive)
+                runner = FakeRunner(help_text="--polls <POLLS>")
+                runner.stdout = "tip 4: create:proposal\n"
+                report = args.handler(args, run=runner)
+                self.assertEqual(runner.commands, [
+                    [str(self.iroha), "sccp", "governance", "drive", "--help"],
+                    [str(self.iroha), "--machine", "-c",
+                     str(self.target / devnet.PARLIAMENT_CITIZEN_DIRECTORY
+                         / f"citizen-{index:02d}.client.toml"),
+                     "sccp", "governance", "drive", "--polls", "1"],
+                ])
+                self.assertEqual(report, {
+                    "action": "governance-drive", "citizen_index": index,
+                    "account_id": f"citizen-{index}", "polls": 1,
+                    "output": "tip 4: create:proposal",
+                })
+
+    def test_unknown_citizen_never_invokes_the_cli(self) -> None:
+        for index in (-1, 16):
+            with self.subTest(index=index):
+                args = self.arguments("--citizen", str(index))
+                runner = FakeRunner(help_text="--polls")
+                with self.assertRaisesRegex(devnet.DevnetError, "no Parliament citizen"):
+                    args.handler(args, run=runner)
+                self.assertEqual(runner.commands, [])
+
+    def test_exposed_citizen_config_is_rejected_before_driver_execution(self) -> None:
+        config = self.target / devnet.PARLIAMENT_CITIZEN_DIRECTORY / "citizen-00.client.toml"
+        config.chmod(0o644)
+        args = self.arguments()
+        runner = FakeRunner(help_text="--polls")
+        with self.assertRaisesRegex(devnet.DevnetError, "mode 0600"):
+            args.handler(args, run=runner)
+        self.assertEqual(runner.commands, [])
+
+    def test_managed_marker_and_network_bundle_are_required(self) -> None:
+        args = self.arguments()
+        runner = FakeRunner(help_text="--polls")
+        marker = self.root / devnet.MARKER
+        marker.unlink()
+        with self.assertRaisesRegex(devnet.DevnetError, "unmarked"):
+            args.handler(args, run=runner)
+        marker.write_text(devnet.MARKER_BODY, encoding="utf-8")
+        marker.chmod(0o600)
+        (self.target / "genesis.expected_hash").unlink()
+        with self.assertRaisesRegex(devnet.DevnetError, "incomplete"):
+            args.handler(args, run=runner)
+        self.assertEqual(runner.commands, [])
+
+    def test_seating_failure_prevents_driver_execution(self) -> None:
+        (self.target / "peer0.toml").write_text("[gov]\n", encoding="utf-8")
+        args = self.arguments()
+        runner = FakeRunner(help_text="--polls")
+        with self.assertRaises(devnet.DevnetError):
+            args.handler(args, run=runner)
+        self.assertEqual(runner.commands, [])
+
+    def test_cli_must_expose_the_bounded_driver_option(self) -> None:
+        for help_text in ("", "--polls-until-complete"):
+            with self.subTest(help_text=help_text):
+                args = self.arguments()
+                runner = FakeRunner(help_text=help_text)
+                with self.assertRaises(devnet.DevnetError):
+                    args.handler(args, run=runner)
+                self.assertEqual(len(runner.commands), 1)
+                self.assertEqual(runner.commands[0][-1], "--help")
+
+    def test_native_governance_refusal_is_not_retried_or_reported_as_success(self) -> None:
+        args = self.arguments()
+        runner = FakeRunner(help_text="--polls")
+
+        def closed(command, **kwargs):
+            result = runner(command, **kwargs)
+            if command[-1] != "--help":
+                raise devnet.DevnetError("qualified Parliament ballot is unavailable")
+            return result
+
+        with self.assertRaisesRegex(devnet.DevnetError, "ballot is unavailable"):
+            args.handler(args, run=closed)
+        self.assertEqual(len(runner.commands), 2)
+
+    def test_driver_does_not_accept_an_unbounded_poll_count_or_external_config(self) -> None:
+        for extra in (("--polls", "0"), ("--config", "/external/client.toml")):
+            with self.subTest(extra=extra), self.assertRaises(SystemExit):
+                self.arguments(*extra)
+
+
 if __name__ == "__main__":
     unittest.main()

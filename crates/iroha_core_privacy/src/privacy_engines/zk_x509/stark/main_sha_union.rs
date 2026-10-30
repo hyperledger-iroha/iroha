@@ -291,8 +291,9 @@ impl MainShaUnionPlanV1 {
 
     /// The maximum of disjoint explicitly scoped phases, including an eight-
     /// column native replay scratch reserve. Common accumulators, source owners
-    /// and runtime are already retained in the parent ledger. Device staging
-    /// consumes only the policy allowance left after this reservation.
+    /// and runtime are already retained in the parent ledger. This peak is
+    /// included in the complete SHA-union arithmetic phase; device staging
+    /// cannot spend that arithmetic reservation a second time.
     pub(super) const fn private_owner_charge_v1() -> usize {
         let extension = Self::QUOTIENT_ROWS_V1 * core::mem::size_of::<E>();
         let replay = extension
@@ -386,6 +387,33 @@ impl MainShaUnionPlanV1 {
         policy: main_bounded_transform::MainBoundedTransformPolicyV1,
         accumulator: &mut [Vec<Vec<E>>],
     ) -> Result<(), ZkX509StarkErrorV1> {
+        self.accumulate_with_v1(layout, alphas, policy, accumulator, |column, policy| {
+            polynomials.replay_columns_coefficients_v1(
+                layout,
+                MainTraceColumnKindV1::Aux,
+                column.group,
+                column.column..column.column + 1,
+                sources,
+                policy,
+            )
+        })
+    }
+
+    /// The replay closure is production's unchanged original-mask source; tests
+    /// can exercise this complete allocation/transform phase without rebuilding
+    /// every preceding registration or creating an alternate proving path.
+    #[allow(clippy::too_many_lines)]
+    fn accumulate_with_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        alphas: &[E],
+        policy: main_bounded_transform::MainBoundedTransformPolicyV1,
+        accumulator: &mut [Vec<Vec<E>>],
+        mut replay: impl FnMut(
+            ColumnV1,
+            main_bounded_transform::MainBoundedTransformPolicyV1,
+        ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+    ) -> Result<(), ZkX509StarkErrorV1> {
         use super::super::super::private_table::{PrivateTableV1, zeroize_field_rows_v1};
         use fastpq_prover::goldilocks_transform::{
             goldilocks_transform_completion_uncertain_v1, transform_goldilocks_columns_v1,
@@ -398,12 +426,24 @@ impl MainShaUnionPlanV1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         main_bounded_transform::check_completion_v1(goldilocks_transform_completion_uncertain_v1())?;
-        let policy = policy.reserve_additional_v1(Self::private_owner_charge_v1())?;
+        // Registration-local matrices/caches are gone. The complete joint
+        // phase includes both retained cuts, CA originals/metadata, outer
+        // composition chunks, replay and these private union owners inside the
+        // original arithmetic maximum. The caller checks actual CA capacities.
+        main_ca_resources::MainCaJointBufferPlanV1::new_v1(layout)?
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::ShaUnion)?;
         let shared = layout.as_shared()?;
         let cap = shared
             .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
             .map_err(map_aggregate_error_v1)?;
-        if cap != 589_824 {
+        if cap != 589_824
+            || accumulator.len() != SECURITY_LANES
+            || accumulator.iter().any(|lane| {
+                lane.len() != COMPOSITION_DEGREE_CHUNKS
+                    || lane.capacity() > COMPOSITION_DEGREE_CHUNKS
+                    || lane.iter().any(|chunk| chunk.capacity() > cap)
+            })
+        {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         let matrix = |count: usize| {
@@ -470,14 +510,7 @@ impl MainShaUnionPlanV1 {
                     .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
                     .native_trace_log2;
                 let expected_coefficients = (1_usize << native_log) + MASK_DEGREE + 1;
-                let generated = polynomials.replay_columns_coefficients_v1(
-                    layout,
-                    MainTraceColumnKindV1::Aux,
-                    column.group,
-                    column.column..column.column + 1,
-                    sources,
-                    policy,
-                )?;
+                let generated = replay(column, policy)?;
                 if generated.len() != 1
                     || generated.capacity() != 1
                     || generated.iter().any(|column| {

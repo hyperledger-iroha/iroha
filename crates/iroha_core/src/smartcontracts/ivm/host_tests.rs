@@ -2311,7 +2311,7 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
         "mismatched opaque instruction".to_owned(),
     ));
     let payload = norito::to_bytes(&instruction).expect("encode instruction");
-    // Tag 2 is not part of ABI v1 (the retired contract-originated SCCP send).
+    // ABI v1 tags 1 and 2 accept only their respective ballot and X.509 requests.
     for operation_tag in [
         0,
         ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
@@ -2319,7 +2319,10 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
         u64::MAX,
     ] {
         let mut host = local_contract_host(authority.clone());
-        let mut vm = ivm::IVM::new(1_000_000);
+        // Tag 2 funds its canonical decoder before checking the instruction type.
+        let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
+        let mut vm = ivm::IVM::try_new_with_memory_budget(1_000_000, &budget)
+            .expect("fund instruction decoding");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
         vm.set_register(11, operation_tag);
@@ -2337,7 +2340,7 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
 fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
     // specs/sccp.md §4.4: contracts record no SCCP messages. In a contract frame the
     // canonical encoded instruction decodes (a decode failure would be `NoritoInvalid`)
-    // and then fails under the only v1 tag, under tag 2 and under every other tag. A
+    // and then fails under both v1 tags and under every unknown tag. A
     // generic frame may not call `0xA0` at all. Nothing is queued in either frame.
     let authority = (*ALICE_ID).clone();
     let instruction = InstructionBox::from(
@@ -2357,7 +2360,10 @@ fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
             } else {
                 CoreHost::new(authority.clone())
             };
-            let mut vm = ivm::IVM::new(1_000_000);
+            // Tag 2 funds its canonical decoder before checking the instruction type.
+            let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
+            let mut vm = ivm::IVM::try_new_with_memory_budget(1_000_000, &budget)
+                .expect("fund instruction decoding");
             let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
             vm.set_register(10, ptr);
             vm.set_register(11, operation_tag);

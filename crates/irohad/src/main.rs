@@ -12,6 +12,8 @@ pub mod authenticated_genesis;
 pub mod beacon_bootstrap;
 /// Read-only `--check-config --json` and `--check-storage` compatibility probes.
 mod compatibility_probe;
+/// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
+mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Deployment-injected factory for the supervised private Musubi publication service.
@@ -2853,11 +2855,19 @@ impl Iroha {
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             .into(),
         };
+        // The handshake requires what the committed selection activates; the listener below
+        // replaces the requirement whenever a change set activates.
+        let required_host_profiles = iroha_p2p::RequiredHostProfiles::leak(
+            committed_host_profiles(&state).map_err(|error| {
+                Report::new(StartError::StartP2p).attach(error.to_string())
+            })?,
+        );
         let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
             mode: signed_consensus_mode,
             proto_version: u32::from(iroha_core::sumeragi::node::PROTOCOL_VERSION),
             consensus_fingerprint: consensus_fingerprint.0,
             config: config_caps,
+            required_host_profiles: Some(required_host_profiles),
         };
         // The handshake identifies the release, not the chain's committed ZK
         // policy: a policy an authorized `SetParameter` commits is State, and
@@ -3167,6 +3177,11 @@ impl Iroha {
             start_telemetry(&logger, &config, &telemetry, &mut supervisor).await;
             log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
         }
+        supervisor.monitor(tokio::spawn(run_required_host_profiles_listener(
+            Arc::clone(&state),
+            required_host_profiles,
+            events_sender.subscribe(),
+        )));
         let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
@@ -4534,6 +4549,7 @@ impl Iroha {
         let runtime_deps = (|| {
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
+            .with_runtime_attestation_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
         let runtime_deps = runtime_deps
             .with_private_settlement_availability_signer(private_settlement_availability_signer)
@@ -6188,6 +6204,11 @@ fn derive_runtime_nexus_storage_budget(
             .and_then(|value| value.checked_add(bps_total.saturating_sub(1)))
             .map(|value| value / bps_total)
             .and_then(|value| u64::try_from(value).ok())
+            .map(|value| {
+                value.min(
+                    iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_MAX_BYTES,
+                )
+            })
             .ok_or_else(|| {
                 Report::new(ConfigError::ParseConfig).attach(format!(
                     "failed to derive Nexus storage headroom for filesystem `{}`",
@@ -8803,9 +8824,14 @@ fn validate_genesis_execution_offline(
         None,
     )
     .map_err(|error| {
-        Report::new(error)
+        let explanation = genesis_policy_diagnostics::explain_genesis_startup_error(config, &error);
+        let report = Report::new(error)
             .change_context(MainError::Config)
-            .attach("native genesis execution failed")
+            .attach("native genesis execution failed");
+        match explanation {
+            Some(explanation) => report.attach(explanation),
+            None => report,
+        }
     })?;
     let executed = state.world_view();
     let initial_configs = executed
@@ -8902,8 +8928,63 @@ fn build_consensus_config_caps(
         native_config_fingerprint: [0; 32],
         execution_policy_hash: [0; 32],
         nexus_policy_digest,
-        ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
+        host_profiles: release_host_profiles()?,
     })
+}
+/// The host profiles this release implements, advertised in the handshake.
+fn release_host_profiles() -> ReportResult<iroha_p2p::HostProfileSet, StartError> {
+    let catalog = iroha_core::runtime::release_catalog().map_err(|error| {
+        Report::new(StartError::StartP2p).attach(format!("release catalog: {error}"))
+    })?;
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::release_host_profiles(catalog)
+            .into_iter()
+            .map(|id| id.0),
+    )
+    .map_err(|error| Report::new(StartError::StartP2p).attach(error.to_string()))
+}
+/// The host profiles the committed selection of `state` activates.
+fn committed_host_profiles(
+    state: &State,
+) -> Result<iroha_p2p::HostProfileSet, iroha_p2p::HostProfileSetOverflow> {
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::committed_host_profiles(&state.world_view())
+            .into_iter()
+            .map(|id| id.0),
+    )
+}
+/// Keep the handshake's required host profiles equal to those the committed selection activates
+/// (`specs/live_runtime_upgrades.md` §6, "Handshake"): they change only when a change set
+/// activates, so the listener recomputes them on each activation and after a lag.
+async fn run_required_host_profiles_listener(
+    state: Arc<State>,
+    required: &'static iroha_p2p::RequiredHostProfiles,
+    mut events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
+) {
+    use iroha_data_model::events::{
+        EventBox,
+        data::{DataEvent, runtime_upgrade::RuntimeUpgradeEvent},
+    };
+    loop {
+        let refresh = match events.recv().await {
+            Ok(EventBox::Data(event)) => matches!(
+                event.as_ref(),
+                DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Activated(_))
+            ),
+            Ok(_) => false,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        if refresh {
+            match committed_host_profiles(&state) {
+                Ok(profiles) => required.set(profiles),
+                Err(error) => iroha_logger::error!(
+                    %error,
+                    "the committed selection activates more host profiles than a handshake carries"
+                ),
+            }
+        }
+    }
 }
 /// Bind handshake monetary identity to the authenticated original signed genesis.
 ///
@@ -9018,6 +9099,7 @@ fn consensus_caps_from_genesis(
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
+            required_host_profiles: None,
         },
         consensus_params.block_cadence_ms.get(),
         maximum_validator_roster_len,
@@ -11319,11 +11401,11 @@ mod tests {
                 )
                 .expect("sign genesis fixture with configured DA and confidential policies")
         }
-        fn staged_context_hashes_for_test(
+        fn staged_context_for_test(
             raw: &RawGenesisTransaction,
             signer: &KeyPair,
             config: &Config,
-        ) -> (Hash, Hash) {
+        ) -> (iroha_data_model::nexus::NexusAmxContextPreimageV1, Hash) {
             // Derive only an unpublished signing draft's policy commitments.
             // The final signed block must pass the unchanged native validator.
             let provisional = sign_configured_genesis_for_test(raw.clone(), signer, config);
@@ -11385,16 +11467,18 @@ mod tests {
             .unpack(|_| {})
             {
                 Ok((_, staged)) => (
-                    iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
+                    iroha_data_model::nexus::NexusAmxContextPreimageV1::new(
+                        iroha_core::sumeragi::staged_genesis_nexus_amx_context_preimage(&staged),
+                    ),
                     iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
                         .expect("executed genesis policy"),
                 ),
                 Err((_, error)) => match *error {
                     iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
-                        actual_nexus,
+                        actual_nexus_preimage,
                         actual_execution,
                         ..
-                    } => (actual_nexus, actual_execution),
+                    } => (actual_nexus_preimage, actual_execution),
                     error => panic!("genesis signing draft failed native validation: {error}"),
                 },
             }
@@ -11445,6 +11529,8 @@ mod tests {
             mode: iroha_data_model::block::consensus::ConsensusMode,
             parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
             cadence_ms: u64,
+            /// The Nexus/AMX context preimage the genesis commits, as Kagami publishes it.
+            signed_nexus_context: iroha_data_model::nexus::NexusAmxContextPreimageV1,
         }
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
@@ -11488,10 +11574,10 @@ mod tests {
             );
             require_crypto_verification_implementations(base_raw.crypto_admission_policy())
                 .expect("compiled verifiers support the explicitly authored genesis policy");
-            let (context_hash, execution_policy_hash) =
-                staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
+            let (signed_nexus_context, execution_policy_hash) =
+                staged_context_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_context_parameters();
-            parameters.nexus_amx_context_hash = context_hash.into();
+            parameters.nexus_amx_context_hash = signed_nexus_context.hash().into();
             parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
@@ -11520,6 +11606,7 @@ mod tests {
                 mode,
                 parameters,
                 cadence_ms,
+                signed_nexus_context,
             }
         }
         #[test]
@@ -11538,6 +11625,75 @@ mod tests {
             )
             .expect("valid genesis should execute in the disposable overlay");
             assert_eq!(bootstrap.initial_committee_size, 4);
+        }
+        /// A node file that restates a consensus-bound value differently fails `--check-config`
+        /// with the differing field and both values once the network's published Nexus/AMX
+        /// context sits beside the signed genesis file, and with directions while it is absent.
+        #[test]
+        fn check_config_names_the_nexus_field_a_node_file_restates_differently() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let mut fixture = offline_semantic_genesis_fixture([]);
+            let directory = tempfile::tempdir().expect("temporary genesis directory");
+            fixture.config.genesis.file = Some(WithOrigin::inline(
+                directory.path().join("genesis.signed.nrt"),
+            ));
+            let signed_exit_teu = fixture.config.nexus.fusion.exit_teu;
+            let node_exit_teu = signed_exit_teu.checked_add(1).expect("fixture exit TEU");
+            fixture.config.nexus.fusion.exit_teu = node_exit_teu;
+            let check = |fixture: &LocalSemanticGenesisFixture| {
+                let report = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    None,
+                )
+                .expect_err("a restated consensus-bound value must refuse the signed genesis");
+                format!("{report:?}")
+            };
+            let without = check(&fixture);
+            assert!(
+                without.contains("Signed genesis policy mismatch"),
+                "{without}"
+            );
+            assert!(
+                without.contains(&format!(
+                    "copy the network's `nexus-amx-context.v1.bin` (written by `kagami network create`, \
+                     `kagami localnet` and `kagami genesis sign --nexus-context-output`) to {}",
+                    directory.path().join("nexus-amx-context.v1.bin").display()
+                )),
+                "{without}"
+            );
+            std::fs::write(
+                directory.path().join("nexus-amx-context.v1.bin"),
+                fixture.signed_nexus_context.as_bytes(),
+            )
+            .expect("publish the signed Nexus/AMX context");
+            let with = check(&fixture);
+            // The report renders each line of the explanation under its own tree prefix.
+            for line in [
+                "this node's Nexus/AMX context differs from the signed one".to_owned(),
+                "in 1 field:".to_owned(),
+                format!(
+                    "nexus.fusion.exit_teu: signed genesis {signed_exit_teu}, this node {node_exit_teu}"
+                ),
+            ] {
+                assert!(with.contains(&line), "missing {line:?} in {with}");
+            }
+            fixture.config.nexus.fusion.exit_teu = signed_exit_teu;
+            validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("copying the signed value accepts the signed genesis");
         }
         /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
         /// genesis-bound values the running network attests: the signed context hashes, the
@@ -12123,8 +12279,12 @@ mod tests {
             assert_eq!(caps.native_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
             assert_eq!(
-                caps.ivm_gas_schedule_hash,
-                <[u8; 32]>::from(ivm::gas::schedule_hash())
+                caps.host_profiles,
+                release_host_profiles().expect("release host profiles"),
+            );
+            assert!(
+                !caps.host_profiles.as_slice().is_empty(),
+                "the release implements the baseline host profile"
             );
         }
         #[test]
@@ -12751,6 +12911,18 @@ mod tests {
                 derive_runtime_nexus_storage_budget(&[probe]).expect("safe derived budget");
             assert_eq!(budgets.len(), 1);
             assert_eq!(budgets[0].budget_bytes.get(), 100);
+        }
+        #[test]
+        fn runtime_budget_caps_headroom_on_large_filesystems() {
+            const GIB: u64 = 1024 * 1024 * 1024;
+            // A 7.3 TiB volume with 617 GiB free: 20% would reserve about 1.46 TiB and leave
+            // no budget, so the reservation stops at the fixed cap.
+            let probe = storage_budget_probe(7_475 * GIB, 617 * GIB, 0);
+            let budgets = derive_runtime_nexus_storage_budget(&[probe])
+                .expect("a large volume with ample free space has a budget");
+            assert_eq!(budgets[0].budget_bytes.get(), 617 * GIB - 64 * GIB);
+            let full = storage_budget_probe(7_475 * GIB, 60 * GIB, 0);
+            assert!(derive_runtime_nexus_storage_budget(&[full]).is_err());
         }
         #[test]
         fn runtime_budget_is_stable_across_restart_usage_splits() {

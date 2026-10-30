@@ -861,7 +861,7 @@ pub(in crate::sumeragi) fn assemble_startup_history(
         .saturating_sub(demotion_window.saturating_add(1))
         .max(genesis_height + 1);
     let mut recent_headers = Vec::new();
-    if cfg!(all(test, sumeragi_core_mutation = "HC975")) {
+    if cfg!(all(test, sumeragi_core_mutation = "HC494")) {
         for height in first..=t {
             let entry = startup_entry(blocks, height)?;
             recent_headers.push(entry.manifest.header);

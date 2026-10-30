@@ -34,48 +34,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  no_std:
-    if: github.event.pull_request.draft == false
-    name: no_std-compatibility
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        feature: [default, bn256-table, derive_serde, ""]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-
-      - name: Download no_std target
-        run: rustup target add thumbv7em-none-eabi
-
-      #  Check if build passes on `thumbv7em-none-eabi` no_std target with and without specific features (default, bn256-table and derive_serde)
-      - name: Build
-        # Script that checks if feature is empty or script should be ran with feature
-        run: |
-          if [ -z "${{ matrix.feature }}" ]; then
-            cargo build --release --target thumbv7em-none-eabi --no-default-features
-          else
-            cargo build --release --target thumbv7em-none-eabi --no-default-features --features ${{ matrix.feature }}
-          fi
-  compat:
-    if: github.event.pull_request.draft == false
-    name: Wasm-compatibility
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - wasm32-unknown-unknown
-          - wasm32-wasip1
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-
-      - name: Download WASM targets
-        run: rustup target add "${{ matrix.target }}"
-      # We run WASM build (for tests) which compiles the lib allowig us to have
-      # `getrandom` as a dev-dependency.
-      - name: Build
-        run: cargo build --tests --release --features "bn256-table derive_serde" --target "${{ matrix.target }}"
   test:
     if: github.event.pull_request.draft == false
     name: Test

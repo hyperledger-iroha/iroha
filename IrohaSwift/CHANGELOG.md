@@ -4,6 +4,19 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-30: `proposeRuntimeUpgrade(changeSet:provenance:)` posts `{change_set, provenance}`:
+  the change set and the trusted release signers' `ToriiRuntimeChangeSetEndorsement`s the
+  committed `runtime_provenance_policy_v1` requires (none for a root without that policy).
+
+- 2026-10-30: Runtime upgrades follow the governed change-set lifecycle
+  (`specs/runtime_upgrades.md`); the manifest API is removed without compatibility.
+  `listRuntimeUpgrades()` returns `ToriiRuntimeUpgradesSnapshot` (selection, committee, committee
+  digest and change-set records), `proposeRuntimeUpgrade(changeSet:)` and
+  `cancelRuntimeUpgrade(idHex:)` draft the SORA Parliament proposal, and all three are
+  operator-signed. `activateRuntimeUpgrade` and the manifest, record and status types are deleted;
+  `ToriiRuntimeUpgradeCounters` counts `scheduled`, `activated`, `lapsed` and `canceled`, and the
+  governance `RuntimeUpgrade` payload is `proposalOperator`, `action`, `notice` and `proposedMs`.
+
 - 2026-10-26: `PetalScanSession` reads a capture's turn lanes after its bands when it has time
   to spare: when the capture's work and the session's last turn try fit a 30 fps camera's frame
   time (`captureBudgetMilliseconds`), timed on the monotonic clock. A slow phone core never has

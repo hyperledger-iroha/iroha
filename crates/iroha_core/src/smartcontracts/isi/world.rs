@@ -68,9 +68,9 @@ pub mod isi {
         executor::CanUpgradeExecutor,
         governance::{
             CanEnactGovernance, CanManageConfidentialParams, CanManageConsensusKeys,
-            CanManageParliament, CanManageRuntimeUpgrades, CanManageVerifyingKeys,
-            CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRestituteGovernanceLock,
-            CanSlashGovernanceLock, CanSubmitGovernanceBallot,
+            CanManageParliament, CanManageVerifyingKeys, CanProposeContractDeployment,
+            CanProposeRuntimeChangeSet, CanRestituteGovernanceLock, CanSlashGovernanceLock,
+            CanSubmitGovernanceBallot,
         },
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
@@ -3287,31 +3287,37 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let required_permission: Permission = CanProposeRuntimeUpgrade {
-                abi_version: self.manifest.abi_version,
-                abi_hash: self.manifest.abi_hash,
-            }
-            .into();
+            let required_permission: Permission = CanProposeRuntimeChangeSet.into();
             if !has_exact_permission(&state_transaction.world, authority, &required_permission) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: exact CanProposeRuntimeUpgrade ABI target required".into(),
+                    "not permitted: CanProposeRuntimeChangeSet required".into(),
                 ));
             }
-            if self.manifest.end_height <= self.manifest.start_height {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "runtime upgrade window must satisfy end_height > start_height".into(),
-                    ),
-                ));
-            }
-            validate_runtime_upgrade_provenance(&self.manifest, state_transaction)?;
-            ensure_runtime_upgrade_abi_version(&self.manifest, state_transaction)?;
-            validate_runtime_upgrade_surface(&self.manifest, state_transaction)?;
-            ensure_runtime_upgrade_no_overlap(&self.manifest, state_transaction)?;
+            let (notice, proposed_ms) = crate::runtime::change_set::admit_proposal(
+                &self.action,
+                &self.provenance,
+                state_transaction,
+            )?;
             let h_now = state_transaction._curr_block.height().get();
+            if let iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(
+                change_set,
+            ) = &self.action
+            {
+                let id = change_set
+                    .id()
+                    .map_err(|error| InstructionExecutionError::Conversion(error.to_string()))?;
+                crate::runtime::containment::record_review(
+                    &mut state_transaction.world,
+                    id,
+                    change_set,
+                    h_now,
+                );
+            }
             let payload = RuntimeUpgradeProposal {
                 proposal_operator: authority.clone(),
-                manifest: self.manifest.clone(),
+                action: self.action.clone(),
+                notice,
+                proposed_ms,
             };
             let kind = ProposalKind::RuntimeUpgrade(payload.clone());
             let id = kind.fingerprint();
@@ -3322,7 +3328,7 @@ pub mod isi {
                     ));
                 };
                 if existing_payload.proposal_operator != payload.proposal_operator
-                    || existing_payload.manifest != payload.manifest
+                    || existing_payload.action != payload.action
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
@@ -6242,84 +6248,21 @@ pub mod isi {
     fn enact_runtime_upgrade_proposal(
         state_transaction: &mut StateTransaction<'_, '_>,
         payload: &RuntimeUpgradeProposal,
-        proposer: &AccountId,
+        _proposer: &AccountId,
     ) -> Result<(), Error> {
-        let now_h = state_transaction._curr_block.height().get();
-        if now_h > payload.manifest.start_height {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "runtime upgrade start_height already passed before enactment".into(),
-            ));
-        }
-        let id = payload.manifest.id();
-        if let Some(existing) = state_transaction.world.runtime_upgrades.get(&id) {
-            if existing.manifest != payload.manifest {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "runtime upgrade id collision".into(),
-                ));
-            }
-            if matches!(
-                existing.status,
-                iroha_data_model::runtime::RuntimeUpgradeStatus::Canceled
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "runtime upgrade already canceled".into(),
-                ));
-            }
-            return Ok(());
-        }
-        validate_runtime_upgrade_provenance(&payload.manifest, state_transaction)?;
-        ensure_runtime_upgrade_abi_version(&payload.manifest, state_transaction)?;
-        validate_runtime_upgrade_surface(&payload.manifest, state_transaction)?;
-        ensure_runtime_upgrade_no_overlap(&payload.manifest, state_transaction)?;
-        let status = if now_h == payload.manifest.start_height {
-            iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h)
-        } else {
-            iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-        };
-        state_transaction.world.runtime_upgrades.insert(
-            id,
-            iroha_data_model::runtime::RuntimeUpgradeRecord {
-                manifest: payload.manifest.clone(),
-                status,
-                proposer: proposer.clone(),
-                created_height: now_h,
-            },
-        );
-        state_transaction.world.emit_events(Some(
-            iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Proposed(
-                iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeProposed {
-                    id,
-                    abi_version: payload.manifest.abi_version,
-                    start_height: payload.manifest.start_height,
-                    end_height: payload.manifest.end_height,
-                },
-            ),
-        ));
+        crate::runtime::change_set::enact(state_transaction, payload)?;
         #[cfg(feature = "telemetry")]
         {
             state_transaction
                 .telemetry
-                .inc_runtime_upgrade_event("proposed");
-        }
-        if matches!(
-            status,
-            iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_)
-        ) {
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
-                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
-                        id,
-                        abi_version: payload.manifest.abi_version,
-                        at_height: now_h,
-                    },
-                ),
-            ));
-            #[cfg(feature = "telemetry")]
-            {
-                state_transaction
-                    .telemetry
-                    .inc_runtime_upgrade_event("activated");
-            }
+                .inc_runtime_upgrade_event(match payload.action {
+                    iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(_) => {
+                        "scheduled"
+                    }
+                    iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(_) => {
+                        "canceled"
+                    }
+                });
         }
         Ok(())
     }
@@ -8430,11 +8373,18 @@ pub mod isi {
                 state_transaction,
             ),
             ProposalKind::RuntimeUpgrade(payload) => {
-                let runtime_upgrade_id = payload.manifest.id();
+                let change_set = match &payload.action {
+                    iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(
+                        change_set,
+                    ) => change_set.id().map_err(|error| {
+                        InstructionExecutionError::Conversion(error.to_string())
+                    })?,
+                    iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Cancel(id) => *id,
+                };
                 state_transaction
                     .world
-                    .runtime_upgrades
-                    .get(&runtime_upgrade_id)
+                    .runtime_change_sets
+                    .get(&change_set)
                     .map_or_else(
                         || Ok(parliament_absent_head_v1(subject_id)),
                         |record| parliament_present_head_v1(subject_id, 1, record),
@@ -11033,274 +10983,6 @@ pub mod isi {
         )
     }
 
-    fn require_runtime_upgrade_permission(
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let required: Permission = CanManageRuntimeUpgrades.into();
-        if !has_exact_permission(&state_transaction.world, authority, &required) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "not permitted: CanManageRuntimeUpgrades".into(),
-            ));
-        }
-        Ok(())
-    }
-    fn decode_runtime_upgrade_manifest(
-        bytes: &[u8],
-    ) -> Result<(iroha_data_model::runtime::RuntimeUpgradeManifest, Vec<u8>), Error> {
-        let manifest: iroha_data_model::runtime::RuntimeUpgradeManifest =
-            norito::decode_canonical(bytes).map_err(|e| {
-                if matches!(&e, norito::Error::NonCanonicalEncoding) {
-                    InstructionExecutionError::InvariantViolation(
-                        "manifest bytes must use canonical Norito framing".into(),
-                    )
-                } else {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid manifest: {e}").into(),
-                    )
-                }
-            })?;
-        // `decode_canonical` proves these exact admission bytes are the unique V1 frame.
-        // Retain them directly so ambient encode flags cannot alter the upgrade identity.
-        let canonical_bytes = bytes.to_vec();
-        if manifest.end_height <= manifest.start_height {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "invalid window: end_height must be > start_height".into(),
-            ));
-        }
-        Ok((manifest, canonical_bytes))
-    }
-    fn runtime_upgrade_provenance_error(
-        reason: iroha_data_model::runtime::RuntimeUpgradeProvenanceError,
-        _state_transaction: &StateTransaction<'_, '_>,
-    ) -> Error {
-        #[cfg(feature = "telemetry")]
-        _state_transaction
-            .telemetry
-            .record_runtime_upgrade_provenance_rejection(reason);
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(format!(
-            "runtime_upgrade_provenance:{}",
-            reason.as_label()
-        )))
-    }
-    fn validate_runtime_upgrade_provenance(
-        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        use iroha_data_model::runtime::RuntimeUpgradeProvenanceError;
-        let policy = &state_transaction.gov.runtime_upgrade_provenance;
-        let has_provenance = !(manifest.sbom_digests.is_empty()
-            && manifest.slsa_attestation.is_empty()
-            && manifest.provenance.is_empty());
-        if policy.mode.is_required() && !has_provenance {
-            return Err(runtime_upgrade_provenance_error(
-                RuntimeUpgradeProvenanceError::MissingProvenance,
-                state_transaction,
-            ));
-        }
-        if !has_provenance {
-            return Ok(());
-        }
-        if policy.require_sbom && manifest.sbom_digests.is_empty() {
-            return Err(runtime_upgrade_provenance_error(
-                RuntimeUpgradeProvenanceError::MissingSbom,
-                state_transaction,
-            ));
-        }
-        for entry in &manifest.sbom_digests {
-            if entry.algorithm.trim().is_empty() || entry.digest.is_empty() {
-                return Err(runtime_upgrade_provenance_error(
-                    RuntimeUpgradeProvenanceError::InvalidSbomDigest,
-                    state_transaction,
-                ));
-            }
-        }
-        if policy.require_slsa && manifest.slsa_attestation.is_empty() {
-            return Err(runtime_upgrade_provenance_error(
-                RuntimeUpgradeProvenanceError::MissingSlsaAttestation,
-                state_transaction,
-            ));
-        }
-        if policy.signature_threshold > 0 && manifest.provenance.is_empty() {
-            return Err(runtime_upgrade_provenance_error(
-                RuntimeUpgradeProvenanceError::MissingSignatures,
-                state_transaction,
-            ));
-        }
-        if !manifest.provenance.is_empty() {
-            let payload = manifest.signature_payload_bytes();
-            let mut trusted_signers = BTreeSet::new();
-            for provenance in &manifest.provenance {
-                verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
-                    .map_err(|_| {
-                        runtime_upgrade_provenance_error(
-                            RuntimeUpgradeProvenanceError::InvalidSignature,
-                            state_transaction,
-                        )
-                    })?;
-                if !policy.trusted_signers.is_empty()
-                    && !policy.trusted_signers.contains(&provenance.signer)
-                {
-                    return Err(runtime_upgrade_provenance_error(
-                        RuntimeUpgradeProvenanceError::UntrustedSigner,
-                        state_transaction,
-                    ));
-                }
-                if policy.trusted_signers.contains(&provenance.signer) {
-                    trusted_signers.insert(provenance.signer.clone());
-                }
-            }
-            if policy.signature_threshold > 0 && trusted_signers.len() < policy.signature_threshold
-            {
-                return Err(runtime_upgrade_provenance_error(
-                    RuntimeUpgradeProvenanceError::SignatureThresholdNotMet,
-                    state_transaction,
-                ));
-            }
-        }
-        Ok(())
-    }
-    fn policy_for_abi_version(
-        abi_version: u16,
-    ) -> Result<(ivm::SyscallPolicy, u8), InstructionExecutionError> {
-        if abi_version != 1 {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("unsupported abi_version {abi_version}; expected 1").into(),
-            ));
-        }
-        Ok((ivm::SyscallPolicy::AbiV1, 1))
-    }
-    fn allowed_syscalls_for_policy(policy: ivm::SyscallPolicy) -> BTreeSet<u32> {
-        ivm::syscalls::syscalls_for_policy(policy)
-            .iter()
-            .copied()
-            .collect()
-    }
-    fn allowed_pointer_types_for_policy(policy: ivm::SyscallPolicy) -> BTreeSet<ivm::PointerType> {
-        ivm::pointer_abi::policy_pointer_types(policy)
-            .iter()
-            .copied()
-            .collect()
-    }
-    fn latest_active_abi_version(state_transaction: &StateTransaction<'_, '_>) -> u16 {
-        state_transaction
-            .world
-            .runtime_upgrades
-            .iter()
-            .filter_map(|(_, rec)| match rec.status {
-                iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) => {
-                    Some(rec.manifest.abi_version)
-                }
-                _ => None,
-            })
-            .max()
-            .unwrap_or(1)
-    }
-    fn validate_runtime_upgrade_surface(
-        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let (policy, _) = policy_for_abi_version(manifest.abi_version)?;
-        let computed = ivm::syscalls::compute_abi_hash(policy);
-        if manifest.abi_hash != computed {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("abi_hash mismatch for abi_version {}", manifest.abi_version).into(),
-            ));
-        }
-        let previous = latest_active_abi_version(state_transaction);
-        let (prev_policy, _) = policy_for_abi_version(previous)?;
-        let prev_syscalls = allowed_syscalls_for_policy(prev_policy);
-        let new_syscalls = allowed_syscalls_for_policy(policy);
-        if !new_syscalls.is_superset(&prev_syscalls) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "syscall surface must be additive".into(),
-            ));
-        }
-        let expected_syscall_delta: BTreeSet<u32> =
-            new_syscalls.difference(&prev_syscalls).copied().collect();
-        let manifest_syscalls: BTreeSet<u32> = manifest
-            .added_syscalls
-            .iter()
-            .copied()
-            .map(u32::from)
-            .collect();
-        if expected_syscall_delta != manifest_syscalls {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "added_syscalls must list exactly the new syscall numbers".into(),
-            ));
-        }
-        let prev_ptrs = allowed_pointer_types_for_policy(prev_policy);
-        let new_ptrs = allowed_pointer_types_for_policy(policy);
-        if !new_ptrs.is_superset(&prev_ptrs) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "pointer-type surface must be additive".into(),
-            ));
-        }
-        let expected_ptr_delta: BTreeSet<u16> = new_ptrs
-            .difference(&prev_ptrs)
-            .map(|ty| *ty as u16)
-            .collect();
-        let manifest_ptrs: BTreeSet<u16> = manifest.added_pointer_types.iter().copied().collect();
-        if expected_ptr_delta != manifest_ptrs {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "added_pointer_types must list exactly the new pointer-type identifiers".into(),
-            ));
-        }
-        Ok(())
-    }
-    fn ensure_runtime_upgrade_abi_version(
-        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
-        _state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        // Runtime upgrades in the first release keep ABI v1 fixed; no version bumping is allowed.
-        policy_for_abi_version(manifest.abi_version)?;
-        Ok(())
-    }
-    fn ensure_runtime_upgrade_no_overlap(
-        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let new_start = manifest.start_height;
-        let new_end = manifest.end_height;
-        for (_id, rec) in state_transaction.world.runtime_upgrades.iter() {
-            if matches!(
-                rec.status,
-                iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                    | iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_)
-            ) {
-                let s = rec.manifest.start_height;
-                let e = rec.manifest.end_height;
-                if new_start < e && s < new_end {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "runtime upgrade window overlaps existing proposal/activation".into(),
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-    fn handle_existing_runtime_upgrade(
-        id: iroha_data_model::runtime::RuntimeUpgradeId,
-        manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<bool, Error> {
-        if let Some(existing) = state_transaction.world.runtime_upgrades.get(&id) {
-            if existing.manifest == *manifest
-                && matches!(
-                    existing.status,
-                    iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-                )
-                && existing.proposer == *authority
-            {
-                return Ok(true);
-            }
-            return Err(InstructionExecutionError::InvariantViolation(
-                "runtime upgrade already proposed".into(),
-            ));
-        }
-        Ok(false)
-    }
     fn validate_verifying_key_update(
         id: &VerifyingKeyId,
         new: &VerifyingKeyRecord,
@@ -11431,163 +11113,36 @@ pub mod isi {
         validate_soracloud_fhe_stark_verifying_key_records(id, new, state_transaction)?;
         Ok(())
     }
-    // Runtime Upgrade Governance — minimal implementation (see specs/runtime_upgrades.md)
-    impl Execute for runtime_upgrade::ProposeRuntimeUpgrade {
+    // A validator's support for a scheduled runtime change set (`specs/live_runtime_upgrades.md` §6).
+    impl Execute for runtime_upgrade::AttestRuntimeSupportV1 {
         fn execute(
             self,
-            authority: &AccountId,
+            _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            require_runtime_upgrade_permission(authority, state_transaction)?;
-            let (manifest, canonical_bytes) =
-                decode_runtime_upgrade_manifest(self.manifest_bytes())?;
-            let id =
-                iroha_data_model::runtime::RuntimeUpgradeId::from_manifest_bytes(&canonical_bytes);
-            if handle_existing_runtime_upgrade(id, &manifest, authority, state_transaction)? {
-                return Ok(());
-            }
-            validate_runtime_upgrade_provenance(&manifest, state_transaction)?;
-            ensure_runtime_upgrade_abi_version(&manifest, state_transaction)?;
-            validate_runtime_upgrade_surface(&manifest, state_transaction)?;
-            ensure_runtime_upgrade_no_overlap(&manifest, state_transaction)?;
-            let created_height = state_transaction._curr_block.height().get();
-            let record = iroha_data_model::runtime::RuntimeUpgradeRecord {
-                manifest: manifest.clone(),
-                status: iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed,
-                proposer: authority.clone(),
-                created_height,
-            };
-            state_transaction.world.runtime_upgrades.insert(id, record);
-            // Emit Proposed event
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Proposed(
-                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeProposed {
-                        id,
-                        abi_version: manifest.abi_version,
-                        start_height: manifest.start_height,
-                        end_height: manifest.end_height,
-                    },
-                ),
-            ));
+            crate::runtime::change_set::attest(state_transaction, self.attestation)?;
             #[cfg(feature = "telemetry")]
             {
                 state_transaction
                     .telemetry
-                    .inc_runtime_upgrade_event("proposed");
+                    .inc_runtime_upgrade_event("attested");
             }
             Ok(())
         }
     }
-    impl Execute for runtime_upgrade::ActivateRuntimeUpgrade {
+    // Emergency containment of runtime definitions (`specs/live_runtime_upgrades.md` §7.1).
+    impl Execute for runtime_upgrade::ContainRuntimeV1 {
         fn execute(
             self,
-            authority: &AccountId,
+            _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            require_runtime_upgrade_permission(authority, state_transaction)?;
-            let id = *self.id();
-            let Some(rec) = state_transaction.world.runtime_upgrades.get(&id).cloned() else {
-                return Err(FindError::Permission(Box::new(Permission::new(
-                    "RuntimeUpgradeNotFound".into(),
-                    iroha_primitives::json::Json::from("id"),
-                )))
-                .into());
-            };
-            validate_runtime_upgrade_provenance(&rec.manifest, state_transaction)?;
-            validate_runtime_upgrade_surface(&rec.manifest, state_transaction)?;
-            let h = state_transaction._curr_block.height().get();
-            match rec.status {
-                iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed => {
-                    if h != rec.manifest.start_height || h >= rec.manifest.end_height {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "activation height is outside of the scheduled window".into(),
-                        ));
-                    }
-                    // Flip to ActivatedAt(h)
-                    let mut new_rec = rec.clone();
-                    new_rec.status =
-                        iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(h);
-                    state_transaction.world.runtime_upgrades.insert(id, new_rec);
-                    // Emit Activated event
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Activated(
-                            iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeActivated {
-                                id,
-                                abi_version: rec.manifest.abi_version,
-                                at_height: h,
-                            },
-                        ),
-                    ));
-                    #[cfg(feature = "telemetry")]
-                    {
-                        state_transaction
-                            .telemetry
-                            .inc_runtime_upgrade_event("activated");
-                    }
-                    Ok(())
-                }
-                iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(prev) if prev == h => {
-                    // Idempotent replay: already activated at this height.
-                    Ok(())
-                }
-                iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(prev) => {
-                    Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot activate: already activated at height {prev}, current block {h}"
-                        )
-                        .into(),
-                    ))
-                }
-                _ => Err(InstructionExecutionError::InvariantViolation(
-                    "cannot activate: status is not Proposed".into(),
-                )),
-            }
-        }
-    }
-    impl Execute for runtime_upgrade::CancelRuntimeUpgrade {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            require_runtime_upgrade_permission(authority, state_transaction)?;
-            let id = *self.id();
-            let Some(rec) = state_transaction.world.runtime_upgrades.get(&id).cloned() else {
-                return Err(FindError::Permission(Box::new(Permission::new(
-                    "RuntimeUpgradeNotFound".into(),
-                    iroha_primitives::json::Json::from("id"),
-                )))
-                .into());
-            };
-            if !matches!(
-                rec.status,
-                iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "cannot cancel: status is not Proposed".into(),
-                ));
-            }
-            let h = state_transaction._curr_block.height().get();
-            if h >= rec.manifest.start_height {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "cannot cancel at/after start_height".into(),
-                ));
-            }
-            // Flip to Canceled
-            let mut new_rec = rec.clone();
-            new_rec.status = iroha_data_model::runtime::RuntimeUpgradeStatus::Canceled;
-            state_transaction.world.runtime_upgrades.insert(id, new_rec);
-            // Emit Canceled event
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeEvent::Canceled(
-                    iroha_data_model::events::data::runtime_upgrade::RuntimeUpgradeCanceled { id },
-                ),
-            ));
+            crate::runtime::containment::contain(state_transaction, self)?;
             #[cfg(feature = "telemetry")]
             {
                 state_transaction
                     .telemetry
-                    .inc_runtime_upgrade_event("canceled");
+                    .inc_runtime_upgrade_event("contained");
             }
             Ok(())
         }
@@ -18080,6 +17635,32 @@ pub mod isi {
                         })
                         .map_err(invalid_smart_contract_parameter)?;
                 }
+                // A root commits only runtime policies its lifecycle can read (§6, §7.1): the
+                // change-set notice, the change-set provenance and the emergency panel.
+                if custom.id()
+                    == iroha_data_model::parameter::RuntimeUpgradePolicyV1::parameter_id()
+                {
+                    iroha_data_model::parameter::RuntimeUpgradePolicyV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+                }
+                if custom.id()
+                    == iroha_data_model::parameter::RuntimeProvenancePolicyV1::parameter_id()
+                {
+                    iroha_data_model::parameter::RuntimeProvenancePolicyV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+                }
+                if custom.id()
+                    == iroha_data_model::parameter::RuntimeEmergencyPanelV1::parameter_id()
+                {
+                    iroha_data_model::parameter::RuntimeEmergencyPanelV1::from_custom_parameter(
+                        custom,
+                    )
+                    .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+                }
                 if state_transaction._curr_block.is_genesis()
                     && custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
                 {
@@ -19656,19 +19237,16 @@ pub mod isi {
             let hostile = ProposalKind::RuntimeUpgrade(
                 iroha_data_model::governance::types::RuntimeUpgradeProposal {
                     proposal_operator: ALICE_ID.clone(),
-                    manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
-                        name: "hostile".to_owned(),
-                        description: "inexact height".to_owned(),
-                        abi_version: 1,
-                        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                        added_syscalls: Vec::new(),
-                        added_pointer_types: Vec::new(),
-                        start_height: maximum + 1,
-                        end_height: maximum + 2,
-                        sbom_digests: Vec::new(),
-                        slsa_attestation: Vec::new(),
-                        provenance: Vec::new(),
+                    action: crate::runtime::change_set::test_support::schedule(
+                        *state_transaction.network_id(),
+                        maximum + 1,
+                    ),
+                    notice: iroha_data_model::runtime::lifecycle::RuntimeNoticeV1 {
+                        blocks: 1,
+                        ms: 0,
+                        approval_cushion_ms: 0,
                     },
+                    proposed_ms: 0,
                 },
             );
             let error = gov::CreateParliamentGovernanceAttemptV1 {
@@ -24847,103 +24425,75 @@ AccountEvent::PermissionRemoved(change))
                 .expect_execute_err(&ALICE_ID, &mut state_transaction, "a grant for another target must not authorize this proposal");
             assert_err!(format!("{error:?}"), "exact CanProposeContractDeployment target", "unexpected target-scope rejection: {error:?}");
         });
-        world_test!(direct_runtime_upgrade_proposal_requires_the_exact_abi_target_permission {
+        world_test!(direct_runtime_upgrade_proposal_requires_the_change_set_permission_and_policy {
             second_height_transaction!(state, block, state_transaction);
             let network_id = *state_transaction.network_id();
-            let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-            let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-                name: "exact-runtime-target".to_owned(),
-                description: "direct execution authorization regression".to_owned(),
-                abi_version: 1,
-                abi_hash,
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: 10,
-                end_height: 20,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
+            let height = state_transaction._curr_block.height().get();
+            let schedule = |effective_height| gov::ProposeRuntimeUpgradeProposal {
+                action: crate::runtime::change_set::test_support::schedule(
+                    network_id,
+                    effective_height,
+                ),
                 provenance: Vec::new(),
-            };
-            let proposal = gov::ProposeRuntimeUpgradeProposal {
-                manifest: manifest.clone(),
             };
             let unrelated_contract =
                 ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
                     .expect("canonical contract address");
-            let legacy_permission: Permission = CanProposeContractDeployment {
+            let unrelated_permission: Permission = CanProposeContractDeployment {
                 contract_address: unrelated_contract,
             }
             .into();
             state_transaction
                 .world
                 .account_permissions
-                .insert(ALICE_ID.clone(), BTreeSet::from([legacy_permission]));
-            let error = proposal
-                .clone()
-                .expect_execute_err(&ALICE_ID, &mut state_transaction, "a contract deployment grant must never authorize runtime upgrades");
-            assert_err!(format!("{error:?}"), "exact CanProposeRuntimeUpgrade ABI target", "unexpected legacy-permission rejection: {error:?}");
-            for wrong_target_permission in [
-                CanProposeRuntimeUpgrade {
-                    abi_version: 1,
-                    abi_hash: [0xFF; 32],
-                },
-                CanProposeRuntimeUpgrade {
-                    abi_version: 2,
-                    abi_hash,
-                },
-            ] {
-                state_transaction.world.account_permissions.insert(
-                    ALICE_ID.clone(),
-                    BTreeSet::from([wrong_target_permission.into()]),
-                );
-                let error = proposal
-                    .clone()
-                    .expect_execute_err(&ALICE_ID, &mut state_transaction, "a runtime grant for another ABI target must fail closed");
-                assert_err!(format!("{error:?}"), "exact CanProposeRuntimeUpgrade ABI target", "unexpected wrong-ABI rejection: {error:?}");
-            }
-            let exact_permission: Permission = CanProposeRuntimeUpgrade {
-                abi_version: 1,
-                abi_hash,
-            }
-            .into();
+                .insert(ALICE_ID.clone(), BTreeSet::from([unrelated_permission]));
+            let error = schedule(height + 10)
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "a contract deployment grant must never authorize runtime change sets");
+            assert_err!(format!("{error:?}"), "CanProposeRuntimeChangeSet required", "unexpected unrelated-permission rejection: {error:?}");
+            let permission: Permission = CanProposeRuntimeChangeSet.into();
             state_transaction
                 .world
                 .account_permissions
-                .insert(ALICE_ID.clone(), BTreeSet::from([exact_permission]));
-            proposal
-                .clone()
-                .expect_execute(
-                    &ALICE_ID,
-                    &mut state_transaction,
-                    "exactly representable runtime proposal",
-                );
-            let mut invalid_window_manifest = manifest.clone();
-            invalid_window_manifest.end_height = invalid_window_manifest.start_height;
-            let error = gov::ProposeRuntimeUpgradeProposal {
-                manifest: invalid_window_manifest,
-            }
-            .expect_execute_err(&ALICE_ID, &mut state_transaction, "exact target grant must reach runtime manifest validation");
-            assert_err!(format!("{error:?}"), "runtime upgrade window", "exact ABI grant did not pass authorization: {error:?}");
+                .insert(ALICE_ID.clone(), BTreeSet::from([permission]));
+            let error = schedule(height + 10)
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "a root without a committed policy admits no change set");
+            assert_err!(format!("{error:?}"), "runtime upgrade policy is not committed", "unexpected missing-policy rejection: {error:?}");
+            crate::runtime::change_set::test_support::commit_policy(
+                &mut state_transaction,
+                &crate::runtime::change_set::test_support::short_policy(5),
+            );
+            let error = schedule(height + 4)
+                .expect_execute_err(&ALICE_ID, &mut state_transaction, "a change set must give the committed notice");
+            assert_err!(format!("{error:?}"), "takes effect before its notice of 5 blocks", "unexpected short-notice rejection: {error:?}");
+            schedule(height + 5).expect_execute(
+                &ALICE_ID,
+                &mut state_transaction,
+                "a permitted change set with exactly the committed notice",
+            );
+            let proposals: Vec<_> = state_transaction
+                .world
+                .governance_proposals
+                .iter()
+                .filter_map(|(_, record)| record.as_runtime_upgrade().cloned())
+                .collect();
+            assert_eq!(proposals.len(), 1, "one runtime-upgrade proposal reaches governance");
+            assert_eq!(proposals[0].proposal_operator, *ALICE_ID);
+            assert_eq!(proposals[0].notice.blocks, 5, "the policy's notice is frozen into the proposal");
+            assert!(
+                state_transaction.world.runtime_change_sets.iter().next().is_none(),
+                "a proposal schedules nothing before Parliament approves it"
+            );
             let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
-            for (start_height, end_height) in [
-                (maximum + 1, maximum + 2),
-                (maximum, maximum + 1),
-            ] {
-                let mut hostile = manifest.clone();
-                hostile.start_height = start_height;
-                hostile.end_height = end_height;
-                let error = gov::ProposeRuntimeUpgradeProposal { manifest: hostile }
-                    .expect_execute_err(
-                        &ALICE_ID,
-                        &mut state_transaction,
-                        "number-encoded runtime heights above the exact JSON maximum must reject",
-                    );
-                assert_err!(
-                    format!("{error:?}"),
-                    "not a canonical certificate-only Parliament record",
-                    "unexpected inexact runtime-height rejection: {error:?}"
-                );
-            }
+            let error = schedule(maximum + 1).expect_execute_err(
+                &ALICE_ID,
+                &mut state_transaction,
+                "number-encoded effective heights above the exact JSON maximum must reject",
+            );
+            assert_err!(
+                format!("{error:?}"),
+                "not a canonical certificate-only Parliament record",
+                "unexpected inexact effective-height rejection: {error:?}"
+            );
         });
         world_test!(typed_proposal_admission_rejects_preexisting_standalone_selector_alias {
             second_height_transaction!(state, block, state_transaction);
@@ -27214,6 +26764,9 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
 
         #[test]
         fn manifest_verification_preserves_original_state_capacity_for_counter_and_frame() {
+            // Keep retired fixture State generations from reopening this original pool.
+            // Only the tested admission and synchronous owner refunds may change capacity.
+            let _constructor_retirement = crossbeam_epoch::pin();
             use std::{
                 future::Future as _,
                 pin::pin,
@@ -30176,29 +29729,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     created_by: account_id.clone(),
                     created_height: 1,
                     expires_at_height: None,
-                },
-            );
-            let runtime_manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-                name: "runtime-guard".to_string(),
-                description: "guard".to_string(),
-                abi_version: 1,
-                abi_hash: [0x61; 32],
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: 1,
-                end_height: 2,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
-            };
-            let upgrade_id = runtime_manifest.id();
-            stx.world.runtime_upgrades.insert(
-                upgrade_id,
-                iroha_data_model::runtime::RuntimeUpgradeRecord {
-                    manifest: runtime_manifest,
-                    status: iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed,
-                    proposer: account_id.clone(),
-                    created_height: 1,
                 },
             );
             let binding_digest = Hash::new(b"viral-escrow-domain-guard");
@@ -34260,7 +33790,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 .expect_execute(&ALICE_ID, &mut stx, "register governance role");
 
             for name in [
-                "CanManageRuntimeUpgrades",
+                "CanProposeRuntimeChangeSet",
                 "CanManageConsensusKeys",
                 "CanManageConfidentialParams",
             ] {
@@ -34280,11 +33810,12 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 );
             }
 
+            let runtime_change_sets: Permission = CanProposeRuntimeChangeSet.into();
+            assert!(
+                !has_exact_permission(&stx.world, &ALICE_ID, &runtime_change_sets),
+                "same-name non-unit payload must not authorize runtime change sets"
+            );
             for (name, result) in [
-                (
-                    "CanManageRuntimeUpgrades",
-                    require_runtime_upgrade_permission(&ALICE_ID, &stx),
-                ),
                 (
                     "CanManageConsensusKeys",
                     ensure_can_manage_consensus_keys(&ALICE_ID, &stx),
@@ -34299,7 +33830,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             }
 
             for permission in [
-                Permission::from(CanManageRuntimeUpgrades),
+                runtime_change_sets.clone(),
                 Permission::from(CanManageConsensusKeys),
                 Permission::from(CanManageConfidentialParams),
             ] {
@@ -34309,8 +33840,10 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     "grant canonical role permission",
                 );
             }
-            require_runtime_upgrade_permission(&ALICE_ID, &stx)
-                .expect("canonical role token must authorize runtime upgrades");
+            assert!(
+                has_exact_permission(&stx.world, &ALICE_ID, &runtime_change_sets),
+                "canonical role token must authorize runtime change sets"
+            );
             ensure_can_manage_consensus_keys(&ALICE_ID, &stx)
                 .expect("canonical role token must authorize consensus-key management");
             ensure_can_manage_confidential_params(&ALICE_ID, &stx)

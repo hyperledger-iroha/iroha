@@ -2898,7 +2898,7 @@ def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:
         'jsonschema==4.26.0',
         'pycparser==3.11; platform_python_implementation != "PyPy" and python_version < "3.11"',
         'pycparser==3.12; platform_python_implementation != "PyPy" and python_version >= "3.11"',
-        'pytest==9.1.1',
+        'pytest==9.2.0',
         'requests==2.34.2',
         'tomli==2.5.0; python_version < "3.11"',
         'tomli_w==1.2.0',

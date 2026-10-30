@@ -28,7 +28,7 @@ use iroha_sccp_wallet::pure::{
     bundle::{BundlePurposeV1, CertificateUseV1, DestinationContextV1, verify_message_bundle},
     control::{DestinationControlStateV1, verify_control_bundle},
     evm::{
-        Eip1559TransactionV1, EvmSigningKey, eip1559_chain_id, finalize_calldata,
+        Eip1559TransactionV1, EvmFeeCapsV1, EvmSigningKey, eip1559_chain_id, finalize_calldata,
         submit_checkpoints_calldata,
     },
     rotation::verify_rotation_steps,
@@ -65,6 +65,7 @@ pub(super) struct EvmDestination {
     contract: [u8; 20],
     destination: DestinationV1,
     code_hash: [u8; 32],
+    fee_caps: EvmFeeCapsV1,
 }
 impl EvmDestination {
     /// Connect to the selected deployment; every observation checks its original code hash.
@@ -82,6 +83,7 @@ impl EvmDestination {
             contract,
             destination,
             code_hash,
+            fee_caps: fee_caps(config, network)?,
         })
     }
 
@@ -233,6 +235,7 @@ impl EvmDestination {
             network: self.network,
             contract: self.contract,
             code_hash: self.code_hash,
+            fee_caps: self.fee_caps,
         }
     }
 }
@@ -243,17 +246,32 @@ pub(super) struct EvmTransport<'a> {
     network: SccpNetworkV1,
     contract: [u8; 20],
     code_hash: [u8; 32],
+    fee_caps: EvmFeeCapsV1,
 }
 
 impl EvmTransport<'_> {
     /// Quote an exact unsigned transaction for an external payer, without loading a key.
     pub(super) fn unsigned(&self, payer: [u8; 20], data: Vec<u8>) -> Result<Eip1559TransactionV1> {
-        unsigned_transaction(self.client, self.network, payer, Some(self.contract), data)
+        unsigned_transaction(
+            self.client,
+            self.network,
+            payer,
+            Some(self.contract),
+            data,
+            &self.fee_caps,
+        )
     }
     /// Sign without network dispatch; the caller must persist these exact bytes first.
     pub(super) fn prepare(&self, key: &EvmSigningKey, data: Vec<u8>) -> Result<Vec<u8>> {
-        prepare_transaction(self.client, self.network, key, Some(self.contract), data)
-            .map(|(raw, _)| raw)
+        prepare_transaction(
+            self.client,
+            self.network,
+            key,
+            Some(self.contract),
+            data,
+            &self.fee_caps,
+        )
+        .map(|(raw, _)| raw)
     }
 
     /// Check that a retained signed transaction is this exact requested contract call.
@@ -385,14 +403,25 @@ pub(super) fn connect_chain_config(
     Ok(client)
 }
 
+/// The configured `[sccp.fee_caps]` of an EVM network.
+fn fee_caps(
+    config: &iroha_sccp_wallet::config::SccpClientConfig,
+    network: SccpNetworkV1,
+) -> Result<EvmFeeCapsV1> {
+    config
+        .evm_fee_caps(network)
+        .ok_or_else(|| eyre!("network has no EVM fee caps"))
+}
+
 fn prepare_transaction(
     client: &EvmClient,
     network: SccpNetworkV1,
     key: &EvmSigningKey,
     to: Option<[u8; 20]>,
     data: Vec<u8>,
+    caps: &EvmFeeCapsV1,
 ) -> Result<(Vec<u8>, u64)> {
-    let transaction = unsigned_transaction(client, network, key.address(), to, data)?;
+    let transaction = unsigned_transaction(client, network, key.address(), to, data, caps)?;
     let nonce = transaction.nonce;
     let signed = transaction
         .sign(key)
@@ -400,12 +429,16 @@ fn prepare_transaction(
     Ok((signed.raw(), nonce))
 }
 
+/// Quote one EIP-1559 transaction from the endpoint. The nonce, gas estimate, tip and base fee
+/// all come from that one endpoint, so a quote above `caps` is refused before anything is signed
+/// or journaled: a compromised endpoint cannot turn the call into a large tip from the payer.
 fn unsigned_transaction(
     client: &EvmClient,
     network: SccpNetworkV1,
     sender: [u8; 20],
     to: Option<[u8; 20]>,
     data: Vec<u8>,
+    caps: &EvmFeeCapsV1,
 ) -> Result<Eip1559TransactionV1> {
     let nonce = client
         .transaction_count(&sender, BlockId::Tag(BlockTag::Pending))
@@ -446,6 +479,13 @@ fn unsigned_transaction(
     transaction
         .validate()
         .map_err(|error| eyre!("transaction: {error:?}"))?;
+    transaction.check_fee_caps(caps).map_err(|error| {
+        eyre!(
+            "refusing to sign: {error}. The fee and gas come from the {} RPC endpoint; raise \
+             [sccp.fee_caps] in the client configuration only if the network really costs this much",
+            network.profile_key()
+        )
+    })?;
     Ok(transaction)
 }
 
@@ -454,6 +494,7 @@ use iroha_sccp::v1::constants::SCCP_EVM_DEPLOYER_RUNTIME;
 pub(super) struct Deployment {
     client: EvmClient,
     network: SccpNetworkV1,
+    fee_caps: EvmFeeCapsV1,
     pub(super) address: [u8; 20],
     pub(super) calldata: Vec<u8>,
 }
@@ -464,6 +505,7 @@ impl Deployment {
             network: self.network,
             contract: DEPLOYER,
             code_hash: iroha_sccp::v1::constants::SCCP_EVM_DEPLOYER_RUNTIME_HASH,
+            fee_caps: self.fee_caps,
         }
     }
     pub(super) fn runtime_code_hash(&self) -> Result<[u8; 32]> {
@@ -492,6 +534,7 @@ pub(super) fn deployment(
     Ok(Deployment {
         client,
         network,
+        fee_caps: fee_caps(config, network)?,
         address,
         calldata,
     })
@@ -555,6 +598,10 @@ mod tests {
             network: SccpNetworkV1::EthereumMainnet,
             contract: [1; 20],
             code_hash: [2; 32],
+            fee_caps: EvmFeeCapsV1 {
+                max_fee_per_gas: 1,
+                max_total_fee: 1,
+            },
         };
         assert_eq!(client.transport().budget().deadline(), None);
         let before = std::time::Instant::now();
@@ -685,6 +732,131 @@ mod tests {
             }
             worker.join().unwrap();
         }
+    }
+
+    /// A local endpoint that quotes one transaction: nonce 5, a 90 000 gas estimate, a 10 gwei
+    /// base fee and the given `eth_maxPriorityFeePerGas` result.
+    fn fee_quote_endpoint(priority_fee: &'static str) -> (EvmClient, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{BufRead as _, Read as _, Write as _},
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let worker = std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(10);
+            let mut served = 0;
+            while served < 4 && Instant::now() < until {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(error) => panic!("local RPC listener: {error}"),
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut input = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    input.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                input.read_exact(&mut body).unwrap();
+                let request: norito::json::Value = norito::json::from_slice(&body).unwrap();
+                let result = match request["method"].as_str().unwrap() {
+                    "eth_getTransactionCount" => norito::json!("0x5"),
+                    "eth_estimateGas" => norito::json!("0x15f90"),
+                    "eth_maxPriorityFeePerGas" => norito::json::Value::from(priority_fee),
+                    "eth_getBlockByNumber" => norito::json!({
+                        "hash": (format!("0x{}", "11".repeat(32))),
+                        "parentHash": (format!("0x{}", "22".repeat(32))),
+                        "sha3Uncles": (format!("0x{}", "33".repeat(32))),
+                        "miner": (format!("0x{}", "44".repeat(20))),
+                        "stateRoot": (format!("0x{}", "55".repeat(32))),
+                        "transactionsRoot": (format!("0x{}", "66".repeat(32))),
+                        "receiptsRoot": (format!("0x{}", "77".repeat(32))),
+                        "logsBloom": (format!("0x{}", "00".repeat(256))),
+                        "difficulty": "0x0",
+                        "number": "0x10",
+                        "gasLimit": "0x1c9c380",
+                        "gasUsed": "0x0",
+                        "timestamp": "0x6553f100",
+                        "extraData": "0x",
+                        "mixHash": (format!("0x{}", "88".repeat(32))),
+                        "nonce": "0x0000000000000000",
+                        "baseFeePerGas": "0x2540be400",
+                        "transactions": [],
+                    }),
+                    other => panic!("unexpected EVM RPC {other}"),
+                };
+                let body = norito::json::to_vec(&norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": (request["id"].clone()),
+                    "result": (result),
+                }))
+                .unwrap();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+                served += 1;
+            }
+            assert_eq!(
+                served, 4,
+                "the quote reads nonce, gas, tip and base fee once each"
+            );
+        });
+        let client = EvmClient::new(
+            HttpTransport::new(
+                EndpointSet::parse(&[url.as_str()], &[]).unwrap(),
+                iroha_sccp_rpc::http::HttpConfig::default(),
+                FailoverPolicy::default(),
+            )
+            .unwrap(),
+        );
+        (client, worker)
+    }
+
+    #[test]
+    fn an_endpoint_quoting_a_huge_priority_fee_is_refused_before_signing() {
+        let config = iroha_sccp_wallet::config::SccpClientConfig::from_user(
+            iroha::config::sccp::SccpClientConfigUser::default(),
+            Path::new("target/sccp-continuation/fee-cap-journal"),
+        )
+        .unwrap();
+        let network = SccpNetworkV1::EthereumMainnet;
+        let caps = fee_caps(&config, network).unwrap();
+        assert!(fee_caps(&config, SccpNetworkV1::TonMainnet).is_err());
+        // An ordinary 2 gwei tip over a 10 gwei base fee is quoted.
+        let (client, worker) = fee_quote_endpoint("0x77359400");
+        let quoted =
+            unsigned_transaction(&client, network, [9; 20], Some([3; 20]), vec![1], &caps).unwrap();
+        worker.join().unwrap();
+        assert_eq!(quoted.nonce, 5);
+        assert_eq!(quoted.gas_limit, 108_000);
+        assert_eq!(quoted.max_priority_fee_per_gas, 2_000_000_000);
+        assert_eq!(quoted.max_fee_per_gas, 22_000_000_000);
+        // A compromised endpoint quoting a 10^15 wei tip per gas is refused, so nothing can be
+        // signed or journaled from that quote.
+        let (client, worker) = fee_quote_endpoint("0x38d7ea4c68000");
+        let error = unsigned_transaction(&client, network, [9; 20], Some([3; 20]), vec![1], &caps)
+            .unwrap_err();
+        worker.join().unwrap();
+        let message = error.to_string();
+        assert!(message.contains("refusing to sign"), "{message}");
+        assert!(message.contains("[sccp.fee_caps]"), "{message}");
+        assert!(message.contains("1000020000000000"), "{message}");
     }
 
     #[test]

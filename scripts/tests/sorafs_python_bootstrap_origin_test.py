@@ -134,10 +134,10 @@ def test_malformed_runtime_or_environment_profile_is_refused(mutation):
 
 def dependency_wheel(script):
     """Build a tiny ordinary pytest wheel; the production parser owns validation."""
-    dist = "pytest-9.0.3.dist-info"
+    dist = "pytest-9.2.0.dist-info"
     contents = {"_pytest/__init__.py": b"# inert dependency source\n",
                 "pytest/__init__.py": b"# inert facade\n",
-                dist + "/METADATA": b"Metadata-Version: 2.3\nName: pytest\nVersion: 9.0.3\n",
+                dist + "/METADATA": b"Metadata-Version: 2.3\nName: pytest\nVersion: 9.2.0\n",
                 dist + "/WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
                 dist + "/entry_points.txt": ("[console_scripts]\n" + script + "=pytest:main\n").encode()}
     record = dist + "/RECORD"
@@ -153,7 +153,7 @@ def dependency_wheel(script):
             info.external_attr = (stat.S_IFREG | 0o644) << 16
             wheel.writestr(info, raw)
     raw = output.getvalue()
-    return raw, DependencyWheel("pytest", "9.0.3", FileReference(
+    return raw, DependencyWheel("pytest", "9.2.0", FileReference(
         "/historical/wheels/pytest.whl", hashlib.sha256(raw).hexdigest(), len(raw)))
 
 

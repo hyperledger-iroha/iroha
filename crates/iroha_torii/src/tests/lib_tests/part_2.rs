@@ -868,7 +868,10 @@ async fn account_alias_get_resolves_sns_only_dynamic_dataspace() {
         "derive dynamic account alias enumeration authority fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let app = onboarding_alias_test_app(&authority, &authority);
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
+        onboarding_alias_test_world(&authority, &authority),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     let dataspace = DataSpaceId::new(42);
     bind_dynamic_account_alias_for_test(&app, &authority, "merchant@paynet", dataspace);
     grant_alias_resolve_dataspace_permission(&app, &authority, dataspace);
@@ -876,7 +879,14 @@ async fn account_alias_get_resolves_sns_only_dynamic_dataspace() {
     let uri: Uri = format!("/v1/accounts/{authority}/aliases")
         .parse()
         .expect("account aliases URI");
-    let headers = signed_app_headers(&authority, &key_pair, &method, &uri, &[]);
+    let headers = crate::tests_runtime_handlers::signed_network_app_headers(
+        app.state.network_id_ref(),
+        &authority,
+        &key_pair,
+        &method,
+        &uri,
+        &[],
+    );
     let response = handler_account_aliases(
         State(app),
         method,

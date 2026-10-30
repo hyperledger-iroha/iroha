@@ -375,9 +375,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::kaigi::RegisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::UnregisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>,
-    dispatch_instruction::<runtime_upgrade::ProposeRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::ActivateRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::CancelRuntimeUpgrade>,
+    dispatch_instruction::<runtime_upgrade::AttestRuntimeSupportV1>,
+    dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -731,7 +730,10 @@ define_instruction_handlers! {
     // key. Core checks the exact backend, envelope, limits and duplicate identity; this does
     // not authorize spending, key administration or stronger execution-proof semantics.
     dispatch_instruction::<zk::VerifyProof> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<zk::PruneProofs>,
+    // Any signed account may apply retention. Core reads cap/grace/batch from the
+    // committed policy; the caller can select only a backend, never a weaker policy.
+    // Removing proof records and their indexes changes no numeric asset balances.
+    dispatch_instruction::<zk::PruneProofs> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
@@ -871,6 +873,12 @@ pub(crate) fn execute_borrowed_instruction(
 ) -> Result<(), Error> {
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;
+    crate::runtime::resolve(
+        instruction,
+        state_transaction.world.runtime_selection.get(),
+        state_transaction._curr_block.height().get(),
+        || crate::runtime::obligations::step(instruction, &state_transaction.world),
+    )?;
     iroha_logger::debug!(isi=%instruction, "Executing");
     if let Some(result) = NATIVE_INSTRUCTIONS
         .get(instruction)
@@ -1162,11 +1170,12 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RegisterPrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RotatePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
+        assert_native_registration::<privacy::SubmitPrivacyZkX509CertificateV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
         assert_reviewed_initial_family("iroha_data_model::isi::privacy::", &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::privacy::",
-            29,
+            27,
             &(BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()])),
         );
         assert_reviewed_asset_effect_family(

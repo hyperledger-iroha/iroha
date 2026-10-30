@@ -23,7 +23,13 @@ kagami contract deploy hello.ko
 ```
 
 These commands require no supplied TOML, prompts, source checkout, Cargo, Python,
-shell scripts, or container runtime. Configuration and credentials are generated
+shell scripts, or container runtime. For a network of separate machines,
+`kagami node init --dir DIR` writes the validator, SoraNet transport and streaming keys to
+`DIR/secrets/` and a starter `DIR/config.toml` (`data_dir = "."`) that names only the node's
+key and listeners and includes `network.toml`. `kagami network create` checks the collected
+`3f + 1` roster and proofs of possession, signs genesis with a fresh key and writes that
+shared file (chain, roster, genesis and the consensus-bound sections the genesis was signed
+with); every other node setting has a working default. Configuration and credentials are generated
 in private managed storage outside projects. Kagami is the CLI frontend; Mochi
 is the desktop frontend to the same services.
 

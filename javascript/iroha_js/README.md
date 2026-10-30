@@ -4585,40 +4585,93 @@ if (snapshot) {
 
 ### Runtime and capability helpers
 
-`ToriiClient` now covers the runtime capability endpoints so SDK consumers can surface ABI
-versioning data without crafting raw HTTP calls. Use `getNodeCapabilities()` to inspect ABI
+`ToriiClient` covers the runtime capability endpoints and the governed runtime change-set
+lifecycle (`specs/live_runtime_upgrades.md` §6). Use `getNodeCapabilities()` to inspect ABI
 support and cryptography acceleration flags, `getRuntimeAbiActive()`/`getRuntimeAbiHash()` to
-mirror the compiler guardrails, `getRuntimeMetrics()` for aggregate counters, and
-`listRuntimeUpgrades()` to page through recorded manifests. The helper trio
-`proposeRuntimeUpgrade()`, `activateRuntimeUpgrade()`, and `cancelRuntimeUpgrade()` post the
-runtime JSON endpoints and return transaction skeletons (`wire_id` + payload hex) that you can
-sign via `TxBuilder`, so rollout automation no longer needs bespoke HTTP clients.
+mirror the compiler guardrails, and `getRuntimeMetrics()` for the recorded change sets counted by
+status (`scheduled`, `activated`, `lapsed`, `canceled`).
+
+The runtime changes only through change sets. A `ChangeSetV1` moves the universal root from one
+selection (`predecessor`) to the next (`successor`) at `effective_height`, publishing new
+immutable definitions and applying transitions. The change-set helpers are operator routes: they
+require an immutable `OperatorSigningContext` and sign every request.
+
+- `listRuntimeUpgrades()` returns the committed selection (`selectionIdHex` and the opaque
+  `selection`), the validator `committee` and `committeeDigestHex` that support attestations bind,
+  and every recorded change set by effective height, then identity. A new change set names as its
+  predecessor the selection it will meet: the committed one, advanced by every change set scheduled
+  to take effect before it. Each item types `idHex`, `effectiveHeight`, `predecessorHex`,
+  `successorHex`, `status` (`Scheduled`, or `Activated`, `Lapsed` or `Cancelled` with the
+  `height` at which that happened) and the frozen `notice`. The complete `ChangeSetRecordV1` stays
+  available as `record`, with integers above `Number.MAX_SAFE_INTEGER` as bigint.
+- `proposeRuntimeUpgrade(changeSet, { provenance })` posts the exact `ChangeSetV1` JSON object as
+  `change_set` with the trusted release signers' `ChangeSetEndorsementV1` objects as `provenance`,
+  and returns the drafted SORA Parliament proposal that schedules it. While the universal root
+  commits a `runtime_provenance_policy_v1`, the proposal needs endorsements from its threshold of
+  distinct trusted signers (each produced by `iroha runtime upgrade endorse`); a root without that
+  policy takes none, and `provenance` defaults to `[]`. Before sending, the SDK requires the exact
+  snake_case field set, the universal root, 32-byte lowercase hex identities and an
+  `effective_height` of at most `Number.MAX_SAFE_INTEGER`; pass larger integers inside published
+  definitions or transitions as bigint.
+- `cancelRuntimeUpgrade(idHex)` returns the drafted proposal that withdraws a scheduled change set.
+- `attestRuntimeUpgrade(idHex)` asks the node to sign its support for a scheduled change set with
+  its own validator key. The node refuses unless its release executes the successor selection and
+  its key is a committee member; the draft holds exactly one `iroha.runtime.support.attest.v1`
+  instruction to submit.
+- `getRuntimeRelease()` reports the node's build, its release digest, and whether its release
+  executes the committed selection and each scheduled successor, naming the first definition it
+  lacks (`ToriiRuntimeReleaseSupport`).
+
+Each propose or cancel draft contains exactly one
+`iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal` instruction (`wire_id` and the
+framed `payload_hex`) for your wallet or key store to sign and submit; admission happens when the
+signed proposal executes. There is no activation call: an approved change set activates at the
+start of its effective block once the validator committee has attested support and the frozen
+notice has elapsed, and otherwise lapses.
 
 ```js
-const torii = new ToriiClient("http://localhost:8080");
+import { NetworkId, OperatorSigningContext, ToriiClient } from "@iroha/iroha-js";
+
+const torii = new ToriiClient(toriiUrl, {
+  localSigningContext,
+  operatorSigningContext: new OperatorSigningContext(
+    NetworkId.parse(exactNetworkId),
+    runtimeOperatorSigner,
+  ),
+});
 const caps = await torii.getNodeCapabilities();
 console.log("ABI version", caps.abiVersion);
 console.log("Allowed curve IDs", caps.crypto.curves.allowedCurveIds);
 console.log("Allowed curve bitmap", caps.crypto.curves.allowedCurveBitmap);
 
-const abi = await torii.getRuntimeAbiActive();
+const abi = await torii.getRuntimeAbiActive({ canonicalAuth });
 console.log(`Runtime ABI v${abi.abiVersion}`);
+const { upgradeEventsTotal } = await torii.getRuntimeMetrics({ canonicalAuth });
+console.log(`scheduled=${upgradeEventsTotal.scheduled} lapsed=${upgradeEventsTotal.lapsed}`);
 
-const upgrades = await torii.listRuntimeUpgrades();
-for (const item of upgrades) {
-  console.log(`${item.idHex} -> ${item.record.status.kind}`);
+const runtime = await torii.listRuntimeUpgrades();
+console.log(`selection ${runtime.selectionIdHex}, committee of ${runtime.committee.length}`);
+for (const item of runtime.items) {
+  const at = item.status.kind === "Scheduled" ? "" : ` at ${item.status.height}`;
+  console.log(`${item.idHex} effective ${item.effectiveHeight}: ${item.status.kind}${at}`);
 }
 
-const manifest = {
-  name: "ABI v1 maintenance",
-  description: "Schedule a no-ABI-change runtime rollout",
-  abiVersion: 1,
-  abiHash: "0123...cdef",
-  startHeight: 10_000,
-  endHeight: 10_500,
-};
-const draft = await torii.proposeRuntimeUpgrade(manifest);
-console.log(draft.tx_instructions);
+// Nothing is scheduled before this change set, so it meets the committed selection. The
+// endorsements come from the trusted release signers of the committed provenance policy.
+const draft = await torii.proposeRuntimeUpgrade({
+  network: exactNetworkId,
+  root: { kind: "Universal", content: null },
+  predecessor: runtime.selectionIdHex,
+  successor: successorSelectionIdHex,
+  effective_height: 120_000,
+  publish: [],
+  transitions: [{ kind: "Activate", content: definitionIdHex }],
+  qualification: qualificationDigestHex,
+}, { provenance: releaseSignerEndorsements });
+const [{ wire_id: wireId, payload_hex: payloadHex }] = draft.tx_instructions;
+
+const withdrawal = await torii.cancelRuntimeUpgrade(scheduledChangeSetIdHex);
+console.log(withdrawal.tx_instructions[0].wire_id);
 ```
 
 ### Network time helpers

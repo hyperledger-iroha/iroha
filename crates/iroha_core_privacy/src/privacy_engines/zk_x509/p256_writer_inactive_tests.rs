@@ -364,3 +364,153 @@ fn multiplicity_two_accepts_zero_factors_and_still_constrains_selected_power() {
         .any(|x| *x != F::ZERO)
     );
 }
+
+fn flat_writer_reference(row: &P256CrossTraceWriterAuxRowV1) -> Vec<F> {
+    row.event_values
+        .into_iter()
+        .chain(row.powers.into_iter().flatten().flatten())
+        .chain(row.selected_power.into_iter().flatten())
+        .chain(row.product_before.into_iter().flatten())
+        .chain(row.terminal)
+        .collect()
+}
+
+#[test]
+fn selected_writer_columns_match_every_flat_offset_and_public_tuple() {
+    for left in [0, 1, 2, 64, 65, 129] {
+        for right in [0, 1, 2, 64, 65, 129] {
+            let fixed = fixed_row([left, right]);
+            for value in [F::ZERO, F(65535), F(0xffff_fffe_ffff_ffff)] {
+                let sources = [value, value.add(F::ONE)];
+                let before = [F::ZERO, F::ONE, F(91), F(0xffff_fffe_ffff_ffff)];
+                let terminal = [F(17), F(19), F(23), F(29)];
+                let mut expected = direct_writer_row_v1(fixed, sources, before, challenges());
+                expected.terminal = terminal;
+                let flat = flat_writer_reference(&expected);
+                let after = core::array::from_fn(|lane| {
+                    expected.product_before[1][lane].mul(expected.selected_power[1][lane])
+                });
+                for first in 0..flat.len() {
+                    assert_eq!(writer_aux_column_v1(&expected, first), flat[first]);
+                    for width in 1..=8.min(flat.len() - first) {
+                        let (actual, actual_after) = selected_writer_columns_v1(
+                            fixed,
+                            sources,
+                            before,
+                            terminal,
+                            challenges(),
+                            first,
+                            width,
+                        );
+                        assert_eq!(&actual[..width], &flat[first..first + width]);
+                        assert!(actual[width..].iter().all(|value| *value == F::ZERO));
+                        assert_eq!(actual_after, after);
+                    }
+                }
+            }
+        }
+    }
+    // An inactive flag alone must never select the constant-row shortcut.
+    for field in 0..7 {
+        let mut fixed = fixed_row([0, 0]);
+        match field {
+            0 => fixed.events[0].active = F(2),
+            1 => fixed.events[0].endpoint = F(2),
+            2 => fixed.events[0].address = F(2),
+            3 => fixed.multiplicity_small[0] = F(2),
+            4 => fixed.multiplicity_64[0] = F(2),
+            5 => fixed.multiplicity_65[0] = F(2),
+            6 => fixed.multiplicity_129[0] = F(2),
+            _ => unreachable!(),
+        }
+        assert!(!writer_slot_is_inactive_v1(&fixed, 0));
+        let expected = direct_writer_row_v1(fixed, [F(7), F(29)], [F(3); 4], challenges());
+        let flat = flat_writer_reference(&expected);
+        for first in (0..flat.len()).step_by(8) {
+            let width = 8.min(flat.len() - first);
+            let (actual, _) = selected_writer_columns_v1(
+                fixed,
+                [F(7), F(29)],
+                [F(3); 4],
+                [F::ZERO; 4],
+                challenges(),
+                first,
+                width,
+            );
+            assert_eq!(&actual[..width], &flat[first..first + width]);
+        }
+    }
+}
+
+#[test]
+fn selected_writer_stream_keeps_source_shape_and_terminal_refusals() {
+    use super::super::p256_value_bus::{P256ValueBusBaseCellV1, P256ValueBusEndpointV1};
+    let schedule = Arc::new(P256CrossTraceWriterSourceFixedV1 {
+        multiplicities: vec![0; P256_CROSS_TRACE_VALUE_CELLS_V1],
+    });
+    fn make_stream<'a>(
+        endpoint: &'a P256ValueBusBaseEndpointTraceV1,
+        schedule: &Arc<P256CrossTraceWriterSourceFixedV1>,
+        next_row: usize,
+        terminal: [F; P256_CROSS_TRACE_LANES_V1],
+    ) -> P256CrossTraceWriterSourceStreamV1<'a> {
+        P256CrossTraceWriterSourceStreamV1 {
+            value_bus: endpoint,
+            fixed: P256CrossTraceWriterFixedReplayV1::Compiled(Arc::clone(schedule)),
+            challenges: challenges(),
+            terminal,
+            running: [F::ONE; 4],
+            next_row,
+        }
+    }
+    // Both public slots are inactive; the original source range/canonicality
+    // validation must still reject malformed private cells before emitting.
+    let invalid = P256ValueBusBaseEndpointTraceV1 {
+        endpoint: P256ValueBusEndpointV1::Execution,
+        rows: vec![
+            P256ValueBusBaseCellV1 {
+                fixed: P256ValueBusFixedAccessV1::Inactive,
+                value: F::ONE,
+            };
+            2
+        ],
+    };
+    let mut compact = make_stream(&invalid, &schedule, 0, [F::ONE; 4]);
+    let mut dense = compact.replay_v1();
+    assert_eq!(
+        compact.next_selected_columns_v1(0, 8),
+        Err(P256CrossTraceBusErrorV1::Source)
+    );
+    assert_eq!(dense.next_row_v1(), Err(P256CrossTraceBusErrorV1::Source));
+    assert_eq!(compact.next_row, 0);
+    for (first, width) in [
+        (0, 0),
+        (0, 9),
+        (usize::MAX, 1),
+        (P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1, 1),
+    ] {
+        assert_eq!(
+            compact.next_selected_columns_v1(first, width),
+            Err(P256CrossTraceBusErrorV1::Topology)
+        );
+        assert_eq!(compact.next_row, 0);
+    }
+    let empty = P256ValueBusBaseEndpointTraceV1 {
+        endpoint: P256ValueBusEndpointV1::Execution,
+        rows: Vec::new(),
+    };
+    let last = P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 - 1;
+    let mut valid = make_stream(&empty, &schedule, last, [F::ONE; 4]);
+    assert!(
+        valid
+            .next_selected_columns_v1(P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1 - 8, 8)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(valid.next_selected_columns_v1(0, 8).unwrap(), None);
+    let mut corrupt = make_stream(&empty, &schedule, last, [F(2); 4]);
+    assert_eq!(
+        corrupt.next_selected_columns_v1(0, 8),
+        Err(P256CrossTraceBusErrorV1::Constraint)
+    );
+}

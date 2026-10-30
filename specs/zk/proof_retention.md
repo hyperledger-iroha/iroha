@@ -3,25 +3,27 @@
 Iroha keeps a registry of proof verification results (backend + hash) for audit
 and replay. Retention is enforced deterministically inside the consensus path.
 
-## Configuration
+## Policy
 
-The `zk` config controls retention:
+The committed `zk_validity_policy_v1` parameter controls retention:
 
-- `zk.proof_history_cap` — max records per backend (0 = unlimited)
-- `zk.proof_retention_grace_blocks` — minimum blocks to keep before age-based pruning
-- `zk.proof_prune_batch` — max removals per enforcement pass (0 = unlimited)
+- `proofs.proof_history_cap` — max records per backend (0 = unlimited)
+- `proofs.proof_retention_grace_blocks` — grace window for age-based pruning
+- `proofs.proof_prune_batch` — max removals per enforcement pass (0 = unlimited)
 
-These values are read from `iroha_config` (user → actual → defaults).
+An authorized `SetParameter` changes the policy for subsequent blocks. Node-local
+`[zk]` settings cannot override these validity values.
 
 ## Enforcement
 
 - **On insert:** `VerifyProof` enforces the cap/grace/batch for the proof’s
   backend after recording the new entry.
-- **Manual:** the new `PruneProofs` instruction prunes all backends (or a single
-  backend when provided) using the same policy. Use the CLI helper:
+- **Manual:** the Initial executor admits `PruneProofs` from any signed account.
+  It prunes all backends (or the selected backend) under the same committed policy;
+  the caller cannot supply different cap, grace or batch values. Use the CLI helper:
 
   ```bash
-  iroha app zk proofs prune --backend halo2/ipa
+  iroha app zk proofs prune --backend pipa-r/pasta
   ```
 
 Both paths emit `ProofEvent::Pruned` with the backend, removed ids (bounded by
@@ -32,7 +34,7 @@ Both paths emit `ProofEvent::Pruned` with the backend, removed ids (bounded by
 
 - Status endpoint: `GET /v1/proofs/retention` returns caps, grace, prune_batch,
   total records, total prunable, and per-backend counts. Because these are
-  node-local retention details, the request requires a fresh, exact-network
+  operator status details, the request requires a fresh, exact-network
   `OperatorSignature` over `GET`, the exact path and query, and an empty body;
   redirects, retries, and token fallback are rejected. Status aggregation keeps
   only one scalar summary per backend; it does not clone, sort, or retain the

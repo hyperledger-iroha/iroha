@@ -1810,7 +1810,7 @@ mod tests {
                     (<[u8; KEY_LEN]>::try_from(raw).unwrap(), private)
                 })
                 .collect();
-            members.sort_by(|left, right| left.0.cmp(&right.0));
+            members.sort_by_key(|member| member.0);
             Self { members }
         }
 
@@ -2523,7 +2523,7 @@ mod tests {
         ];
         for (deployment, error) in refusals {
             assert_eq!(Destination::new(deployment), Err(error));
-            assert!(!error.to_string().is_empty());
+            assert_ne!(error.to_string(), "");
         }
         // The first violated rule is reported.
         let both = DeploymentV1 {
@@ -5392,7 +5392,7 @@ mod tests {
         assert_eq!(older.history_path.len(), 1);
         let only = ledger.block_ref(1010, &empty);
         assert_eq!(check_block_ref(&only, &empty), Ok(()));
-        assert!(only.history_path.is_empty());
+        assert_eq!(only.history_path, Vec::<[u8; 32]>::new());
         for broken in [
             BlockRefV1 {
                 height: 1011,
@@ -6178,14 +6178,14 @@ mod tests {
                 stored.verify(&invalid, &mut events),
                 Ok((full.header, full.checkpoint_id))
             );
-            assert!(events.is_empty());
+            assert_eq!(events, []);
             invalid.signature = IDENTITY_SIGNATURE_EVM.to_vec();
             invalid.ton_signature = IDENTITY_SIGNATURE.to_vec();
             assert_eq!(
                 stored.verify(&invalid, &mut events),
                 Err(DestinationError::BadSignature)
             );
-            assert!(events.is_empty());
+            assert_eq!(events, []);
         }
     }
 

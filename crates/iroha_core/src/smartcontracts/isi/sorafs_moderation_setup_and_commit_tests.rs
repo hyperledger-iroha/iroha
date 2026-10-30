@@ -705,6 +705,18 @@ fn component_moderation_state(world: World) -> State {
         world.sccp_committee_generations.allocation_budget(),
     )
     .expect("install original fixture crypto policy");
+    // Account retirement must reach the pending-challenge guard and its later
+    // release with both original monetary policies present in this component.
+    crate::state::set_parameter_cell_for_testing(
+        &mut parameters,
+        iroha_data_model::parameter::Parameter::Custom(
+            crate::smartcontracts::isi::domain::monetary_test_support::staking()
+                .into_custom_parameter()
+                .expect("explicit moderation component staking policy"),
+        ),
+        world.sccp_committee_generations.allocation_budget(),
+    )
+    .expect("install original fixture staking policy");
     parameters.commit();
     State::new_for_testing(
         world,

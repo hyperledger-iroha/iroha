@@ -151,6 +151,15 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         ),
     ),
     function(
+        "crates/iroha_core/src/runtime/containment.rs",
+        "holding",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Lists the identities of the active containments that still hold a restriction they imposed, so block start can close their ratification cases after the height's change sets: record identifiers, no digest over a table or cell",
+        ),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/code.rs",
         "fetch_instance_binding",
         1,
@@ -428,7 +437,7 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/smartcontracts/ivm.rs",
-        "active_runtime_abi_hash",
+        "active_host_abi_hashes",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
@@ -734,6 +743,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "verify_next_height_threshold_key_lifecycle_certificate_v1",
         1,
         UseOwner::Other(Use::Record, BLOCK_HASH),
+    ),
+    function(
+        "crates/iroha_core/src/state/asset_uid/binding_custody.rs",
+        "binding_uid_with_owner",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
     function(
         "crates/iroha_core/src/state/asset_uid_reader/same_uid.rs",
@@ -1181,6 +1196,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "publication_state_delta",
         1,
         UseOwner::Roots(&["world_net_delta_fold"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/world_state_accumulator.rs",
+        "adopt_checkpoint_accumulator",
+        1,
+        UseOwner::Roots(&["world_state_root"]),
     ),
     function(
         "crates/iroha_core/src/state/world_state_accumulator.rs",

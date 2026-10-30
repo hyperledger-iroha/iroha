@@ -1688,6 +1688,22 @@ fn parse_does_not_apply_chain_discriminant_runtime_setting() {
         defaults::governance::slash_receiver_account_id()
     );
     assert_eq!(
+        config.gov.viral_incentives.incentive_pool_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        config.gov.viral_incentives.escrow_account,
+        defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        config.gov.sorafs_pin_fee_treasury_account,
+        defaults::governance::sorafs_pin_fee::treasury_account_id()
+    );
+    assert_eq!(
+        config.network.soranet_vpn.operator_account_id,
+        defaults::governance::bond_escrow_account_id()
+    );
+    assert_eq!(
         iroha_data_model::account::address::chain_discriminant(),
         0x02F1
     );
@@ -2301,6 +2317,28 @@ fn crypto_section_defaults_applied() {
         crypto.sm2_distid_default,
         defaults::crypto::SM2_DISTID_DEFAULT
     );
+}
+#[test]
+fn crypto_section_rejects_retired_admission_overrides() {
+    for (field, value, unknown) in [
+        ("allowed_signing", "['ed25519']", "allowed_signing"),
+        ("curves.allowed_curve_ids", "[1]", "curves"),
+    ] {
+        let table = format!("[crypto]\n{field} = {value}\n")
+            .parse()
+            .expect("well-formed retired configuration");
+        let error = ConfigReader::new()
+            .read_toml_with_extends(fixtures_dir().join("base.toml"))
+            .expect("base config should load")
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect_err("node configuration must not select crypto admission policy");
+        let report = strip_ansi_codes(&format!("{error:?}"));
+        assert!(
+            report.contains(&format!("unknown parameter: `crypto.{unknown}`")),
+            "{report}"
+        );
+    }
 }
 #[test]
 fn crypto_section_respects_env_overrides() {

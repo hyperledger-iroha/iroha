@@ -995,14 +995,10 @@ pub mod governance {
         }
     }
     permission! {
-        /// Allow proposing a runtime upgrade for one exact ABI target.
+        /// Allow proposing to SORA Parliament that a runtime change set be scheduled or
+        /// canceled (`specs/live_runtime_upgrades.md` §6). Parliament still decides.
         #[derive(Copy)]
-        pub struct CanProposeRuntimeUpgrade {
-            /// Exact ABI version targeted by the proposed runtime upgrade.
-            pub abi_version: u16,
-            /// Exact canonical ABI hash targeted by the proposed runtime upgrade.
-            pub abi_hash: [u8; 32],
-        }
+        pub struct CanProposeRuntimeChangeSet;
     }
     permission! {
         /// Allow submitting a governance ballot to a referendum/election
@@ -1025,11 +1021,6 @@ pub mod governance {
         /// Allow registering and rotating ledger verifying keys.
         #[derive(Copy)]
         pub struct CanManageVerifyingKeys;
-    }
-    permission! {
-        /// Allow activating and cancelling runtime upgrades.
-        #[derive(Copy)]
-        pub struct CanManageRuntimeUpgrades;
     }
     permission! {
         /// Allow managing consensus keys and endorsement committees.
@@ -1372,8 +1363,8 @@ mod tests {
     };
     use super::escrow::CanResolveEscrowDispute;
     use super::governance::{
-        CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
-        CanManageVerifyingKeys, CanProposeRuntimeUpgrade,
+        CanManageConfidentialParams, CanManageConsensusKeys, CanManageVerifyingKeys,
+        CanProposeRuntimeChangeSet,
     };
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
@@ -1534,9 +1525,9 @@ mod tests {
         }
 
         assert_exact_unit_capability!(
-            CanManageRuntimeUpgrades,
-            CanManageRuntimeUpgrades,
-            "CanManageRuntimeUpgrades"
+            CanProposeRuntimeChangeSet,
+            CanProposeRuntimeChangeSet,
+            "CanProposeRuntimeChangeSet"
         );
         assert_exact_unit_capability!(
             CanManageConsensusKeys,
@@ -1547,40 +1538,6 @@ mod tests {
             CanManageConfidentialParams,
             CanManageConfidentialParams,
             "CanManageConfidentialParams"
-        );
-    }
-    #[test]
-    fn runtime_upgrade_proposal_permission_binds_the_exact_abi_target() {
-        let expected = CanProposeRuntimeUpgrade {
-            abi_version: 1,
-            abi_hash: [0xA5; 32],
-        };
-        let canonical: iroha_data_model::permission::Permission = expected.into();
-        assert_eq!(canonical.name(), "CanProposeRuntimeUpgrade");
-        assert_eq!(
-            CanProposeRuntimeUpgrade::try_from(&canonical)
-                .expect("decode exact runtime-upgrade proposal scope"),
-            expected
-        );
-        let other_target: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
-            abi_version: 1,
-            abi_hash: [0x5A; 32],
-        }
-        .into();
-        assert_ne!(canonical, other_target);
-        let other_version: iroha_data_model::permission::Permission = CanProposeRuntimeUpgrade {
-            abi_version: 2,
-            abi_hash: [0xA5; 32],
-        }
-        .into();
-        assert_ne!(canonical, other_version);
-        let malformed = iroha_data_model::permission::Permission::new(
-            "CanProposeRuntimeUpgrade".into(),
-            norito::json!({"abi_version": 1}),
-        );
-        assert!(
-            CanProposeRuntimeUpgrade::try_from(&malformed).is_err(),
-            "runtime-upgrade permission must require the exact ABI hash"
         );
     }
     #[test]

@@ -347,7 +347,9 @@ fn reported_return_pending_pins_original_through_retention_and_restart() {
     let store = TempDir::new().unwrap();
     let mut config = sample_config();
     config.store_dir = Some(store.path().to_path_buf());
-    config.store_retention_secs = 1;
+    // The original is explicitly aged to the Unix epoch below. Keep the newly
+    // finalized report within retention while real durable writes complete.
+    config.store_retention_secs = 3_600;
     config.store_max_records = 2;
     let runtime = Iso20022BridgeRuntime::from_config(&config)
         .unwrap()

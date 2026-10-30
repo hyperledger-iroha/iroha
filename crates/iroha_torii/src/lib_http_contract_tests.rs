@@ -214,7 +214,7 @@ mod matched_route_metadata_tests {
     }
     #[tokio::test]
     async fn host_selected_site_bypasses_listener_token_only_when_fallback_wins() {
-        let mut app = crate::mk_app_state_for_tests();
+        let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique test app state");
         state.require_api_token = true;
         state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));

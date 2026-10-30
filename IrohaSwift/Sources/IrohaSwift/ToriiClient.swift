@@ -525,6 +525,48 @@ func requireExactJSONFields(
     }
 }
 
+/// Largest integer a first-release public JSON number field carries (`2^53 - 1`), so
+/// IEEE-754 binary64 consumers read every such value exactly.
+let firstReleaseMaxExactJSONUInt64: UInt64 = 9_007_199_254_740_991
+
+/// Decode one keyed JSON number as an exact `UInt64` no larger than `maximum`.
+///
+/// Under the exact-number lexemes `ToriiClient` installs, the raw token must be a canonical
+/// unquoted unsigned integer, so `5.0`, `5e0` and `"5"` are rejected. A plain `JSONDecoder`
+/// falls back to Foundation's integer decoding, which rejects strings and non-integral or
+/// out-of-range numbers.
+func decodeExactJSONUInt64<K: CodingKey>(
+    _ container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    userInfo: [CodingUserInfoKey: Any],
+    field: String,
+    maximum: UInt64 = .max
+) throws -> UInt64 {
+    let value: UInt64
+    if let lexemes = userInfo[exactJSONNumberLexemesUserInfoKey] as? [String: String] {
+        guard let token = lexemes[exactJSONNumberCodingPathKey(container.codingPath + [key])],
+              let parsed = SccpUInt128.parse(token),
+              let exact = UInt64(parsed.decimalString) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(field) must be an unquoted unsigned 64-bit JSON integer"
+            )
+        }
+        value = exact
+    } else {
+        value = try container.decode(UInt64.self, forKey: key)
+    }
+    guard value <= maximum else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) exceeds \(maximum), the largest value it may carry"
+        )
+    }
+    return value
+}
+
 fileprivate func decodeRequiredNullableString<K: CodingKey>(
     from container: KeyedDecodingContainer<K>,
     forKey key: K,
@@ -6409,15 +6451,43 @@ public struct ToriiConfigurationSnapshot: Decodable, Sendable {
     }
 }
 
-public struct ToriiRuntimeUpgradeCounters: Decodable, Sendable {
-    public let proposed: Int
-    public let activated: Int
-    public let canceled: Int
+/// Recorded runtime change sets by lifecycle status (`specs/live_runtime_upgrades.md` §6).
+public struct ToriiRuntimeUpgradeCounters: Decodable, Sendable, Equatable {
+    /// Approved and waiting for their effective height.
+    public let scheduled: UInt64
+    /// Took effect.
+    public let activated: UInt64
+    /// Reached their effective height without taking effect.
+    public let lapsed: UInt64
+    /// Withdrawn by governance.
+    public let canceled: UInt64
 
-    private enum CodingKeys: String, CodingKey {
-        case proposed
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case scheduled
         case activated
+        case lapsed
         case canceled
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime upgrade counters"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func count(_ key: CodingKeys) throws -> UInt64 {
+            try decodeExactJSONUInt64(
+                container,
+                forKey: key,
+                userInfo: decoder.userInfo,
+                field: "upgrade_events_total.\(key.stringValue)"
+            )
+        }
+        scheduled = try count(.scheduled)
+        activated = try count(.activated)
+        lapsed = try count(.lapsed)
+        canceled = try count(.canceled)
     }
 }
 
@@ -6447,12 +6517,6 @@ public struct ToriiRuntimeAbiHash: Decodable, Sendable {
         case policy
         case abiHashHex = "abi_hash_hex"
     }
-}
-
-public enum ToriiRuntimeUpgradeStatus: Equatable, Sendable {
-    case proposed
-    case activatedAt(UInt64)
-    case canceled
 }
 
 public struct ToriiUaidPortfolioTotals: Decodable, Sendable {
@@ -7203,259 +7267,455 @@ public struct ToriiUaidManifestRecord: Decodable, Sendable {
     }
 }
 
-extension ToriiRuntimeUpgradeStatus: Decodable {
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let map = try container.decode([String: ToriiJSONValue].self)
-        guard map.count == 1, let (key, value) = map.first else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "RuntimeUpgradeStatus expects single-key object")
-        }
-        switch key {
-        case "Proposed":
-            self = .proposed
-        case "Canceled":
-            self = .canceled
-        case "ActivatedAt":
-            let height: UInt64
-            switch value {
-            case .number(let number):
-                guard let exactHeight = UInt64(exactly: number) else {
-                    throw DecodingError.dataCorruptedError(in: container,
-                                                           debugDescription: "ActivatedAt height must be a non-negative integer within range")
-                }
-                height = exactHeight
-            case .integer(let integer):
-                guard let parsed = UInt64(integer) else {
-                    throw DecodingError.dataCorruptedError(
-                        in: container,
-                        debugDescription: "ActivatedAt height must fit UInt64"
-                    )
-                }
-                height = parsed
-            case .string(let string):
-                guard let parsed = UInt64(string) else {
-                    throw DecodingError.dataCorruptedError(in: container,
-                                                           debugDescription: "ActivatedAt height string is invalid")
-                }
-                height = parsed
-            case .null:
-                throw DecodingError.dataCorruptedError(in: container,
-                                                       debugDescription: "ActivatedAt height missing")
-            default:
-                throw DecodingError.dataCorruptedError(in: container,
-                                                       debugDescription: "ActivatedAt expects numeric height")
-            }
-            self = .activatedAt(height)
-        default:
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "Unknown runtime upgrade status \(key)")
-        }
+/// Decode one keyed 32-byte identity rendered as exactly 64 lowercase hexadecimal characters.
+fileprivate func decodeRuntimeHash32<K: CodingKey>(
+    _ container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    guard value.utf8.count == 64,
+          value.utf8.allSatisfy({ (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must be exactly 64 lowercase hexadecimal characters"
+        )
     }
+    return value
 }
 
-public struct ToriiRuntimeUpgradeManifest: Codable, Sendable {
-    public let name: String
-    public let description: String
-    public let abiVersion: UInt16
-    public let abiHashHex: String
-    public let addedSyscalls: [UInt16]
-    public let addedPointerTypes: [UInt16]
-    public let startHeight: UInt64
-    public let endHeight: UInt64
+/// Minimum notice of one kind of runtime change: blocks and committed time
+/// (`specs/live_runtime_upgrades.md` §6, "Notice").
+///
+/// A notice is frozen into the runtime-upgrade proposal that admitted it, so every value is a
+/// first-release exact JSON integer (at most `2^53 - 1`).
+public struct ToriiRuntimeNotice: Decodable, Sendable, Equatable {
+    /// Fewest blocks between approval and the effective height.
+    public let blocks: UInt64
+    /// Fewest committed milliseconds between proposal and activation.
+    public let ms: UInt64
+    /// Fewest committed milliseconds between approval and activation.
+    public let approvalCushionMs: UInt64
 
-    public var abiHash: Data {
-        Data(hexString: abiHashHex) ?? Data()
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name
-        case description
-        case abiVersion = "abi_version"
-        case abiHashHex = "abi_hash"
-        case addedSyscalls = "added_syscalls"
-        case addedPointerTypes = "added_pointer_types"
-        case startHeight = "start_height"
-        case endHeight = "end_height"
-    }
-
-    public init(name: String,
-                description: String,
-                abiVersion: UInt16,
-                abiHashHex: String,
-                addedSyscalls: [UInt16] = [],
-                addedPointerTypes: [UInt16] = [],
-                startHeight: UInt64,
-                endHeight: UInt64) {
-        self.name = name
-        self.description = description
-        self.abiVersion = abiVersion
-        self.abiHashHex = abiHashHex.lowercased()
-        self.addedSyscalls = addedSyscalls
-        self.addedPointerTypes = addedPointerTypes
-        self.startHeight = startHeight
-        self.endHeight = endHeight
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case blocks
+        case ms
+        case approvalCushionMs = "approval_cushion_ms"
     }
 
     public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime notice"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        description = try container.decode(String.self, forKey: .description)
-        abiVersion = try container.decode(UInt16.self, forKey: .abiVersion)
-        let hashHex = try container.decode(String.self, forKey: .abiHashHex)
-        abiHashHex = try ToriiValidation.normalized32ByteHex(
-            hashHex,
-            field: "abi_hash",
-            codingPath: container.codingPath + [CodingKeys.abiHashHex]
-        )
-        addedSyscalls = try container.decodeIfPresent([UInt16].self, forKey: .addedSyscalls) ?? []
-        addedPointerTypes = try container.decodeIfPresent([UInt16].self, forKey: .addedPointerTypes) ?? []
-        startHeight = try container.decode(UInt64.self, forKey: .startHeight)
-        endHeight = try container.decode(UInt64.self, forKey: .endHeight)
-        try Self.validateFirstReleaseAbiForDecoding(
-            abiVersion: abiVersion,
-            addedSyscalls: addedSyscalls,
-            addedPointerTypes: addedPointerTypes,
-            codingPath: container.codingPath + [CodingKeys.abiVersion]
-        )
+        func value(_ key: CodingKeys) throws -> UInt64 {
+            try decodeExactJSONUInt64(
+                container,
+                forKey: key,
+                userInfo: decoder.userInfo,
+                field: "notice.\(key.stringValue)",
+                maximum: firstReleaseMaxExactJSONUInt64
+            )
+        }
+        blocks = try value(.blocks)
+        ms = try value(.ms)
+        approvalCushionMs = try value(.approvalCushionMs)
+    }
+}
+
+/// A governed runtime change set (`ChangeSetV1`): one move of an execution root from its
+/// predecessor selection to its successor at `effectiveHeight`
+/// (`specs/live_runtime_upgrades.md` §6).
+///
+/// The selections and the effective height are typed and checked exactly. `json` keeps the
+/// complete change-set object as Torii encodes it (network, root, published definitions,
+/// ordered transitions and the qualification digest); it is the `change_set` that
+/// `ToriiClient.proposeRuntimeUpgrade(changeSet:provenance:)` posts.
+public struct ToriiRuntimeChangeSet: Decodable, Sendable, Equatable {
+    /// Selection the change set starts from, 32-byte lowercase hex.
+    public let predecessorHex: String
+    /// Exact selection the change set produces, 32-byte lowercase hex.
+    public let successorHex: String
+    /// First height executed under the successor; a first-release exact JSON integer
+    /// (at most `2^53 - 1`).
+    public let effectiveHeight: UInt64
+    /// The complete `ChangeSetV1` JSON object.
+    public let json: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case network
+        case root
+        case predecessor
+        case successor
+        case effectiveHeight = "effective_height"
+        case publish
+        case transitions
+        case qualification
     }
 
-    public func encode(to encoder: Encoder) throws {
-        try Self.validateFirstReleaseAbiForEncoding(
-            abiVersion: abiVersion,
-            addedSyscalls: addedSyscalls,
-            addedPointerTypes: addedPointerTypes
-        )
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(name, forKey: .name)
-        try container.encode(description, forKey: .description)
-        try container.encode(abiVersion, forKey: .abiVersion)
-        let normalizedHash = try ToriiRequestValidation.normalized32ByteHex(abiHashHex, field: "abi_hash")
-        try container.encode(normalizedHash, forKey: .abiHashHex)
-        if !addedSyscalls.isEmpty {
-            try container.encode(addedSyscalls, forKey: .addedSyscalls)
-        } else {
-            try container.encode([UInt16](), forKey: .addedSyscalls)
-        }
-        if !addedPointerTypes.isEmpty {
-            try container.encode(addedPointerTypes, forKey: .addedPointerTypes)
-        } else {
-            try container.encode([UInt16](), forKey: .addedPointerTypes)
-        }
-        try container.encode(startHeight, forKey: .startHeight)
-        try container.encode(endHeight, forKey: .endHeight)
-    }
-
-    private static func validateFirstReleaseAbiForDecoding(
-        abiVersion: UInt16,
-        addedSyscalls: [UInt16],
-        addedPointerTypes: [UInt16],
-        codingPath: [CodingKey]
-    ) throws {
-        if abiVersion != 1 {
-            throw DecodingError.dataCorrupted(
-                DecodingError.Context(
-                    codingPath: codingPath,
-                    debugDescription: "abi_version must be 1 in the first release"
-                )
-            )
-        }
-        if !addedSyscalls.isEmpty {
-            throw DecodingError.dataCorrupted(
-                DecodingError.Context(
-                    codingPath: codingPath,
-                    debugDescription: "added_syscalls must be empty in the first release"
-                )
-            )
-        }
-        if !addedPointerTypes.isEmpty {
-            throw DecodingError.dataCorrupted(
-                DecodingError.Context(
-                    codingPath: codingPath,
-                    debugDescription: "added_pointer_types must be empty in the first release"
-                )
-            )
+    /// Validate one `ChangeSetV1` JSON object, for example one read with
+    /// `ToriiJSONValue.decodeExact(from:)`.
+    public init(json: ToriiJSONValue) throws {
+        do {
+            self = try json.decode(as: ToriiRuntimeChangeSet.self)
+        } catch {
+            throw ToriiClientError.invalidPayload("runtime change set is invalid: \(error)")
         }
     }
 
-    private static func validateFirstReleaseAbiForEncoding(
-        abiVersion: UInt16,
-        addedSyscalls: [UInt16],
-        addedPointerTypes: [UInt16]
-    ) throws {
-        if abiVersion != 1 {
-            throw ToriiClientError.invalidPayload("abi_version must be 1 in the first release.")
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime change set"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        predecessorHex = try decodeRuntimeHash32(container, forKey: .predecessor, field: "predecessor")
+        successorHex = try decodeRuntimeHash32(container, forKey: .successor, field: "successor")
+        effectiveHeight = try decodeExactJSONUInt64(
+            container,
+            forKey: .effectiveHeight,
+            userInfo: decoder.userInfo,
+            field: "effective_height",
+            maximum: firstReleaseMaxExactJSONUInt64
+        )
+        json = try ToriiJSONValue(from: decoder)
+    }
+}
+
+/// A trusted release signer's endorsement of a change set's provenance
+/// (`ChangeSetEndorsementV1`, `specs/live_runtime_upgrades.md` §6, "Who governs");
+/// `iroha runtime upgrade endorse` prints one.
+///
+/// While the universal root commits a `runtime_provenance_policy_v1`, a proposal that schedules
+/// a change set needs endorsements from its threshold of distinct trusted signers; the node
+/// verifies every signature when the proposal executes. `json` keeps the exact object.
+public struct ToriiRuntimeChangeSetEndorsement: Decodable, Sendable, Equatable {
+    /// Identity of the endorsed change set, 32-byte lowercase hex.
+    public let changeSetHex: String
+    /// The release signer's canonical public-key multihash.
+    public let signer: String
+    /// The signature, uppercase hexadecimal.
+    public let signatureHex: String
+    /// The complete `ChangeSetEndorsementV1` JSON object.
+    public let json: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case changeSet = "change_set"
+        case signer
+        case signature
+    }
+
+    /// Validate one `ChangeSetEndorsementV1` JSON object, for example one read with
+    /// `ToriiJSONValue.decodeExact(from:)`.
+    public init(json: ToriiJSONValue) throws {
+        do {
+            self = try json.decode(as: ToriiRuntimeChangeSetEndorsement.self)
+        } catch {
+            throw ToriiClientError.invalidPayload("runtime change-set endorsement is invalid: \(error)")
         }
-        if !addedSyscalls.isEmpty {
-            throw ToriiClientError.invalidPayload("added_syscalls must be empty in the first release.")
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime change-set endorsement"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        changeSetHex = try decodeRuntimeHash32(container, forKey: .changeSet, field: "change_set")
+        signer = try container.decode(String.self, forKey: .signer)
+        guard !signer.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .signer,
+                in: container,
+                debugDescription: "signer must be a non-empty public-key multihash"
+            )
         }
-        if !addedPointerTypes.isEmpty {
-            throw ToriiClientError.invalidPayload("added_pointer_types must be empty in the first release.")
+        signatureHex = try container.decode(String.self, forKey: .signature)
+        guard !signatureHex.isEmpty,
+              signatureHex.utf8.count.isMultiple(of: 2),
+              signatureHex.utf8.allSatisfy({ (0x30...0x39).contains($0) || (0x41...0x46).contains($0) }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .signature,
+                in: container,
+                debugDescription: "signature must be uppercase byte-aligned hexadecimal"
+            )
+        }
+        json = try ToriiJSONValue(from: decoder)
+    }
+}
+
+/// Where a governed runtime change set stands (`ChangeSetStatusV1`).
+public enum ToriiRuntimeChangeSetStatus: Decodable, Sendable, Equatable {
+    /// Approved; it applies at its effective height once every validator supports it.
+    case scheduled
+    /// Applied at this height.
+    case activated(height: UInt64)
+    /// Its effective height passed without complete, current support or notice; it never applies.
+    case lapsed(height: UInt64)
+    /// Governance withdrew it at this height, before activation.
+    case cancelled(height: UInt64)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case content
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: ["kind"],
+            optional: ["content"],
+            debugName: "runtime change-set status"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        func height() throws -> UInt64 {
+            try decodeExactJSONUInt64(
+                container,
+                forKey: .content,
+                userInfo: decoder.userInfo,
+                field: "\(kind) status height"
+            )
+        }
+        switch kind {
+        case "Scheduled":
+            if container.contains(.content), try !container.decodeNil(forKey: .content) {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .content,
+                    in: container,
+                    debugDescription: "Scheduled status carries no content"
+                )
+            }
+            self = .scheduled
+        case "Activated":
+            self = .activated(height: try height())
+        case "Lapsed":
+            self = .lapsed(height: try height())
+        case "Cancelled":
+            self = .cancelled(height: try height())
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "unknown runtime change-set status \(kind)"
+            )
         }
     }
 }
 
-public struct ToriiRuntimeUpgradeRecord: Decodable, Sendable {
-    public let manifest: ToriiRuntimeUpgradeManifest
-    public let status: ToriiRuntimeUpgradeStatus
-    public let proposer: String
-    public let createdHeight: UInt64
+/// A governed runtime change set and its progress (`ChangeSetRecordV1`).
+///
+/// The change set, its status and the notice frozen at proposal are typed. `json` keeps the
+/// complete record, including the proposal and approval times and the latest support
+/// attestation of each validator.
+public struct ToriiRuntimeChangeSetRecord: Decodable, Sendable, Equatable {
+    /// The change set.
+    public let changeSet: ToriiRuntimeChangeSet
+    /// Where it stands.
+    public let status: ToriiRuntimeChangeSetStatus
+    /// The notice policy in force when its proposal was admitted.
+    public let notice: ToriiRuntimeNotice
+    /// The complete `ChangeSetRecordV1` JSON object.
+    public let json: ToriiJSONValue
+
+    private static let fields: Set<String> = [
+        "change_set", "status", "proposed_ms", "approved_height", "approved_ms", "notice",
+        "attestations",
+    ]
 
     private enum CodingKeys: String, CodingKey {
-        case manifest
+        case changeSet = "change_set"
         case status
-        case proposer
-        case createdHeight = "created_height"
+        case notice
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Self.fields,
+            debugName: "runtime change-set record"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        changeSet = try container.decode(ToriiRuntimeChangeSet.self, forKey: .changeSet)
+        status = try container.decode(ToriiRuntimeChangeSetStatus.self, forKey: .status)
+        notice = try container.decode(ToriiRuntimeNotice.self, forKey: .notice)
+        json = try ToriiJSONValue(from: decoder)
     }
 }
 
-public struct ToriiRuntimeUpgradeListItem: Decodable, Sendable {
+/// One recorded runtime change set.
+public struct ToriiRuntimeUpgradeListItem: Decodable, Sendable, Equatable {
+    /// Change-set identity, 32-byte lowercase hex; `ToriiClient.cancelRuntimeUpgrade(idHex:)`
+    /// takes it.
     public let idHex: String
-    public let record: ToriiRuntimeUpgradeRecord
+    /// The change set with its status and frozen notice.
+    public let record: ToriiRuntimeChangeSetRecord
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case idHex = "id_hex"
         case record
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let idHex = try container.decode(String.self, forKey: .idHex)
-        self.idHex = try ToriiValidation.normalized32ByteHex(
-            idHex,
-            field: "id_hex",
-            codingPath: container.codingPath + [CodingKeys.idHex]
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime upgrade list item"
         )
-        record = try container.decode(ToriiRuntimeUpgradeRecord.self, forKey: .record)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        idHex = try decodeRuntimeHash32(container, forKey: .idHex, field: "id_hex")
+        record = try container.decode(ToriiRuntimeChangeSetRecord.self, forKey: .record)
     }
 }
 
-struct ToriiRuntimeUpgradesListResponse: Decodable {
-    let items: [ToriiRuntimeUpgradeListItem]
+/// `GET /v1/runtime/upgrades`: the selection the universal root executes, the committee that
+/// attests change sets, and every recorded change set.
+public struct ToriiRuntimeUpgradesSnapshot: Decodable, Sendable, Equatable {
+    /// Identity of the committed selection, 32-byte lowercase hex: the predecessor a new
+    /// change set names.
+    public let selectionIdHex: String
+    /// The committed `RootSelectionV1` object.
+    public let selection: ToriiJSONValue
+    /// Public keys (multihash strings) of the current validator committee; every member
+    /// attests a change set before it activates.
+    public let committee: [String]
+    /// Committee digest an attestation binds, 32-byte lowercase hex.
+    public let committeeDigestHex: String
+    /// Recorded change sets by effective height, then identity.
+    public let items: [ToriiRuntimeUpgradeListItem]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case selectionIdHex = "selection_id_hex"
+        case selection
+        case committee
+        case committeeDigestHex = "committee_digest_hex"
+        case items
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime upgrades snapshot"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectionIdHex = try decodeRuntimeHash32(
+            container,
+            forKey: .selectionIdHex,
+            field: "selection_id_hex"
+        )
+        selection = try container.decode(ToriiJSONValue.self, forKey: .selection)
+        guard case .object = selection else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .selection,
+                in: container,
+                debugDescription: "selection must be a RootSelectionV1 JSON object"
+            )
+        }
+        committee = try container.decode([String].self, forKey: .committee)
+        guard committee.allSatisfy({ key in
+            !key.isEmpty && key.unicodeScalars.allSatisfy({ scalar in
+                !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                    && !CharacterSet.controlCharacters.contains(scalar)
+            })
+        }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .committee,
+                in: container,
+                debugDescription: "committee keys must be exact non-empty multihash text"
+            )
+        }
+        committeeDigestHex = try decodeRuntimeHash32(
+            container,
+            forKey: .committeeDigestHex,
+            field: "committee_digest_hex"
+        )
+        items = try container.decode([ToriiRuntimeUpgradeListItem].self, forKey: .items)
+    }
 }
 
+/// One instruction Torii drafted for local signing.
 public struct ToriiRuntimeInstruction: Codable, Sendable {
+    /// Canonical V1 wire identifier.
     public let wireId: String
+    /// Norito-framed instruction payload, lowercase hex.
     public let payloadHex: String
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case wireId = "wire_id"
         case payloadHex = "payload_hex"
     }
-}
 
-public struct ToriiRuntimeUpgradeActionResponse: Decodable, Sendable {
-    public let ok: Bool
-    public let txInstructions: [ToriiRuntimeInstruction]
-
-    private enum CodingKeys: String, CodingKey {
-        case ok
-        case txInstructions = "tx_instructions"
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime instruction draft"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        wireId = try container.decode(String.self, forKey: .wireId)
+        payloadHex = try container.decode(String.self, forKey: .payloadHex)
+        guard !payloadHex.isEmpty,
+              payloadHex.utf8.count.isMultiple(of: 2),
+              payloadHex.utf8.allSatisfy({ (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payloadHex,
+                in: container,
+                debugDescription: "payload_hex must be exact non-empty lowercase hexadecimal"
+            )
+        }
     }
 }
 
-private struct ToriiRuntimeUpgradeManifestEnvelope: Encodable {
-    let manifest: ToriiRuntimeUpgradeManifest
+/// Torii's draft of the one SORA Parliament proposal instruction that schedules or withdraws a
+/// runtime change set. Sign and submit `txInstructions` locally; admission happens when the
+/// signed proposal executes.
+public struct ToriiRuntimeUpgradeActionResponse: Decodable, Sendable {
+    /// Wire identifier of the drafted `ProposeRuntimeUpgradeProposal` instruction.
+    public static let proposalInstructionWireId =
+        "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+
+    /// Always `true` for a drafted instruction.
+    public let ok: Bool
+    /// The one drafted proposal instruction.
+    public let txInstructions: [ToriiRuntimeInstruction]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case ok
+        case txInstructions = "tx_instructions"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try requireExactJSONFields(
+            from: decoder,
+            required: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "runtime upgrade draft response"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard try container.decode(Bool.self, forKey: .ok) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ok,
+                in: container,
+                debugDescription: "ok must be exactly true"
+            )
+        }
+        let instructions = try container.decode([ToriiRuntimeInstruction].self, forKey: .txInstructions)
+        guard instructions.count == 1,
+              instructions[0].wireId == Self.proposalInstructionWireId else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .txInstructions,
+                in: container,
+                debugDescription: "runtime upgrade draft must contain exactly one \(Self.proposalInstructionWireId) instruction"
+            )
+        }
+        ok = true
+        txInstructions = instructions
+    }
 }
 
 public enum ToriiVerifyingKeyStatus: String, Codable, Sendable {
@@ -22173,45 +22433,55 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiRuntimeAbiHash.self, from: data)
     }
 
-    public func listRuntimeUpgrades() async throws -> [ToriiRuntimeUpgradeListItem] {
-        let request = try makeRequest(path: "/v1/runtime/upgrades")
+    /// Operator-authenticated `GET /v1/runtime/upgrades`: the committed runtime selection, the
+    /// committee that attests change sets, and every recorded change set.
+    public func listRuntimeUpgrades() async throws -> ToriiRuntimeUpgradesSnapshot {
+        let request = try makeOperatorGetRequest(
+            path: "/v1/runtime/upgrades",
+            headers: ["Accept": "application/json"]
+        )
         let data = try await data(for: request)
-        let response = try decodeJSON(ToriiRuntimeUpgradesListResponse.self, from: data)
-        return response.items
+        return try decodeJSON(ToriiRuntimeUpgradesSnapshot.self, from: data)
     }
 
-    public func proposeRuntimeUpgrade(manifest: ToriiRuntimeUpgradeManifest) async throws -> ToriiRuntimeUpgradeActionResponse {
-        let envelope = ToriiRuntimeUpgradeManifestEnvelope(manifest: manifest)
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/runtime/upgrades/propose",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
+    /// Operator-authenticated `POST /v1/runtime/upgrades/propose` with the `ChangeSetV1` object
+    /// as `change_set` and the trusted release signers' endorsements as `provenance`: drafts
+    /// the SORA Parliament proposal that schedules `changeSet`. A root without a committed
+    /// `runtime_provenance_policy_v1` takes no endorsements.
+    ///
+    /// Nothing activates a change set by request. Once enacted it is `Scheduled`; at the start
+    /// of its effective height it activates if every committee member attested it, its notice
+    /// elapsed and it still applies to the committed selection, and lapses otherwise.
+    public func proposeRuntimeUpgrade(
+        changeSet: ToriiRuntimeChangeSet,
+        provenance: [ToriiRuntimeChangeSetEndorsement] = []
+    ) async throws -> ToriiRuntimeUpgradeActionResponse {
+        let body = try ToriiJSONValue.object([
+            "change_set": changeSet.json,
+            "provenance": .array(provenance.map(\.json)),
+        ]).encodedData()
+        let request = try makeOperatorRequest(
+            path: "/v1/runtime/upgrades/propose",
+            method: .post,
+            body: body,
+            headers: ["Accept": "application/json", "Content-Type": "application/json"]
+        )
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
     }
 
-    public func activateRuntimeUpgrade(idHex: String) async throws -> ToriiRuntimeUpgradeActionResponse {
-        let normalized = try ToriiRequestValidation.normalized32ByteHex(idHex, field: "idHex")
-        let encoded = encodePathComponent(normalized)
-        let request = try makeRequest(path: "/v1/runtime/upgrades/activate/\(encoded)",
-                                      method: .post,
-                                      body: Data(),
-                                      headers: ["Content-Type": "application/json"])
-        let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 200, responseBody: data)
-        return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
-    }
-
+    /// Operator-authenticated `POST /v1/runtime/upgrades/cancel/{id}`: drafts the SORA
+    /// Parliament proposal that withdraws the scheduled change set `idHex` before it activates.
     public func cancelRuntimeUpgrade(idHex: String) async throws -> ToriiRuntimeUpgradeActionResponse {
         let normalized = try ToriiRequestValidation.normalized32ByteHex(idHex, field: "idHex")
         let encoded = encodePathComponent(normalized)
-        let request = try makeRequest(path: "/v1/runtime/upgrades/cancel/\(encoded)",
-                                      method: .post,
-                                      body: Data(),
-                                      headers: ["Content-Type": "application/json"])
+        let request = try makeOperatorRequest(
+            path: "/v1/runtime/upgrades/cancel/\(encoded)",
+            method: .post,
+            body: Data(),
+            headers: ["Accept": "application/json", "Content-Type": "application/json"]
+        )
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
         return try decodeJSON(ToriiRuntimeUpgradeActionResponse.self, from: data)
@@ -23849,6 +24119,21 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         queryItems: [URLQueryItem]? = nil,
         headers: [String: String] = [:]
     ) throws -> URLRequest {
+        try makeOperatorRequest(path: path, method: .get, queryItems: queryItems, headers: headers)
+    }
+
+    /// Build one fresh exact-network operator-authenticated request whose signature covers
+    /// the method, URL and exact `body` bytes (empty when `body` is `nil`).
+    ///
+    /// Dispatch remains the caller's responsibility so every invocation signs
+    /// exactly once immediately before the one-shot request is sent.
+    private func makeOperatorRequest(
+        path: String,
+        method: HTTPMethod,
+        queryItems: [URLQueryItem]? = nil,
+        body: Data? = nil,
+        headers: [String: String] = [:]
+    ) throws -> URLRequest {
         let managedHeaders = [
             "Authorization",
             "X-API-Token",
@@ -23877,17 +24162,18 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
         var request = try makeRequest(
             path: path,
-            method: .get,
+            method: method,
             queryItems: queryItems,
+            body: body,
             headers: headers
         )
         guard let url = request.url else {
             throw ToriiClientError.invalidURL(path)
         }
         let authHeaders = try operatorSigningContext.buildHeaders(
-            method: HTTPMethod.get.rawValue,
+            method: method.rawValue,
             url: url,
-            body: Data(),
+            body: body ?? Data(),
             timestampMs: currentEpochMs()
         )
         for (key, value) in authHeaders {

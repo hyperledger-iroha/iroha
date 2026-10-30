@@ -160,11 +160,8 @@ pub use zk_x509_transaction_ffi::{
     connect_norito_zk_x509_transaction_close_v1, connect_norito_zk_x509_transaction_prepare_v1,
     connect_norito_zk_x509_transaction_projection_v1, connect_norito_zk_x509_transaction_sign_v1,
 };
-#[cfg(not(unix))]
-compile_error!(
-    "Native KAGEMUSHA wallet storage is not implemented for non-Unix targets; \
-     a genuine platform custody backend is required."
-);
+#[cfg(not(any(unix, windows)))]
+compile_error!("Native KAGEMUSHA wallet storage requires the Unix or Windows custody backend.");
 /// Native KAGEMUSHA custody callbacks and exclusive shared-wallet ownership.
 pub mod kagemusha_wallet_ffi;
 mod kagemusha_wallet_load_original;

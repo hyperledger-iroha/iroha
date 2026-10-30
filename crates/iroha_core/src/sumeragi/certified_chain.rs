@@ -107,6 +107,8 @@ const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
 mod amx_initialization;
 pub(in crate::sumeragi) mod artifacts;
 mod native_acquisition;
+mod successor_context;
+pub(crate) use successor_context::SuccessorContextPreparation;
 mod prefix_checkpoints;
 mod retained_query_authority;
 pub(crate) use retained_query_authority::QueryCacheOwner;

@@ -23,7 +23,6 @@ use iroha_sccp_rpc::{
     evm::{BlockId, BlockTag, EvmCallRequest},
     ton::AccountId as TonAccount,
 };
-use mv::storage::StorageReadOnly as _;
 
 use super::*;
 
@@ -533,12 +532,10 @@ fn inspect(
         }
         match checked {
             Ok(candidate) => {
-                if view
-                    .world()
-                    .consensus_evidence()
-                    .get(&iroha_crypto::Hash::prehashed(candidate.evidence_id()))
-                    .is_some()
-                {
+                // Retire whatever step 7 refuses, not only this exact record: another
+                // certificate may already name every signer and the generation, and a
+                // retried duplicate would pin the watch cursor on this item.
+                if candidate.is_duplicate_in(view.world(), budget)? {
                     return Ok(true);
                 }
             }

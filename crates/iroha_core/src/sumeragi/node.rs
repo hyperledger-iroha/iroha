@@ -1097,6 +1097,19 @@ impl Prepared {
             assertion.as_ref(),
         )
         .map_err(|error| NodeError::Input(error.to_string()))?;
+        // An active key without a safety record signs nothing until peers anchor it (§7.4 R2).
+        // That is expected when joining a running network, but on a brand-new network every key
+        // starts unanchored and consensus never begins, so name the one-shot first-boot flag.
+        if found.iter().any(|(_, state, retired)| {
+            !*retired && *state == iroha_sumeragi::safety::RecordState::Absent
+        }) {
+            iroha_logger::warn!(
+                key = %key_pair.public_key(),
+                "sumeragi: this validator key has no safety record for this chain and signs \
+                 nothing until running peers anchor it; on the first boot of a brand-new network \
+                 restart once with --sumeragi-assert-fresh-key (never after losing node data)"
+            );
+        }
         // Height configurations of the window (t, t + 1, t + 2).
         let (configs, demotion_window) = {
             let view = state.view();
@@ -2110,7 +2123,15 @@ mod tests {
     fn world_state_roots(validators: &[Validator]) -> Vec<Result<Hash, String>> {
         validators
             .iter()
-            .map(|validator| validator.state.world.state_accumulator.view().get().root())
+            .map(|validator| {
+                validator
+                    .state
+                    .world
+                    .state_accumulator
+                    .view()
+                    .get()
+                    .baseline_root()
+            })
             .collect()
     }
 
@@ -3008,6 +3029,9 @@ mod tests {
         );
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
         let (genesis, certificate, _) = startup::stored_genesis(&state)
             .expect("valid stored genesis projection")

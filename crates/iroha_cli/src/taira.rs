@@ -250,8 +250,8 @@ pub struct Doctor {
     /// Emit a stable JSON report.
     #[arg(long)]
     pub json: bool,
-    /// Also report every SORA Parliament seating requirement (`specs/sccp.md` §4.14.5) that
-    /// signer-free public routes cannot prove, as warnings.
+    /// Also observe public Parliament body sizes and beacon/roster state, with warnings for
+    /// unavailable seating and launch/progress requirements. Diagnostics do not authorize launch.
     #[arg(long)]
     pub parliament: bool,
 }
@@ -263,10 +263,7 @@ impl Run for Doctor {
 }
 impl Doctor {
     fn run_with_output<O: ReportOutput>(&self, output: &mut O) -> Result<()> {
-        let mut report = run_doctor(&self.public_root, self.scope)?;
-        if self.parliament {
-            doctor_accounts::append_parliament_warnings(&mut report)?;
-        }
+        let report = run_doctor_with_parliament(&self.public_root, self.scope, self.parliament)?;
         render_report_to(output, self.json, &report)?;
         if report_status(&report) == Some("fail") {
             eyre::bail!("Taira doctor found hard failures");
@@ -2630,7 +2627,16 @@ struct CanarySigner {
     key_pair: KeyPair,
     account_id: AccountId,
 }
+#[cfg(test)]
 fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
+    run_doctor_with_parliament(public_root, scope, false)
+}
+
+fn run_doctor_with_parliament(
+    public_root: &str,
+    scope: DoctorScope,
+    parliament: bool,
+) -> Result<Value> {
     let public_root = normalize_root_url(public_root)?;
     let http = http_client()?;
     let mut checks = Vec::new();
@@ -2707,6 +2713,15 @@ fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
         }
     }
     doctor_accounts::append_checks(&public_root, &mut checks, &mut failures)?;
+    if parliament {
+        doctor_accounts::append_live_parliament_checks(
+            &http,
+            &public_root,
+            &mut checks,
+            &mut failures,
+            &mut warnings,
+        )?;
+    }
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
     let mcp_get = http_json(&http, reqwest::Method::GET, mcp_url.as_str(), None)?;
     let mcp_get_ok = mcp_get.status == 405;

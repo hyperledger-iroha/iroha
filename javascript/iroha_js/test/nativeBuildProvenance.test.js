@@ -221,6 +221,25 @@ test("same-HEAD dirty changes and clean transitions abort native provenance", ()
   });
 });
 
+test("source Git reads disable global configuration using a Git-compatible null path", () => {
+  withSourceRepository((repoRoot) => {
+    let gitCalls = 0;
+    const state = readNativeBuildSourceState(repoRoot, {
+      run(command, args, options) {
+        if (command === "git") {
+          gitCalls += 1;
+          assert.equal(options.env.GIT_CONFIG_GLOBAL, process.platform === "win32" ? "nul" : os.devNull);
+          assert.equal(options.env.GIT_CONFIG_NOSYSTEM, "1");
+          assert.equal(options.env.GIT_CONFIG_COUNT, "0");
+        }
+        return spawnSync(command, args, options);
+      },
+    });
+    assert.ok(gitCalls > 0);
+    assert.equal(state.sourceTreeClean, true);
+  });
+});
+
 test("source seal covers tracked, untracked, lock, mode, symlink, and deletion state", () => {
   withSourceRepository((repoRoot) => {
     const trackedPath = path.join(repoRoot, "tracked.txt");
@@ -252,10 +271,12 @@ test("source seal covers tracked, untracked, lock, mode, symlink, and deletion s
     assert.notEqual(lockChanged.sourceTreeSha256, base.sourceTreeSha256);
     writeFileSync(lockPath, "version = 4\n");
 
-    chmodSync(trackedPath, 0o755);
-    const modeChanged = readNativeBuildSourceState(repoRoot);
-    assert.notEqual(modeChanged.sourceTreeSha256, base.sourceTreeSha256);
-    chmodSync(trackedPath, 0o644);
+    if (process.platform !== "win32") {
+      chmodSync(trackedPath, 0o755);
+      const modeChanged = readNativeBuildSourceState(repoRoot);
+      assert.notEqual(modeChanged.sourceTreeSha256, base.sourceTreeSha256);
+      chmodSync(trackedPath, 0o644);
+    }
 
     if (process.platform !== "win32") {
       symlinkSync("tracked.txt", linkPath);

@@ -231,7 +231,10 @@ fn retained_predecessor_later_work_refusal_preserves_descriptor_heads_frontiers_
         matches!(read.advance_predecessor(&budget,&mut work,limit),Err(RetainedPackageReadError::Work{used,limit:actual,..})if used==limit&&actual==limit)
     );
     let prefix = read.predecessor_progress();
-    assert_eq!(prefix.rows, 1);
+    assert_eq!(
+        prefix.rows, 1,
+        "HC175 later work refusal must retain completed predecessor descriptors"
+    );
     assert_eq!(prefix.current_consumed, 1);
     assert_eq!(prefix.undo_consumed, 1);
     assert!(!prefix.complete);

@@ -4612,8 +4612,9 @@ fn public_observer_is_rejected_before_source_authority_and_admitted_after_explic
             execution_policy_hash: [0; 32],
             nexus_policy_digest: [0; 32],
             native_config_fingerprint: [0; 32],
-            ivm_gas_schedule_hash: [0; 32],
+            host_profiles: crate::HostProfileSet::default(),
         },
+        required_host_profiles: None,
     });
     let peer = test_peer(socket_addr!(127.0.0.1:12081));
     let first_conn_id = 81;
@@ -4759,8 +4760,9 @@ fn accepted_public_observer_churn_does_not_expand_consensus_or_metadata_state() 
             execution_policy_hash: [0; 32],
             nexus_policy_digest: [0; 32],
             native_config_fingerprint: [0; 32],
-            ivm_gas_schedule_hash: [0; 32],
+            host_profiles: crate::HostProfileSet::default(),
         },
+        required_host_profiles: None,
     });
     for offset in 0_u16..128 {
         let conn_id = 2_000 + u64::from(offset);

@@ -11,6 +11,8 @@ pub(super) struct BuiltInWireId {
     #[cfg(test)]
     pub(super) type_label: &'static str,
     pub(super) type_name: TypeName,
+    /// Declared Norito identity of the payload type.
+    pub(super) payload: fn() -> std::borrow::Cow<'static, str>,
     pub(super) wire_id: &'static str,
     frame_len: fn(usize) -> Option<usize>,
     #[cfg(test)]
@@ -23,6 +25,7 @@ macro_rules! built_in_wire_id_with_scope {
             #[cfg(test)]
             type_label: stringify!($ty),
             type_name: std::any::type_name::<$ty>,
+            payload: norito::schema::identity::nominal_name::<$ty>,
             wire_id: $wire_id,
             frame_len: crate::isi::framed_instruction_payload_len_for::<$ty>,
             #[cfg(test)]
@@ -466,9 +469,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::RestituteGovernanceLock => "iroha.instruction.v1::governance::RestituteGovernanceLock"),
     governance_wire_id!(governance::RegisterCitizen => "iroha.instruction.v1::governance::RegisterCitizen"),
     governance_wire_id!(governance::UnregisterCitizen => "iroha.instruction.v1::governance::UnregisterCitizen"),
-    built_in_wire_id!(runtime_upgrade::ProposeRuntimeUpgrade => "iroha.runtime_upgrade.propose"),
-    built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
-    built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),
+    built_in_wire_id!(runtime_upgrade::AttestRuntimeSupportV1 => "iroha.runtime.support.attest.v1"),
+    built_in_wire_id!(runtime_upgrade::ContainRuntimeV1 => "iroha.runtime.contain.v1"),
 ];
 /// Borrow encoding metadata from this same canonical registration inventory.
 pub(super) fn encoding_entry(

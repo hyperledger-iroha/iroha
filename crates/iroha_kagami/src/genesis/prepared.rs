@@ -1265,6 +1265,7 @@ mod tests {
                 actual_execution,
                 expected_nexus,
                 actual_nexus,
+                ..
             }) = context_error.downcast_ref::<iroha_core::block::BlockValidationError>()
             else {
                 panic!("unexpected original policy drift refusal: {context_error:#}");

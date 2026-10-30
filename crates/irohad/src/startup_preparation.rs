@@ -240,6 +240,20 @@ impl PreparedStartup {
                     report.attach("lane manifest registry is not ready before snapshot restoration")
                 })?
         };
+        // Blocks at or below an upgrade checkpoint are the predecessor release's history; this
+        // release restores the World there instead of re-executing them.
+        let upgrade_checkpoint = config
+            .snapshot
+            .upgrade_checkpoint
+            .checkpoint()
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?
+            .map(|checkpoint| {
+                iroha_core::state::upgrade_checkpoint::UpgradeCheckpointV1::from_config(&checkpoint)
+            });
+        if let Some(checkpoint) = &upgrade_checkpoint {
+            kura.set_upgrade_checkpoint(checkpoint.clone())
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        }
         let mut loaded_state_from_snapshot = false;
         let snapshot_read_buffer_budget =
             iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
@@ -281,6 +295,18 @@ impl PreparedStartup {
                 )
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                 state
+            }
+            Err(error)
+                if upgrade_checkpoint.as_ref().is_some_and(|checkpoint| {
+                    u64::try_from(block_count.0).is_ok_and(|count| count >= checkpoint.height)
+                }) =>
+            {
+                let height = upgrade_checkpoint
+                    .as_ref()
+                    .map_or(0, |checkpoint| checkpoint.height);
+                return Err(Report::new(error).change_context(StartError::InitKura).attach(format!(
+                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs the checkpoint snapshot or a later snapshot of this release"
+                )));
             }
             Err(error) if snapshot_failure_allows_empty_state_fallback(&error, emergency_fast) => {
                 if matches!(&error, TryReadSnapshotError::NotFound) {

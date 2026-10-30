@@ -223,6 +223,97 @@ fn unslashable_signer_is_reported_without_inventing_member_or_penalty() {
 }
 
 #[test]
+fn unresolved_signers_record_their_generation_and_hold_once() {
+    use crate::smartcontracts::isi::sccp::forgery::{
+        tests::unresolved_member_chain, verify_for_proposal,
+    };
+    let (chain, keys, _, evidence) = unresolved_member_chain();
+    let header = next_header(&chain);
+    let view = chain.state().view();
+    let mut block = chain.state().block(header);
+    let mut stx = block.transaction_for_callback_testing();
+    // Registry DATA only tests the event/hold projection; RegisterRoute remains separately gated.
+    let route = sample_route(SccpNetworkV1::EthereumMainnet);
+    store::routes::insert(&mut stx, route.network, route).unwrap();
+    assert_eq!(store::forgery_max_generation(&*stx.world), None);
+    // No signer is slashable, yet a quorum of generation 1 forged: record it (§4.9 step 7).
+    let outcome = execute_forgery(&evidence, &mut stx);
+    assert!(
+        matches!(outcome, Ok(())),
+        "SC25 a forgery signed only by unresolved members must record its generation"
+    );
+    assert_eq!(store::forgery_max_generation(&*stx.world), Some(1));
+    assert!(stx.world.sccp_forgery_offences.is_empty());
+    let (_, retained) = stx.world.consensus_evidence.iter().next().unwrap();
+    let RecordedEvidenceV1::SccpForgery(record) = &retained.evidence else {
+        panic!("closed SCCP record");
+    };
+    assert_eq!(
+        record.rule,
+        iroha_data_model::sccp::native::SccpForgeryRuleV1::E1
+    );
+    assert!(record.offenders.is_empty() && retained.attribution.offenders.is_empty());
+    assert_eq!(retained.penalty_status, EvidencePenaltyStatus::Pending);
+    let route = store::routes::get(&*stx.world, &SccpNetworkV1::EthereumMainnet).unwrap();
+    assert!(
+        route
+            .revisions
+            .values()
+            .all(|revision| revision.forgery_held(store::forgery_max_generation(&*stx.world))),
+        "the §4.10 hold engages without any slashable signer"
+    );
+    let events = sccp_events(&mut stx);
+    for (index, signer) in [0, 1, 2].into_iter().enumerate() {
+        assert!(
+            matches!(&events[index], SccpEvent::ForgeryOffenderUnslashable(e) if e.generation == 1 && e.signer == signer)
+        );
+    }
+    assert!(
+        matches!(&events[3], SccpEvent::ForgeryEvidenceRecorded(e) if e.generation == 1 && e.offenders.is_empty())
+    );
+    assert!(
+        matches!(&events[4], SccpEvent::RevisionForgeryHeld(e) if e.generation == 1 && e.forgery_floor == 1)
+    );
+    assert_eq!(events.len(), 5);
+    // The recorded generation now makes the same certificate, and any other certificate of
+    // unresolved signers, a duplicate: one record per generation, no repeated hold.
+    assert!(matches!(
+        execute_forgery(&evidence, &mut stx),
+        Err(ForgeryExecutionError::EvidenceDuplicate)
+    ));
+    let mut other = evidence.clone();
+    let mut qc = QcFixedV1::parse(&other.qc).unwrap();
+    qc.signers = 0b1011;
+    other.qc = qc.encode();
+    resign(&mut other, &keys, chain.instance());
+    assert!(matches!(
+        execute_forgery(&other, &mut stx),
+        Err(ForgeryExecutionError::EvidenceDuplicate)
+    ));
+    assert_eq!(stx.world.consensus_evidence.len(), 1);
+    assert_eq!(sccp_events(&mut stx), []);
+    // Proposal and the in-node watch share the step-7 predicate: the committed parent has
+    // no record yet, while the executing child already names generation 1.
+    let budget = AllocationBudget::new(128 << 20);
+    let parent = chain.committed(chain.height());
+    verify_for_proposal(
+        &view,
+        parent.block(),
+        &evidence,
+        header.creation_time_ms,
+        &budget,
+    )
+    .unwrap();
+    let candidate = super::super::verify_prechecked(
+        &super::super::prepare_committed(&view, &evidence, header.creation_time_ms).unwrap(),
+        &budget,
+    )
+    .unwrap();
+    assert!(!candidate.is_duplicate_in(view.world(), &budget).unwrap());
+    assert!(candidate.is_duplicate_in(&*stx.world, &budget).unwrap());
+}
+
+#[test]
 fn distinct_certificate_with_only_recorded_offenders_cannot_publish_a_success_or_hold() {
     let (chain, keys) = active_member_chain();
     let mut evidence = future(&chain, &keys);
@@ -521,6 +612,9 @@ fn prepared_record_cannot_change_execution_clock_between_verification_and_conver
 
 #[test]
 fn genuine_prepared_publication_late_map_refusal_discards_first_offence_and_max() {
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     // This is a deliberately split private-publication component, not injected Network
     // execution: the genuine prepared owner provides every key and record. The same
     // first insertion used by publish completes before a real second insertion refuses.

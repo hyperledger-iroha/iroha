@@ -21,6 +21,8 @@ pub(super) enum MainCaBufferPhaseV1 {
     OriginalCommitments,
     /// Each ordinary registration; MAIN24 has not yet been created.
     Registration,
+    /// SHA/RFC and Projection unions after all registration-local owners drop.
+    ShaUnion,
     /// Late MAIN24 construction, private quotient pass and chunk contribution.
     PrivateLinks,
     /// Both compositions, original supplemental DEEP and separate local FRIs.
@@ -73,6 +75,7 @@ impl MainCaJointBufferPlanV1 {
         for phase in [
             MainCaBufferPhaseV1::OriginalCommitments,
             MainCaBufferPhaseV1::Registration,
+            MainCaBufferPhaseV1::ShaUnion,
             MainCaBufferPhaseV1::PrivateLinks,
             MainCaBufferPhaseV1::Finalization,
         ] {
@@ -144,6 +147,30 @@ impl MainCaJointBufferPlanV1 {
         Ok(total)
     }
 
+    /// Admit serial replay scratch inside an already complete late phase.
+    /// Retained original capacities are checked by the phase's owner guard;
+    /// the caller must finish other replay work before borrowing this budget.
+    pub(super) fn check_replay_subphase_v1(
+        &self,
+        phase: MainCaBufferPhaseV1,
+        replay_payload: usize,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        if !matches!(
+            phase,
+            MainCaBufferPhaseV1::PrivateLinks | MainCaBufferPhaseV1::Finalization
+        ) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        self.required_v1(phase)?;
+        main_bounded_transform::check_completion_v1(
+            fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1(),
+        )?;
+        if replay_payload > self.common.replay_batch {
+            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+        }
+        Ok(())
+    }
+
     /// Complete simultaneous ownership before applying the common admission cap.
     pub(super) fn phase_payload_v1(
         &self,
@@ -158,6 +185,16 @@ impl MainCaJointBufferPlanV1 {
             MainCaBufferPhaseV1::Registration => {
                 sum_v1(&[common.quotient_stage, common.replay_batch])?
             }
+            // All registration matrices and both coefficient caches have dropped.
+            // Keep the complete composition allowance, which includes the outer
+            // coefficient chunks, and the separate replay/source batch. The
+            // union peak belongs inside this arithmetic phase; subtracting it
+            // again from device slack would reserve it twice.
+            MainCaBufferPhaseV1::ShaUnion => sum_v1(&[
+                common.composition,
+                common.replay_batch,
+                super::main_sha_union::MainShaUnionPlanV1::private_owner_charge_v1(),
+            ])?,
             MainCaBufferPhaseV1::PrivateLinks => sum_v1(&[
                 self.main_originals,
                 common.replay_batch,
@@ -224,7 +261,9 @@ impl MainCaJointBufferPlanV1 {
         }
         match (phase, main_payload) {
             (
-                MainCaBufferPhaseV1::OriginalCommitments | MainCaBufferPhaseV1::Registration,
+                MainCaBufferPhaseV1::OriginalCommitments
+                | MainCaBufferPhaseV1::Registration
+                | MainCaBufferPhaseV1::ShaUnion,
                 None,
             ) => Ok(()),
             (MainCaBufferPhaseV1::PrivateLinks | MainCaBufferPhaseV1::Finalization, Some(main))

@@ -557,8 +557,12 @@ impl SccpRestore {
             keys[index] = Some(key);
             count += 1;
         }
-        if count == 0 {
-            return Err(invalid("executed Submit has no new original offenders"));
+        // The executing child's step-7 view: earlier successful Submits of this carrier
+        // already raised the derived maximum, exactly as they raised the actual one.
+        if is_duplicate(selected, self.facts.derived_maximum, generation.generation) {
+            return Err(invalid(
+                "executed Submit duplicates recorded original evidence",
+            ));
         }
         self.claims(state, h, &Hash::prehashed(id), |record| {
             check_immutable(

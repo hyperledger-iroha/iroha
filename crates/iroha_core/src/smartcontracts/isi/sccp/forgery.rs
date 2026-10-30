@@ -173,6 +173,18 @@ impl<'a> VerifiedForgeryCandidate<'a> {
     pub fn evidence_id(&self) -> [u8; 32] {
         forgery_evidence_id(self.generation.generation, &self.message, self.qc.signers)
     }
+    /// §4.9 step 7 against `world`: whether execution would refuse this candidate as
+    /// `EvidenceDuplicate`. A submitter retires such evidence instead of retrying it.
+    ///
+    /// # Errors
+    /// The permanent-offence query could not fund its key copies from `budget`.
+    pub fn is_duplicate_in(
+        &self,
+        world: &impl WorldReadOnly,
+        budget: &AllocationBudget,
+    ) -> core::result::Result<bool, crate::state::sccp_forgery_custody::ForgeryStorageError> {
+        Ok(new_offenders(world, self.generation, self.qc.signers, budget)?.is_none())
+    }
     /// Every set signer bit in canonical order, with its original optional G6 member.
     /// `None` is unslashable and must not be replaced by a current peer/key lookup.
     pub fn signers(
@@ -500,10 +512,38 @@ pub(crate) fn verify_prechecked<'a>(
     })
 }
 
-/// Exact permanent offence selection shared by ingress, proposal and executing preparation.
-/// This is a funded map query, not signature or execution authority. Repeated keys in a
+/// §4.9 step 7, the one deduplication predicate of ingress, proposal, execution and restart
+/// reauthentication (R-EX). Evidence is a duplicate only when no slashable signer is new
+/// **and** recorded evidence already names generation `g`. A certificate signed only by
+/// members that G6 left unresolved has no slashable signer, yet its first record must still
+/// raise `sccp_forgery_max_generation` to `g`; otherwise the §4.10 hold never engages.
+pub(crate) fn is_duplicate(
+    new_signers: u32,
+    recorded_maximum: Option<u64>,
+    generation: u64,
+) -> bool {
+    new_signers == 0
+        && (cfg!(all(test, sumeragi_core_mutation = "HC496"))
+            || recorded_maximum >= Some(generation))
+}
+
+/// Step 7 against permanent state: the new slashable signer mask, or `None` for a duplicate.
+/// `Some(0)` records evidence without offenders, which only raises the recorded maximum.
+/// This is a funded map query, not signature or execution authority.
+pub(crate) fn new_offenders(
+    world: &impl WorldReadOnly,
+    generation: &RetainedSccpGeneration,
+    signers: u32,
+    budget: &AllocationBudget,
+) -> core::result::Result<Option<u32>, crate::state::sccp_forgery_custody::ForgeryStorageError> {
+    let selected = new_signers(world, generation, signers, budget)?;
+    let recorded = store::forgery_max_generation(world);
+    Ok((!is_duplicate(selected, recorded, generation.generation)).then_some(selected))
+}
+
+/// Exact permanent offence selection behind [`new_offenders`]. Repeated keys in a
 /// malformed member list cannot make one validator become two new offences.
-pub(crate) fn new_signers(
+fn new_signers(
     world: &impl WorldReadOnly,
     generation: &RetainedSccpGeneration,
     signers: u32,
@@ -601,12 +641,13 @@ pub(crate) fn verify_for_proposal(
         budget,
         VerificationControl::Synchronous,
     )?;
-    if new_signers(
+    if new_offenders(
         view.world(),
         checked.generation(),
         checked.qc().signers,
         budget,
-    )? == 0
+    )?
+    .is_none()
     {
         return Err(ForgeryExecutionError::EvidenceDuplicate);
     }

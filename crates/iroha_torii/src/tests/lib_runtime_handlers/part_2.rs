@@ -445,8 +445,27 @@ async fn transaction_batch_partial_admission_preserves_exact_ordered_outcomes() 
 async fn transaction_batch_cannot_bypass_ordinary_economic_admission() {
     use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
 
-    let app = mk_native_app_state_for_tests();
     let key = checked_torii_test_ed25519_keypair(0xce, "ordinary batch signer");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
+        world_with_account(&AccountId::new(key.public_key().clone())),
+        1_000,
+    );
+    let fees = iroha_data_model::block::consensus::RootFeePolicy {
+        base_fee: Quantity::from(1_u32),
+        per_byte_fee: Quantity::zero(),
+        per_instruction_fee: Quantity::zero(),
+        per_gas_unit_fee: Quantity::zero(),
+        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    };
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            fees.clone()
+                .into_custom_parameter()
+                .expect("original positive batch fee schedule"),
+        ));
+    let app = native_ingress_app_with_config_for_test(config);
+    assert_eq!(app.state.world_view().parameters().root_fees(), Some(&fees));
     let tx = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         AccountId::new(key.public_key().clone()),
@@ -1171,11 +1190,7 @@ async fn peer_inventory_requires_ledger_permission_and_executes_locally() {
         "derive public peer inventory handler fixture key",
     );
     let authority = AccountId::new(key_pair.public_key().clone());
-    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
-        world_with_account(&authority),
-        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
-    );
-    configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+    let app = native_ingress_with_offline_foreign_app_for_test(world_with_account(&authority));
     assert!(
         super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
         "test requires multiple restricted dataspace routes",
@@ -3367,12 +3382,22 @@ async fn asset_registration_checks_definition_visibility_in_its_projection_view(
             [],
         )
         .expect("restricted definition home");
-    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world_and_nexus(
         world,
         crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
     );
-    let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(restricted_dataspace, DataSpaceId::new(10));
+    assert_initial_nexus_catalog_for_test(&app.state, &private_ingress_nexus_for_test());
+    assert!(
+        app.state
+            .view()
+            .world()
+            .asset_definition(&global)
+            .unwrap()
+            .spec()
+            .scale()
+            .is_none(),
+        "the fixture deliberately has no fixed registration scale"
+    );
     let request = |asset: &AssetDefinitionId| {
         super::offline_asset_registration::handler(
             State(app.clone()),
@@ -3401,13 +3426,13 @@ async fn asset_registration_checks_definition_visibility_in_its_projection_view(
         }
     }
     // A visible definition passes the same-view check and reaches the projection,
-    // which refuses the fixture's absent committed block.
+    // which refuses the fixture's absent fixed scale.
     match request(&global).await {
         Err(Error::AppServiceUnavailable { code, .. }) => {
             assert_eq!(code, "offline_asset_registration_unavailable");
         }
         Err(other) => panic!("visible definition refused for another reason: {other:?}"),
-        Ok(_) => panic!("the fixture has no committed registration block"),
+        Ok(_) => panic!("the fixture has no fixed registration scale"),
     }
 }
 

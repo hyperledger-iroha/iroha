@@ -409,6 +409,24 @@ export function registerToriiClientGovernanceTests({
     ...options,
     localSigningContext: GOVERNANCE_LOCAL_SIGNING_CONTEXT,
   });
+  const runtimeUpgradeProposalPayload = () => ({
+    proposal_operator: FIXTURE_ALICE_ID,
+    action: {
+      kind: "Schedule",
+      content: {
+        network: GOVERNANCE_NETWORK_ID.toString(),
+        root: { kind: "Universal", content: null },
+        predecessor: "01".repeat(32),
+        successor: "02".repeat(32),
+        effective_height: 120,
+        publish: [],
+        transitions: [{ kind: "Activate", content: "0a".repeat(32) }],
+        qualification: "03".repeat(32),
+      },
+    },
+    notice: { blocks: 100, ms: 86_400_000, approval_cushion_ms: 3_600_000 },
+    proposed_ms: 1_700_000_000_000,
+  });
   const governanceProposalFixture = (kind, payload) => ({
     found: true,
     proposal: {
@@ -503,22 +521,7 @@ export function registerToriiClientGovernanceTests({
       ],
       [
         "RuntimeUpgrade",
-        {
-          proposal_operator: FIXTURE_ALICE_ID,
-          manifest: {
-            name: "runtime-v1-refresh",
-            description: "Canonical V1 runtime image",
-            abi_version: 1,
-            abi_hash: Array(32).fill(0x11),
-            added_syscalls: [],
-            added_pointer_types: [],
-            start_height: 100,
-            end_height: 120,
-            sbom_digests: [{ algorithm: "sha256", digest: "AQID" }],
-            slsa_attestation: "BAUG",
-            provenance: [],
-          },
-        },
+        runtimeUpgradeProposalPayload(),
         "runtime_upgrade",
       ],
       [
@@ -641,6 +644,78 @@ export function registerToriiClientGovernanceTests({
       readGovernanceProposalFixture(scalarMusubiNewtypes),
       /exact one-field string tuple/u,
     );
+  });
+
+  test("getGovernanceProposalTyped admits exact runtime change-set proposals", async () => {
+    const schedule = runtimeUpgradeProposalPayload();
+    const scheduled = await readGovernanceProposalFixture(
+      governanceProposalFixture("RuntimeUpgrade", schedule),
+    );
+    assert.deepEqual(scheduled.proposal?.kind, {
+      variant: "RuntimeUpgrade",
+      runtime_upgrade: schedule,
+    });
+
+    const cancel = {
+      ...runtimeUpgradeProposalPayload(),
+      action: { kind: "Cancel", content: "aa".repeat(32) },
+    };
+    const cancelled = await readGovernanceProposalFixture(
+      governanceProposalFixture("RuntimeUpgrade", cancel),
+    );
+    assert.deepEqual(cancelled.proposal?.kind.runtime_upgrade, cancel);
+
+    const boundary = runtimeUpgradeProposalPayload();
+    boundary.action.content.effective_height = Number.MAX_SAFE_INTEGER;
+    boundary.notice = {
+      blocks: Number.MAX_SAFE_INTEGER,
+      ms: Number.MAX_SAFE_INTEGER,
+      approval_cushion_ms: Number.MAX_SAFE_INTEGER,
+    };
+    boundary.proposed_ms = Number.MAX_SAFE_INTEGER;
+    const admitted = await readGovernanceProposalFixture(
+      governanceProposalFixture("RuntimeUpgrade", boundary),
+    );
+    assert.deepEqual(admitted.proposal?.kind.runtime_upgrade, boundary);
+
+    const inexact = 2 ** 53;
+    const cases = [
+      ["retired manifest payload", (payload) => {
+        delete payload.action;
+        payload.manifest = { name: "runtime-v1-refresh", abi_version: 1 };
+      }, /unsupported fields: manifest/u],
+      ["inexact effective height", (payload) => {
+        payload.action.content.effective_height = inexact;
+      }, /effective_height must be a positive JSON safe integer/u],
+      ["inexact notice blocks", (payload) => {
+        payload.notice.blocks = inexact;
+      }, /notice\.blocks must be a non-negative JSON safe integer/u],
+      ["inexact approval cushion", (payload) => {
+        payload.notice.approval_cushion_ms = inexact;
+      }, /notice\.approval_cushion_ms must be a non-negative JSON safe integer/u],
+      ["inexact proposal time", (payload) => {
+        payload.proposed_ms = inexact;
+      }, /proposed_ms must be a non-negative JSON safe integer/u],
+      ["retired activation action", (payload) => {
+        payload.action = { kind: "Activate", content: "aa".repeat(32) };
+      }, /action\.kind must be Schedule or Cancel/u],
+      ["uppercase cancel id", (payload) => {
+        payload.action = { kind: "Cancel", content: "AA".repeat(32) };
+      }, /action\.content must be exactly 32 lowercase hexadecimal bytes/u],
+      ["data space root", (payload) => {
+        payload.action.content.root = { kind: "DataSpace", content: 7 };
+      }, /root must be the universal root with null content/u],
+    ];
+    for (const [label, mutate, pattern] of cases) {
+      const payload = runtimeUpgradeProposalPayload();
+      mutate(payload);
+      // eslint-disable-next-line no-await-in-loop
+      await assert.rejects(
+        readGovernanceProposalFixture(governanceProposalFixture("RuntimeUpgrade", payload)),
+        pattern,
+        label,
+      );
+    }
   });
 
   test("getGovernanceProposalTyped rejects open, legacy, and inexact proposal shapes", async () => {

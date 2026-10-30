@@ -425,23 +425,68 @@ async fn lane_compliance_policy_blocks_transactions() {
 }
 
 fn funded_privacy_manifest_fixture() -> LaneManifestRegistryHandle {
-    Arc::new(LaneManifestRegistry::from_statuses(BTreeMap::from([(
-        LaneId::SINGLE,
-        LaneManifestStatus {
-            lane: LaneId::SINGLE,
-            alias: "default".to_owned(),
-            dataspace: DataSpaceId::UNIVERSAL,
-            visibility: LaneVisibility::Public,
-            storage: LaneStorageProfile::FullReplica,
-            governance: None,
-            manifest_path: Some(PathBuf::from("/fixture/privacy.json")),
-            governance_rules: None,
-            privacy_commitments: vec![LanePrivacyCommitment::merkle(
-                LaneCommitmentId::new(7),
-                MerkleCommitment::from_root_bytes([0x11; 32], 4),
-            )],
-        },
-    )])))
+    use iroha_data_model::nexus::{
+        NativeLaneManifestV1, NativeLaneMerkleCommitmentV1, NativeLanePrivacyCommitmentV1,
+    };
+
+    // Lifecycle rebinding consumes the frozen source, so the component fixture
+    // authors canonical manifest bytes before its temporary directory is removed.
+    let nexus = Nexus::default();
+    let directory = tempdir().expect("privacy manifest source directory");
+    let alias = &nexus.lane_catalog.lanes()[0].alias;
+    let manifest = NativeLaneManifestV1 {
+        lane: Some(alias.clone()),
+        version: Some(NativeLaneManifestV1::VERSION),
+        privacy_commitments: Some(vec![NativeLanePrivacyCommitmentV1 {
+            id: Some(7),
+            scheme: Some("merkle".to_owned()),
+            merkle: Some(NativeLaneMerkleCommitmentV1 {
+                root: Some("11".repeat(32)),
+                max_depth: Some(4),
+            }),
+        }]),
+        ..NativeLaneManifestV1::default()
+    };
+    fs::write(
+        directory.path().join(format!("{alias}.manifest.json")),
+        norito::json::to_vec(&manifest).expect("canonical privacy manifest"),
+    )
+    .expect("write privacy manifest source");
+    let mut registry = nexus.registry;
+    registry.manifest_directory = Some(directory.path().to_path_buf());
+    Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &registry,
+    ))
+}
+
+#[test]
+fn funded_privacy_manifest_retains_frozen_source_and_original_commitment() {
+    let manifests = funded_privacy_manifest_fixture();
+    manifests
+        .validate_materialized_source_projection()
+        .expect("privacy fixture retains its canonical source");
+    let nexus = Nexus::default();
+    let rebound = manifests.rebind(&nexus.lane_catalog, &nexus.governance);
+    rebound
+        .validate_materialized_authority_for_catalog(&nexus.lane_catalog, &nexus.governance)
+        .expect("privacy fixture can rebind after source directory removal");
+    let status = rebound.status(LaneId::SINGLE).expect("privacy lane");
+    assert!(
+        !status
+            .manifest_path
+            .as_ref()
+            .expect("original path")
+            .exists()
+    );
+    assert_eq!(
+        status.privacy_commitments,
+        vec![LanePrivacyCommitment::merkle(
+            LaneCommitmentId::new(7),
+            MerkleCommitment::from_root_bytes([0x11; 32], 4),
+        )]
+    );
 }
 
 #[test]
@@ -667,6 +712,8 @@ fn queue_privacy_publication_refunds_after_all_original_writers_release() {
 
 #[test]
 fn queue_reconfiguration_and_route_preserve_accepted_owners_on_privacy_refusal() {
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),
@@ -1021,6 +1068,8 @@ fn foreign_privacy_retirement_survives_error_and_unwind_after_both_replacements(
 
 #[test]
 fn batch_privacy_retirement_storage_uses_exact_input_count_and_original_pool() {
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let (mut state, time) = current_admission_queue_fixture();
     let tx = accepted_tx_by_someone(&time);
     register_accepted_tx_authority_for_queue_test(&mut state, &tx);

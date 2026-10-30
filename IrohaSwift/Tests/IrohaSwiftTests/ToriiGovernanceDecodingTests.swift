@@ -46,6 +46,27 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         Data("{\"kind\":\"\(kind)\",\"payload\":\(payload)}".utf8)
     }
 
+    /// One `ChangeSetV1` object as the governance proposal payload carries it.
+    private func runtimeChangeSetJSON(
+        effectiveHeight: String = "42",
+        publish: String = "[]"
+    ) -> String {
+        """
+        {"network":"\(TestNetworkIds.canonical.literal)","root":{"kind":"Universal","content":null},"predecessor":"\(String(repeating: "1", count: 64))","successor":"\(String(repeating: "2", count: 64))","effective_height":\(effectiveHeight),"publish":\(publish),"transitions":[],"qualification":"\(String(repeating: "3", count: 64))"}
+        """
+    }
+
+    /// One `RuntimeUpgrade` proposal payload around `action`.
+    private func runtimeUpgradePayloadJSON(
+        action: String,
+        notice: String = #"{"blocks":3600,"ms":1209600000,"approval_cushion_ms":86400000}"#,
+        proposedMs: String = "1700000000000"
+    ) -> String {
+        """
+        {"proposal_operator":"\(Self.governanceOwner)","action":\(action),"notice":\(notice),"proposed_ms":\(proposedMs)}
+        """
+    }
+
     private func sccpGovernanceProposalJSON() -> String {
         """
         {"network_id":"\(TestNetworkIds.canonical.literal)","base_revisions":[{"subject":{"subject":"route","key":{"network":"bsc_mainnet","profile":null}},"revision":1}],"actions":[{"action":"remove_staged","payload":{"network":{"network":"bsc_mainnet","profile":null},"revision":1}}]}
@@ -213,16 +234,37 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
 
         let runtime = proposalKindJSON(
             kind: "RuntimeUpgrade",
-            payload: """
-            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
-            """
+            payload: runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Schedule\",\"content\":\(runtimeChangeSetJSON())}"
+            )
         )
         guard case .runtimeUpgrade(let runtimePayload) = try JSONDecoder().decode(
             ToriiGovernanceProposalKind.self,
             from: runtime
-        ) else { return XCTFail("expected RuntimeUpgrade") }
+        ), case .schedule(let scheduled) = runtimePayload.action else {
+            return XCTFail("expected RuntimeUpgrade schedule")
+        }
         XCTAssertEqual(runtimePayload.proposalOperator, Self.governanceOwner)
-        XCTAssertEqual(runtimePayload.manifest.endHeight, 20)
+        XCTAssertEqual(scheduled.effectiveHeight, 42)
+        XCTAssertEqual(scheduled.predecessorHex, String(repeating: "1", count: 64))
+        XCTAssertEqual(scheduled.successorHex, String(repeating: "2", count: 64))
+        XCTAssertEqual(runtimePayload.notice.blocks, 3_600)
+        XCTAssertEqual(runtimePayload.notice.ms, 1_209_600_000)
+        XCTAssertEqual(runtimePayload.notice.approvalCushionMs, 86_400_000)
+        XCTAssertEqual(runtimePayload.proposedMs, 1_700_000_000_000)
+
+        let changeSetId = String(repeating: "7c", count: 32)
+        let runtimeCancel = proposalKindJSON(
+            kind: "RuntimeUpgrade",
+            payload: runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Cancel\",\"content\":\"\(changeSetId)\"}"
+            )
+        )
+        guard case .runtimeUpgrade(let cancelPayload) = try JSONDecoder().decode(
+            ToriiGovernanceProposalKind.self,
+            from: runtimeCancel
+        ) else { return XCTFail("expected RuntimeUpgrade cancel") }
+        XCTAssertEqual(cancelPayload.action, .cancel(changeSetIdHex: changeSetId))
 
         let sccp = proposalKindJSON(
             kind: "SccpRouteGovernance",
@@ -539,20 +581,15 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         let removeStaged = Self.sccpRemoveStagedAction
         let blsValidator = "ea0130" + String(repeating: "A1", count: 48)
 
-        // Only the envelope is checked here; whether `base_revisions` lists exactly the
-        // subjects the actions touch stays with Torii until typed action decoding lands.
         for accepted in [
             sccpProposalBody(),
-            sccpProposalBody(subject: #"{"subject":"route_control","key":{"network":"ethereum_mainnet","profile":null}}"#),
-            sccpProposalBody(subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#),
-            sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#, revision: "0"),
-            sccpProposalBody(subject: #"{"subject":"forgery_hold","key":{"network":"bsc_mainnet","profile":null}}"#),
             sccpProposalBody(actions: "[" + Array(repeating: removeStaged, count: 16).joined(separator: ",") + "]"),
         ] {
             XCTAssertNoThrow(try decodeSccpRouteProposal(accepted), accepted)
         }
         let tonLightClient = sccpProposalBody(
-            subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#
+            subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#,
+            actions: #"[{"action":"freeze_light_client","payload":{"network":{"network":"ton_mainnet","profile":null}}}]"#
         )
         XCTAssertNoThrow(
             try ToriiParliamentProposalV1(
@@ -564,6 +601,10 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         )
 
         for rejected in [
+            sccpProposalBody(subject: #"{"subject":"route_control","key":{"network":"ethereum_mainnet","profile":null}}"#),
+            sccpProposalBody(subject: #"{"subject":"light_client","key":{"network":"ton_mainnet","profile":null}}"#),
+            sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#, revision: "0"),
+            sccpProposalBody(subject: #"{"subject":"forgery_hold","key":{"network":"bsc_mainnet","profile":null}}"#),
             "{}",
             sccpProposalBody(extra: ",\"memo\":null"),
             sccpProposalBody(networkId: "\"sora\""),
@@ -597,8 +638,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
     }
 
     func testSccpCurrentGovernanceEnvelopeTagsAndSubjectCoordinates() throws {
-        // This is the declared SDK envelope contract. Native typed action bodies and
-        // exact action-to-subject coverage still have their independent validation owner.
+        // Every known tag still requires its exact action body and touched subjects.
         let actions = [
             "register_route", "activate_revision", "switch_revision", "deactivate_outbound",
             "retire_revision", "remove_staged", "release_stranded", "set_taira_paused",
@@ -609,8 +649,8 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         ]
         for action in actions {
             let body = sccpProposalBody(actions: "[{\"action\":\"\(action)\",\"payload\":{}}]")
-            XCTAssertNoThrow(try decodeSccpRouteProposal(body), action)
-            XCTAssertNoThrow(
+            XCTAssertThrowsError(try decodeSccpRouteProposal(body), action)
+            XCTAssertThrowsError(
                 try ToriiParliamentProposalV1(
                     validating: proposalKindJSON(
                         kind: "SccpRouteGovernance", payload: "{\"proposal\":\(body)}"
@@ -636,7 +676,11 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
         for subject in ["route", "route_control", "light_client", "forgery_hold", "fast_hold", "fast_pause_control"] {
             for network in ["ethereum_mainnet", "bsc_mainnet", "ton_mainnet"] {
                 let coordinate = "{\"subject\":\"\(subject)\",\"key\":{\"network\":\"\(network)\",\"profile\":null}}"
-                XCTAssertNoThrow(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
+                if subject == "route" && network == "bsc_mainnet" {
+                    XCTAssertNoThrow(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
+                } else {
+                    XCTAssertThrowsError(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
+                }
             }
             for key in [
                 "null", "\"ea0130\"", "{}",
@@ -656,7 +700,7 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
                 XCTAssertThrowsError(try decodeSccpRouteProposal(sccpProposalBody(subject: coordinate)), coordinate)
             }
         }
-        XCTAssertNoThrow(try decodeSccpRouteProposal(sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#)))
+        XCTAssertThrowsError(try decodeSccpRouteProposal(sccpProposalBody(subject: #"{"subject":"parameters","key":null}"#)))
         for subject in [
             #"{"subject":"forgery_hold"}"#,
             #"{"subject":"fast_hold","key":{"network":"bsc_mainnet","profile":null},"extra":0}"#,
@@ -695,18 +739,41 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             {"proposal_operator":"not-an-account","contract_address":"\(Self.contractAddress)","expected_revision":1,"action":{"action":"AcceptParliamentOwnership","payload":null}}
             """
         )
-        let runtimeWithImplicitDefaults = proposalKindJSON(
+        let retiredRuntimeManifest = proposalKindJSON(
             kind: "RuntimeUpgrade",
             payload: """
-            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20}}
+            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":10,"end_height":20,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
             """
         )
-        let runtimeBeyondExactJSON = proposalKindJSON(
-            kind: "RuntimeUpgrade",
-            payload: """
-            {"proposal_operator":"\(Self.governanceOwner)","manifest":{"name":"runtime-v1","description":"upgrade","abi_version":1,"abi_hash":\(fixedBytes(3)),"added_syscalls":[],"added_pointer_types":[],"start_height":9007199254740992,"end_height":9007199254740993,"sbom_digests":[],"slsa_attestation":"","provenance":[]}}
-            """
-        )
+        let schedule = "{\"kind\":\"Schedule\",\"content\":\(runtimeChangeSetJSON())}"
+        let runtimeShapes = [
+            runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Schedule\",\"content\":\(runtimeChangeSetJSON(effectiveHeight: "9007199254740992"))}"
+            ),
+            runtimeUpgradePayloadJSON(
+                action: schedule,
+                notice: #"{"blocks":9007199254740992,"ms":1,"approval_cushion_ms":1}"#
+            ),
+            runtimeUpgradePayloadJSON(action: schedule, proposedMs: "9007199254740992"),
+            runtimeUpgradePayloadJSON(action: schedule, notice: #"{"blocks":1,"ms":1}"#),
+            runtimeUpgradePayloadJSON(action: schedule)
+                .replacingOccurrences(of: ",\"proposed_ms\":1700000000000", with: ""),
+            runtimeUpgradePayloadJSON(action: schedule)
+                .replacingOccurrences(of: "{\"proposal_operator\"", with: "{\"manifest\":null,\"proposal_operator\""),
+            runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Activate\",\"content\":\"\(String(repeating: "7c", count: 32))\"}"
+            ),
+            runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Cancel\",\"content\":\"\(String(repeating: "7C", count: 32))\"}"
+            ),
+            runtimeUpgradePayloadJSON(action: "{\"kind\":\"Cancel\",\"content\":null}"),
+            runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Schedule\",\"content\":\(runtimeChangeSetJSON()),\"notice\":null}"
+            ),
+            runtimeUpgradePayloadJSON(
+                action: "{\"kind\":\"Schedule\",\"content\":\(runtimeChangeSetJSON().replacingOccurrences(of: "\"transitions\":[],", with: "\"transitions\":[],\"manifest\":null,"))}"
+            ),
+        ].map { proposalKindJSON(kind: "RuntimeUpgrade", payload: $0) }
         for json in [
             unknown,
             oldSingleKey,
@@ -714,12 +781,52 @@ final class ToriiGovernanceDecodingTests: XCTestCase {
             missingProvenance,
             missingOperator,
             malformedOperator,
-            runtimeWithImplicitDefaults,
-            runtimeBeyondExactJSON,
-        ] {
+            retiredRuntimeManifest,
+        ] + runtimeShapes {
             XCTAssertThrowsError(
-                try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: json)
+                try JSONDecoder().decode(ToriiGovernanceProposalKind.self, from: json),
+                String(decoding: json, as: UTF8.self)
             )
+        }
+    }
+
+    func testRuntimeUpgradeProposalBoundsEveryNumberAtTheExactJSONMaximum() throws {
+        func decode(_ payload: String) throws -> ToriiGovernanceRuntimeUpgradeProposal {
+            try JSONDecoder().decode(
+                ToriiGovernanceRuntimeUpgradeProposal.self,
+                from: Data(payload.utf8)
+            )
+        }
+        func schedule(effectiveHeight: String = "42", publish: String = "[]") -> String {
+            "{\"kind\":\"Schedule\",\"content\":\(runtimeChangeSetJSON(effectiveHeight: effectiveHeight, publish: publish))}"
+        }
+
+        let maximum = "9007199254740991"
+        let within = try decode(
+            runtimeUpgradePayloadJSON(
+                action: schedule(effectiveHeight: maximum, publish: "[{\"bound\":\(maximum)}]"),
+                notice: "{\"blocks\":\(maximum),\"ms\":\(maximum),\"approval_cushion_ms\":\(maximum)}",
+                proposedMs: maximum
+            )
+        )
+        guard case .schedule(let changeSet) = within.action else {
+            return XCTFail("expected a scheduled change set")
+        }
+        XCTAssertEqual(changeSet.effectiveHeight, 9_007_199_254_740_991)
+        XCTAssertEqual(within.notice.approvalCushionMs, 9_007_199_254_740_991)
+        XCTAssertEqual(within.proposedMs, 9_007_199_254_740_991)
+
+        let beyond = "9007199254740992"
+        for payload in [
+            runtimeUpgradePayloadJSON(action: schedule(effectiveHeight: beyond)),
+            runtimeUpgradePayloadJSON(action: schedule(publish: "[{\"bound\":\(beyond)}]")),
+            runtimeUpgradePayloadJSON(
+                action: schedule(),
+                notice: "{\"blocks\":1,\"ms\":1,\"approval_cushion_ms\":\(beyond)}"
+            ),
+            runtimeUpgradePayloadJSON(action: schedule(), proposedMs: beyond),
+        ] {
+            XCTAssertThrowsError(try decode(payload), payload)
         }
     }
 
