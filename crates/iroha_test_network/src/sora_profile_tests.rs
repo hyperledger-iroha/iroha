@@ -170,11 +170,6 @@ fn genesis_projection_preserves_explicit_default_sora_topology_and_execution_pol
                 &config.settlement,
                 nexus,
                 iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
-                config
-                    .nexus
-                    .legacy_genesis
-                    .as_ref()
-                    .map(|legacy| &legacy.crypto),
             )
         };
     assert_eq!(

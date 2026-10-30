@@ -404,6 +404,7 @@ fn fanout_prebody_exact_boundary_and_checked_phase_overflow() {
         "one signed-query byte above the pre-body unit must fail before decode"
     );
     let near_overflow = QueryFanoutMemoryEnvelope {
+        profile: QueryMemoryProfile::Fanout,
         working_set_bytes: usize::MAX,
         request_bytes: usize::MAX,
         request_decode_allocated_bytes: usize::MAX,
@@ -513,8 +514,7 @@ fn query_memory_geometry_separates_complete_request_ceiling_from_concurrency() {
     assert_eq!(default.fanout_slots.get(), 8);
     assert_eq!(default.fanout_pool_bytes, 384_000_000);
     assert_eq!(
-        default.routed_read_body_pool_bytes,
-        64_000_000,
+        default.routed_read_body_pool_bytes, 64_000_000,
         "the default budget admits one maximum transaction body or many small fee quotes"
     );
     assert_eq!(

@@ -63,6 +63,8 @@ async fn independently_decided_expiry_recovers_only_the_existing_exact_carrier_w
             .source
             .proof(NonZeroU64::new(2).unwrap())
             .await
+            .unwrap()
+            .decode_checked()
             .unwrap();
         let block = iroha_data_model::block::decode_framed_signed_block(&proof.block_wire).unwrap();
         let transaction = block.external_transactions().next().unwrap();

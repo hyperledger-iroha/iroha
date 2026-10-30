@@ -148,11 +148,12 @@ impl Source for ApprovalSource {
     fn locate(&self, _: HashOf<SignedTransaction>) -> WorkflowFuture<'_, Result<Location>> {
         Box::pin(async { Ok(Location::Absent) })
     }
-    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<SumeragiFinalityProof>> {
+    fn proof(&self, height: NonZeroU64) -> WorkflowFuture<'_, Result<ProofInput>> {
         Box::pin(async move {
             self.proofs
                 .get(&height.get())
                 .cloned()
+                .map(|proof| ProofInput::Fixture(Box::new(proof)))
                 .ok_or_else(|| eyre!("proof unavailable"))
         })
     }
@@ -258,12 +259,16 @@ fn row<K: norito::codec::Encode, V: norito::codec::Encode>(
         value_hash: world_state_value_hash_v1(value).unwrap(),
     }
 }
-fn fixture() -> (
+type ApprovalFixture = (
     Arc<RelayLedger>,
     Arc<Custody>,
     AmxDebitApprovalV1,
     Arc<ApprovalSource>,
-) {
+);
+fn fixture() -> ApprovalFixture {
+    fixture_to_height(3)
+}
+fn fixture_to_height(terminal_height: u64) -> ApprovalFixture {
     let parent = NativeFinalityFixture::new().network_id();
     let ds = DataSpaceId::new(7);
     let mut native = NativeFinalityFixture::start_with_scope(
@@ -376,6 +381,13 @@ fn fixture() -> (
     let h2 = native.certify_with_world_root(block, proof.world.root().unwrap());
     let block = native.block_with_submitted_work(native.next_header());
     let h3 = native.certify_with_world_root(block, Hash::new(b"later revoked permission cut"));
+    let mut proofs: BTreeMap<_, _> = [(1, native.genesis_proof().clone()), (2, h2), (3, h3)].into();
+    for height in 4..=terminal_height {
+        let block = native.block_with_submitted_work(native.next_header());
+        let proof =
+            native.certify_with_world_root(block, Hash::new(b"later revoked permission cut"));
+        proofs.insert(height, proof);
+    }
     let available = Arc::new(AtomicBool::new(false));
     let custody = Arc::new(Custody {
         signed,
@@ -384,26 +396,32 @@ fn fixture() -> (
         available: available.clone(),
     });
     let source = Arc::new(ApprovalSource {
-        proofs: [(1, native.genesis_proof().clone()), (2, h2), (3, h3)].into(),
+        proofs,
         proof,
         available,
         reported_height: AtomicU64::new(2),
         approval_heights: Mutex::new(vec![]),
         failure: Mutex::new(ApprovalFailure::Capacity),
     });
-    let ledger = Arc::new(RelayLedger {
-        source: source.clone(),
-        dispatch: custody.clone(),
-        verifier: Mutex::new(verifier),
-        network: native.network_id(),
-        authority: relay,
-        fee_payment: fee,
-        instruction: Mutex::new(Some(digest)),
-        approval: Mutex::new(Some(approval.clone())),
-        handoff_scan: Mutex::new(HandoffScan::default()),
-        max_reads: 8,
-        reads: AtomicUsize::new(8),
-    });
+    let ledger = Arc::new(
+        RelayLedger {
+            source: source.clone(),
+            dispatch: custody.clone(),
+            custody: PendingCustody::for_test(&verifier, relay.clone()),
+            original: verifier.into_genesis_verifier(),
+            network: native.network_id(),
+            authority: relay,
+            fee_payment: fee,
+            instruction: Mutex::new(Some(digest)).into(),
+            approval: Mutex::new(Some(approval.clone())).into(),
+            source_plan: Mutex::new(None).into(),
+            handoff: Mutex::new(None).into(),
+            test_lease: Mutex::new(None).into(),
+            max_reads: 8,
+            reads: AtomicUsize::new(8).into(),
+        }
+        .with_test_observation(),
+    );
     (ledger, custody, approval, source)
 }
 struct Driver(Vec<u8>);
@@ -480,7 +498,7 @@ async fn unapproved_prepare_never_signs_or_dispatches_and_resumes_exact_signed_i
     assert_eq!(custody.sends.load(Ordering::Relaxed), 0);
     let digest = ledger.instruction.lock().unwrap().unwrap();
     ledger
-        .begin_observation(digest, Some(approval.clone()))
+        .begin_test_observation(digest, Some(approval.clone()))
         .unwrap();
     custody.available.store(true, Ordering::Relaxed);
     assert!(handle.run(&driver, &options).await.is_err());
@@ -491,7 +509,7 @@ async fn unapproved_prepare_never_signs_or_dispatches_and_resumes_exact_signed_i
         "a signed resumed payload must recheck debit consent before transport"
     );
     ledger
-        .begin_observation(digest, Some(approval.clone()))
+        .begin_test_observation(digest, Some(approval.clone()))
         .unwrap();
     assert!(handle.run(&driver, &options).await.is_err());
     assert_eq!(
@@ -501,7 +519,9 @@ async fn unapproved_prepare_never_signs_or_dispatches_and_resumes_exact_signed_i
     );
     assert_eq!(custody.sends.load(Ordering::Relaxed), 0);
     custody.available.store(true, Ordering::Relaxed);
-    ledger.begin_observation(digest, Some(approval)).unwrap();
+    ledger
+        .begin_test_observation(digest, Some(approval))
+        .unwrap();
     assert!(handle.run(&driver, &options).await.is_err());
     assert_eq!(custody.signs.load(Ordering::Relaxed), 1);
     assert_eq!(
@@ -539,22 +559,87 @@ async fn approval_status_cannot_roll_back_an_authenticated_revoke_cut() {
     assert_eq!(custody.sends.load(Ordering::Relaxed), 0);
 }
 
+#[tokio::test]
+async fn approval_h70_floor_survives_cold_old_h2_carrier_replay() {
+    let (mut ledger, custody, approval, source) = fixture_to_height(70);
+    source.available.store(true, Ordering::Relaxed);
+    ledger
+        .authorize_debit(custody.signed.payload())
+        .await
+        .unwrap();
+    let trust = ledger.original.clone();
+    let digest = ledger.instruction.lock().unwrap().unwrap();
+    let mut complete = false;
+    for _ in 0..70 {
+        ledger
+            .begin_test_observation(digest, Some(approval.clone()))
+            .unwrap();
+        if let Ok(block) = ledger.verified_block(70).await {
+            assert_eq!(block.height(), 70);
+            complete = true;
+        }
+        ledger = restart_ledger(&ledger, &trust);
+        if complete {
+            break;
+        }
+    }
+    assert!(
+        complete,
+        "the live approval floor progresses beyond the read budget across restart"
+    );
+    source.reported_height.store(2, Ordering::Relaxed);
+    // An old untrusted carrier locator gets its own original-genesis replay. It
+    // cannot turn this unrelated H2 input into success or rewind live consent.
+    ledger
+        .begin_test_observation(digest, Some(approval))
+        .unwrap();
+    let old = ledger.carrier_block(&custody.identity(), 2).await.unwrap();
+    assert!(ledger.carrier_evidence(&old, &custody.identity()).is_err());
+    ledger = restart_ledger(&ledger, &trust);
+    let account = RelayAccount {
+        account: custody.clone(),
+        ledger,
+    };
+    let payload = norito::encode_canonical(custody.signed.payload()).unwrap();
+    let error = account.sign(&payload).await.unwrap_err();
+    assert_eq!(error.code, WorkflowErrorCode::EvidenceUnavailable);
+    assert_eq!(source.approval_heights.lock().unwrap().as_slice(), [2]);
+    // The earlier exact-identity gate independently forbids signing this unresolved
+    // synthetic carrier. Exercise consent itself to prove old replay cannot rewind it.
+    let error = account
+        .ledger
+        .authorize_debit(custody.signed.payload())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, WorkflowErrorCode::ProofInvalid);
+    assert_eq!(source.approval_heights.lock().unwrap().as_slice(), [2, 70]);
+    assert_eq!(custody.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(custody.sends.load(Ordering::Relaxed), 0);
+}
+
 // A restart discards the HTTP workflow handle, storage handle and destination
 // verifier cursor. Only configured trust and the file-backed exact payload remain.
 fn restart_ledger(original: &RelayLedger, trust: &SumeragiFinalityVerifier) -> Arc<RelayLedger> {
-    Arc::new(RelayLedger {
-        source: original.source.clone(),
-        dispatch: original.dispatch.clone(),
-        verifier: Mutex::new(trust.clone()),
-        network: original.network,
-        authority: original.authority.clone(),
-        fee_payment: original.fee_payment.clone(),
-        instruction: Mutex::new(*original.instruction.lock().unwrap()),
-        approval: Mutex::new(original.approval.lock().unwrap().clone()),
-        handoff_scan: Mutex::new(HandoffScan::default()),
-        max_reads: original.max_reads,
-        reads: AtomicUsize::new(original.max_reads),
-    })
+    original.test_lease.lock().unwrap().take();
+    Arc::new(
+        RelayLedger {
+            source: original.source.clone(),
+            dispatch: original.dispatch.clone(),
+            custody: original.custody.reopen_for_test(),
+            original: trust.clone().into_genesis_verifier(),
+            network: original.network,
+            authority: original.authority.clone(),
+            fee_payment: original.fee_payment.clone(),
+            instruction: Mutex::new(*original.instruction.lock().unwrap()).into(),
+            approval: Mutex::new(original.approval.lock().unwrap().clone()).into(),
+            source_plan: Mutex::new(None).into(),
+            handoff: Mutex::new(None).into(),
+            test_lease: Mutex::new(None).into(),
+            max_reads: original.max_reads,
+            reads: AtomicUsize::new(original.max_reads).into(),
+        }
+        .with_test_observation(),
+    )
 }
 
 #[tokio::test]
@@ -574,7 +659,7 @@ async fn approval_gate_failures_preserve_exact_reservations_across_file_restart(
     ] {
         for before_sign in [true, false] {
             let (original, custody, _, source) = fixture();
-            let trust = original.verifier.lock().unwrap().clone();
+            let trust = original.original.clone();
             *source.failure.lock().unwrap() = cause;
             source.available.store(!before_sign, Ordering::Relaxed);
             let directory = tempfile::tempdir().unwrap();

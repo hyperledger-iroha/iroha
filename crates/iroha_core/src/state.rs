@@ -20,8 +20,7 @@ use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 /// Canonical parameter MV value with inseparable validated pipeline fee and limit policies.
 pub use crate::pipeline_gas_policy::{
-    LegacyGenesisPolicies, ParameterIngressError, ParameterRetentionError, RetainedStateParameters,
-    StateParameters, install_legacy_genesis_policies, legacy_genesis_policies,
+    ParameterIngressError, ParameterRetentionError, RetainedStateParameters, StateParameters,
 };
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
@@ -4368,7 +4367,7 @@ pub struct WorldData {
     pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: Storage<
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA reserve ledger, permanent replay indexes and historical objects.
@@ -5368,7 +5367,7 @@ pub struct WorldBlockFields<'world> {
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: StorageField<
         'world,
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA ledger overlay.
@@ -7118,7 +7117,7 @@ pub struct WorldTransaction<'block, 'world> {
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: StorageTransaction<
         'block,
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Canonical KAGEMUSHA ledger transaction.
@@ -9388,7 +9387,7 @@ pub struct WorldView<'world> {
     /// Optional committed resource policies keyed by closed protocol identity.
     pub(crate) privacy_protocol_policies: StorageView<
         'world,
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     >,
     /// Public private-settlement governance projection view.
@@ -21632,7 +21631,7 @@ macro_rules! world_ro_accessors {
             cell_ref privacy_consensus_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1;
             /// Optional committed privacy resource policies (read-only).
             storage privacy_protocol_policies:
-                crate::privacy_state::PrivacyProtocolPolicyKeyV1 =>
+                iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1 =>
                 iroha_data_model::privacy::PrivacyProtocolPolicyV1;
         );
     };
@@ -36324,7 +36323,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
             |protocol_id| {
                 world
                     .privacy_protocol_policies()
-                    .get(&crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
+                    .get(&iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
                         protocol_id,
                     ))
                     .copied()
@@ -37927,7 +37926,6 @@ fn compute_execution_policy_digest_v1(
             settlement,
             nexus_policy_digest,
             compute_zk_consensus_policy_hash(zk),
-            nexus.legacy_genesis.as_ref().map(|legacy| &legacy.crypto),
         ),
     )
 }
@@ -42000,7 +41998,6 @@ impl StateTransaction<'_, '_> {
     fn ensure_private_settlement_admitted_v1(
         &self,
     ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
-        let config = &self.nexus.atomic_private_settlement;
         let protocol_id =
             iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let admitted = crate::privacy_state::resolve_admitted_privacy_protocol_v1(
@@ -42021,13 +42018,30 @@ impl StateTransaction<'_, '_> {
         if limits.max_input_count < required_inputs || limits.max_output_count < required_outputs {
             return Err(PrivateSettlementGlobalStateErrorV1::Capability);
         }
-        if config.proof_profile_version.get()
-            != u16::from(iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1)
-            || !config.permitted_policy_versions.contains(&u16::from(
-                iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-            ))
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Capability);
+        Ok(())
+    }
+    // A continuation still consumes structurally valid committed policy and the native
+    // verifier, but a valid later admission closure cannot revoke original obligations.
+    fn ensure_private_settlement_continuation_v1(
+        &self,
+    ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
+        crate::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
+        self.world
+            .privacy_consensus_policy
+            .get()
+            .validate()
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
+        let protocol = iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        if let Some(policy) = self.world.privacy_protocol_policies.get(
+            &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol),
+        ) {
+            if policy.protocol_id != protocol {
+                return Err(PrivateSettlementGlobalStateErrorV1::Capability);
+            }
+            policy
+                .validate()
+                .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
         }
         Ok(())
     }
@@ -42139,28 +42153,29 @@ impl StateTransaction<'_, '_> {
         if barrier.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        let participant_count = u16::try_from(barrier.manifest.legs.len())
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let expiry_span = barrier
-            .manifest
-            .expiry_height
-            .checked_sub(barrier.manifest.authority_context_height)
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let carrier = iroha_data_model::isi::InstructionBox::from(
-            iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1::new(
-                barrier.clone(),
+        let policy = self.world.privacy_consensus_policy.get();
+        let protocol = self.world.privacy_protocol_policies.get(
+            &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+                iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             ),
         );
-        let carrier_bytes = norito::encode_canonical(&carrier)
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?
-            .len();
-        if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
-            || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
-            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
-                > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
-        }
+        let admission_deadline =
+            iroha_data_model::privacy::private_settlement_admission_deadline_v1(policy, protocol);
+        policy
+            .current_limits
+            .private_settlement
+            .validate_admission(
+                barrier.manifest.legs.len(),
+                barrier.manifest.authority_context_height,
+                barrier.manifest.expiry_height,
+                current_height,
+                admission_deadline,
+            )
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
+        iroha_data_model::privacy::validate_private_settlement_sponsor_v1(
+            &barrier.manifest.sponsor,
+        )
+        .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
         for (index, leg) in barrier.manifest.legs.iter().enumerate() {
             self.ensure_private_settlement_route_active_v1(leg.route)?;
             let authority = barrier
@@ -42206,27 +42221,12 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_admitted_v1()?;
+        self.ensure_private_settlement_continuation_v1()?;
         if receipt.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        let participant_count = u16::try_from(receipt.manifest.legs.len())
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let expiry_span = receipt
-            .manifest
-            .expiry_height
-            .checked_sub(receipt.manifest.authority_context_height)
-            .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
-        let carrier_bytes = receipt
-            .canonical_carrier_bytes_len()
-            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?;
-        if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
-            || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
-            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
-                > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
-        {
-            return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
-        }
+        // Finalize consumes the original all-Prepare locks. It does not admit
+        // a new obligation under a policy that may have changed since Register.
         receipt
             .validate_shape()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
@@ -42301,7 +42301,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let current_height = self.block_height();
-        self.ensure_private_settlement_admitted_v1()?;
+        self.ensure_private_settlement_continuation_v1()?;
         if receipt.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
@@ -42659,16 +42659,29 @@ impl StateTransaction<'_, '_> {
         payload_digest: Hash,
         instruction_digest: Hash,
     ) -> core::result::Result<(), PrivateSettlementCarrierBindingErrorV1> {
-        let max_signed_transaction_bytes =
-            self.nexus.atomic_private_settlement.max_carrier_bytes.get();
-        self.private_settlement_carrier_binding
+        // SPEC: §13.4 HC491 removes only the pre-obligation genesis boundary.
+        if !cfg!(all(test, sumeragi_core_mutation = "HC491")) && self.block_height() <= 1 {
+            return Err(PrivateSettlementCarrierBindingErrorV1::GenesisCarrier);
+        }
+        let binding = self
+            .private_settlement_carrier_binding
             .as_mut()
-            .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?
-            .consume(
-                payload_digest,
-                instruction_digest,
-                max_signed_transaction_bytes,
-            )
+            .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?;
+        let max_signed_transaction_bytes = if binding.is_continuation() {
+            iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1
+        } else {
+            self.world
+                .privacy_consensus_policy
+                .get()
+                .current_limits
+                .private_settlement
+                .max_carrier_bytes
+        };
+        binding.consume(
+            payload_digest,
+            instruction_digest,
+            max_signed_transaction_bytes,
+        )
     }
     /// Consume the exact signed direct privacy submission once.
     ///

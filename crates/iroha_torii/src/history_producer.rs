@@ -38,6 +38,19 @@ pub struct ProducerBudget {
 }
 
 impl ProducerBudget {
+    /// Closed native-finality request, codec, cancellation and last-byte controls.
+    /// These actual layouts are separate from source/response buffers and Core graphs.
+    pub(crate) fn native_finality_metadata_bytes() -> Option<usize> {
+        [
+            ChargedShared::<Self>::allocation_layout().size(),
+            DecodeBudgetContext::allocation_layout().size(),
+            crate::AdmittedFanoutPermit::layout().size(),
+            ChargedShared::<std::sync::atomic::AtomicBool>::allocation_layout().size(),
+            crate::response_memory_custody::native_response_control_bytes()?,
+        ]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+    }
     pub(crate) fn response_metadata(&self) -> &AllocationBudget {
         &self.response_metadata
     }
@@ -771,6 +784,108 @@ mod tests {
             original.budget.envelope, prebody,
             "existing owners retain their original geometry"
         );
+    }
+
+    #[test]
+    fn default_finality_custody_can_hold_one_maximum_payment_and_its_response() {
+        // Necessary lower bound for the real maximum-payment network regression: the
+        // portable proof still owns the original transaction while HTTP owns its encoded
+        // response. These are actual funded buffers, not authenticated proof fixtures.
+        let maximum_payment = usize::try_from(
+            iroha_data_model::parameter::Parameters::default()
+                .transaction()
+                .max_tx_bytes()
+                .get(),
+        )
+        .unwrap();
+        let working = usize::try_from(
+            iroha_config::parameters::defaults::torii::FINALITY_MAX_WORKING_SET_BYTES.0,
+        )
+        .unwrap();
+        let envelope = QueryFanoutMemoryEnvelope::for_native_finality(
+            working,
+            usize::try_from(iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0).unwrap(),
+        )
+        .unwrap();
+        let budget = ProducerBudget::from_admitted(envelope, 7).unwrap();
+        let proof =
+            iroha_allocation::ChargedBuffer::<u8>::new(maximum_payment, &budget.cold_frames)
+                .expect("default finality custody must admit the maximum signed payment source");
+        let response =
+            iroha_allocation::ChargedBuffer::<u8>::new(maximum_payment, &budget.cold_frames)
+                .expect(
+                    "default finality custody must retain the original while encoding its response",
+                );
+        assert!(envelope.final_body_bytes >= maximum_payment);
+        drop((proof, response));
+        assert_eq!(budget.cold_frames.reserved_bytes(), 0);
+    }
+
+    #[test]
+    fn native_finality_profile_refuses_before_acquisition_and_keeps_disjoint_pools() {
+        let response =
+            usize::try_from(iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0).unwrap();
+        let frames = iroha_core::sumeragi::finality::native_finality_frame_budget_bytes(
+            response,
+            iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
+            64,
+        )
+        .unwrap();
+        let graph_floor =
+            iroha_core::sumeragi::finality::native_finality_graph_floor_bytes().unwrap();
+        let controls = ProducerBudget::native_finality_metadata_bytes().unwrap();
+        let fixed = crate::query_fanout_fixed_overhead_bytes().unwrap();
+        // Core's maximum-payment test reserves this existing fixed allowance a
+        // second time instead of guessing our platform-specific Body/Bytes layouts.
+        // Its graph grant is therefore a proven lower bound of this actual profile.
+        assert!(controls <= fixed);
+        let candidate =
+            QueryFanoutMemoryEnvelope::for_native_finality(384_000_000, response).unwrap();
+        let actual = ProducerBudget::from_admitted(candidate, 7).unwrap();
+        let core_test_lower_bound = 384_000_000_usize
+            .checked_sub(frames)
+            .unwrap()
+            .checked_sub(fixed)
+            .unwrap()
+            .checked_sub(fixed)
+            .unwrap();
+        assert!(actual.finality_graphs.limit_bytes() >= core_test_lower_bound);
+        let minimum = fixed + controls + frames + graph_floor;
+        assert!(QueryFanoutMemoryEnvelope::for_native_finality(minimum - 1, response).is_err());
+        assert!(QueryFanoutMemoryEnvelope::for_native_finality(384_000_000, usize::MAX).is_err());
+        let exact = QueryFanoutMemoryEnvelope::for_native_finality(minimum, response).unwrap();
+        let budget = ProducerBudget::from_admitted(exact, 7).unwrap();
+        assert_eq!(budget.finality_graphs.limit_bytes(), graph_floor);
+        assert_eq!(budget.cold_frames.limit_bytes(), frames);
+        assert_eq!(budget.response_metadata.limit_bytes(), controls);
+        assert_eq!(
+            fixed
+                + budget.finality_graphs.limit_bytes()
+                + budget.cold_frames.limit_bytes()
+                + budget.response_metadata.limit_bytes(),
+            minimum
+        );
+        assert!(!budget.finality_graphs.same_pool(&budget.cold_frames));
+        assert!(!budget.response_metadata.same_pool(&budget.cold_frames));
+        let remaining = frames - budget.cold_frames.reserved_bytes();
+        let full = budget
+            .cold_frames
+            .try_reserve(std::alloc::Layout::array::<u8>(remaining).unwrap())
+            .unwrap();
+        assert!(
+            budget
+                .cold_frames
+                .try_reserve(std::alloc::Layout::new::<u8>())
+                .is_err()
+        );
+        drop(full);
+        assert_eq!(budget.cold_frames.reserved_bytes(), 0);
+
+        let smaller = QueryFanoutMemoryEnvelope::for_bodyless_finality(48_000_000).unwrap();
+        let inherited = ProducerBudget::from_admitted(smaller, 7).unwrap();
+        assert_eq!(inherited.envelope, smaller);
+        assert!(inherited.cold_frames.limit_bytes() < 10 * 1024 * 1024);
+        assert!(QueryFanoutMemoryEnvelope::for_native_finality(48_000_000, response).is_err());
     }
 
     #[test]

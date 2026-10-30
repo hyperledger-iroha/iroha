@@ -68,8 +68,6 @@ use std::{
 mod actual_soranet_handshake_debug;
 mod amx_relay;
 pub use amx_relay::{AmxRelay, AmxRelayRoute};
-mod legacy_genesis;
-pub use legacy_genesis::{LegacyGenesisCryptoV1, LegacyGenesisStakingV1, LegacyGenesisV1};
 mod kagemusha_enrollment;
 pub use kagemusha_enrollment::{
     KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider, KagemushaEnrollmentWorker,
@@ -3114,90 +3112,17 @@ impl_default!(NexusAxt => {
                 .expect("replay retention window must be non-zero"),
         }
 });
-/// Governed atomic private cross-dataspace settlement configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Node-local custody limits for encrypted atomic private settlement sidecars.
+/// Payment validity comes from the committed privacy consensus policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Audited fixed-shape private-note proof profile version.
-    pub proof_profile_version: NonZeroU16,
-    /// Maximum number of ordered dataspace legs in one bundle.
-    pub max_participants: NonZeroU16,
-    /// Maximum admission-to-expiry distance, in blocks.
-    pub max_expiry_blocks: NonZeroU64,
-    /// Maximum auditor-approval phase duration, in blocks.
-    pub audit_timeout_blocks: NonZeroU64,
-    /// Maximum Prepare-QC phase duration, in blocks.
-    pub prepare_timeout_blocks: NonZeroU64,
-    /// Maximum Commit-QC phase duration, in blocks.
-    pub commit_timeout_blocks: NonZeroU64,
-    /// Strictly increasing canonical padded-plaintext classes, in bytes.
-    ///
-    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
-    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
-    pub capsule_padding_classes_bytes: Vec<NonZeroU32>,
-    /// Maximum proof sidecar size per leg.
-    pub max_proof_bytes: NonZeroU64,
-    /// Maximum encrypted audit capsule size per leg.
-    pub max_capsule_bytes: NonZeroU64,
-    /// Maximum canonical sponsor-signed direct carrier transaction size.
-    pub max_carrier_bytes: NonZeroU64,
-    /// Minimum durable sidecar retention after admission, in blocks.
-    pub sidecar_retention_blocks: NonZeroU64,
     /// Maximum encrypted settlement records retained by one local sidecar store.
     pub sidecar_max_records: NonZeroU32,
     /// Maximum canonical bytes retained by one local sidecar store.
     pub sidecar_max_total_bytes: NonZeroU64,
-    /// Governed minimum online auditor threshold accepted for new policies.
-    pub default_min_auditor_approvals: NonZeroU16,
-    /// Audit-policy schema versions accepted by this deployment.
-    pub permitted_policy_versions: BTreeSet<u16>,
 }
 impl_default!(NexusAtomicPrivateSettlement => {
         Self {
-            proof_profile_version: NonZeroU16::new(
-                defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
-            )
-            .expect("private-settlement proof profile must be non-zero"),
-            max_participants: NonZeroU16::new(
-                defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
-            )
-            .expect("private-settlement participant bound must be non-zero"),
-            max_expiry_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
-            )
-            .expect("private-settlement expiry bound must be non-zero"),
-            audit_timeout_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS,
-            )
-            .expect("private-settlement audit timeout must be non-zero"),
-            prepare_timeout_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS,
-            )
-            .expect("private-settlement prepare timeout must be non-zero"),
-            commit_timeout_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS,
-            )
-            .expect("private-settlement commit timeout must be non-zero"),
-            capsule_padding_classes_bytes:
-                defaults::nexus::atomic_private_settlement::CAPSULE_PADDING_CLASSES_BYTES
-                    .into_iter()
-                    .map(|bytes| NonZeroU32::new(bytes).expect("padding class must be non-zero"))
-                    .collect(),
-            max_proof_bytes: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES,
-            )
-            .expect("private-settlement proof bound must be non-zero"),
-            max_capsule_bytes: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
-            )
-            .expect("private-settlement capsule bound must be non-zero"),
-            max_carrier_bytes: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
-            )
-            .expect("private-settlement carrier bound must be non-zero"),
-            sidecar_retention_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
-            )
-            .expect("private-settlement sidecar retention must be non-zero"),
             sidecar_max_records: NonZeroU32::new(
                 defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
             )
@@ -3206,12 +3131,6 @@ impl_default!(NexusAtomicPrivateSettlement => {
                 defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
             )
             .expect("private-settlement sidecar byte bound must be non-zero"),
-            default_min_auditor_approvals: NonZeroU16::new(
-                defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
-            )
-            .expect("private-settlement auditor threshold must be non-zero"),
-            permitted_policy_versions:
-                defaults::nexus::atomic_private_settlement::PERMITTED_POLICY_VERSIONS.into(),
         }
 });
 /// Storage component participating in Nexus disk budgeting.
@@ -3469,9 +3388,6 @@ pub struct Nexus {
     pub commit: Commit,
     /// Data-availability sampling configuration.
     pub da: Da,
-    /// Configured terms of a signed genesis that predates genesis-authored policy; see
-    /// [`LegacyGenesisV1`]. `None` on every network whose genesis signs its policies.
-    pub legacy_genesis: Option<LegacyGenesisV1>,
 }
 impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
         Self {
@@ -3497,7 +3413,6 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             autoscale: Autoscale::default(),
             commit: Commit::default(),
             da: Da::default(),
-            legacy_genesis: None,
         }
 });
 impl Nexus {
@@ -3637,7 +3552,6 @@ struct NexusConsensusPolicyPreimageV1<'a> {
     uploaded_models: NexusConsensusUploadedModelsV1,
     endorsement: NexusConsensusEndorsementV1,
     axt: NexusConsensusAxtV1,
-    atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1,
     governance: NexusConsensusGovernanceV1,
     compliance_enabled: bool,
     compliance_audit_only: bool,
@@ -3698,24 +3612,6 @@ struct NexusConsensusAxtV1 {
     max_clock_skew_ms: u64,
     proof_cache_ttl_slots: u64,
     replay_retention_slots: u64,
-}
-#[derive(Encode)]
-struct NexusConsensusAtomicPrivateSettlementV1 {
-    proof_profile_version: u16,
-    max_participants: u16,
-    max_expiry_blocks: u64,
-    audit_timeout_blocks: u64,
-    prepare_timeout_blocks: u64,
-    commit_timeout_blocks: u64,
-    capsule_padding_classes_bytes: Vec<u32>,
-    max_proof_bytes: u64,
-    max_capsule_bytes: u64,
-    max_carrier_bytes: u64,
-    sidecar_retention_blocks: u64,
-    sidecar_max_records: u32,
-    sidecar_max_total_bytes: u64,
-    default_min_auditor_approvals: u16,
-    permitted_policy_versions: Vec<u16>,
 }
 #[derive(Encode)]
 struct NexusConsensusGovernanceV1 {
@@ -4003,42 +3899,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             proof_cache_ttl_slots: nexus.axt.proof_cache_ttl_slots.get(),
             replay_retention_slots: nexus.axt.replay_retention_slots.get(),
         },
-        atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
-            proof_profile_version: nexus.atomic_private_settlement.proof_profile_version.get(),
-            max_participants: nexus.atomic_private_settlement.max_participants.get(),
-            max_expiry_blocks: nexus.atomic_private_settlement.max_expiry_blocks.get(),
-            audit_timeout_blocks: nexus.atomic_private_settlement.audit_timeout_blocks.get(),
-            prepare_timeout_blocks: nexus.atomic_private_settlement.prepare_timeout_blocks.get(),
-            commit_timeout_blocks: nexus.atomic_private_settlement.commit_timeout_blocks.get(),
-            capsule_padding_classes_bytes: nexus
-                .atomic_private_settlement
-                .capsule_padding_classes_bytes
-                .iter()
-                .map(|bytes| bytes.get())
-                .collect(),
-            max_proof_bytes: nexus.atomic_private_settlement.max_proof_bytes.get(),
-            max_capsule_bytes: nexus.atomic_private_settlement.max_capsule_bytes.get(),
-            max_carrier_bytes: nexus.atomic_private_settlement.max_carrier_bytes.get(),
-            sidecar_retention_blocks: nexus
-                .atomic_private_settlement
-                .sidecar_retention_blocks
-                .get(),
-            sidecar_max_records: nexus.atomic_private_settlement.sidecar_max_records.get(),
-            sidecar_max_total_bytes: nexus
-                .atomic_private_settlement
-                .sidecar_max_total_bytes
-                .get(),
-            default_min_auditor_approvals: nexus
-                .atomic_private_settlement
-                .default_min_auditor_approvals
-                .get(),
-            permitted_policy_versions: nexus
-                .atomic_private_settlement
-                .permitted_policy_versions
-                .iter()
-                .copied()
-                .collect(),
-        },
         governance: NexusConsensusGovernanceV1 {
             default_module: nexus.governance.default_module.clone(),
             modules: governance_modules,
@@ -4103,13 +3963,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             )?,
         },
     };
-    if let Some(legacy) = nexus.legacy_genesis.as_ref() {
-        return Ok(legacy_genesis::nexus_policy_preimage(
-            preimage,
-            legacy,
-            original_fees.unwrap_or(&nexus.fees),
-        ));
-    }
     Ok(preimage.encode())
 }
 #[derive(Encode)]
@@ -4179,7 +4032,6 @@ pub fn execution_policy_digest_v1(
     settlement: &Settlement,
     nexus_policy_digest: [u8; 32],
     zk_policy_digest: [u8; 32],
-    legacy_crypto: Option<&LegacyGenesisCryptoV1>,
 ) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
     const VERSION: u16 = 1;
@@ -4274,10 +4126,6 @@ pub fn execution_policy_digest_v1(
     policy.push("pipeline.amx_per_syscall_ns", &pipeline.amx_per_syscall_ns);
     // Ordinary crypto admission belongs exclusively to committed Parameters.
     // Local generation defaults and implementation selection carry no execution authority.
-    // A pre-policy genesis instead bound its configured crypto terms at this position.
-    if let Some(crypto) = legacy_crypto {
-        legacy_genesis::push_execution_crypto(&mut policy, crypto);
-    }
     // Oracle state transitions, economics, governance, and binding admission.
     policy.push(
         "oracle.history_depth",
@@ -4442,20 +4290,6 @@ pub fn execution_policy_digest_v1(
             .iter()
             .map(|scheme| scheme.scheme_id())
             .collect::<Vec<_>>(),
-    );
-    // The node-configured runtime-upgrade provenance check is deleted; provenance is the
-    // committed `runtime_provenance_policy_v1` (`specs/live_runtime_upgrades.md` §6). Genesis
-    // signs this preimage, so its five terms keep the values every network committed.
-    policy.push("governance.runtime_upgrade_provenance.mode", &1_u8);
-    policy.push("governance.runtime_upgrade_provenance.require_sbom", &false);
-    policy.push("governance.runtime_upgrade_provenance.require_slsa", &false);
-    policy.push(
-        "governance.runtime_upgrade_provenance.trusted_signers",
-        &execution_policy_canonical_set(std::iter::empty::<&PublicKey>()),
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.signature_threshold",
-        &execution_policy_usize(0),
     );
     let viral = &governance.viral_incentives;
     policy.push(
@@ -5707,26 +5541,16 @@ pub fn sumeragi_nexus_amx_context_preimage(
         tag::STAKING_RESTRICTED_VALIDATOR_MODE,
         &restricted_validator_mode,
     );
-    if let Some(legacy) = nexus.legacy_genesis.as_ref() {
-        // A pre-policy genesis committed its configured staking terms and each fee term.
-        legacy_genesis::write_amx_staking_and_fees(
-            &mut preimage,
-            nexus,
-            legacy,
-            original_fees.unwrap_or(&nexus.fees),
-        );
-    } else {
-        preimage.field(
-            tag::STAKING_MAX_VALIDATORS,
-            &nexus.staking.max_validators.get(),
-        );
-        // The exact caller-owned original policy is encoded once as a typed option.
-        // No node-local fee defaults, account rendering or monetary mirror is consulted.
-        preimage.field(
-            tag::ROOT_FEE_POLICY,
-            &original_fees.map(norito::core::PayloadRef),
-        );
-    }
+    preimage.field(
+        tag::STAKING_MAX_VALIDATORS,
+        &nexus.staking.max_validators.get(),
+    );
+    // The exact caller-owned original policy is encoded once as a typed option.
+    // No node-local fee defaults, account rendering or monetary mirror is consulted.
+    preimage.field(
+        tag::ROOT_FEE_POLICY,
+        &original_fees.map(norito::core::PayloadRef),
+    );
     preimage.field(
         tag::DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
         &nexus.dataspace_fee_sponsor_program_ids,
@@ -7024,6 +6848,8 @@ pub struct Torii {
     pub query_fanout_max_retained_bytes: Bytes,
     /// Maximum complete working set for one query, independent of aggregate capacity.
     pub query_fanout_max_working_set_bytes: Bytes,
+    /// Maximum initial full-native-finality working set within the same shared fanout pool.
+    pub finality_max_working_set_bytes: Bytes,
     /// Bytes retained by this node's authenticated SCCP history-node cache.
     pub sccp_history_cache_max_bytes: Bytes,
     /// Absolute deadline for one admitted App routed-read body.
@@ -7240,6 +7066,10 @@ impl fmt::Debug for Torii {
             .field(
                 "query_fanout_max_working_set_bytes",
                 &self.query_fanout_max_working_set_bytes,
+            )
+            .field(
+                "finality_max_working_set_bytes",
+                &self.finality_max_working_set_bytes,
             )
             .field(
                 "sccp_history_cache_max_bytes",

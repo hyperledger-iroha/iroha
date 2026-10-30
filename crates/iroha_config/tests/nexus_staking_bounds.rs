@@ -95,10 +95,7 @@ const RETIRED: [(&str, &str); 8] = [
 ];
 
 #[test]
-fn each_node_monetary_override_needs_the_legacy_genesis_profile_even_in_a_later_layer() {
-    // A retired monetary key only describes the genesis terms of a network whose signed genesis
-    // predates genesis-authored staking (`crypto.allowed_signing` selects that profile). Outside
-    // the profile it is refused, never silently ignored.
+fn each_node_monetary_override_is_unknown_even_in_a_later_layer() {
     for (field, literal) in RETIRED {
         let allowed: toml::Table = "[nexus.staking]\nmax_validators = 7\n".parse().unwrap();
         let retired: toml::Table = format!("[nexus.staking]\n{field} = {literal}\n")
@@ -108,30 +105,28 @@ fn each_node_monetary_override_needs_the_legacy_genesis_profile_even_in_a_later_
             .with_toml_source(TomlSource::inline(allowed))
             .with_toml_source(TomlSource::inline(retired))
             .read_and_complete::<UserConfig>()
-            .expect("the reader admits the legacy genesis profile's keys")
-            .parse()
             .expect_err("retired monetary input must not be silently ignored");
         let message = format!("{error:?}");
+        assert!(message.contains("unknown parameter"), "{message}");
         assert!(
-            message.contains("legacy genesis profile")
-                && message.contains("crypto.allowed_signing"),
-            "{field}: {message}"
+            message.contains(&format!("nexus.staking.{field}")),
+            "{message}"
         );
     }
 }
 
 #[test]
-fn direct_json_reads_each_retired_monetary_field_into_the_legacy_profile_view() {
+fn direct_json_rejects_each_retired_monetary_field() {
     let base = r#"{"public_validator_mode":"stake_elected","restricted_validator_mode":"admin_managed","max_validators":7}"#;
-    let retained = norito::json::from_str::<UserStaking>(base).expect("retained JSON fields");
+    norito::json::from_str::<UserStaking>(base).expect("retained JSON fields");
     for (field, literal) in RETIRED {
         let encoded = format!("{},\"{field}\":{literal}}}", &base[..base.len() - 1]);
-        let read = norito::json::from_str::<UserStaking>(&encoded)
-            .expect("retired JSON monetary field belongs to the legacy profile view");
-        assert_ne!(
-            format!("{read:?}"),
-            format!("{retained:?}"),
-            "{field} must be retained for the legacy profile, not dropped"
+        let error = norito::json::from_str::<UserStaking>(&encoded)
+            .expect_err("retired JSON monetary field");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field") && message.contains(field),
+            "{message}"
         );
     }
 }

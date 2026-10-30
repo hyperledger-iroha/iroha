@@ -6641,7 +6641,7 @@ resource and process failures are errors, never killed mutations.
 | SC20: L5 destination progress (§4.8) | HC251 keeps clearance work on its bounded pending index; HC322 omits original destination clearance | Current-candidate causal qualification required |
 | SC21: immutable registration attribution and penalty coordinates | HC230, HC250 and HC305 bind captured members to original global registrations; HC318 substitutes forged height; HC319 substitutes the current peer-key mapping | Current-candidate causal qualification required |
 | SC24: pending evidence and anchor retention (§4.11) | HC292, HC293 | None for these registered pruning faults |
-| SC25: per-revision forgery hold (§4.10) | HC283 protects registration after forgery; HC285 protects monotone attestation; HC323 omits the forgery-floor hold; HC489 lets unresolved signers evade the hold | Current-candidate causal qualification required |
+| SC25: per-revision forgery hold (§4.10) | HC283 protects registration after forgery; HC285 protects monotone attestation; HC323 omits the forgery-floor hold; HC496 lets unresolved signers evade the hold | Current-candidate causal qualification required |
 
 HC276–HC290, HC292–HC293 and HC295–HC307 additionally cover exact CREATE2 binding, the proposal launch gate,
 permanent quarantine and forged-mint payload binding, reconciliation reservation
@@ -6649,9 +6649,9 @@ and refused-credit accounting, fast-pause seat/quorum/expiry/lift/suspension,
 signed instruction custody, bounded control enactment, original-parent due work,
 clock budget feasibility, bundled advance expectations and local verifier
 refusal. HC326 rejects substituted TON minter, wallet or bucket code even
-after the caller recomputes its matching StateInit address. HC488 makes the
+after the caller recomputes its matching StateInit address. HC495 makes the
 §4.15 balanced-entry guard accept a transition whose escrow balance and
-recorded backing changed differently. HC489 makes §4.9 step 7 call evidence
+recorded backing changed differently. HC496 makes §4.9 step 7 call evidence
 with no new slashable signer a duplicate before any record names its
 generation. These are
 source-owned hooks, not aliases for every open SC row.
@@ -6684,7 +6684,7 @@ still missing is named separately from external authority and audit gates.
 |---|---|
 | Payload codec, amounts, transfer leaf, commitment tree, history accumulator (§3.1–§3.5) | Implemented. The sole 199-byte control leaf binds both pause tracks and the exact cause; Rust/Python fixtures and applicable Solidity/Tolk replays cover payloads, tree/history paths and confusion negatives. |
 | `RecordSccpMessage`, signed-only execution and the ABI closure for contract-originated sends (§4.4) | Implemented. Original-parent degradation, forgery/quarantine and pause checks precede monetary, nonce and leaf writes. Tests cover signed instruction custody, nested/repeated dispatch refusal and rollback. |
-| Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Every value instruction and Parliament enactment runs under the §4.15 balanced-entry guard (HC488). Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
+| Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Every value instruction and Parliament enactment runs under the §4.15 balanced-entry guard (HC495). Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
 | Exempt eligibility predicate and charge-on-failure (§4.19) | Implemented. Shared original-parent predicates, class quotas, keeper advances, Keepalive and R-EX have queue/execution and charge-on-failure tests. |
 | Light clients for Ethereum, BSC and TON; profiles, aged-proof builders and RPC hygiene (§4.13, §8) | Implemented verifiers/builders and Parliament-enacted profile activation, with bootstrap, advance, inclusion, equivocation and profile-switch tests. Read-only Ethereum/BSC/TON bootstrap and verified advance captures replay through the native verifiers. Monetary deployment and verified parameters for each future light-client fork remain open; captures do not qualify settlement. |
 | Light-client keeper task | Implemented key generation, independent advances, due Keepalive, bounded destination watches and L5 progress. Tests cover evidence retention, endpoint rotation and unavailable duties. Live deployment and source-network progress qualification remain external. |

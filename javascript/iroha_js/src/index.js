@@ -5,6 +5,13 @@
  * module.
  */
 export {
+  createPrivateSettlementHost,
+  PrivateSettlementHost,
+  PrivateSettlementOperation,
+  PrivateSettlementTicket,
+  PrivateSettlementOutcome,
+} from "./privateSettlement.js";
+export {
   KotodamaCompilerClient,
   compileKotodamaProgram,
 } from "./kotodamaCompiler/index.js";

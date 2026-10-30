@@ -393,6 +393,9 @@ Root {
         query_fanout_max_working_set_bytes: Bytes(
             48000000,
         ),
+        finality_max_working_set_bytes: Bytes(
+            384000000,
+        ),
         sccp_history_cache_max_bytes: Bytes(
             8000000,
         ),
@@ -705,6 +708,7 @@ Root {
         poll_interval: 2s,
         max_source_heights_per_pass: 32,
         max_finality_proof_reads: 64,
+        max_pending_finality_walks: 16,
         routes: [],
     },
     kura: Kura {
@@ -901,28 +905,8 @@ Root {
             replay_retention_slots: 128,
         },
         atomic_private_settlement: NexusAtomicPrivateSettlement {
-            proof_profile_version: 1,
-            max_participants: 255,
-            max_expiry_blocks: 7200,
-            audit_timeout_blocks: 1200,
-            prepare_timeout_blocks: 1200,
-            commit_timeout_blocks: 1200,
-            capsule_padding_classes_bytes: [
-                4096,
-                16384,
-                65536,
-                262144,
-            ],
-            max_proof_bytes: 8388608,
-            max_capsule_bytes: 1048576,
-            max_carrier_bytes: 4194304,
-            sidecar_retention_blocks: 1000000,
             sidecar_max_records: 256,
             sidecar_max_total_bytes: 3221225472,
-            default_min_auditor_approvals: 1,
-            permitted_policy_versions: {
-                1,
-            },
         },
         lane_catalog: LaneCatalog {
             lane_count: 1,
@@ -1110,7 +1094,6 @@ Root {
                 latency_decay: 0.25,
             },
         },
-        legacy_genesis: None,
     },
     snapshot: Snapshot {
         mode: ReadWrite,

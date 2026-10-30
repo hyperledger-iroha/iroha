@@ -4,17 +4,20 @@
 //! The existing workflow owns round identity and retries; immutable encrypted artifacts own
 //! proof recovery. No plaintext witness is serialized by this operation.
 use iroha::client::{
-    AccountClient, AccountWorkflowContext, PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1,
-    PrivateSettlementError, PrivateSettlementRecovery, PrivateSettlementRequest,
-    PrivateSettlementResult, PrivateSettlementRunOptions, run_private_settlement_worker,
+    AccountClient, AccountWorkflowContext, FilePrivateSettlementFinality,
+    MAX_PRIVATE_SETTLEMENT_FINALITY_BYTES, NativeWorkerError,
+    PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1, PrivateSettlementError, PrivateSettlementRecovery,
+    PrivateSettlementRequest, PrivateSettlementResult, PrivateSettlementRunOptions,
+    VerifiedPrivateSettlementOutcome, run_native_worker,
     validate_private_settlement_committee_endpoints_v1,
 };
 use iroha::workflow::{
     CommittedOutcome, Digest32, DispatchOutcome, DriverIdentityV1, RoundContext, RoundRecovery,
     RoundReport, RoundStatusReport, StepDescriptorV1, StepFailure, SystemWorkflowClock,
     TransactionIdentityV1, WorkflowAccount, WorkflowBindingV1, WorkflowDriver, WorkflowEngine,
-    WorkflowError, WorkflowErrorCode, WorkflowFuture, WorkflowHandle, WorkflowId, WorkflowLedger,
-    WorkflowPlanV1, WorkflowStorage, WorkflowStorageDurability, domain_digest,
+    WorkflowError, WorkflowErrorCode, WorkflowFuture, WorkflowHandle, WorkflowId,
+    WorkflowJournalV1, WorkflowLedger, WorkflowPlanV1, WorkflowStorage, WorkflowStorageDurability,
+    domain_digest,
 };
 use iroha_core_privacy::privacy_engines::atomic_private_settlement::{
     AtomicPrivateSettlementAuthorizedWalletLegV1, AtomicPrivateSettlementPreparationErrorV1,
@@ -44,10 +47,27 @@ use url::Url;
 
 mod artifacts;
 mod errors;
+mod native_session;
+pub use native_session::{
+    NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES, NATIVE_PRIVATE_SETTLEMENT_TERMINAL_ALLOWANCE,
+    NativePrivateSettlementAdmission, NativePrivateSettlementCommand,
+    NativePrivateSettlementCommandError, NativePrivateSettlementExportLease,
+    NativePrivateSettlementHost, NativePrivateSettlementLimits, NativePrivateSettlementOriginals,
+    NativePrivateSettlementOutcome, NativePrivateSettlementSessionError,
+    NativePrivateSettlementSessionId, NativePrivateSettlementStatus, NativePrivateSettlementStores,
+    NativePrivateSettlementTicket,
+};
 mod preparation;
+mod wallet_reconciliation;
+mod wallet_store;
 pub use artifacts::FilePrivateSettlementArtifacts;
 use artifacts::{Artifact, ArtifactKey};
 use preparation::{NoPreparationEffects, PreparationDriver};
+pub use wallet_reconciliation::PrivateSettlementReconciliationPending;
+pub use wallet_store::{
+    FilePrivateSettlementWallet, MAX_PRIVATE_SETTLEMENT_WALLET_BYTES,
+    PrivateSettlementWalletStorageError,
+};
 
 /// Independently chosen private business terms; never copied to the workflow journal.
 /// These are checked against the wallet's original signed authorization before proving.
@@ -113,11 +133,13 @@ impl PrivateSettlementContextSource for AccountClient {
         })
     }
 }
-/// Wallet-owned durable reservation and secret custody, called only during explicit Run.
+/// Wallet-owned durable reservation, secret custody and verified terminal reconciliation.
 ///
 /// `round` and `leg` identify one original reservation. A resumed call must reopen the same
 /// reserved notes and authorizations, never silently choose different inputs. Implementations
 /// may use their existing wallet storage; this operation never encodes these returned witnesses.
+/// Prepare and Run open policies or reserve inputs. Run and Recover both reconcile an independently
+/// verified terminal outcome of the original payment, without granting new reservation or signing authority.
 pub trait PrivateSettlementWallet: Send + Sync {
     /// Reopen exact restricted governed openings for the independent asset selection.
     /// # Errors
@@ -144,6 +166,20 @@ pub trait PrivateSettlementWallet: Send + Sync {
         AtomicPrivateSettlementAuthorizedWalletLegV1,
         OneCallPrivateSettlementError,
     >;
+    /// Reconcile every original leg only after settlement or Abort execution has been independently verified.
+    /// The original prepared statements and outcome bind every reservation. Settlement consumes inputs;
+    /// a successful Abort releases them and permanently closes that original intent.
+    /// Called on the original bounded native worker with its durable round lease. An exact
+    /// repeat must be safe after an uncertain local publication; no new inputs may be chosen.
+    /// # Errors
+    /// Original custody/binding/publication failure. The operation preserves the successful
+    /// outcome and carrier progress in [`PrivateSettlementReconciliationPending`].
+    fn reconcile_verified(
+        &self,
+        round: Digest32,
+        prepared: &PrivateSettlementRequest,
+        outcome: &VerifiedPrivateSettlementOutcome,
+    ) -> std::result::Result<(), OneCallPrivateSettlementError>;
 }
 /// Immutable caller request. Private terms are held in memory; only its domain-separated
 /// digest and public round/certificate metadata enter the existing journal.
@@ -163,9 +199,10 @@ struct Request {
     digest: Digest32,
 }
 impl OneCallPrivateSettlementRequest {
-    /// Bind selected intent, independently chosen private terms, trust schema and local bounds.
+    /// Bind selected intent, independently chosen private terms and trust schema.
+    /// Local byte limits may change when reopening the same original pending operation.
     ///
-    /// The original context height is part of `intent`; Run fetches and authenticates it.
+    /// The original context height is part of `intent`; Prepare and Run fetch and authenticate it.
     /// `minimum_context_time_ms` is an explicit caller freshness floor, not a latest-status
     /// assertion. Local byte limits do not replace the protocol's fixed proof/carrier limits.
     /// # Errors
@@ -230,9 +267,6 @@ impl OneCallPrivateSettlementRequest {
             minimum_context_time_ms,
             padding,
             retention_height,
-            max_carrier_bytes,
-            max_artifact_bytes as u64,
-            max_total_artifact_bytes as u64,
         ))?);
         let digest = domain_digest(
             b"iroha:private-settlement:one-call-request:v1\0",
@@ -285,7 +319,10 @@ pub enum OneCallPrivateSettlementError {
     /// Local proof/custody capacity is unavailable; no ledger verdict is inferred.
     #[error("private one-call local capacity unavailable")]
     Capacity,
-    /// Preparation remains incomplete; Run may continue the original round.
+    /// Original admitted native worker lifecycle failure, retaining its typed local cause.
+    #[error(transparent)]
+    Worker(#[from] NativeWorkerError),
+    /// Preparation remains incomplete; Prepare or Run may continue the original round.
     #[error("private one-call preparation pending")]
     Pending,
     /// Exact original journal/custody failure.
@@ -306,6 +343,12 @@ pub enum OneCallPrivateSettlementError {
     /// Original untrusted-source/wallet provider error, kept outside durable diagnostics.
     #[error("private one-call source or wallet unavailable")]
     Provider(#[source] eyre::Report),
+    /// Original built-in software wallet custody refusal.
+    #[error(transparent)]
+    WalletCustody(#[from] PrivateSettlementWalletStorageError),
+    /// Settlement or Abort is verified; only original local wallet reconciliation remains.
+    #[error(transparent)]
+    ReconciliationPending(Box<PrivateSettlementReconciliationPending>),
     /// Canonical artifact/intent encoding failed.
     #[error(transparent)]
     Encoding(#[from] norito::Error),
@@ -404,16 +447,35 @@ impl OneCallPrivateSettlementOperation {
     pub fn id(&self) -> WorkflowId {
         self.handle.id()
     }
-    /// Complete or resume original local preparation and return independently verified settlement.
+    /// Prepare or resume the original confidential payment without submitting transactions.
+    ///
+    /// This explicitly authorizes original context acquisition, wallet reservation and native
+    /// proving. It durably retains the same encrypted originals used by [`Self::run`], then
+    /// returns their validated prepared form. It does not upload material, request committee
+    /// certification, sign or dispatch a settlement carrier, or release reserved inputs.
+    /// A prepared request is not a successful settlement receipt.
     /// # Errors
-    /// Original capacity, custody, wallet, proof, finality or prepared-operation error.
-    pub async fn run(
+    /// Original capacity, custody, wallet, proof or authenticated-context failure.
+    pub async fn prepare(
         &self,
         options: &PrivateSettlementRunOptions,
-    ) -> std::result::Result<PrivateSettlementResult, OneCallPrivateSettlementError> {
+    ) -> std::result::Result<PrivateSettlementRequest, OneCallPrivateSettlementError> {
         let _call = self.call.lock().await;
+        let (request, _) = self.prepare_original_locked(options).await?;
+        Ok(request)
+    }
+
+    // The caller holds the existing operation mutex. Both public actions use this sole
+    // original preparation workflow and one read allowance; run does not renew it at handoff.
+    async fn prepare_original_locked(
+        &self,
+        options: &PrivateSettlementRunOptions,
+    ) -> std::result::Result<
+        (PrivateSettlementRequest, Option<WorkflowJournalV1>),
+        OneCallPrivateSettlementError,
+    > {
         self.driver
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
+            .begin_call(usize::from(options.max_finality_proof_reads))?;
         let result = self
             .handle
             .run(self.driver.as_ref(), &options.workflow)
@@ -422,16 +484,49 @@ impl OneCallPrivateSettlementOperation {
             return Err(error);
         }
         result?;
-        let request = self
-            .driver
-            .recovered_request(self.handle.journal_snapshot()?.as_ref())
-            .await?;
+        let journal = self.handle.journal_snapshot()?;
+        let request = self.driver.recovered_request(journal.as_ref()).await?;
+        Ok((request, journal))
+    }
+
+    /// Complete or resume original local preparation and return independently verified settlement.
+    /// # Errors
+    /// Original capacity, custody, wallet, proof, finality or prepared-operation error.
+    pub async fn run(
+        &self,
+        options: &PrivateSettlementRunOptions,
+    ) -> std::result::Result<PrivateSettlementResult, OneCallPrivateSettlementError> {
+        let _call = self.call.lock().await;
+        let (request, journal) = self.prepare_original_locked(options).await?;
         let (verifier, options) = self.driver.settlement_handoff(options)?;
-        Ok(self
+        let result = self
             .account
-            .private_settlement(request, self.storage.clone(), verifier)?
+            .private_settlement(
+                request.clone(),
+                self.storage.clone(),
+                self.driver.settlement_finality_custody()?,
+                verifier,
+            )?
             .run(&options)
-            .await?)
+            .await?;
+        let outcome = Arc::new(result.outcome);
+        if let Err(cause) = self
+            .driver
+            .reconcile_verified(journal.as_ref(), request, outcome.clone())
+            .await
+        {
+            return Err(OneCallPrivateSettlementError::ReconciliationPending(
+                Box::new(PrivateSettlementReconciliationPending::new(
+                    Arc::unwrap_or_clone(outcome),
+                    Some(result.progress),
+                    cause,
+                )),
+            ));
+        }
+        Ok(PrivateSettlementResult {
+            outcome: Arc::unwrap_or_clone(outcome),
+            progress: result.progress,
+        })
     }
     /// Reopen the exact prepared form without wallet work, proving, signing or submission.
     ///
@@ -451,7 +546,7 @@ impl OneCallPrivateSettlementOperation {
             return Ok(None);
         }
         self.driver
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
+            .begin_call(usize::from(options.max_finality_proof_reads))?;
         let recovered = self
             .handle
             .recover(Some(self.driver.as_ref()), &options.workflow)
@@ -469,6 +564,7 @@ impl OneCallPrivateSettlementOperation {
 
     /// Recover original preparation and settlement without reserving, proving, signing or sending.
     /// A never-started original returns empty progress without creating a journal.
+    /// A verified terminal outcome reconciles only the original local wallet reservation.
     /// # Errors
     /// Exact original authentication, custody or bounded read failure.
     pub async fn recover(
@@ -479,11 +575,11 @@ impl OneCallPrivateSettlementOperation {
         if self.handle.journal_snapshot()?.is_none() {
             return Ok(PrivateSettlementRecovery {
                 progress: None,
-                receipt: None,
+                outcome: None,
             });
         }
         self.driver
-            .begin_call(options.max_finality_proof_reads.get() as usize)?;
+            .begin_call(usize::from(options.max_finality_proof_reads))?;
         let recovered = self
             .handle
             .recover(Some(self.driver.as_ref()), &options.workflow)
@@ -496,16 +592,39 @@ impl OneCallPrivateSettlementOperation {
         if journal.as_ref().is_none_or(|j| !j.steps[0].is_done()) {
             return Ok(PrivateSettlementRecovery {
                 progress: journal.map(|j| j.progress()),
-                receipt: None,
+                outcome: None,
             });
         }
         let request = self.driver.recovered_request(journal.as_ref()).await?;
         let (verifier, options) = self.driver.settlement_handoff(options)?;
-        Ok(self
+        let mut recovered = self
             .account
-            .private_settlement(request, self.storage.clone(), verifier)?
+            .private_settlement(
+                request.clone(),
+                self.storage.clone(),
+                self.driver.settlement_finality_custody()?,
+                verifier,
+            )?
             .recover(&options)
-            .await?)
+            .await?;
+        if let Some(outcome) = recovered.outcome.take() {
+            let outcome = Arc::new(outcome);
+            if let Err(cause) = self
+                .driver
+                .reconcile_verified(journal.as_ref(), request, outcome.clone())
+                .await
+            {
+                return Err(OneCallPrivateSettlementError::ReconciliationPending(
+                    Box::new(PrivateSettlementReconciliationPending::new(
+                        Arc::unwrap_or_clone(outcome),
+                        recovered.progress,
+                        cause,
+                    )),
+                ));
+            }
+            recovered.outcome = Some(Arc::unwrap_or_clone(outcome));
+        }
+        Ok(recovered)
     }
 }
 

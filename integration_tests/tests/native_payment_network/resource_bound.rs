@@ -487,6 +487,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("rejected"),
             )?),
+            payment_finality(stores.join("rejected-finality"))?,
             verifier(&wire, &selected)?,
         )?;
         let failed = bounded(
@@ -517,6 +518,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
         let operation = gateway.account_client().native_payment(
             request.clone(),
             Arc::new(FileWorkflowStorage::open_or_create(stores.join("success"))?),
+            payment_finality(stores.join("success-finality"))?,
             verifier(&wire, &selected)?,
         )?;
         let completed = bounded(&rt, deadline, operation.submit(&options))??;
@@ -600,6 +602,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
             let success = resumed.account_client().native_payment(
                 request.clone(),
                 Arc::new(FileWorkflowStorage::open_or_create(stores.join("success"))?),
+                payment_finality(stores.join("success-finality"))?,
                 verifier(&wire, &selected)?,
             )?;
             let receipt = bounded(&rt, deadline, success.recover(&options))??
@@ -624,6 +627,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
                 Arc::new(FileWorkflowStorage::open_or_create(
                     stores.join("rejected"),
                 )?),
+                payment_finality(stores.join("rejected-finality"))?,
                 verifier(&wire, &selected)?,
             )?;
             let recovery = bounded(&rt, deadline, failure.recover(&options))??;

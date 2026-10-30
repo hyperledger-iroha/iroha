@@ -579,12 +579,51 @@ fn combined_source() -> SignedBlock {
 }
 
 #[test]
+fn combined_selection_requires_exactly_one_signed_crypto_and_staking_policy() {
+    let crypto = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .unwrap()
+    .into_parameter()
+    .unwrap();
+    for crypto_count in 0..=2 {
+        for staking_count in 0..=2 {
+            let mut batches = vec![vec![Log::new(Level::INFO, "signed genesis".into()).into()]];
+            batches
+                .extend((0..crypto_count).map(|_| vec![SetParameter::new(crypto.clone()).into()]));
+            batches.extend((0..staking_count).map(|_| vec![instruction(1_000)]));
+            let block = source(batches);
+            let original =
+                authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
+            let selected = original.initial_policies(&block);
+            if crypto_count != 1 {
+                assert!(matches!(
+                    selected,
+                    Err(BlockValidationError::InvalidGenesis(
+                        InvalidGenesisError::CryptoPolicy(_)
+                    ))
+                ));
+            } else if staking_count != 1 {
+                assert!(matches!(
+                    selected,
+                    Err(BlockValidationError::InvalidGenesis(
+                        InvalidGenesisError::StakingPolicy(_)
+                    ))
+                ));
+            } else {
+                selected.expect("both policies are selected from their sole signed instructions");
+            }
+        }
+    }
+}
+
+#[test]
 fn production_combined_bootstrap_installs_crypto_and_staking_at_one_pristine_cut() {
     use crate::{block::genesis_policies::GenesisPolicies, smartcontracts::Execute as _};
     let state = state();
     let block = combined_source();
     let source = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
-    let mut initial = source.initial_policies(&block).unwrap();
+    let mut initial = Some(source.initial_policies(&block).unwrap());
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     let generation = state.state_view_generation();
     let result = state.block_with_recorded_pristine_carrier_stage(
@@ -649,7 +688,7 @@ fn second_policy_decoder_refusal_keeps_both_original_capabilities_and_pristine_s
     let state = state();
     let block = combined_source();
     let source = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
-    let mut initial = source.initial_policies(&block).unwrap();
+    let mut initial = Some(source.initial_policies(&block).unwrap());
     let crypto = source.initial_crypto_policy(&block).unwrap();
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     let generation = state.state_view_generation();
@@ -748,7 +787,7 @@ fn combined_initialization_pool_refusal_keeps_both_capabilities_and_retries() {
         instruction(1_000),
     ]]);
     let original = authenticate_genesis_block_intents(&block, &SAMPLE_GENESIS_ACCOUNT_ID).unwrap();
-    let mut selected = original.initial_policies(&block).unwrap();
+    let mut selected = Some(original.initial_policies(&block).unwrap());
     let source_bytes = block.canonical_wire().unwrap();
     let before = crate::snapshot::canonical_state_snapshot_bytes(&state);
     let generation = state.state_view_generation();

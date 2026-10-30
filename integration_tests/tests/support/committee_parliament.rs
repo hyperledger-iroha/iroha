@@ -99,7 +99,9 @@ async fn submit_and_observe(
 
 /// Seed identities and permissions; real XOR funding waits for its signed genesis definition.
 pub fn genesis(mut builder: NetworkBuilder) -> Result<NetworkBuilder> {
-    let xor: AssetDefinitionId = defaults::nexus::fees::fee_asset_id().parse()?;
+    let xor: AssetDefinitionId =
+        iroha_data_model::parameter::system::SumeragiNposParameters::default()
+            .xor_asset_definition_id;
     let escrow = citizenship_escrow()?;
     builder = builder
         .with_genesis_instruction(Register::account(Account::new(escrow.clone())))
@@ -1013,7 +1015,9 @@ mod tests {
                 .with_npos_genesis_bootstrap(1_000_u64.into()),
         )?
         .build();
-        let xor: AssetDefinitionId = defaults::nexus::fees::fee_asset_id().parse()?;
+        let xor: AssetDefinitionId =
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id;
         let citizens = (0..CITIZENS)
             .map(|index| Ok(AccountId::new(citizen_key(index)?.public_key().clone())))
             .collect::<Result<BTreeSet<_>>>()?;

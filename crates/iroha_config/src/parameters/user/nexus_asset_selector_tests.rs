@@ -1,5 +1,4 @@
-//! Read retired node-local staking currency only for the legacy genesis profile, preserving
-//! local validator settings.
+//! Reject retired node-local staking currency while preserving local validator settings.
 
 use super::*;
 use iroha_config_base::toml::TomlSource;
@@ -17,22 +16,24 @@ fn nexus_contract_fixture_uses_checked_ed25519_key_generation() {
     assert_eq!(algorithm, Algorithm::Ed25519);
 }
 #[test]
-fn nexus_staking_reads_retired_monetary_keys_into_the_user_view() {
-    // Only `crypto.allowed_signing` admits them (the legacy genesis profile); its parser
-    // refuses an alias selector, which never names a stake asset.
+fn nexus_staking_rejects_retired_asset_alias_selector() {
     let table = "stake_asset_id = 'xor#universal'"
         .parse()
         .expect("retired asset selector is valid TOML syntax");
-    let staking = ConfigReader::new()
+    let error = ConfigReader::new()
         .with_toml_source(TomlSource::inline(table))
         .read_and_complete::<NexusStaking>()
-        .expect("the user view reads the retired staking key");
-    assert_eq!(staking.stake_asset_id.as_deref(), Some("xor#universal"));
+        .expect_err("staking currency must come from the original signed policy");
+    let message = format!("{error:?}");
+    assert!(message.contains("unknown parameter"), "{message}");
+    assert!(message.contains("stake_asset_id"), "{message}");
 
     let encoded = r#"{"public_validator_mode":"stake_elected","restricted_validator_mode":"admin_managed","max_validators":7,"stake_asset_id":"xor#universal"}"#;
-    let staking =
-        norito::json::from_str::<NexusStaking>(encoded).expect("JSON reads the same retired key");
-    assert_eq!(staking.stake_asset_id.as_deref(), Some("xor#universal"));
+    let error = norito::json::from_str::<NexusStaking>(encoded)
+        .expect_err("JSON must reject the same retired asset selector");
+    let message = error.to_string();
+    assert!(message.contains("unknown field"), "{message}");
+    assert!(message.contains("stake_asset_id"), "{message}");
 }
 
 #[test]
@@ -41,7 +42,6 @@ fn nexus_staking_parse_preserves_retained_modes_and_capacity() {
         public_validator_mode: LaneValidatorModeConfig::AdminManaged,
         restricted_validator_mode: LaneValidatorModeConfig::StakeElected,
         max_validators: NonZeroU32::new(7).expect("nonzero validator capacity"),
-        ..NexusStaking::default()
     };
     let mut emitter = Emitter::new();
     let parsed = cfg

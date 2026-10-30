@@ -9,11 +9,6 @@
 //! original bytes. Golden tests in `iroha_config` keep the writer and this grammar aligned:
 //! a field added to the projection must also be added to [`tag`], to the grammar here and to
 //! the field-level rendering in [`nexus_amx_context_fields_v1`].
-//!
-//! A network whose signed genesis predates genesis-authored crypto and staking policy committed
-//! the retired [`NexusAmxContextLayoutV1::PrePolicy`] tail. Its nodes still write that layout
-//! (`iroha_config::parameters::actual::legacy_genesis`); [`decode_nexus_amx_context_any_layout_v1`]
-//! reads it for a verifier that has checked the genesis signs neither policy.
 use super::{LaneConsensusProjectionV1, LaneVisibility};
 use iroha_model_base::topology::{DataSpaceId, LaneId};
 use norito::codec::{Decode, Encode};
@@ -229,139 +224,6 @@ pub mod tag {
         PIPELINE_AMX_PER_SYSCALL_NS,
         STAGED_ACTIVE_PUBLIC_LANE_VALIDATORS,
     ];
-
-    /// Retired tail of a network whose signed genesis predates genesis-authored policy.
-    ///
-    /// Its nodes projected the configured monetary staking terms and the local fee terms where
-    /// [`super::TAIL`] has only the validator bound and the root fee policy.
-    pub mod pre_policy {
-        use super::*;
-
-        /// Minimum validator stake.
-        pub const STAKING_MIN_VALIDATOR_STAKE: &str = "nexus.staking.min_validator_stake";
-        /// Maximum stake shares per validator.
-        pub const STAKING_MAX_STAKE_SHARES_PER_VALIDATOR: &str =
-            "nexus.staking.max_stake_shares_per_validator";
-        /// Maximum pending unbonds per share.
-        pub const STAKING_MAX_PENDING_UNBONDS_PER_SHARE: &str =
-            "nexus.staking.max_pending_unbonds_per_share";
-        /// Unbonding delay.
-        pub const STAKING_UNBONDING_DELAY_NS: &str = "nexus.staking.unbonding_delay_ns";
-        /// Maximum slash basis points.
-        pub const STAKING_MAX_SLASH_BPS: &str = "nexus.staking.max_slash_bps";
-        /// Stake asset.
-        pub const STAKING_STAKE_ASSET_ID: &str = "nexus.staking.stake_asset_id";
-        /// Stake escrow account.
-        pub const STAKING_STAKE_ESCROW_ACCOUNT_ID: &str = "nexus.staking.stake_escrow_account_id";
-        /// Slash sink account.
-        pub const STAKING_SLASH_SINK_ACCOUNT_ID: &str = "nexus.staking.slash_sink_account_id";
-        /// Fee asset.
-        pub const FEES_ASSET: &str = "nexus.fees.asset";
-        /// Fee sink.
-        pub const FEES_SINK: &str = "nexus.fees.sink";
-        /// Base fee.
-        pub const FEES_BASE: &str = "nexus.fees.base";
-        /// Per-byte fee.
-        pub const FEES_PER_BYTE: &str = "nexus.fees.per_byte";
-        /// Per-instruction fee.
-        pub const FEES_PER_INSTRUCTION: &str = "nexus.fees.per_instruction";
-        /// Per-gas-unit fee.
-        pub const FEES_PER_GAS_UNIT: &str = "nexus.fees.per_gas_unit";
-        /// Sponsor vault custody account.
-        pub const FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID: &str =
-            "nexus.fees.sponsor_vault_custody_account_id";
-        /// Successful-claim fee-exempt authorities.
-        pub const FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES: &str =
-            "nexus.fees.successful_claim_exempt_authorities";
-
-        /// Fixed-arity fields after the routing rules, in exact pre-policy preimage order.
-        pub const TAIL: [&str; 65] = [
-            STAKING_PUBLIC_VALIDATOR_MODE,
-            STAKING_RESTRICTED_VALIDATOR_MODE,
-            STAKING_MIN_VALIDATOR_STAKE,
-            STAKING_MAX_VALIDATORS,
-            STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
-            STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
-            STAKING_UNBONDING_DELAY_NS,
-            STAKING_MAX_SLASH_BPS,
-            STAKING_STAKE_ASSET_ID,
-            STAKING_STAKE_ESCROW_ACCOUNT_ID,
-            STAKING_SLASH_SINK_ACCOUNT_ID,
-            FEES_ASSET,
-            FEES_SINK,
-            FEES_BASE,
-            FEES_PER_BYTE,
-            FEES_PER_INSTRUCTION,
-            FEES_PER_GAS_UNIT,
-            FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
-            FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES,
-            DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
-            AXT_SLOT_LENGTH_MS,
-            AXT_MAX_CLOCK_SKEW_MS,
-            AXT_PROOF_CACHE_TTL_SLOTS,
-            AXT_REPLAY_RETENTION_SLOTS,
-            FUSION_FLOOR_TEU,
-            FUSION_EXIT_TEU,
-            FUSION_OBSERVATION_SLOTS,
-            FUSION_MAX_WINDOW_SLOTS,
-            AUTOSCALE_ENABLED,
-            AUTOSCALE_MIN_LANE_ID,
-            AUTOSCALE_MAX_LANE_ID_EXCLUSIVE,
-            AUTOSCALE_TARGET_BLOCK_MS,
-            AUTOSCALE_SCALE_OUT_LATENCY_RATIO_BITS,
-            AUTOSCALE_SCALE_IN_LATENCY_RATIO_BITS,
-            AUTOSCALE_SCALE_OUT_UTILIZATION_RATIO_BITS,
-            AUTOSCALE_SCALE_IN_UTILIZATION_RATIO_BITS,
-            AUTOSCALE_SCALE_OUT_WINDOW_BLOCKS,
-            AUTOSCALE_SCALE_IN_WINDOW_BLOCKS,
-            AUTOSCALE_COOLDOWN_BLOCKS,
-            AUTOSCALE_PER_LANE_TARGET_TPS,
-            AUTOSCALE_LAST_TRANSITION_HEIGHT,
-            COMMIT_WINDOW_SLOTS,
-            DA_Q_IN_SLOT_TOTAL,
-            DA_Q_IN_SLOT_PER_DS_MIN,
-            DA_SAMPLE_SIZE_BASE,
-            DA_SAMPLE_SIZE_MAX,
-            DA_THRESHOLD_BASE,
-            DA_PER_ATTESTER_SHARDS,
-            DA_INGEST_QUOTA_WINDOW_BLOCKS,
-            DA_INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
-            DA_INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
-            DA_AUDIT_SAMPLE_SIZE,
-            DA_AUDIT_WINDOW_COUNT,
-            DA_AUDIT_INTERVAL_NS,
-            DA_RECOVERY_REQUEST_TIMEOUT_NS,
-            DA_ROTATION_MAX_HITS_PER_WINDOW,
-            DA_ROTATION_WINDOW_SLOTS,
-            DA_ROTATION_SEED_TAG,
-            DA_ROTATION_LATENCY_DECAY_BITS,
-            PIPELINE_AMX_PER_DATASPACE_BUDGET_MS,
-            PIPELINE_AMX_GROUP_BUDGET_MS,
-            PIPELINE_AMX_PER_INSTRUCTION_NS,
-            PIPELINE_AMX_PER_MEMORY_ACCESS_NS,
-            PIPELINE_AMX_PER_SYSCALL_NS,
-            STAGED_ACTIVE_PUBLIC_LANE_VALIDATORS,
-        ];
-    }
-}
-
-/// Tail grammar of a Nexus/AMX context preimage. Both layouts carry the same physical catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NexusAmxContextLayoutV1 {
-    /// The tail this release projects ([`tag::TAIL`]).
-    Current,
-    /// The retired tail of a network whose signed genesis predates genesis-authored crypto and
-    /// staking policy ([`tag::pre_policy::TAIL`]).
-    PrePolicy,
-}
-
-impl NexusAmxContextLayoutV1 {
-    fn tail(self) -> &'static [&'static str] {
-        match self {
-            Self::Current => &tag::TAIL,
-            Self::PrePolicy => &tag::pre_policy::TAIL,
-        }
-    }
 }
 
 /// Writer for the canonical tag-length-value Nexus/AMX context preimage.
@@ -701,11 +563,6 @@ impl<'a> Fields<'a> {
         Ok(value)
     }
 
-    /// The tag `ahead` fields after the next one, consuming nothing.
-    fn peek(&self, ahead: usize) -> Option<&'a str> {
-        self.fields.get(self.next + ahead).map(|(tag, _)| *tag)
-    }
-
     /// A counted group: the count must fit the remaining fields before any iteration.
     fn count(&mut self, tag: &'static str, group: usize) -> Result<usize, NexusAmxContextError> {
         let count = self.value::<u64>(tag)?;
@@ -748,29 +605,6 @@ fn take<'a>(rest: &mut &'a [u8], len: usize) -> Result<&'a [u8], NexusAmxContext
 pub fn decode_nexus_amx_context_v1(
     preimage: &[u8],
 ) -> Result<NexusAmxContextCatalogV1, NexusAmxContextError> {
-    decode(preimage, false).map(|(_, catalog)| catalog)
-}
-
-/// Decode one exact Nexus/AMX context preimage in either layout, and report which.
-///
-/// The layouts differ only after the two validator modes of the tail. A preimage that carries
-/// [`tag::pre_policy::STAKING_MIN_VALIDATOR_STAKE`] there must carry the complete
-/// [`tag::pre_policy::TAIL`]; any other preimage is read exactly as
-/// [`decode_nexus_amx_context_v1`] reads it. Only a genesis that signs neither the
-/// crypto-admission nor the staking policy may commit the pre-policy layout.
-///
-/// # Errors
-/// Every refusal of [`decode_nexus_amx_context_v1`], against the tail of the selected layout.
-pub fn decode_nexus_amx_context_any_layout_v1(
-    preimage: &[u8],
-) -> Result<(NexusAmxContextLayoutV1, NexusAmxContextCatalogV1), NexusAmxContextError> {
-    decode(preimage, true)
-}
-
-fn decode(
-    preimage: &[u8],
-    any_layout: bool,
-) -> Result<(NexusAmxContextLayoutV1, NexusAmxContextCatalogV1), NexusAmxContextError> {
     use tag::*;
     let mut fields = Fields::tokenize(preimage)?;
     let lane_count = fields.value::<u32>(LANE_COUNT)?;
@@ -809,15 +643,7 @@ fn decode(
         min_lane_id: 0,
         max_lane_id_exclusive: 0,
     };
-    // Both tails open with the two validator modes. The pre-policy tail then carries its
-    // retired minimum stake where the current one has the validator bound.
-    let layout =
-        if any_layout && fields.peek(2) == Some(tag::pre_policy::STAKING_MIN_VALIDATOR_STAKE) {
-            NexusAmxContextLayoutV1::PrePolicy
-        } else {
-            NexusAmxContextLayoutV1::Current
-        };
-    for &tag in layout.tail() {
+    for tag in TAIL {
         match tag {
             AUTOSCALE_ENABLED => autoscale.enabled = fields.value(tag)?,
             AUTOSCALE_MIN_LANE_ID => autoscale.min_lane_id = fields.value(tag)?,
@@ -840,7 +666,7 @@ fn decode(
         autoscale,
     };
     check_structure(&catalog)?;
-    Ok((layout, catalog))
+    Ok(catalog)
 }
 
 fn check_structure(catalog: &NexusAmxContextCatalogV1) -> Result<(), NexusAmxContextError> {
@@ -926,23 +752,6 @@ mod tests {
         rules: &[TestRoutingRule<'_>],
         autoscale: (bool, u32, u32),
     ) -> Vec<u8> {
-        preimage_in(
-            NexusAmxContextLayoutV1::Current,
-            lanes,
-            dataspaces,
-            rules,
-            autoscale,
-        )
-    }
-
-    /// The same miniature preimage with the tail of `layout`.
-    fn preimage_in(
-        layout: NexusAmxContextLayoutV1,
-        lanes: &[LaneConfig],
-        dataspaces: &[(u64, &str)],
-        rules: &[TestRoutingRule<'_>],
-        autoscale: (bool, u32, u32),
-    ) -> Vec<u8> {
         use tag::*;
         let catalog = LaneCatalog::new(NonZeroU32::new(8).unwrap(), lanes.to_vec()).unwrap();
         let (count, projected) = catalog.consensus_projection();
@@ -972,7 +781,7 @@ mod tests {
             writer.field(ROUTING_RULE_ACCOUNT, &account.map(str::to_owned));
             writer.field(ROUTING_RULE_INSTRUCTION, &instruction.map(str::to_owned));
         }
-        for &tag in layout.tail() {
+        for tag in TAIL {
             match tag {
                 AUTOSCALE_ENABLED => writer.field(tag, &autoscale.0),
                 AUTOSCALE_MIN_LANE_ID => writer.field(tag, &autoscale.1),
@@ -984,12 +793,7 @@ mod tests {
     }
 
     fn sample() -> Vec<u8> {
-        sample_in(NexusAmxContextLayoutV1::Current)
-    }
-
-    fn sample_in(layout: NexusAmxContextLayoutV1) -> Vec<u8> {
-        preimage_in(
-            layout,
+        preimage_with(
             &[
                 lane(0, "core", DataSpaceId::UNIVERSAL),
                 lane(5, "bpng", DataSpaceId::new(9)),
@@ -1094,161 +898,6 @@ mod tests {
                 })
             );
         }
-    }
-
-    /// Frame tokenized fields as a preimage again.
-    fn encode_fields(fields: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut encoded = NEXUS_AMX_CONTEXT_DOMAIN_V1.to_vec();
-        for (field, value) in fields {
-            encoded.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
-            encoded.extend_from_slice(field.as_bytes());
-            encoded.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
-            encoded.extend_from_slice(value);
-        }
-        encoded
-    }
-
-    #[test]
-    fn pre_policy_tail_differs_only_by_the_retired_staking_and_fee_terms() {
-        use tag::pre_policy;
-        assert_eq!(pre_policy::TAIL[..2], tag::TAIL[..2]);
-        assert_eq!(
-            tag::TAIL[2..4],
-            [tag::STAKING_MAX_VALIDATORS, tag::ROOT_FEE_POLICY]
-        );
-        assert_eq!(
-            pre_policy::TAIL[2..19],
-            [
-                pre_policy::STAKING_MIN_VALIDATOR_STAKE,
-                tag::STAKING_MAX_VALIDATORS,
-                pre_policy::STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
-                pre_policy::STAKING_MAX_PENDING_UNBONDS_PER_SHARE,
-                pre_policy::STAKING_UNBONDING_DELAY_NS,
-                pre_policy::STAKING_MAX_SLASH_BPS,
-                pre_policy::STAKING_STAKE_ASSET_ID,
-                pre_policy::STAKING_STAKE_ESCROW_ACCOUNT_ID,
-                pre_policy::STAKING_SLASH_SINK_ACCOUNT_ID,
-                pre_policy::FEES_ASSET,
-                pre_policy::FEES_SINK,
-                pre_policy::FEES_BASE,
-                pre_policy::FEES_PER_BYTE,
-                pre_policy::FEES_PER_INSTRUCTION,
-                pre_policy::FEES_PER_GAS_UNIT,
-                pre_policy::FEES_SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
-                pre_policy::FEES_SUCCESSFUL_CLAIM_EXEMPT_AUTHORITIES,
-            ]
-        );
-        assert_eq!(pre_policy::TAIL[19..], tag::TAIL[4..]);
-    }
-
-    #[test]
-    fn either_layout_decodes_the_same_catalog_and_names_its_layout() {
-        let current = sample();
-        let pre_policy = sample_in(NexusAmxContextLayoutV1::PrePolicy);
-        let catalog = decode_nexus_amx_context_v1(&current).unwrap();
-        assert_eq!(
-            decode_nexus_amx_context_any_layout_v1(&current),
-            Ok((NexusAmxContextLayoutV1::Current, catalog.clone()))
-        );
-        assert_eq!(
-            decode_nexus_amx_context_any_layout_v1(&pre_policy),
-            Ok((NexusAmxContextLayoutV1::PrePolicy, catalog))
-        );
-        // The strict reader still admits only the current tail.
-        assert_eq!(
-            decode_nexus_amx_context_v1(&pre_policy),
-            Err(NexusAmxContextError::UnexpectedTag {
-                expected: tag::STAKING_MAX_VALIDATORS,
-                found: Some(tag::pre_policy::STAKING_MIN_VALIDATOR_STAKE.to_owned()),
-            })
-        );
-    }
-
-    #[test]
-    fn a_pre_policy_tail_is_complete_and_never_mixes_with_the_current_one() {
-        use tag::pre_policy;
-        let preimage = sample_in(NexusAmxContextLayoutV1::PrePolicy);
-        let fields = Fields::tokenize(&preimage).unwrap().fields;
-        let without_base_fee: Vec<_> = fields
-            .iter()
-            .copied()
-            .filter(|(field, _)| *field != pre_policy::FEES_BASE)
-            .collect();
-        assert_eq!(
-            decode_nexus_amx_context_any_layout_v1(&encode_fields(&without_base_fee)),
-            Err(NexusAmxContextError::UnexpectedTag {
-                expected: pre_policy::FEES_BASE,
-                found: Some(pre_policy::FEES_PER_BYTE.to_owned()),
-            })
-        );
-        let with_root_fee_policy: Vec<_> = fields
-            .iter()
-            .map(|&(field, value)| {
-                if field == pre_policy::FEES_ASSET {
-                    (tag::ROOT_FEE_POLICY, value)
-                } else {
-                    (field, value)
-                }
-            })
-            .collect();
-        assert_eq!(
-            decode_nexus_amx_context_any_layout_v1(&encode_fields(&with_root_fee_policy)),
-            Err(NexusAmxContextError::UnexpectedTag {
-                expected: pre_policy::FEES_ASSET,
-                found: Some(tag::ROOT_FEE_POLICY.to_owned()),
-            })
-        );
-        // A retired minimum stake ahead of a current tail selects the pre-policy grammar, which
-        // the rest of that tail then fails.
-        let current = sample();
-        let stake = 7_u64.encode();
-        let mut mixed = Vec::new();
-        for (field, value) in Fields::tokenize(&current).unwrap().fields {
-            if field == tag::STAKING_MAX_VALIDATORS {
-                mixed.push((pre_policy::STAKING_MIN_VALIDATOR_STAKE, stake.as_slice()));
-            }
-            mixed.push((field, value));
-        }
-        assert_eq!(
-            decode_nexus_amx_context_any_layout_v1(&encode_fields(&mixed)),
-            Err(NexusAmxContextError::UnexpectedTag {
-                expected: pre_policy::STAKING_MAX_STAKE_SHARES_PER_VALIDATOR,
-                found: Some(tag::ROOT_FEE_POLICY.to_owned()),
-            })
-        );
-    }
-
-    /// Taira's live context preimage (taira-reset-20261022 `nexus-amx-context.v1.bin`). Its
-    /// signed genesis predates genesis-authored policy.
-    const TAIRA_PRE_POLICY_PREIMAGE: &[u8] =
-        include_bytes!("../../tests/fixtures/taira_20261022_nexus_amx_context_v1.bin");
-
-    #[test]
-    fn taira_pre_policy_context_decodes_its_public_bpng_lane() {
-        let commitment: [u8; 32] = iroha_crypto::Hash::new(TAIRA_PRE_POLICY_PREIMAGE).into();
-        assert_eq!(
-            hex::encode(commitment),
-            "0ece466e5e51a311ad24b95c28be07b7f6a448dc9a3294600cdfe46d6add0103"
-        );
-        let (layout, catalog) =
-            decode_nexus_amx_context_any_layout_v1(TAIRA_PRE_POLICY_PREIMAGE).unwrap();
-        assert_eq!(layout, NexusAmxContextLayoutV1::PrePolicy);
-        let bpng = catalog.lane(LaneId::new(5)).unwrap();
-        assert_eq!(
-            (bpng.alias(), bpng.dataspace_id(), bpng.visibility()),
-            (
-                "bpng",
-                DataSpaceId::new(8_648_377_547_929_788_715),
-                LaneVisibility::Public
-            )
-        );
-        assert!(matches!(
-            decode_nexus_amx_context_v1(TAIRA_PRE_POLICY_PREIMAGE),
-            Err(NexusAmxContextError::UnexpectedTag {
-                expected: tag::STAKING_MAX_VALIDATORS,
-                ..
-            })
-        ));
     }
 
     #[test]
@@ -1435,5 +1084,33 @@ mod tests {
             decode_nexus_amx_context_v1(&out),
             Err(NexusAmxContextError::Structure(_))
         ));
+    }
+    #[test]
+    fn retired_staking_and_fee_tags_are_rejected_by_the_canonical_grammar() {
+        let preimage = sample();
+        let fields = Fields::tokenize(&preimage).unwrap().fields;
+        for (expected, retired) in [
+            (
+                tag::STAKING_MAX_VALIDATORS,
+                "nexus.staking.min_validator_stake",
+            ),
+            (tag::ROOT_FEE_POLICY, "nexus.fees.asset"),
+        ] {
+            let mut changed = NEXUS_AMX_CONTEXT_DOMAIN_V1.to_vec();
+            for &(field, value) in &fields {
+                let field = if field == expected { retired } else { field };
+                changed.extend_from_slice(&u32::try_from(field.len()).unwrap().to_le_bytes());
+                changed.extend_from_slice(field.as_bytes());
+                changed.extend_from_slice(&u64::try_from(value.len()).unwrap().to_le_bytes());
+                changed.extend_from_slice(value);
+            }
+            assert_eq!(
+                decode_nexus_amx_context_v1(&changed),
+                Err(NexusAmxContextError::UnexpectedTag {
+                    expected,
+                    found: Some(retired.to_owned()),
+                })
+            );
+        }
     }
 }

@@ -81,24 +81,31 @@ cannot return success after expiry. Cleanup still runs after a failure.
 
 ## Remaining private maximum boundary
 
-The native payment above carries no confidential proof. It does not establish X.2/P.20
-private-settlement maxima. The current separate private carrier ceiling is 4,194,304
-V1 signed-wire/instruction bytes; it is numerically below the 10 MiB transaction cap
-and its canonical signed frame at that wire ceiling is 4,194,343 bytes.
-Including the global selection reserve gives 4,259,879 bytes. The resource contract
-uses the canonical writer's checked 39-byte conversion: its sole V1 prefix is
-replaced by Header::SIZE and zero type padding. A compile-time alignment invariant
-rejects model/target layouts that would silently change this geometry. This records
-the current supported layout, not broad hardware qualification. Private instruction
-frames and signed V1 wire remain separate measurements under the unchanged limit. Private leg proofs are capped at
-8,388,608 bytes and capsules at 1,048,576 bytes. A bundle permits at most 255 legs.
-These Nexus configuration-owned validity limits still have the contract's F.4 defects.
+The native payment above carries no confidential proof. It does not establish
+X.2/P.20 private-settlement maxima. The private carrier ceiling is 4,194,304 bytes
+of the complete canonical signed transaction frame, including its Norito header.
+The V1 counting writer converts wire length through the checked canonical-frame
+owner once; the policy and resource relations do not add that header a second
+time. Including the global selection reserve gives 4,259,840 bytes, below the
+10 MiB default transaction and 16 MiB block budgets. A compile-time alignment invariant
+pins the supported native frame geometry; it is not broad hardware qualification.
 
-The existing private fixtures distinguish structural 255-leg carrier/codec tests from
-genuine N=3 proving and the N=2/3/4/8/16 real-process release matrix. The matched
-workload owner explicitly refuses N=255 because its required reimbursement would
-exceed the public control's 255 movements. No current genuine maximum private proof
-asset or protocol-valid exactly-4-MiB private carrier was established by this review.
-Filling a proof or audit capsule with arbitrary bytes would not close that gap. Actual
-maximum private proving, boundary refusal, verification, transport and cold recovery
-remain required under the unchanged proof/carrier/resource contract.
+Private admission is sourced from authenticated committed privacy policy, with
+one bounded pending drain before activation. Default leg proof and canonical
+capsule limits are 8,388,608 and 1,048,576 bytes, and the native bundle permits at
+most 255 legs. Register reserves its original prospective Finalize/Abort frame;
+generic resource coherence preserves the fixed 4 MiB continuation allowance and
+sixteen signer slots. Local encrypted-sidecar count/byte capacity remains a local
+custody refusal. The former private Nexus validity settings are removed; unrelated
+node-local validity gaps remain tracked by F.4.
+
+The existing private fixtures distinguish structural 255-leg carrier/codec tests,
+conservative exact/first-over admission-envelope tests, genuine N=3 proving, and
+the N=2/3/4/8/16 real-process release matrix. The matched workload owner explicitly
+refuses N=255 because its required reimbursement would exceed the public control's
+255 movements. These component tests do not establish a genuine maximum private
+proof asset or complete exactly-4-MiB native settlement. Filling a proof or capsule
+with arbitrary bytes cannot close that gap. Actual maximum private proving,
+boundary refusal, verification, transport and cold recovery remain required P.20
+qualification. The committed-policy migration also requires qualification against
+the current combined candidate, rather than earlier network binaries.

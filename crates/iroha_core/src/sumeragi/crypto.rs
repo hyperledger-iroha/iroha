@@ -52,10 +52,44 @@ fn query_committee_allocation_failure(bytes: usize) -> QueryCommitteeError {
 pub(super) fn query_committee_allocation_bytes(
     members: &[ValidatorCommitteeMemberV1],
 ) -> Result<usize, QueryCommitteeError> {
+    query_committee_layout_bytes(
+        members.len(),
+        members.iter().map(|member| {
+            let key = member.validator.public_key();
+            (
+                key.input_payload_len(),
+                key.retained_allocation_layout().size(),
+            )
+        }),
+    )
+}
+
+/// The same constructor's backing for the largest valid native BLS-normal roster.
+/// This retained-layout bound neither validates keys nor grants authority to the
+/// constructor's original admission callback.
+pub(super) fn maximum_query_committee_allocation_bytes() -> Option<usize> {
+    let count = iroha_data_model::sumeragi::epoch::MAX_VALIDATORS;
+    query_committee_layout_bytes(
+        count,
+        std::iter::repeat_n(
+            (
+                consensus::PUBLIC_KEY_LEN,
+                consensus::PUBLIC_KEY_LEN.checked_add(std::mem::size_of::<u8>())?,
+            ),
+            count,
+        ),
+    )
+    .ok()
+}
+
+fn query_committee_layout_bytes(
+    count: usize,
+    keys: impl Iterator<Item = (usize, usize)>,
+) -> Result<usize, QueryCommitteeError> {
     let overflow = || query_committee_allocation_failure(usize::MAX);
     let map =
         norito::core::owned_btree_allocation_bytes::<PublicKey, Arc<BlsNormalPopVerifiedKey>>(
-            members.len(),
+            count,
         )
         .map_err(|_| overflow())?;
     let credential = norito::core::owned_arc_allocation_bytes::<BlsNormalPopVerifiedKey>()
@@ -63,11 +97,10 @@ pub(super) fn query_committee_allocation_bytes(
     let mut bytes = map
         .checked_add(ConsensusAggregateScratch::<()>::backing_bytes())
         .ok_or_else(overflow)?;
-    for member in members {
-        let key = member.validator.public_key();
+    for (payload_bytes, retained_bytes) in keys {
         bytes = bytes
-            .checked_add(key.input_payload_len())
-            .and_then(|bytes| bytes.checked_add(key.retained_allocation_layout().size()))
+            .checked_add(payload_bytes)
+            .and_then(|bytes| bytes.checked_add(retained_bytes))
             .and_then(|bytes| bytes.checked_add(credential))
             .ok_or_else(overflow)?;
     }

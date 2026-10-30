@@ -108,6 +108,33 @@ impl State {
         }
         let height = tip.height();
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
+            let privacy_policy = world.privacy_consensus_policy.get();
+            privacy_policy
+                .validate_at_committed_height(height)
+                .map_err(|error| error.to_string())?;
+            require_target(
+                snapshot,
+                "world.privacy_consensus_policy",
+                WorldStateElementKindV1::Cell,
+                None,
+                hash_value(privacy_policy)?,
+            )?;
+            let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+                iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            );
+            let protocol_policy = world.privacy_protocol_policies.get(&protocol_key);
+            if let Some(policy) = protocol_policy {
+                policy
+                    .validate_at_committed_height(height)
+                    .map_err(|error| error.to_string())?;
+                require_target(
+                    snapshot,
+                    "world.privacy_protocol_policies",
+                    WorldStateElementKindV1::Table,
+                    Some(hash_value(&protocol_key)?),
+                    hash_value(policy)?,
+                )?;
+            }
             let lanes = world.sumeragi_lanes();
             require_target(
                 snapshot,
@@ -178,6 +205,8 @@ impl State {
 
                 contexts.push(PrivateSettlementContextProofRefV1::new(
                     PrivateSettlementPoolCutProofRefV1::new(snapshot, governance, pool),
+                    privacy_policy,
+                    protocol_policy,
                     lanes,
                     keys,
                 ));

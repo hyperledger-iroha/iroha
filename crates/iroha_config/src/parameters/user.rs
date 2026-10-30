@@ -66,8 +66,6 @@ pub use sccp::{
 };
 mod socket_addr;
 pub use socket_addr::{ConfigSocketAddr, ConfigSocketAddrError};
-mod legacy_genesis;
-pub use legacy_genesis::{CryptoCurves, CurveIdListConfig};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -1434,9 +1432,7 @@ impl Root {
         };
         let gov = gov_provider_binding_valid.then(|| self.gov.parse());
         let nts = self.nts.parse(&mut emitter);
-        let mut nexus_input = self.nexus;
-        let legacy_staking = nexus_input.staking.take_legacy_genesis();
-        let nexus = nexus_input.parse(&mut emitter);
+        let nexus = self.nexus.parse(&mut emitter);
         let confidential = self.confidential.parse();
         let streaming = if let Some(ref key_pair) = key_pair {
             self.streaming
@@ -1455,11 +1451,7 @@ impl Root {
                 ),
             );
         }
-        let mut crypto_input = self.crypto;
-        let legacy_crypto = crypto_input.take_legacy_genesis();
-        let crypto = crypto_input.parse(&mut emitter);
-        let legacy_genesis =
-            legacy_genesis::parse(legacy_crypto, legacy_staking, &crypto, &mut emitter);
+        let crypto = self.crypto.parse(&mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let amx_relay = self.amx_relay.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
@@ -1480,8 +1472,7 @@ impl Root {
         soracloud_runtime.assert_runtime_posture();
         let sumeragi =
             sumeragi.expect("sumeragi configuration should be valid when emitter succeeds");
-        let mut nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
-        nexus.legacy_genesis = legacy_genesis;
+        let nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
@@ -8962,13 +8953,6 @@ pub struct Crypto {
         default = "defaults::crypto::SM2_DISTID_DEFAULT.to_owned()"
     )]
     pub sm2_distid_default: String,
-    /// Retired signing allowlist of a network whose signed genesis predates genesis-authored
-    /// crypto admission. Setting it selects that network's legacy genesis profile
-    /// (`legacy_genesis`); every other network authors the policy in genesis.
-    pub allowed_signing: Option<AlgorithmListConfig>,
-    /// Retired curve allowlist configured together with `allowed_signing`.
-    #[config(nested)]
-    pub curves: CryptoCurves,
 }
 impl Crypto {
     /// Convert this user configuration into the runtime representation.
@@ -9476,7 +9460,7 @@ impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
     }
 }
 /// Validator modes and capacity; monetary terms come from committed State.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
@@ -9488,37 +9472,11 @@ pub struct NexusStaking {
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
-    /// Retired monetary terms of the legacy genesis profile (`crypto.allowed_signing`); a
-    /// genesis that authors its staking policy refuses them. Omitted terms take the
-    /// retired V1 defaults.
-    pub min_validator_stake: Option<Quantity>,
-    /// Retired maximum stake-share rows per validator of the legacy genesis profile.
-    pub max_stake_shares_per_validator: Option<NonZeroU32>,
-    /// Retired maximum pending unbonds per share of the legacy genesis profile.
-    pub max_pending_unbonds_per_share: Option<NonZeroU32>,
-    /// Retired unbonding delay of the legacy genesis profile.
-    pub unbonding_delay_ms: Option<DurationMs>,
-    /// Retired maximum slash ratio (basis points) of the legacy genesis profile.
-    pub max_slash_bps: Option<u16>,
-    /// Retired stake asset literal of the legacy genesis profile.
-    pub stake_asset_id: Option<String>,
-    /// Retired stake escrow account literal of the legacy genesis profile.
-    pub stake_escrow_account_id: Option<String>,
-    /// Retired slash sink account literal of the legacy genesis profile.
-    pub slash_sink_account_id: Option<String>,
 }
 impl_default!(NexusStaking {
     public_validator_mode: LaneValidatorModeConfig::StakeElected,
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
-    min_validator_stake: None,
-    max_stake_shares_per_validator: None,
-    max_pending_unbonds_per_share: None,
-    unbonding_delay_ms: None,
-    max_slash_bps: None,
-    stake_asset_id: None,
-    stake_escrow_account_id: None,
-    slash_sink_account_id: None,
 });
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
@@ -10505,82 +10463,21 @@ impl_default!(NexusAxt {
     proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
     replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
 });
-/// User-level governed atomic private cross-dataspace settlement policy.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+/// Node-local encrypted sidecar custody for atomic private settlement.
+/// Committed privacy policy supplies all payment validity rules.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Audited fixed-shape private-note proof profile version.
-    #[config(default = "defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION")]
-    pub proof_profile_version: u16,
-    /// Maximum ordered dataspace legs in one bundle.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS")]
-    pub max_participants: u16,
-    /// Maximum admission-to-expiry distance, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS")]
-    pub max_expiry_blocks: u64,
-    /// Maximum auditor-approval phase duration, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS")]
-    pub audit_timeout_blocks: u64,
-    /// Maximum Prepare-QC phase duration, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS")]
-    pub prepare_timeout_blocks: u64,
-    /// Maximum Commit-QC phase duration, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS")]
-    pub commit_timeout_blocks: u64,
-    /// Strictly increasing canonical padded-plaintext classes, in bytes.
-    ///
-    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
-    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
-    #[config(
-        default = "defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes()"
-    )]
-    pub capsule_padding_classes_bytes: Vec<u32>,
-    /// Maximum proof sidecar size per leg.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES")]
-    pub max_proof_bytes: u64,
-    /// Maximum encrypted audit capsule size per leg.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES")]
-    pub max_capsule_bytes: u64,
-    /// Maximum canonical sponsor-signed direct carrier transaction size.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES")]
-    pub max_carrier_bytes: u64,
-    /// Minimum durable sidecar retention after admission, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS")]
-    pub sidecar_retention_blocks: u64,
     /// Maximum encrypted settlement records retained by one local sidecar store.
     #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS")]
     pub sidecar_max_records: u32,
     /// Maximum canonical bytes retained by one local sidecar store.
     #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES")]
     pub sidecar_max_total_bytes: u64,
-    /// Governed minimum online auditor threshold accepted for new policies.
-    #[config(
-        default = "defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS"
-    )]
-    pub default_min_auditor_approvals: u16,
-    /// Audit-policy schema versions accepted by this deployment.
-    #[config(default = "defaults::nexus::atomic_private_settlement::permitted_policy_versions()")]
-    pub permitted_policy_versions: Vec<u16>,
 }
 impl_default!(NexusAtomicPrivateSettlement {
-    proof_profile_version: defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
-    max_participants: defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
-    max_expiry_blocks: defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
-    audit_timeout_blocks: defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS,
-    prepare_timeout_blocks: defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS,
-    commit_timeout_blocks: defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS,
-    capsule_padding_classes_bytes:
-        defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes(),
-    max_proof_bytes: defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES,
-    max_capsule_bytes: defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
-    max_carrier_bytes: defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
-    sidecar_retention_blocks: defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
     sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
     sidecar_max_total_bytes: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
-    default_min_auditor_approvals:
-        defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
-    permitted_policy_versions:
-        defaults::nexus::atomic_private_settlement::permitted_policy_versions(),
 });
 impl NexusAtomicPrivateSettlement {
     fn parse(
@@ -10588,50 +10485,6 @@ impl NexusAtomicPrivateSettlement {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::NexusAtomicPrivateSettlement> {
         let mut invalid = false;
-        macro_rules! nonzero_u64 {
-            ($value:expr, $field:literal) => {{
-                NonZeroU64::new($value).unwrap_or_else(|| {
-                    invalid = true;
-                    emitter.emit(
-                        Report::new(ParseError::InvalidNexusConfig)
-                            .attach(concat!($field, " must be > 0")),
-                    );
-                    NonZeroU64::new(1).expect("private-settlement placeholder is non-zero")
-                })
-            }};
-        }
-        let max_expiry_blocks = nonzero_u64!(
-            self.max_expiry_blocks,
-            "nexus.atomic_private_settlement.max_expiry_blocks"
-        );
-        let audit_timeout_blocks = nonzero_u64!(
-            self.audit_timeout_blocks,
-            "nexus.atomic_private_settlement.audit_timeout_blocks"
-        );
-        let prepare_timeout_blocks = nonzero_u64!(
-            self.prepare_timeout_blocks,
-            "nexus.atomic_private_settlement.prepare_timeout_blocks"
-        );
-        let commit_timeout_blocks = nonzero_u64!(
-            self.commit_timeout_blocks,
-            "nexus.atomic_private_settlement.commit_timeout_blocks"
-        );
-        let max_proof_bytes = nonzero_u64!(
-            self.max_proof_bytes,
-            "nexus.atomic_private_settlement.max_proof_bytes"
-        );
-        let max_capsule_bytes = nonzero_u64!(
-            self.max_capsule_bytes,
-            "nexus.atomic_private_settlement.max_capsule_bytes"
-        );
-        let max_carrier_bytes = nonzero_u64!(
-            self.max_carrier_bytes,
-            "nexus.atomic_private_settlement.max_carrier_bytes"
-        );
-        let sidecar_retention_blocks = nonzero_u64!(
-            self.sidecar_retention_blocks,
-            "nexus.atomic_private_settlement.sidecar_retention_blocks"
-        );
         let sidecar_max_records = NonZeroU32::new(self.sidecar_max_records).unwrap_or_else(|| {
             invalid = true;
             emitter.emit(
@@ -10640,105 +10493,16 @@ impl NexusAtomicPrivateSettlement {
             );
             NonZeroU32::new(1).expect("private-settlement record placeholder is non-zero")
         });
-        let sidecar_max_total_bytes = nonzero_u64!(
-            self.sidecar_max_total_bytes,
-            "nexus.atomic_private_settlement.sidecar_max_total_bytes"
-        );
-
-        if self.proof_profile_version
-            != defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.proof_profile_version must be {} for V1",
-                defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
-            )));
-        }
-        let proof_profile_version =
-            NonZeroU16::new(self.proof_profile_version).unwrap_or_else(|| {
+        let sidecar_max_total_bytes =
+            NonZeroU64::new(self.sidecar_max_total_bytes).unwrap_or_else(|| {
                 invalid = true;
-                NonZeroU16::new(defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION)
-                    .expect("V1 private-settlement proof profile is non-zero")
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig).attach(
+                        "nexus.atomic_private_settlement.sidecar_max_total_bytes must be > 0",
+                    ),
+                );
+                NonZeroU64::new(1).expect("private-settlement byte placeholder is non-zero")
             });
-        if !(defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS
-            ..=defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS_LIMIT)
-            .contains(&self.max_participants)
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_participants must be within {}..={}",
-                defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS,
-                defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS_LIMIT
-            )));
-        }
-        let max_participants = NonZeroU16::new(self.max_participants).unwrap_or_else(|| {
-            NonZeroU16::new(defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS)
-                .expect("private-settlement minimum participant count is non-zero")
-        });
-        let default_min_auditor_approvals = NonZeroU16::new(self.default_min_auditor_approvals)
-            .unwrap_or_else(|| {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.atomic_private_settlement.default_min_auditor_approvals must be > 0",
-                ));
-                NonZeroU16::new(1).expect("private-settlement approval placeholder is non-zero")
-            });
-        if usize::from(default_min_auditor_approvals.get())
-            > iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.default_min_auditor_approvals must be at most {}",
-                iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
-            )));
-        }
-
-        let phase_budget = self
-            .audit_timeout_blocks
-            .checked_add(self.prepare_timeout_blocks)
-            .and_then(|value| value.checked_add(self.commit_timeout_blocks));
-        if phase_budget.is_none_or(|budget| budget > self.max_expiry_blocks) {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.atomic_private_settlement phase timeouts must sum to no more than max_expiry_blocks",
-                ),
-            );
-        }
-        if self.sidecar_retention_blocks < self.max_expiry_blocks {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.atomic_private_settlement.sidecar_retention_blocks must be at least max_expiry_blocks",
-                ),
-            );
-        }
-        if self.max_proof_bytes > defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES_LIMIT
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_proof_bytes must be at most {}",
-                defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES_LIMIT
-            )));
-        }
-        if self.max_capsule_bytes
-            > defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES_LIMIT
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_capsule_bytes must be at most {}",
-                defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES_LIMIT
-            )));
-        }
-        if self.max_carrier_bytes
-            > defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_carrier_bytes must be at most {}",
-                defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
-            )));
-        }
         if self.sidecar_max_records
             > defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
         {
@@ -10757,93 +10521,12 @@ impl NexusAtomicPrivateSettlement {
                 defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT
             )));
         }
-
-        if self.capsule_padding_classes_bytes.is_empty() {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.atomic_private_settlement.capsule_padding_classes_bytes must not be empty",
-            ));
-        }
-        let mut previous_padding = 0_u32;
-        let mut capsule_padding_classes_bytes = Vec::new();
-        for (index, bytes) in self
-            .capsule_padding_classes_bytes
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            if bytes == 0 || bytes <= previous_padding {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] must be non-zero and strictly increasing"
-                )));
-                continue;
-            }
-            if !defaults::nexus::atomic_private_settlement::CAPSULE_PADDING_CLASSES_BYTES
-                .contains(&bytes)
-            {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] is not supported by proof profile V1"
-                )));
-            }
-            let required_capsule_bytes =
-                iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1(
-                    u64::from(bytes),
-                    u64::from(default_min_auditor_approvals.get()),
-                );
-            if required_capsule_bytes > self.max_capsule_bytes {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] cannot fit the complete canonical capsule for default_min_auditor_approvals"
-                )));
-            }
-            previous_padding = bytes;
-            capsule_padding_classes_bytes.push(
-                NonZeroU32::new(bytes).expect("validated private-settlement padding is non-zero"),
-            );
-        }
-
-        if self.permitted_policy_versions.is_empty() {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.atomic_private_settlement.permitted_policy_versions must not be empty",
-            ));
-        }
-        let mut permitted_policy_versions = BTreeSet::new();
-        for version in self.permitted_policy_versions {
-            if version != 1 {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.permitted_policy_versions contains unsupported version {version}; V1 supports only 1"
-                )));
-            }
-            if !permitted_policy_versions.insert(version) {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.permitted_policy_versions contains duplicate version {version}"
-                )));
-            }
-        }
         if invalid {
             return None;
         }
         Some(actual::NexusAtomicPrivateSettlement {
-            proof_profile_version,
-            max_participants,
-            max_expiry_blocks,
-            audit_timeout_blocks,
-            prepare_timeout_blocks,
-            commit_timeout_blocks,
-            capsule_padding_classes_bytes,
-            max_proof_bytes,
-            max_capsule_bytes,
-            max_carrier_bytes,
-            sidecar_retention_blocks,
             sidecar_max_records,
             sidecar_max_total_bytes,
-            default_min_auditor_approvals,
-            permitted_policy_versions,
         })
     }
 }
@@ -11000,7 +10683,6 @@ impl Nexus {
             }
         }
         Some(actual::Nexus {
-            legacy_genesis: None,
             fees: defaults::nexus::fees::genesis_policy(),
             storage,
             staking,
@@ -13884,6 +13566,9 @@ pub struct Torii {
     /// Maximum complete working set for one query, independent of aggregate capacity.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES")]
     pub query_fanout_max_working_set_bytes: Bytes,
+    /// Maximum initial full-native-finality working set within the same shared fanout pool.
+    #[config(default = "defaults::torii::FINALITY_MAX_WORKING_SET_BYTES")]
+    pub finality_max_working_set_bytes: Bytes,
     /// Bytes retained by this node's authenticated SCCP history-node cache.
     #[config(default = "defaults::torii::SCCP_HISTORY_CACHE_MAX_BYTES")]
     pub sccp_history_cache_max_bytes: Bytes,
@@ -14262,6 +13947,10 @@ impl core::fmt::Debug for Torii {
             .field(
                 "query_fanout_max_working_set_bytes",
                 &self.query_fanout_max_working_set_bytes,
+            )
+            .field(
+                "finality_max_working_set_bytes",
+                &self.finality_max_working_set_bytes,
             )
             .field(
                 "sccp_history_cache_max_bytes",
@@ -15278,6 +14967,19 @@ impl Torii {
                 "torii.query_fanout_max_working_set_bytes must be greater than zero",
             );
         }
+        let finality_max_working_set_bytes = self.finality_max_working_set_bytes.get();
+        if usize::try_from(finality_max_working_set_bytes).is_err()
+            || defaults::torii::finality_working_set_bytes(
+                query_fanout_max_retained_bytes,
+                finality_max_working_set_bytes,
+            )
+            .is_none()
+        {
+            emit_torii_config_error(
+                emitter,
+                "torii.finality_max_working_set_bytes must be nonzero, fit the platform address space and retain a positive share of the existing query pool",
+            );
+        }
         let sccp_history_cache_max_bytes = self.sccp_history_cache_max_bytes.get();
         if sccp_history_cache_max_bytes == 0 {
             emit_torii_config_error(
@@ -15387,6 +15089,7 @@ impl Torii {
             query_heavy_max_inflight: self.query_heavy_max_inflight,
             query_fanout_max_retained_bytes: self.query_fanout_max_retained_bytes,
             query_fanout_max_working_set_bytes: self.query_fanout_max_working_set_bytes,
+            finality_max_working_set_bytes: self.finality_max_working_set_bytes,
             sccp_history_cache_max_bytes: self.sccp_history_cache_max_bytes,
             app_api_routed_read_body_read_timeout,
             query_queue_timeout: self.query_queue_timeout_ms.get(),

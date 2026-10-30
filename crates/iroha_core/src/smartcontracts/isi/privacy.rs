@@ -21,8 +21,8 @@ use crate::{
         PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1,
         PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
         PrivacyProofManagedAccumulatorStateV1, PrivacyProofManagedPoolAccumulatorStateV1,
-        PrivacyProofManagedPoolSnapshotV1, PrivacyProtocolPolicyKeyV1, PrivacyPublicReserveOwnerV1,
-        PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
+        PrivacyProofManagedPoolSnapshotV1, PrivacyPublicReserveOwnerV1, PrivacyRootHeadKeyV1,
+        PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
         PrivacyRootRetentionAnchorV1, PrivacyStateItemRecordV1, PrivacyVegaIssuerRegistryFactsV1,
         derive_privacy_pgc_account_state_root_v1, load_privacy_bootle_lantern_issuer_policy_v1,
         load_privacy_orchard_pool_snapshot_v1, load_privacy_pgc_pool_snapshot_v1,
@@ -53,6 +53,7 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
+use iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1;
 use iroha_data_model::{
     asset::AssetId,
     isi::{
@@ -475,7 +476,12 @@ impl Execute for SchedulePrivacyConsensusPolicyUpdateV1 {
             ));
         }
         let pending = PrivacyConsensusPolicyUpdateV1 {
-            scheduled_at_height: incoming_height,
+            // SPEC: §13.4 HC492 misclassifies an ordinary update as initial genesis policy.
+            scheduled_at_height: if cfg!(all(test, sumeragi_core_mutation = "HC492")) {
+                1
+            } else {
+                incoming_height
+            },
             effective_at_height: self.effective_at_height,
             next_limits: self.next_limits,
         };
@@ -538,6 +544,20 @@ impl Execute for SchedulePrivacyProtocolLimitsUpdateV1 {
             ));
         }
         let pending = PrivacyProtocolLimitsUpdateV1 {
+            private_settlement_drain_blocks:
+                iroha_data_model::privacy::private_settlement_protocol_closes_v1(
+                    &current.current_limits,
+                    &self.next_limits,
+                )
+                .then_some(
+                    state_transaction
+                        .world
+                        .privacy_consensus_policy
+                        .get()
+                        .current_limits
+                        .private_settlement
+                        .max_expiry_blocks,
+                ),
             scheduled_at_height: incoming_height,
             effective_at_height: self.effective_at_height,
             next_limits: self.next_limits,
@@ -5780,6 +5800,120 @@ mod tests {
     }
 
     #[test]
+    fn native_private_policy_schedules_drain_original_obligations_before_activation() {
+        use iroha_data_model::privacy::{
+            IvmPrivateNoteLimitsV1, PrivacyConsensusPolicyV1, PrivacyProtocolLimitsV1,
+            private_settlement_admission_deadline_v1,
+        };
+        let state = governance_execution_state();
+        let mut block = state.block(governance_execution_header(&state));
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        let original = *transaction.world.privacy_consensus_policy.get();
+        let span = original.current_limits.private_settlement.max_expiry_blocks;
+        let last = TEST_BLOCK_HEIGHT + span;
+        let mut next = original.current_limits;
+        next.private_settlement.max_carrier_bytes -= 1;
+        let execute = |instruction: iroha_data_model::isi::InstructionBox,
+                       tx: &mut StateTransaction<'_, '_>| {
+            crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, instruction)
+        };
+        assert!(
+            execute(
+                SchedulePrivacyConsensusPolicyUpdateV1::new(last, next).into(),
+                &mut transaction
+            )
+            .is_err()
+        );
+        assert_eq!(*transaction.world.privacy_consensus_policy.get(), original);
+        execute(
+            SchedulePrivacyConsensusPolicyUpdateV1::new(last + 1, next).into(),
+            &mut transaction,
+        )
+        .unwrap();
+        let pending = *transaction.world.privacy_consensus_policy.get();
+        assert_eq!(
+            pending.pending_update.unwrap().effective_at_height,
+            last + 1
+        );
+        let frame = norito::encode_canonical(&pending).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<PrivacyConsensusPolicyV1>(&frame).unwrap(),
+            pending
+        );
+
+        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        let closing = PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            max_input_count: 1,
+            max_output_count: 1,
+        });
+        assert!(
+            execute(
+                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, last, closing).into(),
+                &mut transaction
+            )
+            .is_err()
+        );
+        assert!(
+            transaction
+                .world
+                .privacy_protocol_policies
+                .get(&key)
+                .is_none()
+        );
+        execute(
+            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, last + 2, closing).into(),
+            &mut transaction,
+        )
+        .unwrap();
+        let retained = *transaction
+            .world
+            .privacy_protocol_policies
+            .get(&key)
+            .unwrap();
+        assert_eq!(
+            retained
+                .pending_update
+                .unwrap()
+                .private_settlement_drain_blocks,
+            Some(span)
+        );
+        assert_eq!(
+            private_settlement_admission_deadline_v1(&pending, Some(&retained)),
+            Some(last + 1)
+        );
+        let admission = pending.current_limits.private_settlement;
+        admission
+            .validate_admission(
+                2,
+                TEST_BLOCK_HEIGHT,
+                last,
+                TEST_BLOCK_HEIGHT,
+                Some(last + 1),
+            )
+            .unwrap();
+        assert!(
+            admission
+                .validate_admission(
+                    2,
+                    TEST_BLOCK_HEIGHT + 1,
+                    last + 1,
+                    TEST_BLOCK_HEIGHT + 1,
+                    Some(last + 1)
+                )
+                .is_err()
+        );
+        drop(transaction);
+        assert_eq!(
+            *block.world.privacy_consensus_policy.get(),
+            original,
+            "uncommitted schedules roll back together"
+        );
+        assert!(block.world.privacy_protocol_policies.get(&key).is_none());
+    }
+
+    #[test]
     fn governed_policy_update_uses_defaults_and_is_committed_atomically() {
         let state = governance_execution_state();
         let mut block = state.block(governance_execution_header(&state));
@@ -5810,6 +5944,7 @@ mod tests {
             .expect("authorized ordinary update from implicit defaults");
         let expected = PrivacyProtocolPolicyV1 {
             pending_update: Some(iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1 {
+                private_settlement_drain_blocks: None,
                 scheduled_at_height: TEST_BLOCK_HEIGHT,
                 effective_at_height: TEST_BLOCK_HEIGHT + 1,
                 next_limits: next,

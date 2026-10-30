@@ -1011,7 +1011,6 @@ fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
         &config.settlement,
         [0x11; 32],
         [0x22; 32],
-        config.nexus.legacy_genesis.as_ref().map(|legacy| &legacy.crypto),
     )
 }
 fn validate_runtime_projection_policy(
@@ -1784,8 +1783,7 @@ fn project_prepared_runtime_config(
     // Without a configured table the node uses the canonical tables compiled into `iroha3d`.
     let captured_rans_source = match &source.streaming.codec.rans_tables_path {
         Some(path) => {
-            let rans_content =
-                read_runtime_file_bounded(path, "rANS table", RANS_TABLE_MAX_BYTES)?;
+            let rans_content = read_runtime_file_bounded(path, "rANS table", RANS_TABLE_MAX_BYTES)?;
             let captured = materialize_container_readable_file(
                 projection_root,
                 "rans",

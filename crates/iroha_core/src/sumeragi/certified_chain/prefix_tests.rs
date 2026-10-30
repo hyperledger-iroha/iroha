@@ -846,33 +846,51 @@ fn admitted_prefix_rebuilds_funded_configuration_for_same_epoch_parameter_change
     with_same_epoch_parameter_change(assert_same_epoch_parameter_change);
 }
 
-// Genesis admits 32 KiB of transactions per block. A permitted lag-two update raises the
-// block cap that the signed-availability verifier consumes, and the activation height
-// carries a genuine payload above the original cap: a stale native configuration rejects it.
+// Genesis preserves the committed native private-carrier and original-cleanup envelopes.
+// A permitted lag-two update raises the block cap that signed availability consumes, and
+// the activation height carries a genuine payload above the original cap: stale native
+// configuration rejects it even though every individual transaction remains includable.
+const ORIGINAL_MAX_TRANSACTION_BYTES: u32 = {
+    let carrier = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default()
+        .private_settlement
+        .max_carrier_bytes;
+    let cleanup = iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1;
+    let required = if carrier > cleanup { carrier } else { cleanup };
+    assert!(required <= u32::MAX as u64);
+    required as u32
+};
 const ORIGINAL_MAX_BLOCK_BYTES: u32 =
-    iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 32 * 1024;
-const RAISED_MAX_BLOCK_BYTES: u32 =
-    iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 128 * 1024;
+    iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES
+        + ORIGINAL_MAX_TRANSACTION_BYTES;
+const RAISED_MAX_BLOCK_BYTES: u32 = 2 * ORIGINAL_MAX_BLOCK_BYTES;
 
 #[inline(never)]
 fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
+    use crate::state::WorldReadOnly as _;
     use iroha_data_model::{
         isi::{Grant, SetParameter},
         parameter::{
-            Parameter, SumeragiParameter, TransactionParameter,
+            CustomParameter, CustomParameterId, Parameter, SumeragiParameter, TransactionParameter,
             system::resource_coherence::maximal_action_transaction_bytes,
         },
-        privacy::{PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1},
+        privacy::{
+            PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1, PrivacyConsensusLimitsV1,
+            PrivacyConsensusPolicyV1,
+        },
     };
     use std::num::{NonZeroU32, NonZeroU64};
 
-    const INCLUDABLE: u32 = 32 * 1024;
-    let signatures = NonZeroU64::MIN;
+    let signatures = NonZeroU64::new(PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u64).unwrap();
+    assert!(
+        u64::from(RAISED_MAX_BLOCK_BYTES)
+            <= iroha_sumeragi::availability::MAX_DA_PAYLOAD_SIZE_BYTES,
+        "both fixture block policies remain within the original PayloadBytes ceiling"
+    );
     let context = maximal_action_transaction_bytes(0, signatures).unwrap();
     let action = u32::try_from(
-        u64::from(INCLUDABLE)
+        u64::from(ORIGINAL_MAX_TRANSACTION_BYTES)
             .checked_sub(context)
-            .expect("fixture transaction cap includes one signer's required context"),
+            .expect("fixture transaction cap includes native cleanup signers' required context"),
     )
     .unwrap();
     let mut world = World::new();
@@ -880,12 +898,14 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     let mut limits = PrivacyConsensusLimitsV1::taira_default();
     limits.max_proof_bytes_per_action = action;
     limits.max_action_bytes = action;
-    limits.max_privacy_bytes_per_transaction = INCLUDABLE;
-    limits.max_privacy_bytes_per_block = INCLUDABLE;
-    limits.max_statement_and_encrypted_output_bytes_per_transaction = action;
+    limits.max_privacy_bytes_per_transaction = ORIGINAL_MAX_TRANSACTION_BYTES;
+    limits.max_privacy_bytes_per_block = ORIGINAL_MAX_TRANSACTION_BYTES;
+    limits.max_statement_and_encrypted_output_bytes_per_transaction = limits
+        .max_statement_and_encrypted_output_bytes_per_transaction
+        .min(action);
     limits
         .validate()
-        .expect("coherent small fixture privacy limits");
+        .expect("coherent fixture privacy and original private-cleanup limits");
     world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
         current_limits: limits,
         pending_update: None,
@@ -899,12 +919,23 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     config
         .genesis_parameters
         .push(Parameter::Transaction(TransactionParameter::MaxTxBytes(
-            NonZeroU64::new(u64::from(INCLUDABLE)).unwrap(),
+            NonZeroU64::new(u64::from(ORIGINAL_MAX_TRANSACTION_BYTES)).unwrap(),
         )));
     config
         .genesis_parameters
         .push(Parameter::Transaction(TransactionParameter::MaxSignatures(
             signatures,
+        )));
+    // Native Log charges its message bytes as gas. The six real carriers exceed the
+    // default four-million block gas allowance independently of the byte policy under
+    // test. Commit an explicit allowance sufficient for those logs and the fixture's
+    // clock transaction; changing the block-byte cap must remain the tested transition.
+    let fixture_block_gas = u64::from(RAISED_MAX_BLOCK_BYTES);
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(CustomParameter::new(
+            CustomParameterId::new("ivm_gas_limit_per_block".parse().unwrap()),
+            iroha_primitives::json::Json::new(fixture_block_gas),
         )));
     let author = config.genesis_key.clone();
     config.genesis_instructions.push(
@@ -915,6 +946,11 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
         .into(),
     );
     let mut chain = Box::new(CertifiedTestChain::start(config).unwrap());
+    assert_eq!(
+        crate::state::gas_limit_from_parameters(chain.state().view().world().parameters()),
+        fixture_block_gas,
+        "the native gas allowance comes from the original committed genesis"
+    );
     let update = chain.sign(
         &author,
         [
@@ -927,21 +963,44 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     );
     assert_eq!(chain.commit_at(2_000, vec![update]), [true]);
     chain.commit_at(3_000, Vec::new());
-    // Six 18,000-byte logs exceed the original 96 KiB block cap, including its reserve.
-    // Their signed transactions fit the raised cap that activates at height 4.
+    // The six message bodies alone exceed the original block cap, including its reserve.
+    // Actual signed transactions remain below the original transaction cap and fit the
+    // raised block cap that activates at height 4; no synthetic payload substitutes for them.
+    let log_bytes = ORIGINAL_MAX_BLOCK_BYTES as usize / 6 + 1;
     let large = (0..6_u64)
         .map(|index| {
-            chain.sign(
+            let signed = chain.sign(
                 &author,
                 [InstructionBox::from(Log::new(
                     Level::DEBUG,
-                    "x".repeat(18_000),
+                    "x".repeat(log_bytes),
                 ))],
                 3_500 + index,
-            )
+            );
+            assert!(
+                norito::canonical_frame_len(&signed).unwrap()
+                    <= ORIGINAL_MAX_TRANSACTION_BYTES as usize,
+                "each actual signed carrier fits the unchanged original transaction cap"
+            );
+            signed
         })
         .collect();
-    assert_eq!(chain.commit_at(4_000, large), [true; 6]);
+    let outcomes = chain.commit_at(4_000, large);
+    if outcomes != [true; 6] {
+        let original = chain.committed(4);
+        for (index, applied) in outcomes.iter().enumerate() {
+            if !applied {
+                eprintln!(
+                    "original H4 input {index} rejected: {:?}",
+                    original
+                        .block()
+                        .network_output_at(u32::try_from(index).unwrap())
+                        .map(|(_, output)| &output.result)
+                );
+            }
+        }
+    }
+    assert_eq!(outcomes, [true; 6]);
     assert!(
         chain.committed(4).header().unwrap().payload_len > ORIGINAL_MAX_BLOCK_BYTES,
         "the activation height carries a payload above the original cap"

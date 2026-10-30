@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -247,6 +248,9 @@ def test_host_and_interpreter_fail_before_tool_selection(monkeypatch, platform_n
 
 def test_tool_selection_uses_exact_producer_policy_and_canonical_node(monkeypatch, tmp_path):
     root = tmp_path.resolve()
+    toolchain = Path(__file__).resolve().parents[2] / "rust-toolchain.toml"
+    (root / "rust-toolchain.toml").write_bytes(toolchain.read_bytes())
+    channel = tomllib.loads(toolchain.read_text())["toolchain"]["channel"]
     developer = root / "Xcode.app/Contents/Developer"
     apple = developer / "Toolchains/XcodeDefault.xctoolchain/usr/bin"
     apple.mkdir(parents=True)
@@ -268,7 +272,7 @@ def test_tool_selection_uses_exact_producer_policy_and_canonical_node(monkeypatc
 
     def which(name, *, path):
         assert name == "node"
-        assert path.endswith("/.rustup/toolchains/1.93.1-aarch64-apple-darwin/bin:/opt/homebrew/bin:/usr/bin:/bin")
+        assert path.endswith(f"/.rustup/toolchains/{channel}-aarch64-apple-darwin/bin:/opt/homebrew/bin:/usr/bin:/bin")
         return str(alias)
 
     monkeypatch.setattr(runner.subprocess, "run", run)
@@ -280,6 +284,8 @@ def test_tool_selection_uses_exact_producer_policy_and_canonical_node(monkeypatc
     assert config["node"] == str(node)
     assert config["sdk"] == str(developer / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk")
     assert config["developer_dir"] == str(developer)
+    for name in ("cargo", "rustc", "rustdoc"):
+        assert config[name] == str(Path.home() / ".rustup/toolchains" / f"{channel}-aarch64-apple-darwin/bin" / name)
     assert policies == [(root, config)]
 
 

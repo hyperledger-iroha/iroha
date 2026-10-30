@@ -482,6 +482,19 @@ impl VerifiedWorldStateSnapshotV1 {
         Ok(())
     }
 
+    /// Authenticate absence of the exact optional committed protocol-policy row.
+    /// # Errors
+    /// The complete certified World contains the key, the field is not a table, or encoding fails.
+    pub fn verify_privacy_protocol_policy_absent(
+        &self,
+        protocol: crate::privacy::PrivacyProtocolIdV1,
+    ) -> Result<(), FinalityError> {
+        self.verify_native_table_key_absent(
+            "world.privacy_protocol_policies",
+            &crate::privacy::PrivacyProtocolPolicyKeyV1::new(protocol),
+        )
+    }
+
     fn verify_native_table_key_absent<K: norito::codec::Encode>(
         &self,
         field: &str,

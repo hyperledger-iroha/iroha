@@ -8640,7 +8640,7 @@ fn decode_world_fields(
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_protocol_policies: Storage<
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     > = take_required(&mut map, "privacy_protocol_policies")?;
     let kagemusha_wallet_ledger: Storage<

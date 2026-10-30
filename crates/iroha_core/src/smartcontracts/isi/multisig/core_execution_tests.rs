@@ -436,9 +436,11 @@ fn initial_executor_runs_multisig_flow() {
         .initial_crypto_policy(source)
         .expect("select original signed crypto policy")
         .inspect(Clone::clone);
-    let mut policies = original
-        .initial_policies(source)
-        .expect("select policies from original signed genesis");
+    let mut policies = Some(
+        original
+            .initial_policies(source)
+            .expect("select policies from original signed genesis"),
+    );
     let generation = prepared.state.state_view_generation();
     // The same recorder owns pristine policy installation and the tested instruction.
     let (mut block, recording) = prepared

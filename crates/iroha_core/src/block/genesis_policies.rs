@@ -7,13 +7,7 @@
 //! TODO(original-source-admission): original signed-input retention and capability-selection backing remain with
 //! the authenticated source owner; they are not retroactively admitted here.
 
-use iroha_data_model::{
-    block::{SignedBlock, consensus::PublicLaneStakingPolicy},
-    crypto_admission_policy::CryptoAdmissionPolicyV1,
-    isi::SetParameter,
-    parameter::Parameter,
-    transaction::Executable,
-};
+use iroha_data_model::block::SignedBlock;
 
 use super::{
     AuthenticatedGenesisOutputSource, BlockValidationError, InvalidGenesisError,
@@ -30,52 +24,15 @@ pub(crate) struct GenesisPolicies {
 
 impl AuthenticatedGenesisOutputSource {
     /// Select both mandatory policies without giving an ordinary caller bootstrap authority.
-    ///
-    /// `None` is a configured pre-policy genesis: one that signs neither policy, on a node that
-    /// installed that network's legacy policies. Such a node refuses a signed policy.
     pub(crate) fn initial_policies(
         &self,
         block: &SignedBlock,
-    ) -> Result<Option<GenesisPolicies>, BlockValidationError> {
-        if crate::pipeline_gas_policy::legacy_genesis_policies().is_some() {
-            self.account_for(block).map_err(|error| {
-                BlockValidationError::from(InvalidGenesisError::CryptoPolicy(error.into()))
-            })?;
-            if signs_policy(block) {
-                return Err(InvalidGenesisError::CryptoPolicy(
-                    "configured legacy genesis policies cannot accompany a genesis that signs \
-                     its own policy"
-                        .into(),
-                )
-                .into());
-            }
-            return Ok(None);
-        }
-        Ok(Some(GenesisPolicies {
+    ) -> Result<GenesisPolicies, BlockValidationError> {
+        Ok(GenesisPolicies {
             crypto: self.initial_crypto_policy(block)?,
             staking: self.initial_staking_policy(block)?,
-        }))
-    }
-}
-
-/// Whether any original instruction assigns the crypto or staking policy parameter.
-fn signs_policy(block: &SignedBlock) -> bool {
-    let crypto = CryptoAdmissionPolicyV1::parameter_id();
-    let staking = PublicLaneStakingPolicy::parameter_id();
-    block.external_transactions().any(|transaction| {
-        let Executable::Instructions(instructions) = transaction.instructions() else {
-            return false;
-        };
-        instructions.iter().any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<SetParameter>()
-                .is_some_and(|set| {
-                    matches!(set.inner(), Parameter::Custom(custom)
-                        if custom.id() == &crypto || custom.id() == &staking)
-                })
         })
-    })
+    }
 }
 
 impl GenesisPolicies {

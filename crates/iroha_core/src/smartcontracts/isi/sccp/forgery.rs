@@ -523,7 +523,7 @@ pub(crate) fn is_duplicate(
     generation: u64,
 ) -> bool {
     new_signers == 0
-        && (cfg!(all(test, sumeragi_core_mutation = "HC489"))
+        && (cfg!(all(test, sumeragi_core_mutation = "HC496"))
             || recorded_maximum >= Some(generation))
 }
 

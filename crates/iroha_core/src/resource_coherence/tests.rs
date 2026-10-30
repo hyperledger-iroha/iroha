@@ -37,6 +37,8 @@ use crate::{
 };
 
 const MIB: u32 = 1024 * 1024;
+// Resource fixtures retain their exact/one-over relationships above the fixed native
+// private-payment cleanup floor; low transaction budgets are separately negative controls.
 
 fn lower_limits(action: u32, block: u32) -> PrivacyConsensusLimitsV1 {
     PrivacyConsensusLimitsV1 {
@@ -190,13 +192,13 @@ fn missing_authenticated_successor_never_uses_local_or_default_caps() {
 #[test]
 fn lower_genesis_caps_require_privacy_tightening_at_height_two() {
     let world = World::new();
-    set_caps(&world, u64::from(3 * MIB), 4 * MIB);
+    set_caps(&world, u64::from(7 * MIB), 8 * MIB);
     let mut policy = PrivacyConsensusPolicyV1 {
         current_limits: PrivacyConsensusLimitsV1::taira_default(),
         pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
             scheduled_at_height: 1,
             effective_at_height: 2,
-            next_limits: lower_limits(2 * MIB, 3 * MIB),
+            next_limits: lower_limits(6 * MIB, 7 * MIB),
         }),
     };
     set_privacy(&world, policy);
@@ -242,15 +244,15 @@ fn genesis_config(effective_at_height: Option<u64>) -> TestChainConfig {
     config.genesis_key = ALICE_KEYPAIR.clone();
     config.genesis_parameters.extend([
         Parameter::Transaction(TransactionParameter::MaxTxBytes(
-            NonZeroU64::new(u64::from(3 * MIB)).unwrap(),
+            NonZeroU64::new(u64::from(7 * MIB)).unwrap(),
         )),
         Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
-            NonZeroU32::new(4 * MIB).unwrap(),
+            NonZeroU32::new(8 * MIB).unwrap(),
         )),
     ]);
     if let Some(height) = effective_at_height {
         config.genesis_instructions.push(
-            SchedulePrivacyConsensusPolicyUpdateV1::new(height, lower_limits(2 * MIB, 3 * MIB))
+            SchedulePrivacyConsensusPolicyUpdateV1::new(height, lower_limits(6 * MIB, 7 * MIB))
                 .into(),
         );
     }
@@ -266,7 +268,7 @@ fn split_signed_genesis_transactions_may_be_temporarily_incoherent() {
     for (index, transaction) in chain.genesis().external_transactions().enumerate() {
         if let Executable::Instructions(instructions) = transaction.instructions() {
             for instruction in instructions {
-                if instruction.as_any().downcast_ref::<SetParameter>().is_some_and(|set| matches!(set.inner(), Parameter::Transaction(TransactionParameter::MaxTxBytes(value)) if value.get() == u64::from(3 * MIB))) {
+                if instruction.as_any().downcast_ref::<SetParameter>().is_some_and(|set| matches!(set.inner(), Parameter::Transaction(TransactionParameter::MaxTxBytes(value)) if value.get() == u64::from(7 * MIB))) {
                     parameter_index = Some(index);
                 }
                 if instruction
@@ -308,13 +310,13 @@ fn atomic_governance_transaction_checks_final_policy_in_either_instruction_order
         let mut chain = CertifiedTestChain::start(genesis_config(Some(2))).unwrap();
         let mut instructions: Vec<InstructionBox> = vec![
             SetParameter::new(Parameter::Transaction(TransactionParameter::MaxTxBytes(
-                NonZeroU64::new(u64::from(MIB)).unwrap(),
+                NonZeroU64::new(u64::from(5 * MIB)).unwrap(),
             )))
             .into(),
-            // Exactly the largest action whose required context fits the 1 MiB cap.
+            // Exactly the largest action whose required context fits the 5 MiB cap.
             SchedulePrivacyConsensusPolicyUpdateV1::new(
                 3,
-                lower_limits(exact_action(MIB), 2 * MIB),
+                lower_limits(exact_action(5 * MIB), 6 * MIB),
             )
             .into(),
         ];
@@ -333,7 +335,7 @@ fn atomic_governance_transaction_checks_final_policy_in_either_instruction_order
                 .transaction()
                 .max_tx_bytes()
                 .get(),
-            u64::from(MIB)
+            u64::from(5 * MIB)
         );
     }
 }
@@ -345,7 +347,7 @@ fn invalid_final_governance_transaction_rolls_back_without_poisoning_block() {
         &ALICE_KEYPAIR,
         [
             SetParameter::new(Parameter::Transaction(TransactionParameter::MaxTxBytes(
-                NonZeroU64::new(u64::from(MIB)).unwrap(),
+                NonZeroU64::new(u64::from(5 * MIB)).unwrap(),
             )))
             .into(),
         ],
@@ -366,7 +368,7 @@ fn invalid_final_governance_transaction_rolls_back_without_poisoning_block() {
             .transaction()
             .max_tx_bytes()
             .get(),
-        u64::from(3 * MIB)
+        u64::from(7 * MIB)
     );
     assert!(
         format!("{:?}", chain.committed(2).block().output_error(0))
@@ -393,7 +395,7 @@ fn internal_pipeline_candidate_rolls_back_incoherent_policy_before_publication()
     };
     let mut config = genesis_config(Some(2));
     let invalid = SetParameter::new(Parameter::Transaction(TransactionParameter::MaxTxBytes(
-        NonZeroU64::new(u64::from(MIB)).unwrap(),
+        NonZeroU64::new(u64::from(5 * MIB)).unwrap(),
     )));
     config.genesis_instructions.push(
         Register::trigger(Trigger::new(
@@ -437,7 +439,7 @@ fn internal_pipeline_candidate_rolls_back_incoherent_policy_before_publication()
             .transaction()
             .max_tx_bytes()
             .get(),
-        u64::from(3 * MIB)
+        u64::from(7 * MIB)
     );
     validate_restored_policy(chain.state().view().world(), 2).unwrap();
 }
@@ -476,7 +478,7 @@ fn restore_checks_the_action_context_at_exact_and_one_over_signature_caps() {
 #[test]
 fn executed_genesis_checks_the_action_context_at_exact_and_one_over_signature_caps() {
     // Height two applies the genesis tightening: a 2 MiB action under the 3 MiB cap.
-    let largest = largest_signatures(u64::from(3 * MIB), &lower_limits(2 * MIB, 3 * MIB));
+    let largest = largest_signatures(u64::from(7 * MIB), &lower_limits(6 * MIB, 7 * MIB));
     let config = |signatures: u64| {
         let mut config = genesis_config(Some(2));
         config.genesis_parameters.push(Parameter::Transaction(
@@ -514,7 +516,7 @@ fn executed_genesis_checks_the_action_context_at_exact_and_one_over_signature_ca
 #[test]
 fn governance_checks_the_action_context_at_exact_and_one_over_signature_caps() {
     let mut chain = CertifiedTestChain::start(genesis_config(Some(2))).unwrap();
-    let largest = largest_signatures(u64::from(3 * MIB), &lower_limits(2 * MIB, 3 * MIB));
+    let largest = largest_signatures(u64::from(7 * MIB), &lower_limits(6 * MIB, 7 * MIB));
     let set = |signatures: u64| -> InstructionBox {
         SetParameter::new(Parameter::Transaction(TransactionParameter::MaxSignatures(
             NonZeroU64::new(signatures).unwrap(),
@@ -550,26 +552,26 @@ fn governance_checks_the_action_context_at_exact_and_one_over_signature_caps() {
 
 #[test]
 fn later_privacy_increase_is_checked_by_final_candidates_and_restores() {
-    let world = scheduled_world([4 * MIB; 3]);
-    set_caps(&world, u64::from(3 * MIB), 4 * MIB);
-    let current = lower_limits(2 * MIB, 3 * MIB);
+    let world = scheduled_world([8 * MIB; 3]);
+    set_caps(&world, u64::from(7 * MIB), 8 * MIB);
+    let current = lower_limits(6 * MIB, 7 * MIB);
     let reserve = iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
     let mut policy = PrivacyConsensusPolicyV1 {
         current_limits: current,
         pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
             scheduled_at_height: 2,
             effective_at_height: 10,
-            next_limits: lower_limits(2 * MIB, 4 * MIB),
+            next_limits: lower_limits(6 * MIB, 8 * MIB),
         }),
     };
     set_privacy(&world, policy);
     let expected = PolicyCoherenceError::Effective(SuccessorResourceCoherenceError::AtHeight {
         effective_height: 10,
         error: ResourceCoherenceError::PrivacyBlockExceedsPayload {
-            max_privacy_bytes_per_block: 4 * MIB,
+            max_privacy_bytes_per_block: 8 * MIB,
             reserve_bytes: reserve,
-            required_block_bytes: u64::from(4 * MIB + reserve),
-            max_block_bytes: 4 * MIB,
+            required_block_bytes: u64::from(8 * MIB + reserve),
+            max_block_bytes: 8 * MIB,
         },
     });
     assert_eq!(validate_final_policy(&world.view(), 2), Err(expected));
@@ -580,7 +582,7 @@ fn later_privacy_increase_is_checked_by_final_candidates_and_restores() {
         .as_mut()
         .unwrap()
         .next_limits
-        .max_privacy_bytes_per_block = 4 * MIB - reserve;
+        .max_privacy_bytes_per_block = 8 * MIB - reserve;
     set_privacy(&world, policy);
     validate_final_policy(&world.view(), 2).unwrap();
     validate_restored_policy(&world.view(), 2).unwrap();
@@ -590,8 +592,8 @@ fn later_privacy_increase_is_checked_by_final_candidates_and_restores() {
 #[test]
 fn later_privacy_increase_rolls_back_atomically_and_a_coherent_retry_applies() {
     let mut chain = CertifiedTestChain::start(genesis_config(Some(2))).unwrap();
-    let current = lower_limits(2 * MIB, 3 * MIB);
-    let next_limits = lower_limits(2 * MIB, 6 * MIB);
+    let current = lower_limits(6 * MIB, 7 * MIB);
+    let next_limits = lower_limits(6 * MIB, 10 * MIB);
     let set_block = |cap| -> InstructionBox {
         SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MaxBlockBytes(
             NonZeroU32::new(cap).unwrap(),
@@ -601,7 +603,7 @@ fn later_privacy_increase_rolls_back_atomically_and_a_coherent_retry_applies() {
     let invalid = chain.sign(
         &ALICE_KEYPAIR,
         [
-            set_block(5 * MIB),
+            set_block(9 * MIB),
             SchedulePrivacyConsensusPolicyUpdateV1::new(10, next_limits).into(),
         ],
         1,
@@ -616,7 +618,7 @@ fn later_privacy_increase_rolls_back_atomically_and_a_coherent_retry_applies() {
         let view = chain.state().view();
         assert_eq!(
             view.world().parameters().sumeragi().max_block_bytes().get(),
-            4 * MIB
+            8 * MIB
         );
         assert_eq!(
             *view.world().privacy_consensus_policy(),
@@ -634,7 +636,7 @@ fn later_privacy_increase_rolls_back_atomically_and_a_coherent_retry_applies() {
         "{failure}"
     );
     let reserve = iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
-    let exact_block = 6 * MIB + reserve;
+    let exact_block = 10 * MIB + reserve;
     let retry = chain.sign(
         &ALICE_KEYPAIR,
         [
@@ -677,4 +679,125 @@ fn later_privacy_increase_rolls_back_atomically_and_a_coherent_retry_applies() {
             assert!(policy.pending_update.is_none());
         }
     }
+}
+
+#[test]
+fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::{AccountId, MultisigMember, MultisigPolicy},
+        isi::private_settlement::AbortAtomicPrivateSettlementV1,
+        nexus::PrivateSettlementAbortReasonV1,
+        transaction::TransactionBuilder,
+    };
+    let mut chain = CertifiedTestChain::start(genesis_config(Some(2))).unwrap();
+    let original_cap = chain
+        .state()
+        .view()
+        .world()
+        .parameters()
+        .transaction()
+        .max_signatures();
+    let (bundle, _) =
+        crate::private_settlement::coordinator::tests::certified_commit_bundle_fixture();
+    let keys: Vec<_> = (0..3)
+        .map(|i| KeyPair::from_seed(vec![0x72 + i; 32], Algorithm::Ed25519))
+        .collect();
+    let sponsor = AccountId::new_multisig(
+        MultisigPolicy::new(
+            2,
+            keys.iter()
+                .map(|key| MultisigMember::new(key.public_key().clone(), 1).unwrap())
+                .collect(),
+        )
+        .unwrap(),
+    );
+    let mut manifest = bundle.manifest;
+    manifest.sponsor = sponsor.clone();
+    manifest.bundle_id = manifest.computed_bundle_id().unwrap();
+    let cleanup = TransactionBuilder::new(
+        manifest.network_id,
+        sponsor,
+        manifest.public_fee_intent.clone(),
+    )
+    .with_instructions([AbortAtomicPrivateSettlementV1::new(
+        manifest,
+        PrivateSettlementAbortReasonV1::Expired,
+    )])
+    .sign_multisig(keys[..2].iter().map(|key| key.private_key()));
+    cleanup.verify_signature().unwrap();
+    assert_eq!(cleanup.signature_count(), 2);
+    let update = chain.sign(
+        &ALICE_KEYPAIR,
+        [
+            SetParameter::new(Parameter::Transaction(TransactionParameter::MaxSignatures(
+                NonZeroU64::new(1).unwrap(),
+            )))
+            .into(),
+        ],
+        1,
+    );
+    assert_eq!(chain.commit(vec![update]), vec![false]);
+    assert_eq!(
+        chain
+            .state()
+            .view()
+            .world()
+            .parameters()
+            .transaction()
+            .max_signatures(),
+        original_cap
+    );
+    let failure = format!("{:?}", chain.committed(2).block().output_error(0));
+    assert!(
+        failure.contains("private-payment cleanup requires"),
+        "{failure}"
+    );
+    cleanup.verify_signature().unwrap();
+    crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(&cleanup)
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
+    let mut config = genesis_config(None);
+    let mut limits = lower_limits(6 * MIB, 7 * MIB);
+    limits.private_settlement.max_participants = 16;
+    config
+        .genesis_instructions
+        .push(SchedulePrivacyConsensusPolicyUpdateV1::new(2, limits).into());
+    let mut chain =
+        CertifiedTestChain::start(config).expect("authenticated initial private policy");
+    let retained = *chain.state().view().world().privacy_consensus_policy();
+    assert_eq!(retained.pending_update.unwrap().next_limits, limits);
+    assert_eq!(retained.pending_update.unwrap().effective_at_height, 2);
+    assert_eq!(
+        iroha_data_model::privacy::private_settlement_admission_deadline_v1(&retained, None),
+        Some(2)
+    );
+    let payment_free_work = chain.sign(
+        &ALICE_KEYPAIR,
+        [Log::new(Level::INFO, "activate original initial policy".into()).into()],
+        1,
+    );
+    assert_eq!(chain.commit(vec![payment_free_work]), vec![true]);
+    assert_eq!(
+        chain
+            .state()
+            .view()
+            .world()
+            .privacy_consensus_policy()
+            .current_limits,
+        limits
+    );
+    assert!(
+        chain
+            .state()
+            .view()
+            .world()
+            .privacy_consensus_policy()
+            .pending_update
+            .is_none()
+    );
 }

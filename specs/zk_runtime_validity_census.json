@@ -2003,15 +2003,14 @@
    "owner": "F.4",
    "path": "crates/iroha_config/src/parameters/actual.rs",
    "symbol": "pub fn nexus_consensus_policy_preimage_with_runtime_policies(",
-   "gates": "Ten [nexus] limits: atomic private settlement participants, carrier, proof, capsule and sidecar sizes (P.20 owns their boundary tests), uploaded-model plaintext bytes and chunk count (C.9), DA ingest quota count and bytes.",
+   "gates": "Four remaining [nexus] limits: uploaded-model plaintext bytes and chunk count (C.9), and DA ingest quota count and bytes.",
    "decided_by": "Typed committed parameters, read through the State view.",
    "attribution": "read",
-   "open_reason": "The committed-parameter mechanism exists (zk_validity_policy_v1). This family still reaches validation through the State copy installed from node configuration at startup; moving it needs its own typed committed parameter, the staged-genesis and deployment generators that author it, and regenerated deployment configurations.",
+   "open_reason": "Uploaded-model and DA validity bounds remain in the State projection of node configuration and require typed committed owners with regenerated authoring artifacts and current-candidate validation. Private-settlement validity bounds have moved to PrivacyConsensusPolicyV1; node settings retain only local sidecar storage capacities.",
+   "note": "Private-settlement participant, carrier, proof and capsule bounds are consumed from committed current_limits.private_settlement in Core and Torii. Their phase windows and pending drain are recorded under private_settlement.committed_windows. Local sidecar record and byte limits are no longer fields of the Nexus consensus-policy preimage.",
    "sites": [
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_chunk_count_per_model", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_plaintext_bytes_per_model", 2],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_carrier_bytes", 3],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_participants", 2]
+    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_plaintext_bytes_per_model", 2]
    ]
   },
   {
@@ -2071,10 +2070,10 @@
    "owner": "F.4",
    "path": "crates/iroha_config/src/parameters/actual.rs",
    "symbol": "NexusConsensusPolicyPreimageV1",
-   "gates": "The remaining Nexus consensus-policy preimage fields and recorded readers: lane, data space and routing identities, validator activation/capacity, lease and endorsement timing, settlement relation identity and windows, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version. Staking monetary terms have a separate original committed owner.",
+   "gates": "The remaining Nexus consensus-policy preimage fields and recorded readers: lane, data space and routing identities, validator activation/capacity, lease and endorsement timing, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version. Staking monetary terms and private-settlement validity have separate committed owners.",
    "decided_by": "Committed State (the Nexus runtime catalog and lane policy already are; these values follow them).",
    "attribution": "read",
-   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement, autoscale and private-settlement settings. PublicLaneStakingPolicy now owns monetary terms in original committed Parameters; that migration does not close these separate validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
+   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement and autoscale settings. PublicLaneStakingPolicy owns monetary terms in original committed Parameters, and PrivacyConsensusPolicyV1 owns private-settlement validity. Those migrations do not close the remaining validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
    "sites": [
     ["crates/iroha_core/src/block.rs", "node_policy_read", "da.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sns.rs", "node_policy_read", "endorsement.quorum", 1],
@@ -2083,18 +2082,15 @@
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "dataspace_fee_sponsor_program_ids", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.committee_keys", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.quorum", 3],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.*", 1],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_expiry_blocks", 2],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.per_lane_target_tps", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "da.*", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "staking.*", 2],
     ["crates/iroha_core/src/state/output_publication.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state/runtime_catalog_commit.rs", "node_policy_read", "autoscale.*", 1],
-    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_validators", 1],
-    ["crates/iroha_torii/src/private_settlement.rs", "node_policy_read", "atomic_private_settlement.*", 1]
+    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_validators", 1]
    ],
-   "note": "The 18 retired node-policy rows were read against their replacement owners. Transaction execution borrows StateTransaction::staking_monetary_policy from original block Parameters (or the authenticated original genesis policy); slash caps, share/unbond bounds, currency and custody use this owner. Read-only preparation, coalition collateral and parent penalty planning borrow their captured World Parameters; absence refuses. SCCP checks both original and current committed monetary policy for retained-liability coherence. No transaction-local update substitutes original execution policy. max_validators still reads nexus.staking and remains recorded/open. Source reconciliation is not staking or whole-node qualification.",
+   "note": "The 18 retired node-policy rows were read against their replacement owners. Transaction execution borrows StateTransaction::staking_monetary_policy from original block Parameters (or the authenticated original genesis policy); slash caps, share/unbond bounds, currency and custody use this owner. Read-only preparation, coalition collateral and parent penalty planning borrow their captured World Parameters; absence refuses. SCCP checks both original and current committed monetary policy for retained-liability coherence. No transaction-local update substitutes original execution policy. max_validators still reads nexus.staking and remains recorded/open. Source reconciliation is not staking or whole-node qualification. Private-settlement profile/policy versions are fixed by the native model, and validity sizes, participant counts, auditor thresholds, padding, retention and phase windows use committed private-settlement limits. Pending changes retain an exclusive committed drain boundary; continuations preserve existing obligations. No legacy node-policy reader remains for this family.",
    "anchors": [
     {
      "path": "crates/iroha_core/src/state.rs",
@@ -2123,8 +2119,9 @@
    "gates": "The complete root monetary schedule, exact currency, sink, sponsor custody and Global claim exemptions.",
    "decided_by": "The mandatory root_fees_v1 parameter, validated and atomically projected by StateParameters. Each block freezes its predecessor projection; restore rebuilds it from original canonical Parameters. H1 authors exactly one original policy and retains both signed policy digest checks. Currency and sponsor custody are immutable after H1; other authorized terms apply next block. Node fee and fee-relay worker configuration are removed.",
    "attribution": "read",
-   "open_reason": "The moved execution readers, including SoraCloud fee currency and sink resolution, now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Two remaining detector rows retain fee projection consumers in Torii. The executor row (root_fees.rs) is the §13.4 mutation HC396, taken only in a test build with `sumeragi_core_mutation = \"HC396\"`: it substitutes the node's `nexus.fees` for the committed projection so that the original-policy tests can kill it. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
+   "open_reason": "Execution and quote readers borrow committed StateParameters fee policy. The three detector occurrences in executor.rs and executor/root_fees.rs pass nexus.fees to captured_execution_policy only as the alternate for test-only mutation HC396. Production requires original.root_fees() and refuses its absence; the alternate is never a fallback. Two Torii fee projection consumers remain recorded. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
    "sites": [
+    ["crates/iroha_core/src/executor.rs", "node_policy_read", "fees", 2],
     ["crates/iroha_core/src/executor/root_fees.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/game.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/lib.rs", "node_policy_read", "fees", 2]
@@ -5794,6 +5791,68 @@
    ]
   },
   {
+   "id": "private_settlement.committed_windows",
+   "kind": "wall_clock",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+   "symbol": "pub fn private_settlement_admission_deadline_v1(",
+   "gates": "Native private-payment phase durations, signed expiry spans and pending policy drain boundaries.",
+   "decided_by": "The validated PrivacyConsensusPolicyV1 and optional PrivacyProtocolPolicyV1 at the same authenticated World cut, compared with signed context/expiry heights and the executing block height.",
+   "attribution": "read",
+   "note": "audit_timeout_blocks, prepare_timeout_blocks and commit_timeout_blocks are positive committed block counts whose checked sum cannot exceed max_expiry_blocks. exclusive_deadline and private_settlement_admission_deadline_v1 select the earliest committed effective_at_height for private-policy changes or native relation closure. No wall clock is read. Core Prepare-lock admission and Torii manifest admission consume the same policy function; genuine continuations keep their original obligations. This source classification does not qualify complete private-settlement execution or recovery.",
+   "sites": [
+    ["crates/iroha_data_model/src/privacy/private_settlement_policy.rs", "time_budget", "deadline", 5],
+    ["crates/iroha_data_model/src/privacy/private_settlement_policy.rs", "time_budget", "timeout", 12]
+   ],
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "function": "apply_private_settlement_prepare_locks_v1",
+     "contains": "self.world.privacy_consensus_policy.get()"
+    },
+    {
+     "path": "crates/iroha_torii/src/private_settlement.rs",
+     "function": "active_config_at_view",
+     "contains": "state.world().privacy_consensus_policy()"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+     "name": "original_drain_is_checked_and_admission_deadline_is_exclusive"
+    }
+   ]
+  },
+  {
+   "id": "core.state_view_waiter",
+   "kind": "wall_clock",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_core/src/state/view_acquisition.rs",
+   "symbol": "pub struct StateViewWaiter",
+   "gates": "An admitted query worker waits for the original busy State owner within its caller deadline and stop flag.",
+   "decided_by": "The original ReleaseWait permits a fresh State acquisition; the clock only bounds the local wait and supplies no State or finality authority.",
+   "attribution": "read",
+   "note": "StateViewWaiter::wait checks stop and the unchanged absolute deadline before polling the original release. Spurious or foreign wakes cannot extend it. Expiry returns false and cancels the waiter registration; finality interval reads retain the original Busy refusal or cancellation. Every retry reacquires State owners. This is query-service resource control, not transaction validity or a protocol timeout.",
+   "sites": [
+    ["crates/iroha_core/src/state/view_acquisition.rs", "core_wall_clock", "instant", 1]
+   ],
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/state/view_acquisition.rs",
+     "function": "wait",
+     "contains": ".checked_duration_since(Instant::now())"
+    },
+    {
+     "path": "crates/iroha_core/src/state/finality_proof_interval.rs",
+     "function": "wait_for_release",
+     "contains": "StateViewError::Busy(release)",
+     "count": 2
+    }
+   ]
+  },
+  {
    "id": "consensus.proof_destination_budget",
    "kind": "wall_clock",
    "status": "not_a_gate",
@@ -5803,10 +5862,10 @@
    "gates": "Local portable-proof destination construction stops after its caller deadline.",
    "decided_by": "CertifiedChain and the independent verifier establish finality from original committed material; a destination grants no authority.",
    "attribution": "read",
-   "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline.",
+   "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline. Native-frame destinations check the same deadline before moving charged wire ownership and while filling the committee. A busy State capture waits on its original release through StateViewWaiter under that deadline and cancellation flag; expiration retains the original local refusal rather than certifying a result.",
    "sites": [
-    ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 4],
-    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 13],
+    ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 5],
+    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 18],
     ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "wall_clock", "instant", 1]
    ]
   },
@@ -6137,11 +6196,6 @@
       "governance.slash_ineligible_proof_bps",
       "governance.alias_teu_minimum",
       "governance.jdg_signature_schemes",
-      "governance.runtime_upgrade_provenance.mode",
-      "governance.runtime_upgrade_provenance.require_sbom",
-      "governance.runtime_upgrade_provenance.require_slsa",
-      "governance.runtime_upgrade_provenance.trusted_signers",
-      "governance.runtime_upgrade_provenance.signature_threshold",
       "governance.viral.incentive_pool_account",
       "governance.viral.escrow_account",
       "governance.viral.reward_asset_definition_id",
@@ -6317,12 +6371,6 @@
     {
      "entry": "cfg.nexus.bounds",
      "fields": [
-      "atomic_private_settlement.max_participants",
-      "atomic_private_settlement.max_carrier_bytes",
-      "atomic_private_settlement.max_proof_bytes",
-      "atomic_private_settlement.max_capsule_bytes",
-      "atomic_private_settlement.sidecar_max_records",
-      "atomic_private_settlement.sidecar_max_total_bytes",
       "uploaded_models.max_plaintext_bytes_per_model",
       "uploaded_models.max_chunk_count_per_model",
       "da.ingest_quota_max_count_per_account",
@@ -6351,15 +6399,6 @@
       "hf_shared_leases.drain_grace.nanoseconds",
       "endorsement.committee_keys",
       "endorsement.quorum",
-      "atomic_private_settlement.proof_profile_version",
-      "atomic_private_settlement.default_min_auditor_approvals",
-      "atomic_private_settlement.permitted_policy_versions",
-      "atomic_private_settlement.max_expiry_blocks",
-      "atomic_private_settlement.audit_timeout_blocks",
-      "atomic_private_settlement.prepare_timeout_blocks",
-      "atomic_private_settlement.commit_timeout_blocks",
-      "atomic_private_settlement.sidecar_retention_blocks",
-      "atomic_private_settlement.capsule_padding_classes_bytes",
       "governance.default_module",
       "governance.modules.name",
       "governance.modules.module_type",
@@ -6668,9 +6707,9 @@
   }
  },
  "summary": {
-  "entries": 232,
-  "sites": 1504,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 234,
+  "sites": 1503,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 117, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 138, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

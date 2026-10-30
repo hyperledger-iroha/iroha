@@ -110,20 +110,6 @@ impl NexusAmxContextFixture {
     /// Panics if the lanes do not form a valid lane catalog.
     #[must_use]
     pub fn preimage(&self) -> Vec<u8> {
-        self.render(&tag::TAIL)
-    }
-
-    /// Render the same catalog with the retired tail that nodes of a network whose signed
-    /// genesis predates genesis-authored policy commit.
-    ///
-    /// # Panics
-    /// Panics if the lanes do not form a valid lane catalog.
-    #[must_use]
-    pub fn pre_policy_preimage(&self) -> Vec<u8> {
-        self.render(&tag::pre_policy::TAIL)
-    }
-
-    fn render(&self, tail: &[&'static str]) -> Vec<u8> {
         let catalog = LaneCatalog::new(
             NonZeroU32::new(self.lane_count).expect("non-zero fixture lane count"),
             self.lanes.clone(),
@@ -153,7 +139,7 @@ impl NexusAmxContextFixture {
             writer.field(tag::ROUTING_RULE_ACCOUNT, account);
             writer.field(tag::ROUTING_RULE_INSTRUCTION, instruction);
         }
-        for &field in tail {
+        for field in tag::TAIL {
             match field {
                 tag::AUTOSCALE_ENABLED => writer.field(field, &self.autoscale.0),
                 tag::AUTOSCALE_MIN_LANE_ID => writer.field(field, &self.autoscale.1),
@@ -168,12 +154,6 @@ impl NexusAmxContextFixture {
     #[must_use]
     pub fn context_hash(&self) -> [u8; 32] {
         Hash::new(self.preimage()).into()
-    }
-
-    /// The signed context commitment of [`Self::pre_policy_preimage`].
-    #[must_use]
-    pub fn pre_policy_context_hash(&self) -> [u8; 32] {
-        Hash::new(self.pre_policy_preimage()).into()
     }
 }
 

@@ -45,6 +45,7 @@ export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
 export * from "./atomic-private-settlement.js";
+export * from "./private-settlement.js";
 export * from "./dist/blockProofTypes.js";
 export type * from "./dist/explorerTransactionProofTypes.js";
 export * from "./dist/toriiBrowserExplorerTypes.js";
@@ -5352,7 +5353,7 @@ export interface ToriiNetworkTimeStatus {
   note: string | null;
 }
 
-/** Public, account-free V1 bootstrap policy; the default is explicit and unrelated to list order. */
+/** Validated public V1 discovery fields; algorithm order conveys no signing preference. */
 export interface AccountCapabilitiesV1 {
   readonly schema_version: 1;
   readonly network_id: string;

@@ -17,7 +17,9 @@ use super::{
 };
 use crate::privacy_engines::atomic_private_settlement::audit::private_settlement_audit_plaintext_commitment_v1;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::privacy_engines::proof_managed_accumulator::plan_two_leaf_proof_managed_transition_v1;
+use crate::privacy_engines::proof_managed_accumulator::{
+    plan_two_leaf_proof_managed_inputs_v1, plan_two_leaf_proof_managed_transition_v1,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
@@ -761,7 +763,7 @@ pub fn plan_atomic_private_settlement_initial_inputs_v1(
                 .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?,
         }),
     );
-    let planned = plan_two_leaf_proof_managed_transition_v1(namespace, initial_commitments, &[])
+    let planned = plan_two_leaf_proof_managed_inputs_v1(namespace, initial_commitments)
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
     Ok([
         AtomicPrivateSettlementInputSecretV1::new(

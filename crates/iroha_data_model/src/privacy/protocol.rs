@@ -2077,10 +2077,15 @@ pub struct PrivacyConsensusLimitsV1 {
     pub max_commitments_per_action: u32,
     /// Number of recent commitment roots retained for proof admission.
     pub retained_root_count: u32,
+    /// Committed admission contract for the fixed native private-payment relation.
+    pub private_settlement: PrivateSettlementValidityLimitsV1,
 }
 /// Validation failure for [`PrivacyConsensusLimitsV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyConsensusLimitsValidationError {
+    /// The native private-payment admission contract is malformed.
+    #[error("invalid private-settlement limits: {0}")]
+    PrivateSettlement(PrivateSettlementValidityErrorV1),
     /// A consensus limit is zero.
     #[error("privacy limit {field:?} must be non-zero")]
     Zero {
@@ -2178,6 +2183,9 @@ pub struct PrivacyConsensusPolicyV1 {
 /// Validation failure for a singleton privacy-policy value or schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyPolicyValidationErrorV1 {
+    /// A private-payment policy change does not drain its original obligations.
+    #[error("invalid private-settlement drain schedule: {0}")]
+    PrivateSettlementDrain(PrivateSettlementValidityErrorV1),
     /// Current limits are malformed.
     #[error("current privacy policy limits are invalid: {0}")]
     InvalidCurrentLimits(PrivacyConsensusLimitsValidationError),
@@ -3060,10 +3068,19 @@ pub struct PrivacyProtocolLimitsUpdateV1 {
     pub effective_at_height: u64,
     /// Complete protocol-tagged successor limit set.
     pub next_limits: PrivacyProtocolLimitsV1,
+    /// Original private-payment expiry horizon when this schedule closes the native relation.
+    ///
+    /// Governed execution derives this value from the current committed private policy. It is
+    /// not supplied by the scheduling instruction and is retained only while this update is
+    /// pending, so later private-policy changes cannot reinterpret the original drain.
+    pub private_settlement_drain_blocks: Option<u64>,
 }
 /// Validation failure for a scheduled protocol-specific update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyProtocolLimitsUpdateValidationErrorV1 {
+    /// A relation-closing schedule lacks or violates its governed original drain horizon.
+    #[error("invalid private-settlement relation drain: {0}")]
+    PrivateSettlementDrain(PrivateSettlementValidityErrorV1),
     /// Scheduled/effective heights violate the strictly future block rule.
     #[error("privacy protocol-limit schedule is invalid: {0}")]
     Schedule(PrivacyPolicyValidationErrorV1),

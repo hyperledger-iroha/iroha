@@ -920,6 +920,7 @@ fn canonical_policy_expectations_preserve_profiles_and_future_limits() {
         protocol_id,
         current_limits: defaults,
         pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+            private_settlement_drain_blocks: None,
             scheduled_at_height: 2,
             effective_at_height: 10,
             next_limits: jindo_limits(1),
@@ -943,6 +944,7 @@ fn canonical_policy_expectations_preserve_profiles_and_future_limits() {
     let increased = PrivacyProtocolPolicyV1 {
         current_limits: jindo_limits(1),
         pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+            private_settlement_drain_blocks: None,
             scheduled_at_height: 10,
             effective_at_height: 13,
             next_limits: defaults,
@@ -1107,6 +1109,7 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
             protocol_id,
             current_limits: defaults,
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                private_settlement_drain_blocks: None,
                 scheduled_at_height: scheduled,
                 effective_at_height: effective,
                 next_limits: jindo_limits(1),
@@ -1279,6 +1282,7 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
         .await?;
         let increased_pending = PrivacyProtocolPolicyV1 {
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                private_settlement_drain_blocks: None,
                 scheduled_at_height: increase_scheduled,
                 effective_at_height: increase_effective,
                 next_limits: defaults,

@@ -57,10 +57,13 @@ fn published_generation_survives_retry_with_an_unpublished_leftover() {
     let pin = read(&directory).unwrap().launcher;
     let mut request = LocalnetRequest::new(pin.path.clone(), pin.path);
     request.service_profile = prepared.service_profile;
-    assert!(matches!(
-        store.up(&request),
-        Err(Error::Timeout(timeout)) if timeout == request.startup_timeout
-    ));
+    let error = store.up(&request).unwrap_err();
+    // The minimal fixture's placeholder config is rejected before native spawn;
+    // retry must preserve that published generation instead of replacing it.
+    assert!(
+        matches!(&error, Error::Invalid(message) if message == "managed listener configuration is not valid TOML"),
+        "expected retained listener configuration refusal: {error}"
+    );
     assert_eq!(encode(&read(&directory).unwrap()).unwrap(), before);
     assert_eq!(store.prepared("local").unwrap(), prepared);
 }

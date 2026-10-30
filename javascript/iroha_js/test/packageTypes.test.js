@@ -293,6 +293,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   const requiredPaths = [
     "package.json",
     "atomic-private-settlement.d.ts",
+    "private-settlement.d.ts",
     "index.d.ts",
     "browser.d.ts",
     "ivm-artifact.d.ts",
@@ -302,6 +303,7 @@ test("package smoke rejects every non-portable or missing required artifact", ()
     "sumeragi-typed.d.ts",
     "dist/index.js",
     "dist/atomicPrivateSettlement.js",
+    "dist/privateSettlement.js",
     "dist/ivmArtifact.js",
     "dist/kotodamaCompiler/browser.js",
     "dist/kotodamaCompiler/index.js",
@@ -340,7 +342,9 @@ test("package smoke rejects every non-portable or missing required artifact", ()
   for (const requiredPath of [
     "index.d.ts",
     "atomic-private-settlement.d.ts",
+    "private-settlement.d.ts",
     "dist/atomicPrivateSettlement.js",
+    "dist/privateSettlement.js",
     "dist/tairaTestnetProfile.js",
     ...PORTABLE_RECIPES,
     ...requiredHelperPaths,
@@ -499,6 +503,23 @@ test("Torii client declarations never promise unimplemented methods", async () =
         `${className}.${methodName} is declared but not implemented`,
       );
     }
+  }
+});
+
+test("native private settlement subpath exposes only its opaque declared values", async () => {
+  const descriptor = readPackageJson().exports["./private-settlement"];
+  assert.equal(descriptor.browser, undefined);
+  const declarationPath = path.resolve(PACKAGE_ROOT, descriptor.types);
+  const { program } = inspectTypeScriptProject(declarationPath);
+  const declaration = program.getSourceFile(declarationPath);
+  const values = declaration.statements.filter(
+    (statement) => ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement),
+  );
+  const runtime = await import(pathToFileURL(path.resolve(PACKAGE_ROOT, descriptor.import)).href);
+  assert.deepEqual(Object.keys(runtime).sort(), values.map((value) => value.name.text).sort());
+  for (const value of values.filter(ts.isClassDeclaration)) {
+    const constructor = value.members.find(ts.isConstructorDeclaration);
+    assert.ok(constructor.modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword));
   }
 });
 

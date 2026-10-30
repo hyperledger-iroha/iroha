@@ -21,10 +21,10 @@ use crate::{
 use crate::{
     execution_attempt::{ExecutionAttemptError, ExecutionDeferred},
     kura::Kura,
-    state::{BlockHashRead, StateView},
+    state::BlockHashRead,
     sumeragi::certified_chain::{
-        CertifiedChain, ChainReadError, FinalityPrefixCheckpoints, PrefixCheckpoint,
-        QcVerification, QueryCacheOwner,
+        ChainReadError, FinalityPrefixCheckpoints, PrefixCheckpoint, QcVerification,
+        QueryCacheOwner, QueryCertifiedChain,
     },
 };
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError, ChargedShared};
@@ -410,9 +410,9 @@ fn build_interval_in_cache_scope(
             progress()?;
             // The backing covers the original inline cursor/control, not its nested
             // authority graph. No Box, additional pool or policy copy is introduced.
-            let mut cursor = ChargedBuffer::<CertifiedChain<'_, StateView<'_>>>::new(1, budget)?;
-            let mut chain = workspace.stage(|| {
-                CertifiedChain::from_pinned_history_query(
+            let mut cursor = ChargedBuffer::<QueryCertifiedChain<'_>>::new(1, budget)?;
+            let chain = workspace.stage(|| {
+                QueryCertifiedChain::new(
                     source.chain_id,
                     source.network,
                     source.hashes,
@@ -422,7 +422,6 @@ fn build_interval_in_cache_scope(
                 )
             })?;
             progress()?;
-            chain.enable_proof_source_cut();
             if let Some((checkpoints, budget)) = source.checkpoints {
                 let mut cache = QueryCacheOwner::new(budget.clone());
                 if let Err(original) = checkpoints.prepare(budget) {
@@ -453,26 +452,21 @@ fn build_interval_in_cache_scope(
             progress()?;
             for height in limits.from..=limits.to {
                 progress()?;
-                let retained = reader.with_certified_workspace(
+                let retained = reader.with_verified_source(
                     height,
                     &mut progress,
                     &workspace,
-                    |certified| {
+                    |raw, header, members, verification| {
                         if !matches!(
-                            (height, certified.verification()),
+                            (height, verification),
                             (1, QcVerification::Genesis) | (2.., QcVerification::Verified)
                         ) {
                             return Err(NativeFinalityProofIntervalError::Native(
                                 NativeFinalityProofRefusal::UnverifiedCommittee(height),
                             ));
                         }
-                        OwnedProof::new(
-                            certified.block(),
-                            &certified.commitment().schedule.current.committee,
-                            budget,
-                            limits.deadline,
-                        )
-                        .map_err(NativeFinalityProofIntervalError::from)
+                        OwnedProof::from_native_frame(raw, header, members, budget, limits.deadline)
+                            .map_err(NativeFinalityProofIntervalError::from)
                     },
                 )?;
                 progress()?;

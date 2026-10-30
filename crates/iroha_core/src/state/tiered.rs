@@ -4384,7 +4384,7 @@ pub enum TieredKeyHandle {
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
     RuntimeChangeSet(iroha_data_model::runtime::lifecycle::ChangeSetId),
-    PrivacyProtocolPolicy(crate::privacy_state::PrivacyProtocolPolicyKeyV1),
+    PrivacyProtocolPolicy(iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1),
     PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
     PrivacyPgcPoolInvariant(crate::privacy_state::PrivacyPgcPoolInvariantKeyV1),
     PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),

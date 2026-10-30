@@ -2448,6 +2448,8 @@ struct AppState {
     /// Complete memory admitted for one fanout after reserving the independent
     /// signed-query ingress lane from the same configured aggregate pool.
     query_fanout_working_set_bytes: usize,
+    /// Initial full-native-finality ceiling within the same original fanout pool.
+    finality_working_set_bytes: usize,
     /// Complete pre-body accounting used by every signed-query ingress slot.
     query_ingress_envelope: QueryIngressMemoryEnvelope,
     /// Complete bounded HTTP peer-proxy body/decode/forwarding accounting.
@@ -25647,7 +25649,7 @@ async fn finite_finality_response(
     // acquiring their original reservation; an existing outer request keeps its
     // complete original geometry and is never replaced or enlarged.
     if admission.fanout_memory.is_none() {
-        admission.fanout_memory = Some(match try_acquire_bodyless_finality_memory(&app) {
+        admission.fanout_memory = Some(match try_acquire_native_finality_memory(&app) {
             Ok(reservation) => reservation,
             Err(response) => return Ok(response),
         });
@@ -35349,6 +35351,7 @@ pub struct Torii {
     query_heavy_max_inflight: usize,
     query_fanout_max_retained_bytes: usize,
     query_fanout_max_working_set_bytes: usize,
+    finality_max_working_set_bytes: usize,
     sccp_history_cache_max_bytes: usize,
     app_api_routed_read_body_read_timeout: Duration,
     app_query_limits: routing::AppQueryLimits,
@@ -40594,6 +40597,17 @@ ingress,
                     "per-query working-set ceiling does not fit the platform address space",
                 )
             })?;
+        let finality_max_working_set_bytes = usize::try_from(
+            config.finality_max_working_set_bytes.get(),
+        )
+        .ok()
+        .filter(|bytes| *bytes > 0)
+        .ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "finality_max_working_set_bytes",
+                "finality working-set ceiling must be positive and fit the platform address space",
+            )
+        })?;
         let sccp_history_cache_max_bytes =
             usize::try_from(config.sccp_history_cache_max_bytes.get())
                 .ok()
@@ -40689,6 +40703,7 @@ ingress,
             query_heavy_max_inflight: config.query_heavy_max_inflight.get(),
             query_fanout_max_retained_bytes,
             query_fanout_max_working_set_bytes,
+            finality_max_working_set_bytes,
             sccp_history_cache_max_bytes,
             app_api_routed_read_body_read_timeout: config.app_api_routed_read_body_read_timeout,
             app_query_limits,
@@ -41562,6 +41577,9 @@ ingress,
             transaction_max_content_len: self.transaction_max_content_len,
             torii_proxy_max_response_bytes,
             query_fanout_working_set_bytes,
+            finality_working_set_bytes: self
+                .finality_max_working_set_bytes
+                .min(query_memory.fanout_pool_bytes),
             query_ingress_envelope: query_memory.ingress,
             torii_proxy_http_ingress_envelope,
             torii_proxy_memory_inflight,

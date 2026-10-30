@@ -474,50 +474,39 @@ fn taira_genesis_declares_public_bpng_lane_five() {
 }
 
 #[test]
-fn pre_policy_genesis_declares_its_dataspace_through_the_retired_context_tail() {
+fn signed_genesis_without_policy_cannot_select_a_retired_context_layout() {
     let context = NexusAmxContextFixture::taira();
-    let preimage = context.pre_policy_preimage();
-    let declare_pre_policy = |extra: Vec<InstructionBox>| {
-        let fixture = NativeFinalityFixture::start_with_genesis_extension(
-            CHAIN,
-            context.pre_policy_context_hash(),
-            extra,
-        );
-        let (wire, pins) = pins(&fixture);
-        authenticate_signed_genesis_v1(&wire, &pins).unwrap()
-    };
-    let genesis = declare_pre_policy(vec![policy_instruction()]);
-    let authority = verify_genesis_dataspace_v1(&genesis, &preimage, &bpng()).unwrap();
-    assert_eq!(
-        authority.dataspace_id(),
-        DataSpaceId::new(8_648_377_547_929_788_715)
+    let mut preimage = context.preimage();
+    let current = crate::nexus::tag::STAKING_MAX_VALIDATORS;
+    let retired = "nexus.staking.min_validator_stake";
+    let tag_offset = preimage
+        .windows(current.len())
+        .position(|bytes| bytes == current.as_bytes())
+        .expect("canonical validator bound")
+        - std::mem::size_of::<u32>();
+    let mut field = crate::nexus::NexusAmxContextWriterV1::new();
+    field.field(retired, &7_u64);
+    let framed = field.finish();
+    preimage.splice(
+        tag_offset..tag_offset,
+        framed[crate::nexus::NEXUS_AMX_CONTEXT_DOMAIN_V1.len()..]
+            .iter()
+            .copied(),
     );
-    assert_eq!(authority.lane_id(), LaneId::new(5));
-    assert_eq!(
-        authority.nexus_amx_context_sha256(),
-        <[u8; 32]>::from(Sha256::digest(&preimage))
+    let fixture = NativeFinalityFixture::start_with_genesis_extension(
+        CHAIN,
+        Hash::new(&preimage).into(),
+        vec![policy_instruction()],
     );
-    // A genesis that signs either policy committed the current tail.
-    for id in [
-        CryptoAdmissionPolicyV1::parameter_id(),
-        PublicLaneStakingPolicy::parameter_id(),
-    ] {
-        let policy = SetParameter::new(Parameter::Custom(CustomParameter::new(
-            id,
-            iroha_primitives::json::Json::new(norito::json::Value::Null),
-        )))
-        .into();
-        let genesis = declare_pre_policy(vec![policy_instruction(), policy]);
-        assert!(matches!(
-            verify_genesis_dataspace_v1(&genesis, &preimage, &bpng()),
-            Err(GenesisDataspaceError::Context(
-                NexusAmxContextError::UnexpectedTag {
-                    expected: crate::nexus::tag::STAKING_MAX_VALIDATORS,
-                    ..
-                }
-            ))
-        ));
-    }
+    let (wire, pins) = pins(&fixture);
+    let genesis = authenticate_signed_genesis_v1(&wire, &pins).unwrap();
+    assert!(matches!(
+        verify_genesis_dataspace_v1(&genesis, &preimage, &bpng()),
+        Err(GenesisDataspaceError::Context(NexusAmxContextError::UnexpectedTag {
+            expected: crate::nexus::tag::STAKING_MAX_VALIDATORS,
+            found: Some(found),
+        })) if found == retired
+    ));
 }
 
 #[test]

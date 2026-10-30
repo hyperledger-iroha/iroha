@@ -2489,6 +2489,7 @@ type ConsensusLimitMutationV1 = (PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLi
 #[test]
 fn consensus_limit_updates_allow_each_bounded_increase_and_decrease() {
     let current = PrivacyConsensusLimitsV1 {
+        private_settlement: crate::privacy::PrivateSettlementValidityLimitsV1::protocol_default(),
         max_actions_per_transaction: 1,
         max_actions_per_block: 1,
         max_proof_bytes_per_action: 1_024,
@@ -2668,6 +2669,7 @@ fn protocol_limit_schedule_allows_both_directions_and_rejects_bad_timing_mismatc
         max_aggregation_count: 7,
     });
     let valid = PrivacyProtocolLimitsUpdateV1 {
+        private_settlement_drain_blocks: None,
         scheduled_at_height: 25,
         effective_at_height: 26,
         next_limits: next,

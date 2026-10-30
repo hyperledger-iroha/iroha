@@ -646,7 +646,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         autoscale: Autoscale::default(),
         commit: Commit::default(),
         da,
-        legacy_genesis: None,
     };
     let event = telemetry
         .record_nexus_config_diff(&nexus)

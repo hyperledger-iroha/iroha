@@ -349,9 +349,11 @@ mod native_genesis_policy_tests {
         };
         let authenticated = authenticate_genesis_block_intents(genesis, &authority)
             .expect("the same original signed genesis inputs");
-        let mut genesis_policies = authenticated
-            .initial_policies(genesis)
-            .expect("both original signed genesis policies");
+        let mut genesis_policies = Some(
+            authenticated
+                .initial_policies(genesis)
+                .expect("both original signed genesis policies"),
+        );
         let (mut staged, _recording) = ValidBlock::state_block_for_execution(
             genesis,
             &prepared.state,

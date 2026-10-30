@@ -4926,7 +4926,6 @@ pub(crate) mod valid {
                 .as_ref()
                 .map(|original| original.initial_policies(&block))
                 .transpose()
-                .map(Option::flatten)
             {
                 Ok(original) => original,
                 Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),

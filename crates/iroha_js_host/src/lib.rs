@@ -22,6 +22,7 @@ mod kaigi_usage_v1;
 pub use kaigi_authorization_v1::{JsKaigiAuthorizationProofV1, build_kaigi_authorization_proof_v1};
 pub use kaigi_usage_v1::{JsKaigiUsageProofV1, build_kaigi_usage_proof_v1};
 mod private_settlement_response;
+mod private_settlement_session;
 mod secure_private_fs;
 mod settlement_lifecycle;
 pub use settlement_lifecycle::{

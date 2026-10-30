@@ -274,11 +274,11 @@
         "type": "object"
       },
       "AccountCapabilitiesV1": {
-        "additionalProperties": false,
-        "description": "Public account-bootstrap capability V1; no account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
+        "additionalProperties": true,
+        "description": "Public account-bootstrap capability V1. Clients validate the four required discovery fields and ignore unrelated metadata; metadata never selects a signer or supplies missing required fields. No account, key, operator configuration, or credential is returned. Maximum encoded JSON size is 4096 bytes.",
         "properties": {
           "allowed_signing": {
-            "description": "Current admitted signing algorithms. Ordering conveys no preference.",
+            "description": "Current admitted signing algorithms as unique canonical names. Array order conveys no preference and need not be canonical.",
             "items": {
               "enum": [
                 "ed25519",
@@ -31862,6 +31862,9 @@
             "minimum": 1,
             "type": "integer"
           },
+          "private_settlement": {
+            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
+          },
           "retained_root_count": {
             "format": "uint32",
             "minimum": 1,
@@ -31878,7 +31881,8 @@
           "max_statement_and_encrypted_output_bytes_per_transaction",
           "max_nullifiers_per_action",
           "max_commitments_per_action",
-          "retained_root_count"
+          "retained_root_count",
+          "private_settlement"
         ],
         "type": "object"
       },
@@ -33403,6 +33407,19 @@
           "next_limits": {
             "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
+          "private_settlement_drain_blocks": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Original governed private-payment expiry horizon; required only for a native relation-closing update and derived by execution."
+          },
           "scheduled_at_height": {
             "format": "uint64",
             "minimum": 1,
@@ -33412,7 +33429,8 @@
         "required": [
           "scheduled_at_height",
           "effective_at_height",
-          "next_limits"
+          "next_limits",
+          "private_settlement_drain_blocks"
         ],
         "type": "object"
       },
@@ -34869,7 +34887,7 @@
       },
       "PrivateSettlementContextProofV1": {
         "additionalProperties": false,
-        "description": "One selected context member. All batch members must carry identical complete World and native-lane preimages.",
+        "description": "One selected context member with exact committed privacy policy and native protocol row or complete-World absence proof at the same authenticated cut.",
         "properties": {
           "committee_keys": {
             "items": {
@@ -34886,10 +34904,25 @@
           },
           "pool": {
             "$ref": "#/components/schemas/PrivateSettlementPoolCutProofV1"
+          },
+          "privacy_policy": {
+            "$ref": "#/components/schemas/PrivacyConsensusPolicyV1"
+          },
+          "protocol_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "pool",
+          "privacy_policy",
+          "protocol_policy",
           "lanes",
           "committee_keys"
         ],
@@ -35482,6 +35515,87 @@
           "logs_errors_events_must_use_public_allowlist": true,
           "plaintext_transaction_contents": "forbidden"
         }
+      },
+      "PrivateSettlementValidityLimitsV1": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "capsule_padding_classes": {
+            "description": "Nonzero mask of the four fixed native padding classes.",
+            "format": "uint8",
+            "maximum": 15,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "commit_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_capsule_bytes": {
+            "format": "uint64",
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_carrier_bytes": {
+            "format": "uint64",
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_expiry_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_participants": {
+            "format": "uint16",
+            "maximum": 255,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "max_proof_bytes": {
+            "format": "uint64",
+            "maximum": 8388608,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_auditor_approvals": {
+            "format": "uint16",
+            "maximum": 32,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prepare_timeout_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sidecar_retention_blocks": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_participants",
+          "max_expiry_blocks",
+          "audit_timeout_blocks",
+          "prepare_timeout_blocks",
+          "commit_timeout_blocks",
+          "capsule_padding_classes",
+          "max_proof_bytes",
+          "max_capsule_bytes",
+          "max_carrier_bytes",
+          "sidecar_retention_blocks",
+          "min_auditor_approvals"
+        ],
+        "type": "object"
       },
       "ProofAttachment": {
         "additionalProperties": false,

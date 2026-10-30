@@ -8,6 +8,12 @@ use crate::{
         PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1, PrivateSettlementAuditPolicyV1,
         PrivateSettlementCommitteeAuthorityV1, PrivateSettlementPoolGovernanceV1,
     },
+    privacy::{
+        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+        PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1, PrivateSettlementValidityLimitsV1,
+        private_settlement_admission_deadline_v1, private_settlement_protocol_admission_open_v1,
+        validate_private_settlement_sponsor_v1,
+    },
     sorafs::stream_token_custody::proof::borrowed,
     sumeragi_finality::{FinalityError, MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, VerifiedSumeragiBlock},
     sumeragi_lanes::SumeragiLaneState,
@@ -219,6 +225,10 @@ impl<'a> PrivateSettlementCommitteeKeyProofRefV1<'a> {
 pub struct PrivateSettlementContextProofV1 {
     /// Sole complete World proof and selected public governance/frontier rows.
     pub pool: PrivateSettlementPoolCutProofV1,
+    /// Exact committed current and pending privacy admission policy from the selected cut.
+    pub privacy_policy: PrivacyConsensusPolicyV1,
+    /// Exact native protocol policy row, or authenticated absence selecting canonical limits.
+    pub protocol_policy: Option<PrivacyProtocolPolicyV1>,
     /// Exact original canonical native lane cell from that same cut.
     pub lanes: SumeragiLaneState,
     /// Registry originals in the selected lane's exact four-member order.
@@ -231,6 +241,8 @@ pub struct PrivateSettlementContextProofV1 {
 #[derive(norito::derive::NoritoSerialize, norito::derive::JsonSerialize)]
 pub struct PrivateSettlementContextProofRefV1<'a> {
     pool: PrivateSettlementPoolCutProofRefV1<'a>,
+    privacy_policy: borrowed::Value<'a, PrivacyConsensusPolicyV1>,
+    protocol_policy: Option<borrowed::Value<'a, PrivacyProtocolPolicyV1>>,
     lanes: borrowed::Value<'a, SumeragiLaneState>,
     #[norito(json = "committee_keys_json")]
     committee_keys:
@@ -249,12 +261,16 @@ impl<'a> PrivateSettlementContextProofRefV1<'a> {
     #[must_use]
     pub fn new(
         pool: PrivateSettlementPoolCutProofRefV1<'a>,
+        privacy_policy: &'a PrivacyConsensusPolicyV1,
+        protocol_policy: Option<&'a PrivacyProtocolPolicyV1>,
         lanes: &'a SumeragiLaneState,
         committee_keys: [PrivateSettlementCommitteeKeyProofRefV1<'a>;
             PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1],
     ) -> Self {
         Self {
             pool,
+            privacy_policy: borrowed::Value(privacy_policy),
+            protocol_policy: protocol_policy.map(borrowed::Value),
             lanes: borrowed::Value(lanes),
             committee_keys,
         }
@@ -335,6 +351,8 @@ mod committee_keys_json {
 pub struct VerifiedPrivateSettlementContextV1<'a> {
     pool: VerifiedPrivateSettlementPoolCutV1<'a>,
     authority: PrivateSettlementCommitteeAuthorityV1,
+    admission_limits: &'a PrivateSettlementValidityLimitsV1,
+    admission_deadline: Option<u64>,
 }
 impl PrivateSettlementContextProofV1 {
     /// Decode under the existing complete-World response and allocation limits.
@@ -375,6 +393,28 @@ impl PrivateSettlementContextProofV1 {
         }
         let pool = self.pool.verify(network, schema, key, block)?;
         let world = pool.verified_world();
+        world.verify_cell_value("world.privacy_consensus_policy", &self.privacy_policy)?;
+        self.privacy_policy
+            .validate_at_committed_height(block.height())
+            .map_err(|_| invalid())?;
+        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let protocol_key = PrivacyProtocolPolicyKeyV1::new(protocol);
+        let limits = if let Some(policy) = &self.protocol_policy {
+            world.verify_table_value("world.privacy_protocol_policies", &protocol_key, policy)?;
+            if policy.protocol_id != protocol {
+                return Err(invalid());
+            }
+            policy
+                .validate_at_committed_height(block.height())
+                .map_err(|_| invalid())?;
+            policy.current_limits
+        } else {
+            world.verify_privacy_protocol_policy_absent(protocol)?;
+            PrivacyProtocolLimitsV1::canonical_default_v1(protocol)
+        };
+        if !private_settlement_protocol_admission_open_v1(&limits) {
+            return Err(invalid());
+        }
         world.verify_cell_value("world.sumeragi_lanes", &self.lanes)?;
         let record = private_settlement_native_route_v1(&self.lanes, key.route, block.height())
             .map_err(|_| invalid())?;
@@ -421,10 +461,28 @@ impl PrivateSettlementContextProofV1 {
         pool.governance()
             .validate_public_lineage()
             .map_err(|_| invalid())?;
-        Ok(VerifiedPrivateSettlementContextV1 { pool, authority })
+        Ok(VerifiedPrivateSettlementContextV1 {
+            pool,
+            authority,
+            admission_limits: &self.privacy_policy.current_limits.private_settlement,
+            admission_deadline: private_settlement_admission_deadline_v1(
+                &self.privacy_policy,
+                self.protocol_policy.as_ref(),
+            ),
+        })
     }
 }
 impl<'a> VerifiedPrivateSettlementContextV1<'a> {
+    /// Native private-payment limits authenticated at this independently selected World cut.
+    #[must_use]
+    pub const fn admission_limits(&self) -> &PrivateSettlementValidityLimitsV1 {
+        self.admission_limits
+    }
+    /// Earliest exclusive expiry boundary imposed by an already committed policy change.
+    #[must_use]
+    pub const fn admission_deadline(&self) -> Option<u64> {
+        self.admission_deadline
+    }
     /// Authenticated selected pool and exact replay-table absence checks.
     #[must_use]
     pub fn pool_cut(&self) -> &VerifiedPrivateSettlementPoolCutV1<'a> {
@@ -447,6 +505,16 @@ impl<'a> VerifiedPrivateSettlementContextV1<'a> {
         ordinal: u8,
     ) -> Result<(), FinalityError> {
         intent.validate().map_err(|_| invalid())?;
+        self.admission_limits
+            .validate_admission(
+                intent.legs.len(),
+                intent.authority_context_height,
+                intent.expiry_height,
+                self.pool.height(),
+                self.admission_deadline,
+            )
+            .map_err(|_| invalid())?;
+        validate_private_settlement_sponsor_v1(&intent.sponsor).map_err(|_| invalid())?;
         let leg = intent.legs.get(usize::from(ordinal)).ok_or_else(invalid)?;
         let public = self.pool.governance();
         if intent.network_id != self.pool.network()
@@ -476,7 +544,9 @@ impl<'a> VerifiedPrivateSettlementContextV1<'a> {
         expiry_height: u64,
     ) -> Result<VerifiedPrivateSettlementOpeningsV1<'b, 'a>, FinalityError> {
         let public = self.pool.governance();
-        if expiry_height < self.pool.height() {
+        if expiry_height < self.pool.height()
+            || u16::from(policy.body.min_approvals) < self.admission_limits.min_auditor_approvals
+        {
             return Err(invalid());
         }
         governance

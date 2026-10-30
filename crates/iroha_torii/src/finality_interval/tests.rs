@@ -1,5 +1,10 @@
 //! Genuine public source, charged response framing and detached physical-worker controls.
 
+#[path = "maximum_payment.rs"]
+mod maximum_payment;
+
+pub(crate) use maximum_payment::paid_chain as maximum_paid_chain_for_testing;
+
 use super::*;
 use iroha_core::{
     state::World,
@@ -287,6 +292,9 @@ async fn interval_route_uses_real_state_and_counts_complete_outer_framing_for_bo
                 expected
             ),
         }
+        // These zero-copy response bytes still retain the first native request's
+        // original reservation. Retire that response before admitting another one.
+        drop(bytes);
         let mut request = axum::http::Request::builder()
             .uri("/v1/bridge/finality/4")
             .header(
