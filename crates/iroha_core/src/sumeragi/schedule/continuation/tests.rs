@@ -436,7 +436,7 @@ fn ordinary_continuation_refuses_changed_source_cut_params_root_pulse_and_foreig
     bank.contents.lock().original.schedule = saved_schedule;
     let wrong_scope = SumeragiRootScope::Dataspace {
         parent_network_id: *view.network_id(),
-        dataspace_id: iroha_data_model::nexus::DataSpaceId::new(7),
+        dataspace_id: iroha_model_base::topology::DataSpaceId::new(7),
     };
     assert!(
         original

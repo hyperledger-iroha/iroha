@@ -745,6 +745,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Record, BLOCK_HASH),
     ),
     function(
+        "crates/iroha_core/src/state/asset_uid/binding_custody.rs",
+        "binding_uid_with_owner",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/state/asset_uid_reader/same_uid.rs",
         "retail_uid",
         1,
