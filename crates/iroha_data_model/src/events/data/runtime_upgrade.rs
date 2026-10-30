@@ -36,6 +36,8 @@ mod model {
         Canceled(RuntimeUpgradeCanceled),
         Contained(RuntimeUpgradeContained),
         ContainmentExpired(RuntimeUpgradeContainmentExpired),
+        ContainmentReviewed(RuntimeUpgradeContainmentReviewed),
+        ContainmentResolved(RuntimeUpgradeContainmentResolved),
     }
     /// Emitted when governance approves a change set for its effective height.
     #[derive(
@@ -195,6 +197,52 @@ mod model {
         pub containment: [u8; 32],
         pub height: u64,
     }
+    /// Emitted when governance proposes or approves a change set that addresses a definition an
+    /// active containment holds: progress of its ratification case.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeContainmentReviewed"
+    )]
+    pub struct RuntimeUpgradeContainmentReviewed {
+        pub containment: [u8; 32],
+        pub change_set: crate::runtime::lifecycle::ChangeSetId,
+    }
+    /// Emitted when change sets that activate at `height` take over every restriction a
+    /// containment held, closing its ratification case.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeContainmentResolved"
+    )]
+    pub struct RuntimeUpgradeContainmentResolved {
+        pub containment: [u8; 32],
+        pub height: u64,
+    }
 }
 
 impl RuntimeUpgradeEvent {
@@ -207,7 +255,8 @@ impl RuntimeUpgradeEvent {
             Self::Activated(event) => Some(&event.id),
             Self::Lapsed(event) => Some(&event.id),
             Self::Canceled(event) => Some(&event.id),
-            Self::Contained(_) | Self::ContainmentExpired(_) => None,
+            Self::ContainmentReviewed(event) => Some(&event.change_set),
+            Self::Contained(_) | Self::ContainmentExpired(_) | Self::ContainmentResolved(_) => None,
         }
     }
 }
@@ -221,12 +270,15 @@ impl_json_via_norito_bytes!(
     RuntimeUpgradeCanceled,
     RuntimeUpgradeContained,
     RuntimeUpgradeContainmentExpired,
+    RuntimeUpgradeContainmentReviewed,
+    RuntimeUpgradeContainmentResolved,
 );
 /// Prelude exports for runtime upgrade events
 pub mod prelude {
     pub use super::{
         RuntimeUpgradeActivated, RuntimeUpgradeAttested, RuntimeUpgradeCanceled,
-        RuntimeUpgradeContained, RuntimeUpgradeContainmentExpired, RuntimeUpgradeEvent,
+        RuntimeUpgradeContained, RuntimeUpgradeContainmentExpired,
+        RuntimeUpgradeContainmentResolved, RuntimeUpgradeContainmentReviewed, RuntimeUpgradeEvent,
         RuntimeUpgradeLapsed, RuntimeUpgradeScheduled,
     };
 }

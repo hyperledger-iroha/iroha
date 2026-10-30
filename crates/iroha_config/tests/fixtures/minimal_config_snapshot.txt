@@ -1718,13 +1718,6 @@ Root {
         jdg_signature_schemes: {
             SimpleThreshold,
         },
-        runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy {
-            mode: Optional,
-            require_sbom: false,
-            require_slsa: false,
-            trusted_signers: {},
-            signature_threshold: 0,
-        },
         viral_incentives: ViralIncentives {
             incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
             escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,

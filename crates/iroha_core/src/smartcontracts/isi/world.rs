@@ -3299,6 +3299,20 @@ pub mod isi {
                 state_transaction,
             )?;
             let h_now = state_transaction._curr_block.height().get();
+            if let iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(
+                change_set,
+            ) = &self.action
+            {
+                let id = change_set
+                    .id()
+                    .map_err(|error| InstructionExecutionError::Conversion(error.to_string()))?;
+                crate::runtime::containment::record_review(
+                    &mut state_transaction.world,
+                    id,
+                    change_set,
+                    h_now,
+                );
+            }
             let payload = RuntimeUpgradeProposal {
                 proposal_operator: authority.clone(),
                 action: self.action.clone(),

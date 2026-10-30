@@ -307,7 +307,9 @@ committed, Parliament admits a proposal that schedules a change set only with va
 by the change-set identity, which binds the network) from its threshold of distinct trusted
 signers. A proposal carries at most one endorsement per trusted signer, and none to cancel a
 change set or under a root without the policy; admission checks them when the proposal executes.
-The manifest provenance check that read node configuration is deleted.
+The manifest provenance check and the node configuration it read
+(`governance.runtime_upgrade_provenance`) are deleted; its terms stay frozen in the
+genesis-signed execution policy and the governance authority.
 
 1. **Stage.** Publish the definitions and artifacts. A node stores and authenticates definitions it
    cannot execute: admission checks only that the change set applies to the selection it will meet
@@ -734,8 +736,10 @@ not a date: it happens once everything its first selection needs is implemented 
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
-   (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry); its bound ratification
-   case and recorded review progress are still open.
+   (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound
+   ratification case: governance proposals and approvals that address a contained definition
+   record review progress, a renewal needs it, and the containment resolves once change sets take
+   over every restriction it held.
 5. **Checkpoints, adoption and deletion.** Checkpoint export and certificate-chain bootstrap, the
    startup floor and its advancement, the deletion rule and its guard, the adoption carrier, import
    and trust anchor (section 13), and a rehearsal that adopts a copy of a running network, physically
@@ -800,7 +804,7 @@ Costs:
 - Complete-State coverage for LtHash, checkpoints, Parliament's Core integration and the emergency panel
   all land before Taira's adoption, which puts it later than the execution foundation alone would.
 - Some validity inputs still come from node configuration (`status.md`, ZK delivery task F.4, for
-  example `governance.runtime_upgrade_provenance`); they move to committed State with the
+  example the rest of the `[governance]` policy); they move to committed State with the
   foundation. A definition must not add fields to the genesis-signed `execution_policy_hash` or
   `nexus_amx_context_hash`.
 

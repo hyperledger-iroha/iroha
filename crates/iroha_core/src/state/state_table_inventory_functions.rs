@@ -151,6 +151,15 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         ),
     ),
     function(
+        "crates/iroha_core/src/runtime/containment.rs",
+        "holding",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Lists the identities of the active containments that still hold a restriction they imposed, so block start can close their ratification cases after the height's change sets: record identifiers, no digest over a table or cell",
+        ),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/code.rs",
         "fetch_instance_binding",
         1,

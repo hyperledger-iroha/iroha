@@ -2128,102 +2128,6 @@ impl SorafsTelemetryPolicy {
         }
     }
 }
-/// Runtime-upgrade provenance enforcement modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum RuntimeUpgradeProvenanceMode {
-    /// Provenance is optional; when provided it is verified.
-    #[default]
-    Optional,
-    /// Provenance is required for runtime upgrade manifests.
-    Required,
-}
-impl json::JsonSerialize for RuntimeUpgradeProvenanceMode {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-impl json::JsonDeserialize for RuntimeUpgradeProvenanceMode {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "governance.runtime_upgrade_provenance.mode".into(),
-            message: err.to_string(),
-        })
-    }
-}
-fn default_runtime_upgrade_provenance_mode() -> RuntimeUpgradeProvenanceMode {
-    RuntimeUpgradeProvenanceMode::from_str(defaults::governance::RUNTIME_UPGRADE_PROVENANCE_MODE)
-        .expect("invalid runtime upgrade provenance mode default")
-}
-/// Runtime-upgrade provenance policy (user view).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct RuntimeUpgradeProvenance {
-    /// Whether provenance is required for runtime upgrade manifests.
-    #[config(default = "default_runtime_upgrade_provenance_mode()")]
-    pub mode: RuntimeUpgradeProvenanceMode,
-    /// Require at least one SBOM digest entry when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM")]
-    pub require_sbom: bool,
-    /// Require a non-empty SLSA attestation when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA")]
-    pub require_slsa: bool,
-    /// Minimum number of trusted signatures required when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD")]
-    pub signature_threshold: usize,
-    /// Trusted signer public keys (multihash).
-    #[config(default)]
-    pub trusted_signers: Vec<String>,
-}
-impl RuntimeUpgradeProvenance {
-    fn parse(self) -> actual::RuntimeUpgradeProvenancePolicy {
-        if matches!(self.mode, RuntimeUpgradeProvenanceMode::Optional)
-            && (self.require_sbom || self.require_slsa || self.signature_threshold > 0)
-        {
-            panic!(
-                "governance.runtime_upgrade_provenance.mode=optional cannot require sbom/slsa/signatures"
-            );
-        }
-        let mut trusted_signers = BTreeSet::new();
-        for signer in self.trusted_signers {
-            let pk = PublicKey::from_str(signer.trim()).unwrap_or_else(|err| {
-                panic!("invalid runtime upgrade provenance signer {signer}: {err}");
-            });
-            trusted_signers.insert(pk);
-        }
-        if self.signature_threshold > 0 {
-            assert!(
-                !trusted_signers.is_empty(),
-                "governance.runtime_upgrade_provenance.signature_threshold requires trusted_signers"
-            );
-            assert!(
-                self.signature_threshold <= trusted_signers.len(),
-                "governance.runtime_upgrade_provenance.signature_threshold exceeds trusted_signers"
-            );
-        }
-        actual::RuntimeUpgradeProvenancePolicy {
-            mode: self.mode.into(),
-            require_sbom: self.require_sbom,
-            require_slsa: self.require_slsa,
-            trusted_signers,
-            signature_threshold: self.signature_threshold,
-        }
-    }
-}
-impl Default for RuntimeUpgradeProvenance {
-    fn default() -> Self {
-        Self {
-            mode: default_runtime_upgrade_provenance_mode(),
-            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
-            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            signature_threshold:
-                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
-            trusted_signers: Vec::new(),
-        }
-    }
-}
 /// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct ParliamentTimedOvn {
@@ -2407,9 +2311,6 @@ pub struct Governance {
     /// Allowed JDG signature schemes for attestation validation.
     #[config(default = "defaults::governance::jdg_signature_schemes()")]
     pub jdg_signature_schemes: Vec<String>,
-    /// Runtime upgrade provenance enforcement policy.
-    #[config(nested)]
-    pub runtime_upgrade_provenance: RuntimeUpgradeProvenance,
     /// Account supplying viral incentive payouts and sender bonuses.
     #[config(
         env = "GOV_VIRAL_INCENTIVE_POOL_ACCOUNT",
@@ -2634,7 +2535,6 @@ impl Default for Governance {
             alias_frontier_telemetry: defaults::governance::ALIAS_FRONTIER_TELEMETRY,
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenance::default(),
             viral_incentive_pool_account: defaults::governance::viral_incentive_pool_account(),
             viral_escrow_account: defaults::governance::viral_escrow_account(),
             viral_reward_asset_id: defaults::governance::viral_reward_asset_id(),
@@ -2825,7 +2725,6 @@ impl Governance {
             );
         }
         let jdg_signature_schemes = normalize_jdg_signature_schemes(self.jdg_signature_schemes);
-        let runtime_upgrade_provenance = self.runtime_upgrade_provenance.parse();
         actual::Governance {
             // Relation-selecting keys are committed per election; a node names none.
             vk_ballot: None,
@@ -2865,7 +2764,6 @@ impl Governance {
             alias_frontier_telemetry: self.alias_frontier_telemetry,
             debug_trace_pipeline: self.debug_trace_pipeline,
             jdg_signature_schemes,
-            runtime_upgrade_provenance,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
             sorafs_pin_fee_asset_id: self

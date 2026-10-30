@@ -5,8 +5,8 @@ design; this document records the implemented surface of its change-set lifecycl
 universal root. The ABI-v1 manifest records, their `ProposeRuntimeUpgrade`,
 `ActivateRuntimeUpgrade` and `CancelRuntimeUpgrade` instructions, the
 `CanProposeRuntimeUpgrade` and `CanManageRuntimeUpgrades` permissions, the
-`world.runtime_upgrades` table and the `governance.runtime_upgrade_provenance` admission check are
-deleted.
+`world.runtime_upgrades` table, and the `governance.runtime_upgrade_provenance` node configuration
+and its admission check are deleted.
 
 ## Model
 
@@ -85,8 +85,17 @@ bounds and the containment to name this network and the universal root.
   (`iroha.runtime.*`) wire ID. From the next height it is `AdmissionClosed` (or `CompletionOnly`),
   unless already restricted at least as much. The `ContainmentRecordV1` in
   `world.runtime_containments` records each restriction it replaced (`Contained`).
+- **Ratification case.** Each containment opens a case that ordinary governance closes with change
+  sets. When Parliament admits or approves a change set that addresses a contained definition (it
+  activates, deactivates, restricts or lifts it, or binds or unbinds a wire ID behind it), the
+  record's `review` notes that change set and height (`ContainmentReviewed`). When the change sets
+  activating at a height take over every restriction the containment held, it becomes `Resolved`
+  (`ContainmentResolved`). A change set approved before the incident names the selection that
+  containment replaced, so it no longer applies and cannot undo it.
 - **Renewal.** A containment of the same incident, targets and kind, with fresh endorsements, takes
-  the lease over once half of it has passed; the old record becomes `Renewed`.
+  the lease over once half of it has passed, and only with review progress recorded since the
+  containment it renews; the old record becomes `Renewed` and the new one carries the progress
+  over.
 - **Expiry.** At block start, after the height's change sets, a containment whose lease ended
   restores every restriction it still holds and becomes `Expired` (`ContainmentExpired`). A
   restriction governance changed in the meantime is no longer held, so ratification, repair or a

@@ -439,7 +439,13 @@ mod tests {
             .expect("bounded exact raw-key interval");
         let verified = CanonicalTableLeafSet::verify_paired_raw_range(
             "world.account_aliases",
-            limits,(&captured.root(), &captured.lookup_root(), &captured.ordered_root()),(&canonical_rows[0].0, &canonical_rows[1].0),
+            limits,
+            (
+                &captured.root(),
+                &captured.lookup_root(),
+                &captured.ordered_root(),
+            ),
+            (&canonical_rows[0].0, &canonical_rows[1].0),
             1,
             8 * 1024,
             &range,

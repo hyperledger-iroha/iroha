@@ -1404,7 +1404,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-            runtime_upgrade_provenance: A::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: A::SorafsPenaltyPolicy::default(),
             sorafs_telemetry: A::SorafsTelemetryPolicy::default(),

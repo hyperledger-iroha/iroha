@@ -507,7 +507,6 @@ fn ladder_receipt_join_refuses_another_heights_frame() {
     assert!(!receipt_carries_verified_wire(&chain.committed(3), proof));
 }
 
-
 #[test]
 fn ladder_completed_interval_cancellation_refuses_before_receipt_read() {
     let chain = chain();
@@ -520,12 +519,8 @@ fn ladder_completed_interval_cancellation_refuses_before_receipt_read() {
         .unwrap();
     assert_eq!(state.finality_prefix_checkpoints.heights(), [4]);
     chain.kura().reset_canonical_query_reads_for_test();
-    let result = state.finish_certified_ladder_receipt(
-        &owner,
-        &interval,
-        &limits,
-        &AtomicBool::new(true),
-    );
+    let result =
+        state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(true));
     assert!(matches!(
         result,
         Err(FinalityProofIntervalReadError::Proof(
@@ -556,12 +551,8 @@ fn ladder_completed_interval_deadline_refuses_before_receipt_read() {
     )
     .unwrap();
     chain.kura().reset_canonical_query_reads_for_test();
-    let result = state.finish_certified_ladder_receipt(
-        &owner,
-        &interval,
-        &expired,
-        &AtomicBool::new(false),
-    );
+    let result =
+        state.finish_certified_ladder_receipt(&owner, &interval, &expired, &AtomicBool::new(false));
     assert!(matches!(
         result,
         Err(FinalityProofIntervalReadError::Proof(
@@ -598,7 +589,7 @@ fn ladder_completed_interval_busy_receipt_preserves_original_publisher_release()
         });
         let expected = held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         let result = state.finish_certified_ladder_receipt(
-        &owner,
+            &owner,
             &interval,
             &limits,
             &AtomicBool::new(false),
@@ -618,16 +609,21 @@ fn ladder_completed_interval_busy_receipt_preserves_original_publisher_release()
     assert_eq!(frames.reserved_bytes(), 0);
 }
 
-
 #[test]
 fn ladder_receipt_retains_original_frame_and_graph_owners_until_drop() {
     let chain = chain();
     let frames = iroha_allocation::AllocationBudget::new(2_562_487);
     let graphs = iroha_allocation::AllocationBudget::new(33_312_848);
     let owner = NativeFinalityProofBudget::new(
-        frames.clone(), graphs.clone(),
-        norito::DecodeLimits::new(2_562_487, MAX_FINALITY_BLOCK_BYTES,
-            33_312_848, 33_312_848, norito::core::MAX_VALUE_NESTING_DEPTH),
+        frames.clone(),
+        graphs.clone(),
+        norito::DecodeLimits::new(
+            2_562_487,
+            MAX_FINALITY_BLOCK_BYTES,
+            33_312_848,
+            33_312_848,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        ),
     );
     let receipt = ladder(chain.state(), &owner, 4, 3).unwrap();
     assert_eq!(receipt.as_ref().id(), chain.committed(4).id());
@@ -645,14 +641,26 @@ fn ladder_receipt_refuses_exhausted_original_frame_pool_without_state_fallback()
     let frames = iroha_allocation::AllocationBudget::new(2_562_487);
     let owner = test_budget(frames.clone());
     let limits = single(4);
-    let interval = state.read_finality_proof_interval(&owner, &limits, &AtomicBool::new(false)).unwrap();
+    let interval = state
+        .read_finality_proof_interval(&owner, &limits, &AtomicBool::new(false))
+        .unwrap();
     let remaining = frames.limit_bytes() - frames.reserved_bytes();
     assert!(remaining > 0);
-    let original = frames.try_reserve(std::alloc::Layout::array::<u8>(remaining).unwrap()).unwrap();
-    let result = state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false));
-    assert!(matches!(result, Err(FinalityProofIntervalReadError::Proof(NativeFinalityProofIntervalError::Deferred(_)))));
+    let original = frames
+        .try_reserve(std::alloc::Layout::array::<u8>(remaining).unwrap())
+        .unwrap();
+    let result =
+        state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false));
+    assert!(matches!(
+        result,
+        Err(FinalityProofIntervalReadError::Proof(
+            NativeFinalityProofIntervalError::Deferred(_)
+        ))
+    ));
     drop(original);
-    let receipt = state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false)).unwrap();
+    let receipt = state
+        .finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false))
+        .unwrap();
     assert_eq!(receipt.as_ref().id(), chain.committed(4).id());
     drop(receipt);
     drop(interval);
@@ -666,17 +674,33 @@ fn ladder_receipt_refuses_exhausted_original_graph_pool_before_source_read() {
     let frames = iroha_allocation::AllocationBudget::new(2_562_487);
     let graphs = iroha_allocation::AllocationBudget::new(33_312_848);
     let owner = NativeFinalityProofBudget::new(
-        frames.clone(), graphs.clone(),
-        norito::DecodeLimits::new(2_562_487, MAX_FINALITY_BLOCK_BYTES,
-            33_312_848, 33_312_848, norito::core::MAX_VALUE_NESTING_DEPTH),
+        frames.clone(),
+        graphs.clone(),
+        norito::DecodeLimits::new(
+            2_562_487,
+            MAX_FINALITY_BLOCK_BYTES,
+            33_312_848,
+            33_312_848,
+            norito::core::MAX_VALUE_NESTING_DEPTH,
+        ),
     );
     let limits = single(4);
-    let interval = state.read_finality_proof_interval(&owner, &limits, &AtomicBool::new(false)).unwrap();
+    let interval = state
+        .read_finality_proof_interval(&owner, &limits, &AtomicBool::new(false))
+        .unwrap();
     assert_eq!(graphs.reserved_bytes(), 0);
-    let original = graphs.try_reserve(std::alloc::Layout::array::<u8>(graphs.limit_bytes()).unwrap()).unwrap();
+    let original = graphs
+        .try_reserve(std::alloc::Layout::array::<u8>(graphs.limit_bytes()).unwrap())
+        .unwrap();
     chain.kura().reset_canonical_query_reads_for_test();
-    let result = state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false));
-    assert!(matches!(result, Err(FinalityProofIntervalReadError::Proof(NativeFinalityProofIntervalError::Deferred(_)))));
+    let result =
+        state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false));
+    assert!(matches!(
+        result,
+        Err(FinalityProofIntervalReadError::Proof(
+            NativeFinalityProofIntervalError::Deferred(_)
+        ))
+    ));
     assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
     drop(original);
     drop(interval);
@@ -691,11 +715,19 @@ fn ladder_receipt_rejects_advanced_tip_before_receipt_ancestry_work() {
     let frames = iroha_allocation::AllocationBudget::new(2_562_487);
     let owner = test_budget(frames.clone());
     let limits = single(4);
-    let interval = state.read_finality_proof_interval(&owner, &limits, &AtomicBool::new(false)).unwrap();
+    let interval = state
+        .read_finality_proof_interval(&owner, &limits, &AtomicBool::new(false))
+        .unwrap();
     chain.commit(Vec::new());
     chain.kura().reset_canonical_query_reads_for_test();
-    let result = state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false));
-    assert!(matches!(result, Err(FinalityProofIntervalReadError::Proof(NativeFinalityProofIntervalError::Source { height: 4 }))));
+    let result =
+        state.finish_certified_ladder_receipt(&owner, &interval, &limits, &AtomicBool::new(false));
+    assert!(matches!(
+        result,
+        Err(FinalityProofIntervalReadError::Proof(
+            NativeFinalityProofIntervalError::Source { height: 4 }
+        ))
+    ));
     assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
     drop(interval);
     assert_eq!(frames.reserved_bytes(), 0);

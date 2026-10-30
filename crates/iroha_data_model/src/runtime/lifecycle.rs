@@ -1103,6 +1103,32 @@ pub enum ContainmentStatusV1 {
     Renewed(u64),
     /// Its lease ended at this height; restrictions it still held were restored.
     Expired(u64),
+    /// Ordinary governance took over every restriction it held at this height: a change set
+    /// ratified, repaired or lifted the containment, and its ratification case is closed.
+    Resolved(u64),
+}
+
+/// Review progress of a containment's ratification case (§7.1, "Review"): the latest change set
+/// ordinary governance proposed or approved that addresses a definition the containment holds.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+)]
+#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ContainmentReviewV1")]
+pub struct ContainmentReviewV1 {
+    /// The change set governance proposed or approved.
+    pub change_set: ChangeSetId,
+    /// Height at which it was proposed or approved.
+    pub height: u64,
 }
 
 /// An authorized containment and its effect, keyed by containment identity in State.
@@ -1130,6 +1156,9 @@ pub struct ContainmentRecordV1 {
     pub contained: Vec<ContainedDefinitionV1>,
     /// Where it stands.
     pub status: ContainmentStatusV1,
+    /// Latest progress of its ratification case. A renewal needs progress recorded since the
+    /// containment it renews and carries it over.
+    pub review: Option<ContainmentReviewV1>,
 }
 
 impl ContainmentRecordV1 {

@@ -311,6 +311,7 @@ pub(crate) fn activate_due(
         .map(|(id, record)| (record.change_set.effective_height, *id))
         .collect();
     due.sort_unstable();
+    let holding = super::containment::holding(wtx);
     for (_, id) in due {
         let Some(mut record) = wtx.runtime_change_sets.get(&id).cloned() else {
             continue;
@@ -342,6 +343,7 @@ pub(crate) fn activate_due(
         wtx.runtime_change_sets.insert(id, record);
         wtx.emit_events(Some(event));
     }
+    super::containment::resolve_taken_over(wtx, height, &holding);
     let catalog = crate::runtime::release_catalog().map_err(|error| {
         crate::state::StateStorageAdmissionError::UnsupportedRuntime {
             height,
@@ -580,6 +582,7 @@ pub(crate) fn enact(
                     attestations: Vec::new(),
                 },
             );
+            super::containment::record_review(&mut state_transaction.world, id, change_set, height);
             RuntimeUpgradeEvent::Scheduled(RuntimeUpgradeScheduled {
                 id,
                 effective_height: change_set.effective_height,

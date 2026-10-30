@@ -1769,8 +1769,6 @@ mod tests {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
-                runtime_upgrade_provenance:
-                    iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
                 sorafs_pin_fee_asset_id:

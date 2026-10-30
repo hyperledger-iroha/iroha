@@ -330,6 +330,7 @@ fn containment_renewal_opens_halfway_through_the_lease() {
         authorized_ms: 1_000,
         contained: Vec::new(),
         status: ContainmentStatusV1::Active,
+        review: None,
     };
     assert_eq!(record.renewal_opens_ms(), 1_000 + 86_400_000);
 }

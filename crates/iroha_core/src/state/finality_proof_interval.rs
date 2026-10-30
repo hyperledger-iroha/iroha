@@ -4,8 +4,9 @@ use super::*;
 use crate::sumeragi::{
     certified_chain::{ChainReadError, CommittedBlock},
     finality::{
-        FinalityDecodeWorkspace, NativeFinalityProofBudget, NativeFinalityProofInterval, NativeFinalityProofIntervalError,
-        NativeFinalityProofIntervalLimits, NativeFinalityProofSource, build_proof_interval,
+        FinalityDecodeWorkspace, NativeFinalityProofBudget, NativeFinalityProofInterval,
+        NativeFinalityProofIntervalError, NativeFinalityProofIntervalLimits,
+        NativeFinalityProofSource, build_proof_interval,
     },
     startup::GENESIS_HEIGHT,
 };
@@ -341,8 +342,12 @@ impl State {
             .ok()
             .and_then(NonZeroUsize::new)
             .ok_or(NativeFinalityProofIntervalError::Request)?;
-        let workspace = owner.workspace().map_err(NativeFinalityProofIntervalError::from)?;
-        let target = workspace.target_context().map_err(NativeFinalityProofIntervalError::from)?;
+        let workspace = owner
+            .workspace()
+            .map_err(NativeFinalityProofIntervalError::from)?;
+        let target = workspace
+            .target_context()
+            .map_err(NativeFinalityProofIntervalError::from)?;
         let read_budget = CanonicalHistoryReadBudget::new(owner.frames().clone(), target.clone());
         let receipt = workspace.stage(|| {
             let mut original_refusal = None;
@@ -382,7 +387,11 @@ impl State {
             Ok(receipt)
         })?;
         drop(view);
-        Ok(FundedLadderReceipt { receipt, _target: target, _workspace: workspace })
+        Ok(FundedLadderReceipt {
+            receipt,
+            _target: target,
+            _workspace: workspace,
+        })
     }
 
     /// Height of the nearest retained prefix strictly below `height`, else signed genesis.

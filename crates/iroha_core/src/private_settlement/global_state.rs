@@ -3442,12 +3442,16 @@ pub mod tests {
             let mut transaction = block.transaction();
             let before = private_settlement_transaction_bytes(&transaction);
             let mut wrong_network = receipt.clone();
-            wrong_network.manifest.network_id = iroha_data_model::NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            wrong_network.manifest.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
                     iroha_crypto::Hash::new(b"different settlement network"),
-                ),
+                ));
+            assert_ne!(
+                wrong_network.manifest.network_id,
+                receipt.manifest.network_id
             );
-            assert_ne!(wrong_network.manifest.network_id, receipt.manifest.network_id);
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(wrong_network),
                 Err(PrivateSettlementGlobalStateErrorV1::Network),

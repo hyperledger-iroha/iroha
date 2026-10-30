@@ -4391,14 +4391,6 @@ pub mod governance {
     pub const MAX_LOCK_OWNERS_PER_REFERENDUM: NonZeroU32 = nonzero!(1_000_u32);
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
-    /// Default runtime-upgrade provenance enforcement mode.
-    pub const RUNTIME_UPGRADE_PROVENANCE_MODE: &str = "optional";
-    /// Require SBOM digests for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM: bool = false;
-    /// Require SLSA attestation bytes for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA: bool = false;
-    /// Default signature threshold for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD: usize = 0;
     /// Default exact TEU balance required for alias admission.
     pub fn alias_teu_minimum() -> Quantity {
         Quantity::zero()

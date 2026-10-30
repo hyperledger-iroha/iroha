@@ -1,4 +1,5 @@
-//! Emergency containment: panel authorization, the narrowing it imposes, renewal and expiry.
+//! Emergency containment: panel authorization, the narrowing it imposes, its ratification case,
+//! renewal and expiry.
 
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
@@ -129,6 +130,42 @@ fn submit(state: &State, height: u64, ms: u64, instruction: ContainRuntimeV1) ->
 
 fn committed_restriction(state: &State, definition: &DefinitionId) -> Option<RestrictionV1> {
     restriction_of(state.world.runtime_selection.view().get(), definition)
+}
+
+/// A change set of `state`'s universal root that restricts `definition`: what Parliament would
+/// admit or approve to ratify a containment of it. Review reads only its transitions.
+fn ratifying(state: &State, definition: DefinitionId) -> ChangeSetV1 {
+    let selection = state
+        .world
+        .runtime_selection
+        .view()
+        .get()
+        .id()
+        .expect("selection identity");
+    ChangeSetV1 {
+        network: *crate::state::StateReadOnly::network_id(&state.view()),
+        root: RootScopeV1::Universal,
+        predecessor: selection,
+        successor: selection,
+        effective_height: 1_000,
+        publish: Vec::new(),
+        transitions: vec![SelectionTransitionV1::Restrict {
+            definition,
+            restriction: RestrictionKindV1::AdmissionClosed,
+        }],
+        qualification: [0x5c; 32],
+    }
+}
+
+/// Record, in a block at `height` and committed time `ms`, governance progress on `change_set`.
+fn review(state: &State, height: u64, ms: u64, change_set: &ChangeSetV1) -> ChangeSetId {
+    let id = change_set.id().expect("change-set identity");
+    let mut block = state.block(header(height, ms));
+    let mut stx = block.transaction();
+    record_review(&mut stx.world, id, change_set, height);
+    stx.apply();
+    block.commit_empty_block_for_testing().expect("commit");
+    id
 }
 
 /// Start and commit an empty block at `height` and committed time `ms`; block start expires
@@ -332,32 +369,50 @@ fn expiry_restores_held_restrictions_and_renewal_takes_the_lease_over() {
     );
     let renew_ms = NOW_MS + 40 * HOUR_MS;
     let renewal = containment(&state, 5, vec![log], renew_ms + 72 * HOUR_MS);
-    submit(
-        &state,
-        3,
-        renew_ms,
-        ContainRuntimeV1 {
-            containment: renewal.clone(),
-            endorsements: endorse(&renewal, &primary[..6], renew_ms - 1_000),
-        },
-    )
-    .expect("renewal with fresh endorsements");
+    let renew = |height| {
+        submit(
+            &state,
+            height,
+            renew_ms,
+            ContainRuntimeV1 {
+                containment: renewal.clone(),
+                endorsements: endorse(&renewal, &primary[..6], renew_ms - 1_000),
+            },
+        )
+    };
+    let refusal = renew(3).expect_err("a renewal without review progress");
+    assert!(
+        format!("{refusal:?}").contains("a renewal needs review progress"),
+        "{refusal:?}"
+    );
+    let reviewed = review(&state, 3, renew_ms - 2_000, &ratifying(&state, log));
+    renew(4).expect("renewal with fresh endorsements and review progress");
     let records = state.world.runtime_containments.view();
     assert_eq!(
         records
             .get(&first.id().unwrap())
             .map(|record| record.status),
-        Some(ContainmentStatusV1::Renewed(3))
+        Some(ContainmentStatusV1::Renewed(4))
+    );
+    assert_eq!(
+        records
+            .get(&renewal.id().unwrap())
+            .and_then(|record| record.review),
+        Some(ContainmentReviewV1 {
+            change_set: reviewed,
+            height: 3,
+        }),
+        "the renewal carries the case's progress over"
     );
     drop(records);
 
     // The first lease passing no longer matters once renewed; the renewal's does.
-    pass(&state, 4, lease_until_ms + 1);
+    pass(&state, 5, lease_until_ms + 1);
     assert_eq!(
         committed_restriction(&state, &log),
         Some(RestrictionV1::AdmissionClosed(3))
     );
-    pass(&state, 5, renewal.lease_until_ms);
+    pass(&state, 6, renewal.lease_until_ms);
     assert_eq!(committed_restriction(&state, &log), None, "the lease ended");
     assert_eq!(
         state
@@ -366,8 +421,76 @@ fn expiry_restores_held_restrictions_and_renewal_takes_the_lease_over() {
             .view()
             .get(&renewal.id().unwrap())
             .map(|record| record.status),
-        Some(ContainmentStatusV1::Expired(5))
+        Some(ContainmentStatusV1::Expired(6))
     );
+}
+
+#[test]
+fn governance_review_and_takeover_resolve_the_ratification_case() {
+    let primary = members(1..10);
+    let state = state_with(Some(&panel(&primary, &members(10..19))));
+    let log = interface("iroha.log");
+    let target = containment(&state, 6, vec![log], NOW_MS + 72 * HOUR_MS);
+    submit(
+        &state,
+        2,
+        NOW_MS,
+        ContainRuntimeV1 {
+            containment: target.clone(),
+            endorsements: endorse(&target, &primary[..6], NOW_MS - 1_000),
+        },
+    )
+    .expect("contain");
+    let id = target.id().unwrap();
+    let record = |state: &State| {
+        state
+            .world
+            .runtime_containments
+            .view()
+            .get(&id)
+            .cloned()
+            .expect("recorded containment")
+    };
+    assert_eq!(
+        record(&state).review,
+        None,
+        "the case opens without progress"
+    );
+
+    // A change set that addresses another definition is no progress on this case.
+    let other = ratifying(&state, interface("iroha.alias.ensure"));
+    review(&state, 3, NOW_MS + HOUR_MS, &other);
+    assert_eq!(record(&state).review, None);
+    let ratification = ratifying(&state, log);
+    let reviewed = review(&state, 4, NOW_MS + 2 * HOUR_MS, &ratification);
+    assert_eq!(
+        record(&state).review,
+        Some(ContainmentReviewV1 {
+            change_set: reviewed,
+            height: 4,
+        })
+    );
+
+    // Governance takes the restriction over: the containment no longer holds what it imposed.
+    let mut block = state.block(header(5, NOW_MS + 3 * HOUR_MS));
+    let mut stx = block.transaction();
+    let holding_before = holding(&stx.world);
+    assert_eq!(holding_before, vec![id]);
+    let mut selection = stx.world.runtime_selection.get().clone();
+    set_restriction(&mut selection, log, Some(RestrictionV1::Disabled(5)));
+    *stx.world.runtime_selection.get_mut() = selection;
+    resolve_taken_over(&mut stx.world, 5, &holding_before);
+    stx.apply();
+    block.commit_empty_block_for_testing().expect("commit");
+    assert_eq!(record(&state).status, ContainmentStatusV1::Resolved(5));
+
+    // A resolved containment never expires: the lease ending restores nothing.
+    pass(&state, 6, target.lease_until_ms + 1);
+    assert_eq!(
+        committed_restriction(&state, &log),
+        Some(RestrictionV1::Disabled(5))
+    );
+    assert_eq!(record(&state).status, ContainmentStatusV1::Resolved(5));
 }
 
 #[test]

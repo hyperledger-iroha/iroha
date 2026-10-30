@@ -7,10 +7,16 @@
 //! migrates, moves value, deletes storage or fully disables, and it never restricts the
 //! governance and lifecycle interfaces an incident is repaired through.
 //!
-//! Containment is a lease. A renewal of the same incident with fresh endorsements may take it
-//! over once half the lease has passed; otherwise it expires at block start and restores every
-//! restriction it still holds. Ordinary governance ratifies, repairs or lifts it with change sets:
-//! a definition whose restriction governance changed is no longer held, and expiry leaves it.
+//! Containment is a lease and opens a ratification case. Ordinary governance ratifies, repairs
+//! or lifts it with change sets: proposing or approving a change set that addresses a contained
+//! definition records review progress, and once the change sets of a height take over every
+//! restriction the containment held, the case is resolved. A renewal of the same incident with
+//! fresh endorsements may take the lease over once half of it has passed, and only with review
+//! progress since the containment it renews; otherwise the containment expires at block start
+//! and restores every restriction it still holds. A change set approved before the incident
+//! names the selection containment replaced, so it no longer applies and cannot undo it.
+
+use std::collections::BTreeSet;
 
 use iroha_data_model::{
     isi::{error::InstructionExecutionError as Error, runtime_upgrade::ContainRuntimeV1},
@@ -21,8 +27,9 @@ use iroha_data_model::{
             RootSelectionV1,
         },
         lifecycle::{
-            ContainedDefinitionV1, ContainmentKindV1, ContainmentRecordV1, ContainmentStatusV1,
-            RestrictionKindV1, RootScopeV1,
+            ChangeSetId, ChangeSetV1, ContainedDefinitionV1, ContainmentKindV1,
+            ContainmentRecordV1, ContainmentReviewV1, ContainmentStatusV1, RestrictionKindV1,
+            RootScopeV1, SelectionTransitionV1,
         },
     },
 };
@@ -238,6 +245,15 @@ pub(crate) fn contain(
         if now_ms < renewed.renewal_opens_ms() {
             return Err(invalid("renewal opens halfway through the lease"));
         }
+        if !renewed
+            .review
+            .is_some_and(|review| review.height >= renewed.authorized_height)
+        {
+            return Err(invalid(
+                "a renewal needs review progress: governance has proposed or approved no change set \
+                 for the incident since the containment it renews",
+            ));
+        }
         let held: Vec<ContainedDefinitionV1> = renewed
             .contained
             .iter()
@@ -250,11 +266,12 @@ pub(crate) fn contain(
             ));
         }
         renewed.status = ContainmentStatusV1::Renewed(height);
+        let review = renewed.review;
         state_transaction
             .world
             .runtime_containments
             .insert(renewed_id, renewed);
-        held
+        (held, review)
     } else {
         let mut contained = Vec::new();
         for target in &containment.targets {
@@ -280,8 +297,9 @@ pub(crate) fn contain(
             ));
         }
         *state_transaction.world.runtime_selection.get_mut() = selection;
-        contained
+        (contained, None)
     };
+    let (contained, review) = contained;
     let incident = containment.incident;
     state_transaction.world.runtime_containments.insert(
         id,
@@ -291,6 +309,7 @@ pub(crate) fn contain(
             authorized_ms: now_ms,
             contained,
             status: ContainmentStatusV1::Active,
+            review,
         },
     );
     state_transaction
@@ -303,6 +322,143 @@ pub(crate) fn contain(
             },
         )));
     Ok(())
+}
+
+/// The interface and implementation `selection` binds to `wire_id`.
+fn bound_to<'a>(
+    selection: &'a RootSelectionV1,
+    wire_id: &'a str,
+) -> impl Iterator<Item = DefinitionId> + 'a {
+    selection
+        .bindings
+        .iter()
+        .filter(move |binding| binding.wire_id == wire_id)
+        .flat_map(|binding| [binding.interface, binding.implementation])
+}
+
+/// The definitions `change_set` addresses under `selection` (§7.1, "Review"): those its
+/// transitions activate, deactivate, restrict or lift, and the interface and implementation
+/// behind each wire ID it binds or unbinds, before and after.
+fn addressed(change_set: &ChangeSetV1, selection: &RootSelectionV1) -> BTreeSet<DefinitionId> {
+    let mut addressed = BTreeSet::new();
+    for transition in &change_set.transitions {
+        match transition {
+            SelectionTransitionV1::Activate(definition)
+            | SelectionTransitionV1::Deactivate(definition)
+            | SelectionTransitionV1::Lift(definition)
+            | SelectionTransitionV1::Restrict { definition, .. } => {
+                addressed.insert(*definition);
+            }
+            SelectionTransitionV1::Bind(binding) => {
+                addressed.extend([binding.interface, binding.implementation]);
+                addressed.extend(bound_to(selection, &binding.wire_id));
+            }
+            SelectionTransitionV1::Unbind(wire_id) => {
+                addressed.extend(bound_to(selection, wire_id));
+            }
+            SelectionTransitionV1::InstallStorage(_)
+            | SelectionTransitionV1::RetireStorage(_)
+            | SelectionTransitionV1::SetKernel(_)
+            | SelectionTransitionV1::SetCommitmentProfile(_)
+            | SelectionTransitionV1::SetServicesProfile(_)
+            | SelectionTransitionV1::RetainCompletion(_)
+            | SelectionTransitionV1::ReleaseCompletion(_) => {}
+        }
+    }
+    addressed
+}
+
+/// Record review progress (§7.1, "Review"): governance proposed or approved, at `height`, the
+/// change set `id`, which addresses a definition an active containment restricted. A renewal
+/// needs progress recorded since the containment it renews.
+pub(crate) fn record_review(
+    world: &mut crate::state::WorldTransaction<'_, '_>,
+    id: ChangeSetId,
+    change_set: &ChangeSetV1,
+    height: u64,
+) {
+    use iroha_data_model::events::data::runtime_upgrade::{
+        RuntimeUpgradeContainmentReviewed, RuntimeUpgradeEvent,
+    };
+    let addressed = addressed(change_set, world.runtime_selection.get());
+    let reviewed: Vec<[u8; 32]> = world
+        .runtime_containments
+        .iter()
+        .filter(|(_, record)| {
+            record.status == ContainmentStatusV1::Active
+                && record
+                    .contained
+                    .iter()
+                    .any(|entry| addressed.contains(&entry.definition))
+        })
+        .map(|(containment, _)| *containment)
+        .collect();
+    for containment in reviewed {
+        let Some(mut record) = world.runtime_containments.get(&containment).cloned() else {
+            continue;
+        };
+        record.review = Some(ContainmentReviewV1 {
+            change_set: id,
+            height,
+        });
+        world.runtime_containments.insert(containment, record);
+        world.emit_events(Some(RuntimeUpgradeEvent::ContainmentReviewed(
+            RuntimeUpgradeContainmentReviewed {
+                containment,
+                change_set: id,
+            },
+        )));
+    }
+}
+
+/// Whether `record` still holds a restriction it imposed under `selection`.
+fn holds(record: &ContainmentRecordV1, selection: &RootSelectionV1) -> bool {
+    record
+        .contained
+        .iter()
+        .any(|entry| restriction_of(selection, &entry.definition) == Some(entry.imposed))
+}
+
+/// The active containments that hold at least one restriction they imposed.
+pub(crate) fn holding(world: &crate::state::WorldTransaction<'_, '_>) -> Vec<[u8; 32]> {
+    let selection = world.runtime_selection.get();
+    world
+        .runtime_containments
+        .iter()
+        .filter(|(_, record)| {
+            record.status == ContainmentStatusV1::Active && holds(record, selection)
+        })
+        .map(|(containment, _)| *containment)
+        .collect()
+}
+
+/// Resolve each containment of `holding_before` that, after the change sets of `height`
+/// activated, holds nothing any more: ordinary governance ratified, repaired or lifted it
+/// (§7.1, "Review").
+pub(crate) fn resolve_taken_over(
+    world: &mut crate::state::WorldTransaction<'_, '_>,
+    height: u64,
+    holding_before: &[[u8; 32]],
+) {
+    use iroha_data_model::events::data::runtime_upgrade::{
+        RuntimeUpgradeContainmentResolved, RuntimeUpgradeEvent,
+    };
+    for containment in holding_before {
+        let Some(mut record) = world.runtime_containments.get(containment).cloned() else {
+            continue;
+        };
+        if holds(&record, world.runtime_selection.get()) {
+            continue;
+        }
+        record.status = ContainmentStatusV1::Resolved(height);
+        world.runtime_containments.insert(*containment, record);
+        world.emit_events(Some(RuntimeUpgradeEvent::ContainmentResolved(
+            RuntimeUpgradeContainmentResolved {
+                containment: *containment,
+                height,
+            },
+        )));
+    }
 }
 
 /// Expire every active containment whose lease ended by the block's committed time `now_ms`,

@@ -58,7 +58,9 @@ impl<'world> CheckedAssetDefinitions<'world> {
         let (transitions, counts) = checked.confidential_policies.originals();
         let result = validate_original_asset_definitions(
             &checked.rows,
-            &checked.domains,(&checked.contexts, &checked.by_domain, &checked.by_owner),(transitions, counts),
+            &checked.domains,
+            (&checked.contexts, &checked.by_domain, &checked.by_owner),
+            (transitions, counts),
             &checked.homes,
             &checked.incarnations,
             max_work,
@@ -348,8 +350,15 @@ pub(super) fn validate_original_direct_home_rows(
 pub(in crate::state) fn validate_original_asset_definitions(
     rows: &impl RawStorageImages<AssetDefinitionId, AssetDefinition>,
     domains: &impl RawStorageImages<DomainId, Domain>,
-    (contexts, by_domain, by_owner): (&impl RawStorageImages<AssetDefinitionId, DomainId>, &impl RawStorageImages<(DomainId, AssetDefinitionId), ()>, &impl RawStorageImages<(AccountId, AssetDefinitionId), ()>),
-    (transitions, counts): (&impl RawStorageImages<(u64, AssetDefinitionId), ()>, &impl RawStorageImages<u64, u32>),
+    (contexts, by_domain, by_owner): (
+        &impl RawStorageImages<AssetDefinitionId, DomainId>,
+        &impl RawStorageImages<(DomainId, AssetDefinitionId), ()>,
+        &impl RawStorageImages<(AccountId, AssetDefinitionId), ()>,
+    ),
+    (transitions, counts): (
+        &impl RawStorageImages<(u64, AssetDefinitionId), ()>,
+        &impl RawStorageImages<u64, u32>,
+    ),
     homes: &impl RawStorageImages<AssetDefinitionId, AssetDefinitionDirectHomeV1>,
     incarnations: &impl RawStorageImages<AssetDefinitionId, AxtAssetIncarnationV1>,
     max_work: u64,
