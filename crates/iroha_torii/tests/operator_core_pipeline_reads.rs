@@ -3,9 +3,11 @@
 mod norito_rpc_harness;
 use axum::{
     body::Body,
-    http::{HeaderMap, Method, Request, StatusCode, Uri},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri},
 };
+use http_body_util::BodyExt as _;
 use iroha_data_model::NetworkId;
+use iroha_torii_shared::ErrorEnvelope;
 use norito_rpc_harness::NoritoRpcHarness;
 use tower::ServiceExt as _;
 fn request(uri: Uri, headers: HeaderMap) -> Request<Body> {
@@ -170,10 +172,11 @@ async fn core_operator_read_rejects_an_exact_signature_replay() {
     harness.shutdown().await;
 }
 #[tokio::test]
-async fn operator_reads_do_not_become_api_token_routes_when_legacy_tokens_are_enabled() {
+async fn operator_reads_still_require_the_listener_api_token_when_tokens_are_required() {
+    const API_TOKEN: &str = "operator-read-listener-token-0000";
     let harness = NoritoRpcHarness::new(|cfg| {
         cfg.torii.require_api_token = true;
-        cfg.torii.api_tokens = vec!["legacy-token-must-not-be-needed-00".to_owned()].into();
+        cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
     });
     for path in [
         "/v1/configuration",
@@ -185,18 +188,35 @@ async fn operator_reads_do_not_become_api_token_routes_when_legacy_tokens_are_en
         "/v1/pipeline/recovery/0",
     ] {
         let uri: Uri = path.parse().expect("operator route URI");
-        let headers = iroha_torii::operator_signed_request_headers(
-            &harness.cfg.common.key_pair,
-            &harness.network_id,
-            &Method::GET,
-            &uri,
-            &[],
-        )
-        .expect("operator signature fixture");
-        assert!(
-            !headers.contains_key("authorization") && !headers.contains_key("x-api-token"),
-            "fixture must prove token-free operator admission"
-        );
+        let operator_headers = || {
+            iroha_torii::operator_signed_request_headers(
+                &harness.cfg.common.key_pair,
+                &harness.network_id,
+                &Method::GET,
+                &uri,
+                &[],
+            )
+            .expect("operator signature fixture")
+        };
+        // The signature authenticates the operator; the listener token admits the request.
+        let response = harness
+            .app
+            .clone()
+            .oneshot(request(uri.clone(), operator_headers()))
+            .await
+            .expect("token-free operator route response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect token rejection body")
+            .to_bytes();
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode JSON error envelope");
+        assert_eq!(envelope.code(), "api_token_required", "{path}");
+        let mut headers = operator_headers();
+        headers.insert("x-api-token", HeaderValue::from_static(API_TOKEN));
         let response = harness
             .app
             .clone()
