@@ -24,6 +24,22 @@ REVIEWED_VENDOR_FILES = (
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",
     "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy",
+    "vendor/accesskit_atspi_common-0.21.1/Cargo.toml.orig",
+    "vendor/accesskit_unix-0.24.1/Cargo.toml.orig",
+    "vendor/ark-bls12-381-0.5.0/Cargo.toml.orig",
+    "vendor/ark-ff-0.5.0/Cargo.toml.orig",
+    "vendor/atspi-common-0.14.0/Cargo.toml.orig",
+    "vendor/atspi-proxies-0.14.0/Cargo.toml.orig",
+    "vendor/halo2curves-0.10.0/Cargo.toml.orig",
+    "vendor/metal-0.33.0/Cargo.toml.orig",
+    "vendor/zbus-lockstep-0.7.0/Cargo.toml.orig",
+    "vendor/zbus-lockstep-macros-0.7.0/Cargo.toml.orig",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g1_compressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g1_uncompressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g2_compressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g2_uncompressed_valid_test_vectors.dat",
+    "vendor/atspi-common-0.14.0/xml/schemas/DBus.xsd",
+    "vendor/atspi-common-0.14.0/xml/schemas/XMLSchema.xsd",
 )
 ROLE_EXAMPLES = REVIEWED_VENDOR_FILES
 
@@ -50,7 +66,7 @@ def write_public(root: Path, relative: str) -> bytes:
 
 def test_reviewed_vendor_inventory_is_exactly_the_established_roles() -> None:
     assert seal._REVIEWED_PUBLIC_VENDOR_INPUTS == frozenset(REVIEWED_VENDOR_FILES)
-    assert len(seal._REVIEWED_PUBLIC_VENDOR_INPUTS) == 9
+    assert len(seal._REVIEWED_PUBLIC_VENDOR_INPUTS) == 25
 
 
 @pytest.mark.parametrize("relative", [
