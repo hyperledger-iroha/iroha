@@ -10,6 +10,9 @@ use norito::core::DecodeBudgetContext;
 
 #[test]
 fn original_prepaid_native_body_delivers_once_without_repeat_allocation_or_decode() {
+    // Keep retired fixture cells fixed while checking the reader's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit_at(2_000, Vec::new());
     let view = chain.state().view();

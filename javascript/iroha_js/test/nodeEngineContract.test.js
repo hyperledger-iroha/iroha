@@ -83,6 +83,20 @@ test("publish and pack execute the guard before build or release actions", () =>
   assert.match(bundle, /platform: "node",\s*target: "node22\.23"/u);
 });
 
+test("Kotodama JavaScript CI pins a compatible runtime and checks it before installation", () => {
+  const workflow = readFileSync(new URL("../../../.github/workflows/kotodama_perf.yml", import.meta.url), "utf8");
+  for (const job of ["sdk-and-codec-guards", "javascript-provenance-platforms"]) {
+    const section = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z][a-z-]+:\n/u)[0];
+    assert.ok(section, `missing ${job} job`);
+    const runtime = section.match(/node-version: "([0-9]+\.[0-9]+\.[0-9]+)"/u)?.[1];
+    assert.ok(runtime, `${job} must pin an exact Node release`);
+    validateNodeEngineContract(pkg, lock, runtime);
+    const guard = section.indexOf("run: node javascript/iroha_js/scripts/check-node-engine.mjs");
+    const install = section.indexOf("run: npm ci --ignore-scripts --prefix javascript/iroha_js");
+    assert.ok(guard >= 0 && install > guard, `${job} must check its runtime before installing dependencies`);
+  }
+});
+
 test("the fixed CLI reads its package and lock without SDK/native loading", () => {
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/check-node-engine.mjs", import.meta.url))], {
     encoding: "utf8", env: {}, timeout: 10_000,

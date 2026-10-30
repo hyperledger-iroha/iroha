@@ -77,6 +77,7 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_capability_manifest_v1",
+    "iroha_privacy_validate_exact12_submit_proof_construction_v1",
     "iroha_privacy_free_buffer",
 )
 KAGEMUSHA_WALLET_C_EXPORTS = (
@@ -184,6 +185,9 @@ PRIVACY_BRIDGE_JNI_EXPORTS = tuple(
     "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_" + method
     for method in (
         "nativeSubmitProofIntentProjectionV1",
+        "nativeCreateZkX509RequestV1",
+        "nativeInspectZkX509RequestV1",
+        "nativeMaterializeZkX509StatementV1",
         "nativeBridgeAbiVersion",
         "nativeConfidentialDerivationContractRevisionV3",
         "nativeDefaultConfidentialDiversifierV3",
@@ -204,6 +208,13 @@ PRIVACY_BRIDGE_JNI_EXPORTS = tuple(
         "nativeExact12FixtureBundle",
         "nativeValidateExact12FixtureBundle",
     )
+)
+
+ZK_X509_TRANSACTION_C_EXPORTS = (
+    "connect_norito_zk_x509_transaction_prepare_v1",
+    "connect_norito_zk_x509_transaction_projection_v1",
+    "connect_norito_zk_x509_transaction_sign_v1",
+    "connect_norito_zk_x509_transaction_close_v1",
 )
 
 REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
@@ -238,6 +249,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
+        *ZK_X509_TRANSACTION_C_EXPORTS,
         *CONFIDENTIAL_PROVER_C_EXPORTS,
         *KAGEMUSHA_WALLET_C_EXPORTS,
         "connect_norito_confidential_note_derivation_revision_v3",

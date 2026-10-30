@@ -340,7 +340,24 @@ pub fn drive_step<E: From<JournalError>>(
 pub fn drive_step_with_rebroadcast<E: From<JournalError>>(
     step: &SccpJournalStep,
     rebroadcast: bool,
+    observe: impl FnMut(&SccpJournalRecordV1) -> Result<Option<SccpJournalOutcomeV1>, E>,
+    dispatch: impl FnMut(&[u8]) -> Result<(), E>,
+) -> Result<Option<SccpJournalOutcomeV1>, E> {
+    drive_step_guarded(step, rebroadcast, observe, || Ok(()), dispatch)
+}
+
+/// [`drive_step_with_rebroadcast`] that asks `guard` again before the first dispatch and before
+/// every rebroadcast, once reconciliation has found no outcome. A refusing guard leaves the step
+/// as it was: no dispatch marker is written and nothing is sent, so a later run reconciles first
+/// and asks the guard again. An observed outcome is recorded without consulting the guard.
+///
+/// # Errors
+/// Propagates the guard's refusal and every [`drive_step_with_rebroadcast`] error.
+pub fn drive_step_guarded<E: From<JournalError>>(
+    step: &SccpJournalStep,
+    rebroadcast: bool,
     mut observe: impl FnMut(&SccpJournalRecordV1) -> Result<Option<SccpJournalOutcomeV1>, E>,
+    guard: impl FnOnce() -> Result<(), E>,
     mut dispatch: impl FnMut(&[u8]) -> Result<(), E>,
 ) -> Result<Option<SccpJournalOutcomeV1>, E> {
     if let Some(outcome) = step.outcome()? {
@@ -354,8 +371,11 @@ pub fn drive_step_with_rebroadcast<E: From<JournalError>>(
     if step.record().action == SccpFlowActionV1::ObserveComplete {
         return Ok(None);
     }
-    if step.begin_submission()? || rebroadcast {
-        dispatch(&step.record().submission)?;
+    if rebroadcast || !step.submission_recorded()? {
+        guard()?;
+        if step.begin_submission()? || rebroadcast {
+            dispatch(&step.record().submission)?;
+        }
     }
     let outcome = observe(step.record())?;
     if let Some(outcome) = &outcome {

@@ -714,11 +714,11 @@ mod tests {
     #[test]
     fn exact_maximum_envelope_includes_the_single_authoritative_outer_frame() {
         assert_eq!(ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1, 4_348);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_412_944);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_435_984);
         assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 7_934_010);
         assert_eq!(
             ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            24_240
+            1_200
         );
         let maximum_inner = ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
             + ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1

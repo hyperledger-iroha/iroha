@@ -64,14 +64,16 @@ spec!(LATEST_TRANSACTIONS, "explorer_transactions_latest", 48, ["hash"], false, 
     "authority" => Text, "hash" => Text, "block" => Number, "created_at" => Text,
     "executable" => Text, "status" => Text,
 ]);
+// Instruction boxes serialize exactly `wire_id`, `framed_sha256` and the base64
+// `instruction` frame (`explorer_history::InstructionProjectionBox`).
 spec!(INSTRUCTIONS, "explorer_instructions", 49, ["transaction_hash", "index"], false, [
     "authority" => Text, "created_at" => Text, "kind" => Text, "box" => Json,
-    "box.encoded" => Text, "box.framed_sha256" => Text, "box.json" => Json,
+    "box.wire_id" => Text, "box.framed_sha256" => Text, "box.instruction" => Text,
     "transaction_hash" => Text, "transaction_status" => Text, "block" => Number, "index" => Number,
 ]);
 spec!(LATEST_INSTRUCTIONS, "explorer_instructions_latest", 50, ["transaction_hash", "index"], false, [
     "authority" => Text, "created_at" => Text, "kind" => Text, "box" => Json,
-    "box.encoded" => Text, "box.framed_sha256" => Text, "box.json" => Json,
+    "box.wire_id" => Text, "box.framed_sha256" => Text, "box.instruction" => Text,
     "transaction_hash" => Text, "transaction_status" => Text, "block" => Number, "index" => Number,
 ]);
 
@@ -1034,6 +1036,51 @@ mod tests {
                         [1; 32]
                     )
                     .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn instruction_box_fields_match_the_serialized_frame() {
+        let scan = norito::json!({"items":[
+            {"transaction_hash":FAUCET_LITERAL,"index":0,"kind":"Transfer","block":8,
+             "box":{"wire_id":"iroha.transfer","framed_sha256":"aa","instruction":"AAE="}},
+            {"transaction_hash":LOG_LITERAL,"index":0,"kind":"Log","block":9,
+             "box":{"wire_id":"iroha.log","framed_sha256":"bb","instruction":"AgM="}}
+        ],"pagination":{"next_cursor":null}});
+        for spec in [&INSTRUCTIONS, &LATEST_INSTRUCTIONS] {
+            let query = standalone_scan(
+                spec,
+                ListQuery::new()
+                    .filter(field("box.wire_id").eq("iroha.log"))
+                    .select([
+                        FieldPath::from("box.wire_id"),
+                        FieldPath::from("box.framed_sha256"),
+                        FieldPath::from("box.instruction"),
+                    ]),
+                [1; 32],
+            )
+            .expect("instruction box members are row fields");
+            let page = query.page(scan.clone()).expect("filtered page");
+            assert_eq!(
+                page.items,
+                vec![
+                    norito::json!({"box":{"wire_id":"iroha.log","framed_sha256":"bb","instruction":"AgM="}})
+                        .as_object()
+                        .unwrap()
+                        .clone()
+                ]
+            );
+            for retired in ["box.encoded", "box.json"] {
+                assert!(
+                    standalone_scan(
+                        spec,
+                        ListQuery::new().select([FieldPath::from(retired)]),
+                        [1; 32]
+                    )
+                    .is_err(),
+                    "{retired} is not serialized"
                 );
             }
         }

@@ -91,8 +91,15 @@ pub enum AtomicWriteStep {
     SyncFile,
     /// Publish the complete original file without releasing its retained handle.
     Publish,
-    /// Sync the original publication directory.
+    /// Sync one original source or destination namespace (both when they differ).
     SyncDirectory,
+}
+
+/// Native publication policy shared by ordinary and separate-staging writers.
+#[derive(Clone, Copy)]
+struct AtomicWriteOptions {
+    private_destination: bool,
+    temporary_attempts: u32,
 }
 
 /// Stable kernel identity of an opened file, independent of its pathname.
@@ -896,13 +903,39 @@ impl PrivateDirectory {
         self.inner.write_atomic(name, bytes, mode, true)
     }
 
-    /// Discard bounded unpublished files left by an interrupted [`Self::write_atomic`].
+    /// Publish private bytes from a separately retained private staging directory.
+    ///
+    /// The caller holds its original exclusive writer lock across both directories. Staging
+    /// and destination must be on the same native volume. The exact temporary file and both
+    /// directory owners remain retained; native rename publishes without copying or fallback.
+    /// Successful publication syncs both namespaces (write-through metadata on Windows).
+    /// This separates bounded recovery inventory from an arbitrarily larger committed set.
+    ///
+    /// # Errors
+    /// Refuses invalid names, unsafe or changed custody, different volumes, create-new
+    /// collisions and native I/O failures. Any error after publication may mean durability
+    /// is uncertain; the caller must reconcile before retrying irreversible operations.
+    pub fn write_atomic_from_staging(
+        &self,
+        staging: &Self,
+        name: impl AsRef<OsStr>,
+        bytes: &[u8],
+        mode: PublishMode,
+    ) -> io::Result<()> {
+        let name = checked_name(name.as_ref())?;
+        self.inner
+            .write_atomic_from_staging(&staging.inner, name, bytes, mode)
+    }
+
+    /// Discard bounded unpublished files left by an interrupted native atomic writer.
     ///
     /// The caller must hold its original exclusive operation lock. Every required file must
     /// already exist; this operation never initializes committed state. The complete directory
     /// inventory and writable private single-link custody are checked before any removal. Only
     /// this crate's exact staging names are eligible; file bodies are never allocated or read.
-    /// At most sixteen required files and sixteen staged files may be inspected.
+    /// The caller supplies its required-file bound; at most 100,000 required files
+    /// and sixteen staged files may be inspected. Every required original remains
+    /// retained during cleanup, so native descriptor exhaustion fails closed.
     ///
     /// # Errors
     /// Refuses missing required files, unknown names, unsafe or changed custody, excessive
@@ -911,10 +944,16 @@ impl PrivateDirectory {
     pub fn reconcile_atomic_staging(
         &self,
         required_names: &[&str],
+        maximum_required: usize,
         maximum_staged: usize,
         maximum_bytes: usize,
     ) -> io::Result<usize> {
-        if required_names.is_empty() || required_names.len() > 16 || maximum_staged > 16 {
+        if maximum_required == 0
+            || maximum_required > 100_000
+            || required_names.is_empty()
+            || required_names.len() > maximum_required
+            || maximum_staged > 16
+        {
             return Err(invalid("atomic staging inventory bound exceeded"));
         }
         for (index, name) in required_names.iter().enumerate() {

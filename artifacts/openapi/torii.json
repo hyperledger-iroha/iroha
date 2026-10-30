@@ -6331,7 +6331,7 @@
       },
       "BridgeFinalityAttestationTipMismatchV1": {
         "additionalProperties": false,
-        "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
+        "description": "Unsigned, selector-bound HTTP 503 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
         "properties": {
           "applied_height": {
             "description": "Applied immutable state-view tip.",
@@ -17747,122 +17747,182 @@
           }
         ]
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeChangeSetV1": {
         "additionalProperties": false,
-        "description": "Canonical first-release runtime-upgrade manifest. ABI delta lists are reserved and therefore empty.",
+        "description": "A governed change from the universal root's predecessor selection to its exact successor (iroha_data_model::runtime::lifecycle::ChangeSetV1). Published definitions and transitions are internally tagged Norito JSON objects.",
         "properties": {
-          "abi_hash": {
-            "$ref": "#/components/schemas/GovernanceParliamentFixedBytes32V1"
-          },
-          "abi_version": {
-            "const": 1,
-            "format": "uint16",
-            "type": "integer"
-          },
-          "added_pointer_types": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "added_syscalls": {
-            "items": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 0,
-            "type": "array"
-          },
-          "description": {
-            "type": "string"
-          },
-          "end_height": {
+          "effective_height": {
+            "description": "First height executed under the successor.",
             "format": "uint64",
             "maximum": 9007199254740991,
             "minimum": 0,
             "type": "integer"
           },
-          "name": {
-            "minLength": 1,
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "predecessor": {
+            "description": "Identity of the selection the change starts from.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "provenance": {
+          "publish": {
             "items": {
-              "$ref": "#/components/schemas/GovernanceManifestProvenanceV1"
+              "type": "object"
             },
             "type": "array"
           },
-          "sbom_digests": {
-            "items": {
-              "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1"
-            },
-            "type": "array"
-          },
-          "slsa_attestation": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "qualification": {
+            "description": "Digest of the qualification evidence for the successor composition.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
-          "start_height": {
-            "format": "uint64",
-            "maximum": 9007199254740991,
-            "minimum": 0,
-            "type": "integer"
+          "root": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Universal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          "successor": {
+            "description": "Identity of the exact selection the change produces.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "transitions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "name",
-          "description",
-          "abi_version",
-          "abi_hash",
-          "added_syscalls",
-          "added_pointer_types",
-          "start_height",
-          "end_height",
-          "sbom_digests",
-          "slsa_attestation",
-          "provenance"
+          "network",
+          "root",
+          "predecessor",
+          "successor",
+          "effective_height",
+          "publish",
+          "transitions",
+          "qualification"
         ],
         "type": "object"
       },
-      "GovernanceParliamentProposalPayloadRuntimeUpgradeSbomDigestV1": {
+      "GovernanceParliamentProposalPayloadRuntimeNoticeV1": {
         "additionalProperties": false,
+        "description": "Minimum notice of a runtime change: blocks after approval and committed milliseconds after proposal and approval.",
         "properties": {
-          "algorithm": {
-            "minLength": 1,
-            "type": "string"
+          "approval_cushion_ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
-          "digest": {
-            "description": "Canonical RFC 4648 standard base64 with exact padding and no whitespace.",
-            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
-            "type": "string"
+          "blocks": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ms": {
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
-          "algorithm",
-          "digest"
+          "blocks",
+          "ms",
+          "approval_cushion_ms"
         ],
         "type": "object"
+      },
+      "GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1": {
+        "description": "Schedule a change set at its effective height, or withdraw a scheduled one.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+              },
+              "kind": {
+                "const": "Schedule",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Identity of the scheduled change set.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "GovernanceParliamentProposalPayloadRuntimeUpgradeV1": {
         "additionalProperties": false,
+        "description": "A runtime change-set action for SORA Parliament, with the notice policy frozen at proposal time (specs/live_runtime_upgrades.md section 6).",
         "properties": {
-          "manifest": {
-            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeManifestV1"
+          "action": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeUpgradeActionV1"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeNoticeV1"
           },
           "proposal_operator": {
             "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1"
+          },
+          "proposed_ms": {
+            "description": "Committed time of the block that admitted the proposal.",
+            "format": "uint64",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "proposal_operator",
-          "manifest"
+          "action",
+          "notice",
+          "proposed_ms"
         ],
         "type": "object"
       },
@@ -31530,7 +31590,7 @@
                 "type": "null"
               },
               "readiness": {
-                "const": "production-qualified",
+                "const": "available",
                 "type": "string"
               }
             },
@@ -31569,108 +31629,6 @@
               },
               "reason": {
                 "const": "compiled-profile",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "not-registered",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "proposed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "suspended",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "retired",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "missing-production-qualification",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "detail": {
-                "type": "null"
-              },
-              "reason": {
-                "const": "invalid-production-qualification",
                 "type": "string"
               }
             },
@@ -31742,7 +31700,7 @@
             "$ref": "#/components/schemas/PrivacyProtocolIdV1"
           },
           "protocol_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
           "statement_schema_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
@@ -31808,6 +31766,23 @@
               },
               "reason": {
                 "const": "statement-schema-invalid",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "null"
+              },
+              "reason": {
+                "const": "joint-security-reduction-incomplete",
                 "type": "string"
               }
             },
@@ -31907,7 +31882,7 @@
         ],
         "type": "object"
       },
-      "PrivacyConsensusPolicyTighteningV1": {
+      "PrivacyConsensusPolicyUpdateV1": {
         "additionalProperties": false,
         "properties": {
           "effective_at_height": {
@@ -31937,10 +31912,10 @@
           "current_limits": {
             "$ref": "#/components/schemas/PrivacyConsensusLimitsV1"
           },
-          "pending_tightening": {
+          "pending_update": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrivacyConsensusPolicyTighteningV1"
+                "$ref": "#/components/schemas/PrivacyConsensusPolicyUpdateV1"
               },
               {
                 "type": "null"
@@ -31950,26 +31925,7 @@
         },
         "required": [
           "current_limits",
-          "pending_tightening"
-        ],
-        "type": "object"
-      },
-      "PrivacyDeploymentActivationV1": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "protocol_id": {
-            "$ref": "#/components/schemas/PrivacyProtocolIdV1"
-          }
-        },
-        "required": [
-          "protocol_id",
-          "activation_height"
+          "pending_update"
         ],
         "type": "object"
       },
@@ -32104,6 +32060,9 @@
           },
           "manifest_digest": {
             "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
           },
           "protocols": {
             "items": false,
@@ -32977,17 +32936,6 @@
             ],
             "type": "array"
           },
-          "qualification": {
-            "description": "Explicitly null until complete native-validated release and deployment evidence is committed.",
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyExact12QualificationRecordV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "version": {
             "const": 1,
             "format": "uint32",
@@ -32996,9 +32944,9 @@
         },
         "required": [
           "version",
+          "network_id",
           "committed_height",
           "consensus_policy",
-          "qualification",
           "protocols",
           "manifest_digest"
         ],
@@ -33007,16 +32955,6 @@
       "PrivacyExact12CapabilityRowV1": {
         "additionalProperties": false,
         "properties": {
-          "activation": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PrivacyProtocolActivationRecordV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "compiled_profile": {
             "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1"
           },
@@ -33025,6 +32963,16 @@
           },
           "operation_schema": {
             "$ref": "#/components/schemas/PrivacyOperationSchemaV1"
+          },
+          "policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PrivacyProtocolPolicyV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "privacy_feature_mask": {
             "$ref": "#/components/schemas/PrivacyFeatureMaskV1"
@@ -33043,7 +32991,7 @@
           "privacy_feature_mask",
           "compiled_profile",
           "readiness",
-          "activation"
+          "policy"
         ],
         "type": "object"
       },
@@ -33095,17 +33043,6 @@
       "PrivacyExact12DeploymentQualificationV1": {
         "additionalProperties": false,
         "properties": {
-          "activation_transaction_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "activations": {
-            "items": {
-              "$ref": "#/components/schemas/PrivacyDeploymentActivationV1"
-            },
-            "maxItems": 12,
-            "minItems": 12,
-            "type": "array"
-          },
           "chain_id": {
             "maxLength": 128,
             "minLength": 1,
@@ -33172,8 +33109,6 @@
           "network_id",
           "genesis_hash",
           "release_manifest_digest",
-          "activation_transaction_digest",
-          "activations",
           "validator_roster_digest",
           "endpoint_version",
           "convergence_height",
@@ -33186,7 +33121,7 @@
       },
       "PrivacyExact12QualificationRecordV1": {
         "additionalProperties": false,
-        "description": "Complete portable release and target-network deployment evidence. Native admission additionally verifies signatures, exact ordering, nonzero digests, all cross-record identities and committed state. Schema conformance alone grants no production qualification.",
+        "description": "Portable release and target-network execution evidence for external diagnostics. Native validation checks signatures, exact ordering, nonzero digests, and cross-record identities; diagnostic tooling compares this evidence with independently observed committed state. This evidence is not protocol activation authority or a prerequisite for protocol use. Schema conformance alone grants no production qualification.",
         "properties": {
           "deployment_qualification": {
             "$ref": "#/components/schemas/PrivacyExact12DeploymentQualificationV1"
@@ -33427,7 +33362,61 @@
         ],
         "type": "object"
       },
-      "PrivacyProtocolActivationLimitsV1": {
+      "PrivacyProtocolIdV1": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "enum": [
+              "zk-ace-pq-authorization-v1",
+              "anonymous-pgc-k-out-of-n-v1",
+              "verange-transparent-range-v1",
+              "iroha-zk-ams-v1",
+              "vega-existing-credential-zk-v1",
+              "iroha-zk-x509-stark-p256-v1",
+              "iroha-jindo-polynomial-commitment-v1",
+              "iroha-bootle-lantern-anoncred-v1",
+              "orchard-halo2-actions-v1",
+              "monero-fcmp-plus-plus-v1",
+              "iroha-ivm-private-note-stark-v1",
+              "pq-masp-stark-v1"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "protocol",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolLimitsUpdateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "effective_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_limits": {
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
+          },
+          "scheduled_at_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_at_height",
+          "effective_at_height",
+          "next_limits"
+        ],
+        "type": "object"
+      },
+      "PrivacyProtocolLimitsV1": {
         "oneOf": [
           {
             "additionalProperties": false,
@@ -33762,275 +33751,30 @@
           }
         ]
       },
-      "PrivacyProtocolActivationRecordV1": {
+      "PrivacyProtocolPolicyV1": {
         "additionalProperties": false,
         "properties": {
-          "engine_id": {
-            "$ref": "#/components/schemas/PrivacyEngineIdV1"
+          "current_limits": {
+            "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
-          "engine_manifest_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "lifecycle": {
-            "$ref": "#/components/schemas/PrivacyProtocolLifecycleV1"
-          },
-          "parameter_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "parameter_id": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "pending_protocol_limits_tightening": {
+          "pending_update": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/PrivacyProtocolLimitsTighteningV1"
+                "$ref": "#/components/schemas/PrivacyProtocolLimitsUpdateV1"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "proof_system_id": {
-            "$ref": "#/components/schemas/PrivacyProofSystemIdV1"
-          },
           "protocol_id": {
             "$ref": "#/components/schemas/PrivacyProtocolIdV1"
-          },
-          "protocol_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
-          },
-          "statement_schema_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
-          },
-          "verifier_digest": {
-            "$ref": "#/components/schemas/PrivacyFixed32BytesV1"
           }
         },
         "required": [
           "protocol_id",
-          "proof_system_id",
-          "engine_id",
-          "parameter_id",
-          "parameter_digest",
-          "verifier_digest",
-          "statement_schema_digest",
-          "engine_manifest_digest",
-          "lifecycle",
-          "protocol_limits",
-          "pending_protocol_limits_tightening"
-        ],
-        "type": "object"
-      },
-      "PrivacyProtocolIdV1": {
-        "additionalProperties": false,
-        "properties": {
-          "protocol": {
-            "enum": [
-              "zk-ace-pq-authorization-v1",
-              "anonymous-pgc-k-out-of-n-v1",
-              "verange-transparent-range-v1",
-              "iroha-zk-ams-v1",
-              "vega-existing-credential-zk-v1",
-              "iroha-zk-x509-stark-p256-v1",
-              "iroha-jindo-polynomial-commitment-v1",
-              "iroha-bootle-lantern-anoncred-v1",
-              "orchard-halo2-actions-v1",
-              "monero-fcmp-plus-plus-v1",
-              "iroha-ivm-private-note-stark-v1",
-              "pq-masp-stark-v1"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "protocol",
-          "value"
-        ],
-        "type": "object"
-      },
-      "PrivacyProtocolLifecycleV1": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "proposed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "active",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "suspended",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "record": {
-                "additionalProperties": false,
-                "properties": {
-                  "activated_at_height": {
-                    "oneOf": [
-                      {
-                        "format": "uint64",
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "proposed_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "state_since_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "proposed_at_height",
-                  "activated_at_height",
-                  "state_since_height"
-                ],
-                "type": "object"
-              },
-              "state": {
-                "const": "retired",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "record"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "PrivacyProtocolLimitsTighteningV1": {
-        "additionalProperties": false,
-        "properties": {
-          "effective_at_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "next_limits": {
-            "$ref": "#/components/schemas/PrivacyProtocolActivationLimitsV1"
-          },
-          "scheduled_at_height": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "scheduled_at_height",
-          "effective_at_height",
-          "next_limits"
+          "current_limits",
+          "pending_update"
         ],
         "type": "object"
       },
@@ -39165,6 +38909,51 @@
             "type": "object"
           }
         ]
+      },
+      "RuntimeChangeSetEndorsementV1": {
+        "additionalProperties": false,
+        "description": "A trusted release signer's endorsement of a change set's provenance (iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1): the signer's signature over the domain iroha:runtime:change-set-endorsement:v1 with its NUL terminator, followed by the 32-byte change-set identity. The committed runtime_provenance_policy_v1 decides which signers count.",
+        "properties": {
+          "change_set": {
+            "description": "Identity of the endorsed change set.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/CanonicalSignature"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/NativePublicKeyV1"
+          }
+        },
+        "required": [
+          "change_set",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "RuntimeProposeUpgradeRequest": {
+        "additionalProperties": false,
+        "description": "The change set to schedule and the endorsements the committed runtime provenance policy requires: at most one from each trusted release signer. provenance is empty when the universal root commits no provenance policy.",
+        "properties": {
+          "change_set": {
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeChangeSetEndorsementV1"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change_set",
+          "provenance"
+        ],
+        "type": "object"
       },
       "RwaPage": {
         "additionalProperties": false,
@@ -65244,7 +65033,7 @@
     },
     "/v1/bridge/finality/attestation/latest": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 503 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestationLatest",
         "parameters": [
           {
@@ -65413,7 +65202,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record with reason ConflictingState. Contradictory state, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress and must not be treated as a missing responder.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65489,7 +65278,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. Reasons are ConsensusUninitialized, GenesisUncommitted, RestartRequired, TipChanged, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. TipChanged requires an exact tip_mismatch payload binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. General finality callers validate every selector before retrying within the existing deadline; genesis scaling still treats TipChanged as non-retryable conflict. These unsigned observations are not finality proofs. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65536,7 +65325,7 @@
     },
     "/v1/bridge/finality/attestation/{height}": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 409 progress; progress is unsigned and never authenticates finality.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, installed node identity, source-bound build and resolved runtime configuration fingerprints, actual current consensus driver status, durable-tip proof and committed genesis proof. Proofs contain canonical executed block frames with embedded CommitCertificates. The exact durable-tip selector and independently sampled status must agree. Responses are never cacheable; both selectors share one rate-limit bucket. Only exact positive height races return selector-bound HTTP 503 progress; progress is unsigned and never authenticates finality.",
         "operationId": "bridgeFinalityAttestation",
         "parameters": [
           {
@@ -65716,7 +65505,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record with reason ConflictingState. Contradictory state, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress and must not be treated as a missing responder.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -65792,7 +65581,7 @@
                 }
               }
             },
-            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. Reasons are ConsensusUninitialized, GenesisUncommitted, RestartRequired, TipChanged, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. TipChanged requires an exact tip_mismatch payload binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. General finality callers validate every selector before retrying within the existing deadline; genesis scaling still treats TipChanged as non-retryable conflict. These unsigned observations are not finality proofs. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -92316,7 +92105,7 @@
     },
     "/v1/privacy/capabilities": {
       "get": {
-        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation and production-qualification evidence, evidence-derived readiness, and singleton consensus policy from one authoritative committed state view.",
+        "description": "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, optional committed protocol limits, implementation readiness, and singleton consensus policy from one authoritative committed state view. Absent protocol policy selects compiled profile limits. The content digest does not authenticate the producer.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
@@ -93701,6 +93490,52 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/runtime/containments": {
+      "get": {
+        "description": "Every recorded emergency containment of runtime definitions, with its lease, the restrictions it imposed and its status, by authorization height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime containments.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.containment.list"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
     "/v1/runtime/metrics": {
       "get": {
         "description": "Return runtime metrics snapshot.",
@@ -93837,9 +93672,9 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/runtime/upgrades": {
+    "/v1/runtime/release": {
       "get": {
-        "description": "List proposed and activated runtime upgrades.",
+        "description": "This node's build and release digest, whether its release executes the committed runtime selection, and for each scheduled change set whether it executes the successor selection, naming the first definition the release lacks. A node whose release cannot execute the selection due at a height stops before that height.",
         "responses": {
           "200": {
             "content": {
@@ -93870,7 +93705,53 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "List runtime upgrades.",
+        "summary": "Report this release's runtime support.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.release"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/upgrades": {
+      "get": {
+        "description": "The committed runtime selection and its identity, the attesting committee and its digest, and every recorded change set by effective height then identity.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "List runtime change sets.",
         "tags": [
           "Runtime"
         ],
@@ -93883,12 +93764,12 @@
         "x-iroha-tool-effect": "operator"
       }
     },
-    "/v1/runtime/upgrades/activate/{id}": {
+    "/v1/runtime/upgrades/attest/{id}": {
       "post": {
-        "description": "Activate a runtime upgrade by id.",
+        "description": "Sign, with this node's validator key, its attestation that its release executes the successor selection of the scheduled change set with the given 32-byte hex identity, bound to the current committee, and return the instruction that records it for an operator to submit. Refused when the change set is not scheduled, this node is not a committee member, or its release cannot execute the successor selection.",
         "parameters": [
           {
-            "description": "Upgrade identifier.",
+            "description": "Change-set identity, 32-byte hex.",
             "in": "path",
             "name": "id",
             "required": true,
@@ -93937,7 +93818,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Activate a runtime upgrade.",
+        "summary": "Draft this node's runtime support attestation.",
         "tags": [
           "Runtime"
         ],
@@ -93945,14 +93826,14 @@
           "admission": "operator",
           "authentication": "operator_signature",
           "schemaVersion": 1,
-          "stableRouteId": "operator.runtime.upgrade.activate"
+          "stableRouteId": "operator.runtime.upgrade.attest"
         },
         "x-iroha-tool-effect": "operator"
       }
     },
     "/v1/runtime/upgrades/cancel/{id}": {
       "post": {
-        "description": "Cancel a runtime upgrade by id.",
+        "description": "Draft the SORA Parliament proposal that withdraws the scheduled change set with the given 32-byte hex identity, for local signing.",
         "parameters": [
           {
             "description": "Upgrade identifier.",
@@ -94004,7 +93885,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Cancel a runtime upgrade.",
+        "summary": "Draft a runtime change-set withdrawal.",
         "tags": [
           "Runtime"
         ],
@@ -94019,12 +93900,12 @@
     },
     "/v1/runtime/upgrades/propose": {
       "post": {
-        "description": "Submit a runtime upgrade proposal.",
+        "description": "Draft the SORA Parliament proposal that schedules the change set in the body with its release signers' endorsements, for local signing. Admission, including the committed provenance check, happens when the signed proposal executes.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/RuntimeProposeUpgradeRequest"
               }
             }
           },
@@ -94060,7 +93941,7 @@
             "IrohaOperatorTimestampMs": []
           }
         ],
-        "summary": "Propose a runtime upgrade.",
+        "summary": "Draft a runtime change-set proposal.",
         "tags": [
           "Runtime"
         ],

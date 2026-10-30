@@ -9,11 +9,13 @@ use super::*;
 use std::{
     io,
     os::windows::{ffi::OsStrExt as _, io::AsRawHandle as _, process::CommandExt as _},
+    pin::Pin,
     sync::{Arc, Mutex},
+    task::{Context, Poll},
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _},
-    net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions},
+    io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf},
+    net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
     runtime::{Builder, Runtime},
 };
 use windows_sys::Win32::System::{
@@ -53,7 +55,7 @@ fn create_pipe(address: &str, first: bool) -> io::Result<NamedPipeServer> {
     })?
 }
 
-fn authenticate_peer(handle: std::os::windows::io::RawHandle, client: bool) -> Result<()> {
+fn peer_process_id(handle: std::os::windows::io::RawHandle, client: bool) -> Result<u32> {
     let mut process = 0;
     // SAFETY: callers retain the live pipe handle; the process-id output is a valid local u32.
     let accepted = unsafe {
@@ -71,7 +73,11 @@ fn authenticate_peer(handle: std::os::windows::io::RawHandle, client: bool) -> R
             "managed pipe peer belongs to another user".into(),
         ));
     }
-    Ok(())
+    Ok(process)
+}
+
+fn authenticate_peer(handle: std::os::windows::io::RawHandle, client: bool) -> Result<()> {
+    peer_process_id(handle, client).map(|_| ())
 }
 
 pub(crate) struct Listener {
@@ -118,39 +124,167 @@ impl Listener {
                     return Ok(None);
                 }
                 Ok(Some(Connection {
-                    stream,
+                    stream: PipeStream::Server(stream),
                     runtime: Arc::clone(&self.runtime),
+                    deadline: None,
                 }))
             }
         }
     }
 }
 
+enum PipeStream {
+    Server(NamedPipeServer),
+    Client(NamedPipeClient),
+}
+
+impl PipeStream {
+    fn handle(&self) -> std::os::windows::io::RawHandle {
+        match self {
+            Self::Server(stream) => stream.as_raw_handle(),
+            Self::Client(stream) => stream.as_raw_handle(),
+        }
+    }
+}
+
+impl AsyncRead for PipeStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Server(stream) => Pin::new(stream).poll_read(cx, buffer),
+            Self::Client(stream) => Pin::new(stream).poll_read(cx, buffer),
+        }
+    }
+}
+
+impl AsyncWrite for PipeStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Server(stream) => Pin::new(stream).poll_write(cx, bytes),
+            Self::Client(stream) => Pin::new(stream).poll_write(cx, bytes),
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Server(stream) => Pin::new(stream).poll_flush(cx),
+            Self::Client(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Server(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Client(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
 pub(crate) struct Connection {
-    stream: NamedPipeServer,
+    stream: PipeStream,
     runtime: Arc<Runtime>,
+    deadline: Option<Instant>,
 }
 
 impl Connection {
+    fn io_deadline(&self) -> Instant {
+        self.deadline.unwrap_or_else(|| Instant::now() + IO_TIMEOUT)
+    }
+
     pub(crate) fn receive(&mut self) -> Result<ControlRequest> {
-        let bytes = self
-            .runtime
-            .block_on(async {
-                tokio::time::timeout(IO_TIMEOUT, read_async(&mut self.stream)).await
-            })
-            .map_err(|_| Error::Invalid("managed pipe read deadline expired".into()))??;
-        decode(&bytes)
+        self.receive_reply()
     }
 
     pub(crate) fn reply<T: JsonSerialize>(&mut self, status: &T) -> Result<()> {
+        let deadline = self.io_deadline();
+        remaining_io(deadline)?;
         let bytes = encode(status)?;
         self.runtime
             .block_on(async {
-                tokio::time::timeout(IO_TIMEOUT, write_async(&mut self.stream, &bytes)).await
+                tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    write_async(&mut self.stream, &bytes),
+                )
+                .await
             })
-            .map_err(|_| Error::Invalid("managed pipe write deadline expired".into()))?
+            .map_err(|_| Error::Invalid("managed pipe write deadline expired".into()))??;
+        remaining_io(deadline)?;
+        Ok(())
+    }
+
+    pub(crate) fn send_request(&mut self, request: &ControlRequest) -> Result<()> {
+        self.reply(request)
+    }
+
+    pub(crate) fn receive_reply<T: JsonDeserialize>(&mut self) -> Result<T> {
+        let deadline = self.io_deadline();
+        remaining_io(deadline)?;
+        let bytes = self
+            .runtime
+            .block_on(async {
+                tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    read_async(&mut self.stream),
+                )
+                .await
+            })
+            .map_err(|_| Error::Invalid("managed pipe read deadline expired".into()))??;
+        remaining_io(deadline)?;
+        decode(&bytes)
+    }
+
+    pub(crate) fn set_deadline(&mut self, deadline: Instant) -> Result<()> {
+        self.deadline = Some(self.io_deadline().min(deadline));
+        remaining_io(self.io_deadline())?;
+        Ok(())
+    }
+
+    pub(crate) fn peer_process_id(&self) -> Result<u32> {
+        peer_process_id(
+            self.stream.handle(),
+            matches!(self.stream, PipeStream::Server(_)),
+        )
     }
 }
+
+pub(crate) fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> Result<Connection> {
+    let deadline = deadline.min(Instant::now() + IO_TIMEOUT);
+    remaining_io(deadline)?;
+    let runtime = Arc::new(runtime()?);
+    let address = address(directory)?;
+    let stream = loop {
+        remaining_io(deadline)?;
+        let opened = {
+            let _entered = runtime.enter();
+            ClientOptions::new().open(&address)
+        };
+        match opened {
+            Ok(stream) => break stream,
+            Err(error)
+                if error.raw_os_error()
+                    == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) =>
+            {
+                std::thread::sleep(POLL.min(remaining_io(deadline)?));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    authenticate_peer(stream.as_raw_handle(), false)?;
+    directory.revalidate()?;
+    remaining_io(deadline)?;
+    Ok(Connection {
+        stream: PipeStream::Client(stream),
+        runtime,
+        deadline: Some(deadline),
+    })
+}
+
+include!("transport_handoff_windows.rs");
 
 pub(crate) fn request_as<T: JsonDeserialize>(
     directory: &PrivateDirectory,

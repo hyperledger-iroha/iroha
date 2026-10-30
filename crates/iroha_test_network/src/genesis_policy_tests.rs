@@ -68,6 +68,8 @@ fn mismatch_report(hashes: StagedGenesisPolicyHashes) -> Report {
         actual_execution: hashes.execution_policy,
         expected_nexus: Hash::new(b"provisional Nexus policy"),
         actual_nexus: hashes.nexus_amx,
+        // Discovery reads only the two derived hashes.
+        actual_nexus_preimage: iroha_data_model::nexus::NexusAmxContextPreimageV1::new(Vec::new()),
     }))
     .wrap_err("genesis pre-execution failed before transaction results were recorded")
 }

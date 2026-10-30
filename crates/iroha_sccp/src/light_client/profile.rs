@@ -254,10 +254,15 @@ pub const BSC_EPOCH_LENGTH: u64 = 1_000;
 pub const BSC_MAINNET_SUPPORTED_FROM_MS: u64 = 1_777_343_400_000;
 /// Last BSC mainnet time (ms) profile version 1 supports (2027-06-30T00:00:00Z).
 ///
-/// No fork after Mendel is compiled. A later release appends a profile version whose bound is the
-/// last block before the next scheduled fork (or its own support horizon while none is
-/// scheduled), and the Parliament activates it; wallets stop burning seven days before the active
-/// bound (§7.2).
+/// The post-Mendel header, epoch and fast-finality rules also cover Pasteur, activated on
+/// 2026-08-25 at 02:30 UTC. This was checked against BSC v1.7.7, commit
+/// `2ded28fb832f4aa38078b56048ad22f74a737240`: its `params/config.go` fixes that date,
+/// while `core/types/block.go` and `consensus/parlia` retain these light-client rules.
+/// See <https://github.com/bnb-chain/bsc/releases/tag/v1.7.7> and BEP-673.
+///
+/// This bound is a support horizon, not a scheduled source-chain fork date. A later incompatible
+/// fork requires an appended profile version and Parliament activation before its verified
+/// activation time; wallets stop burning seven days before the active bound (§7.2).
 pub const BSC_MAINNET_SUPPORTED_UNTIL_MS: u64 = 1_814_313_600_000;
 /// Hard bound on steps in one BSC advance (§4.13.3).
 pub const BSC_MAX_STEPS_PER_ADVANCE: usize = 16;

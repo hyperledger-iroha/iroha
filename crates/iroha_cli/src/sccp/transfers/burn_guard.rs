@@ -4,9 +4,10 @@ use super::*;
 use iroha::data_model::{
     account::{AccountId, controller::AccountController},
     crypto_admission_policy::CryptoAdmissionPolicyV1,
+    parameter::Parameters,
+    prelude::FindParameters,
     sccp::{light_client::SccpLightClientV1, registry::SccpRouteRevisionV1},
 };
-use iroha_crypto::Algorithm;
 use iroha_sccp::light_client::{
     profile::SccpChainProfilesV1, proof::SccpLcSetDataV1,
     weak_subjectivity_deadline_ms_with_profiles,
@@ -55,7 +56,9 @@ fn require_horizon(
     Ok(())
 }
 
-fn require_controller(recipient: &[u8], capabilities: &norito::json::Value) -> Result<AccountId> {
+/// The recipient decodes to a canonical account whose every controller key the cut's ordinary
+/// crypto admission policy allows (§7.2 step 1).
+fn require_controller(recipient: &[u8], policy: &CryptoAdmissionPolicyV1) -> Result<AccountId> {
     ensure!(
         recipient.len() <= 1024,
         "recipient exceeds the SCCP 1024-byte bound"
@@ -65,58 +68,6 @@ fn require_controller(recipient: &[u8], capabilities: &norito::json::Value) -> R
     ensure!(
         address.canonical_bytes()? == recipient,
         "recipient is not canonical"
-    );
-    let crypto = capabilities
-        .get("crypto")
-        .ok_or_else(|| eyre!("missing crypto admission"))?;
-    let algorithm_values = crypto
-        .get("sm")
-        .and_then(|sm| sm.get("allowed_signing"))
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("missing signing admission"))?;
-    ensure!(
-        algorithm_values.len() <= Algorithm::ALL.len(),
-        "signing admission exceeds the canonical algorithm registry"
-    );
-    let algorithms = algorithm_values
-        .iter()
-        .map(|value| {
-            let name = value
-                .as_str()
-                .ok_or_else(|| eyre!("malformed signing admission"))?;
-            let algorithm = name.parse::<Algorithm>()?;
-            ensure!(
-                name == algorithm.as_static_str(),
-                "signing admission is not the canonical algorithm name"
-            );
-            Ok(algorithm)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let policy = CryptoAdmissionPolicyV1::new(algorithms)?;
-    let curve_values = crypto
-        .get("curves")
-        .and_then(|curves| curves.get("allowed_curve_ids"))
-        .and_then(norito::json::Value::as_array)
-        .ok_or_else(|| eyre!("missing curve admission"))?;
-    // Curves describe this same policy; they are never a second admission authority.
-    ensure!(
-        curve_values.len() == policy.allowed_algorithms().len(),
-        "curve admission is not the committed algorithm policy projection"
-    );
-    let curves = curve_values
-        .iter()
-        .map(|value| {
-            value
-                .as_u64()
-                .and_then(|id| u8::try_from(id).ok())
-                .ok_or_else(|| eyre!("malformed curve admission"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    ensure!(
-        curves
-            .into_iter()
-            .eq(policy.allowed_curves().map(|curve| curve.as_u8())),
-        "curve admission is not the committed algorithm policy projection"
     );
     let check = |key: &iroha_crypto::PublicKey| -> Result<()> {
         let algorithm = key.try_algorithm()?;
@@ -159,6 +110,8 @@ fn weak_subjectivity_bound(
         .ok_or_else(|| eyre!("TON retained stake does not cover its freshness margin"))
 }
 
+/// Run before a new burn is signed, and again, refusal-only, before a journaled burn is first
+/// dispatched or rebroadcast.
 pub(super) fn preflight(
     client: &BlockingClient,
     original: &origin::AuthenticatedOrigin,
@@ -166,6 +119,7 @@ pub(super) fn preflight(
     revision: u32,
     recipient: &[u8],
 ) -> Result<Vec<SccpEvidenceItemV1>> {
+    let freshness = original.require_current_cut(client)?;
     let capabilities = client.sccp().capabilities()?;
     let route = client
         .sccp()
@@ -211,13 +165,16 @@ pub(super) fn preflight(
         bound,
         profiles.supported_until_ms(network),
     )?;
-    let admission = client.client().get_node_capabilities_json()?;
-    require_controller(recipient, &admission)?;
+    // The admission policy is the cut's own `world.parameters` cell, never a node's report.
+    let parameters: Parameters = client.client().query_single(FindParameters)?;
+    let policy = original.crypto_admission_policy(&parameters)?;
+    require_controller(recipient, &policy)?;
     Ok(vec![
+        freshness,
         flows::evidence("taira.original_burn_route", revision)?,
         flows::evidence("taira.original_burn_light_client", &detail.light_client)?,
         flows::evidence("taira.original_burn_signing_set", newest_set)?,
-        flows::evidence("taira.burn_recipient_admission", &admission)?,
+        flows::evidence("taira.burn_recipient_admission", &policy)?,
     ])
 }
 

@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn role_samples_cover_every_role_and_pass_activation_validation() {
+    fn role_samples_cover_every_role_and_pass_canonical_profile_validation() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let samples = privacy_action_role_samples_v1().expect("role samples");
         assert_eq!(
@@ -328,21 +328,15 @@ mod tests {
         );
         for sample in samples {
             assert_eq!(sample.envelope.action_role_v1(), Ok(sample.role));
-            sample
-                .activation
-                .validate()
-                .expect("valid sample activation");
+            sample.profile.validate().expect("valid sample profile");
             sample
                 .envelope
-                .validate_against_activation(&sample.activation, &limits, 2)
-                .expect("the sample is admitted by its activation");
-            assert!(
-                sample
-                    .envelope
-                    .validate_against_activation(&sample.activation, &limits, 1)
-                    .is_err(),
-                "the sample activation is not effective before height 2"
-            );
+                .validate_against_profile_v1(
+                    &sample.profile,
+                    &sample.profile.protocol_limits,
+                    &limits,
+                )
+                .expect("the sample matches its profile and limits");
         }
     }
 

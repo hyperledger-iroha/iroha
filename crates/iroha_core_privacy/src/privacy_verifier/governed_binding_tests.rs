@@ -1,7 +1,7 @@
 #[test]
 fn every_governed_envelope_binding_fails_closed_when_tampered() {
     type EnvelopeMutation = (&'static str, fn(&mut PrivacyProofEnvelopeV1));
-    let (envelope, activation, network_id) = valid_envelope();
+    let (envelope, profile, network_id) = valid_envelope();
     let mutations: [EnvelopeMutation; 9] = [
         ("protocol", |value| {
             value.protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
@@ -26,13 +26,13 @@ fn every_governed_envelope_binding_fails_closed_when_tampered() {
     for (label, mutate) in mutations {
         let mut candidate = envelope.clone();
         mutate(&mut candidate);
-        assert_rejected(&candidate, &activation, &network_id, label);
+        assert_rejected(&candidate, &profile, &network_id, label);
     }
 }
 #[test]
 fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
     type ContextMutation = (&'static str, fn(&mut PrivacyStatementContextV1));
-    let (envelope, activation, network_id) = valid_envelope();
+    let (envelope, profile, network_id) = valid_envelope();
     let mutations: [ContextMutation; 5] = [
         ("statement-parameter-id", |context| {
             context.parameter_id.0[0] ^= 1
@@ -54,6 +54,6 @@ fn every_statement_context_artifact_binding_fails_closed_when_tampered() {
         let mut candidate = envelope.clone();
         mutate(&mut verange_statement_mut(&mut candidate).context);
         refresh_statement_digest(&mut candidate);
-        assert_rejected(&candidate, &activation, &network_id, label);
+        assert_rejected(&candidate, &profile, &network_id, label);
     }
 }

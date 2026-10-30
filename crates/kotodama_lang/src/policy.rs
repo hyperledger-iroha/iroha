@@ -317,6 +317,7 @@ fn display_type(ty: &Type) -> String {
         Type::SoracloudResponse => "SoracloudResponse".to_string(),
         Type::Json => "Json".to_string(),
         Type::Unit => "()".to_string(),
+        Type::PendingAction => "PendingAction".into(),
         Type::Enum(descriptor) => descriptor.identity.clone(),
         Type::ErrorEnum(descriptor) => descriptor.identity.clone(),
         Type::Secret(inner) => format!("Secret<{}>", display_type(&inner)),

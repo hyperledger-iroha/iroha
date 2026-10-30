@@ -116,7 +116,7 @@ pub(crate) const fn num_windows(bits: usize, c: usize) -> usize {
 
 /// Reads `c` bits starting at bit `start` of a 256-bit little-endian value.
 #[inline]
-fn window_bits(limbs: &[u64; 4], start: usize, c: usize) -> u64 {
+pub(crate) fn window_bits(limbs: &[u64; 4], start: usize, c: usize) -> u64 {
     if start >= 256 {
         return 0;
     }
@@ -175,21 +175,49 @@ impl Digits {
         nw: usize,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Self, Cancelled> {
+        Self::recode_cancellable(scalars, c, nw, true, cancellation)
+    }
+
+    /// Recodes `scalars` on the calling thread. A single-task plan uses this, so
+    /// its kernel never waits on nested Rayon work that could start other kernels.
+    pub(crate) fn new_serial_cancellable<F: PastaField>(
+        scalars: &[F],
+        c: usize,
+        nw: usize,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Self, Cancelled> {
+        Self::recode_cancellable(scalars, c, nw, false, cancellation)
+    }
+
+    fn recode_cancellable<F: PastaField>(
+        scalars: &[F],
+        c: usize,
+        nw: usize,
+        parallel: bool,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Self, Cancelled> {
         use rayon::prelude::*;
         CancellationToken::checkpoint(cancellation)?;
         let mut data = vec![0i16; scalars.len() * nw];
-        data.par_chunks_mut(nw * 1024)
-            .zip(scalars.par_chunks(1024))
-            .for_each(|(out, chunk)| {
-                if CancellationToken::checkpoint(cancellation).is_err() {
-                    return;
-                }
-                for (s, o) in chunk.iter().zip(out.chunks_exact_mut(nw)) {
-                    let mut limbs = s.to_canonical_limbs();
-                    recode_into(&limbs, c, o);
-                    limbs.zeroize();
-                }
-            });
+        let recode = |(out, chunk): (&mut [i16], &[F])| {
+            if CancellationToken::checkpoint(cancellation).is_err() {
+                return;
+            }
+            for (s, o) in chunk.iter().zip(out.chunks_exact_mut(nw)) {
+                let mut limbs = s.to_canonical_limbs();
+                recode_into(&limbs, c, o);
+                limbs.zeroize();
+            }
+        };
+        if parallel {
+            data.par_chunks_mut(nw * 1024)
+                .zip(scalars.par_chunks(1024))
+                .for_each(recode);
+        } else {
+            data.chunks_mut(nw * 1024)
+                .zip(scalars.chunks(1024))
+                .for_each(recode);
+        }
         let result = Self { data, nw };
         CancellationToken::checkpoint(cancellation)?;
         Ok(result)

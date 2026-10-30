@@ -29,46 +29,17 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     private static readonly byte[] FeatureMasks =
         [0, 6, 1, 2, 2, 2, 0, 2, 7, 2, 7, 31];
 
-    private static readonly uint[] ProofSystems =
-        [0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0];
-
-    private static readonly uint[] Engines =
-        [0, 2, 3, 1, 4, 0, 5, 8, 6, 7, 0, 0];
-
-    private static readonly uint[] SecurityModels =
-        [0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0];
 
     [Fact]
-    public void ReleaseAndSecurityClaimPinAllNativeCatalogBytes()
+    public void RetiredQualificationFieldCannotReenterRuntimeManifest()
     {
-        var canonical = Exact12CatalogCommitment();
-        Assert.Equal(32, canonical.Length);
-        var fixture = BuildFixture();
-        PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
-        var hostile = new List<byte[]>
-        {
-            canonical[..31], canonical.Concat(new byte[] { 0 }).ToArray(),
-            canonical.Concat(new byte[16]).ToArray(),
-            Convert.FromHexString("E037F13904A0307C00DB15D85CFB406BD79772D20144A949DEF0F3FDA78E342E747F65787CBFBFFAC94F11C369E2BBFF"),
-        };
-        for (var index = 0; index < canonical.Length; index++)
-        {
-            var substituted = (byte[])canonical.Clone();
-            substituted[index] ^= 1;
-            hostile.Add(substituted);
-        }
-        foreach (var value in hostile)
-        {
-            foreach (var invalid in new[] { BuildFixture(releaseCatalog: value), BuildFixture(claimCatalog: value) })
-            {
-                Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-                    PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(invalid.Manifest, invalid.Catalog));
-            }
-        }
+        var fixture = BuildFixture(retiredQualificationField: true);
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
     }
 
     [Fact]
-    public void ManagedProjectionPreservesFieldsWithoutGrantingNativeQualification()
+    public void ManagedProjectionPreservesFieldsWithoutGrantingAuthenticatedOrigin()
     {
         var fixture = BuildFixture();
         var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
@@ -77,22 +48,14 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
 
         Assert.Equal(1U, decoded.Version);
         Assert.Equal(3UL, decoded.CommittedHeight);
-        var qualification = Assert.IsType<PrivacyExact12QualificationRecordV1>(
-            decoded.Qualification);
-        Assert.Equal(12, qualification.ReleaseManifest.Protocols.Count);
-        Assert.Equal(
-            qualification.ReleaseManifest.ManifestDigest,
-            qualification.DeploymentQualification.ReleaseManifestDigest);
+        Assert.Equal(NetworkId.FromBytes(Enumerable.Repeat((byte)0xd1, 32).ToArray()), decoded.NetworkId);
         Assert.Equal(12, decoded.Protocols.Count);
         Assert.True(decoded.Protocols[0].IsNetworkAvailable);
         Assert.All(decoded.Protocols, row => Assert.True(row.LocalCompiledTupleMatches));
         Assert.Equal(
-            PrivacyCapabilityReadinessV1.Unavailable,
+            PrivacyCapabilityReadinessV1.Available,
             decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1].Readiness);
-        Assert.Equal(
-            PrivacyCapabilityUnavailableReasonV1.NotRegistered,
-            decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1]
-                .UnavailableReason);
+        Assert.Null(decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV1].UnavailableReason);
         Assert.Equal(
             PrivacyCapabilityUnavailableReasonV1.CompiledProfile,
             decoded.Protocols[1].UnavailableReason);
@@ -101,92 +64,85 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             decoded.Protocols[1].CompiledProfileUnavailableReason);
         Assert.Equal(ConsensusPolicy(), decoded.ConsensusPolicy);
         Assert.Equal(
-            Option(ActivationForProfileZero(), present: true),
-            decoded.Protocols[0].ActivationCanonicalBytes);
-        var activationCopy = decoded.Protocols[0].ActivationCanonicalBytes;
-        activationCopy[0] ^= 0xff;
-        Assert.False(activationCopy.SequenceEqual(decoded.Protocols[0].ActivationCanonicalBytes));
+            Option(Array.Empty<byte>(), present: false),
+            decoded.Protocols[0].PolicyCanonicalBytes);
+        var policyCopy = decoded.Protocols[0].PolicyCanonicalBytes;
+        policyCopy[0] ^= 0xff;
+        Assert.False(policyCopy.SequenceEqual(decoded.Protocols[0].PolicyCanonicalBytes));
         Assert.Equal(fixture.Manifest, decoded.CanonicalArchive);
     }
 
     [Fact]
-    public void DeploymentProjectionRetainsExactNetworkAndRejectsOtherNetworkAdmission()
+    public void ManifestRetainsExactNetworkAndRejectsOtherNetworkAdmission()
     {
         var fixture = BuildFixture();
-        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-            fixture.Manifest, fixture.Catalog);
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
         var expected = NetworkId.FromBytes(Enumerable.Repeat((byte)0xd1, 32).ToArray());
-        var qualification = Assert.IsType<PrivacyExact12QualificationRecordV1>(decoded.Qualification);
-        Assert.Equal(expected, qualification.DeploymentQualification.NetworkId);
-        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
-            qualification, expected, requireQualification: true);
+        Assert.Equal(expected, decoded.NetworkId);
+        PrivacyExact12CapabilityManifestCodecV1.RequireManifestNetwork(decoded.NetworkId, expected);
         var other = NetworkId.FromBytes(Enumerable.Repeat((byte)0xd3, 32).ToArray());
         Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
-                qualification, other, requireQualification: true));
-        var copy = qualification.DeploymentQualification.NetworkId.ToBytes();
-        copy[0] ^= 1;
-        Assert.Equal(expected, qualification.DeploymentQualification.NetworkId);
+            PrivacyExact12CapabilityManifestCodecV1.RequireManifestNetwork(decoded.NetworkId, other));
+        var copy = decoded.NetworkId.ToBytes(); copy[0] ^= 1;
+        Assert.Equal(expected, decoded.NetworkId);
     }
 
     [Fact]
-    public void MissingDeploymentCanBeInspectedButCannotAuthorizeConstruction()
+    public void MissingManifestNetworkCannotAuthorizeConstruction()
     {
-        var expected = NetworkId.FromBytes(Enumerable.Repeat((byte)0xd1, 32).ToArray());
-        PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(null, expected);
+        var fixture = BuildFixture(networkId: Array.Empty<byte>());
         Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.RequireDeploymentNetwork(
-                null, expected, requireQualification: true));
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
     }
 
     [Fact]
     public void RecomputedManifestDigestCannotHideMalformedOrMismatchedNetworkBytes()
     {
         var valid = Enumerable.Repeat((byte)0xd1, 32).ToArray();
-        var invalid = new[]
+        foreach (var network in new[] { Array.Empty<byte>(), valid[..31], valid.Concat(new byte[] { 0 }).ToArray(), Struct(valid), Enumerable.Repeat((byte)0xd0, 32).ToArray() })
         {
-            Array.Empty<byte>(), valid[..31], valid.Concat(new byte[] { 0 }).ToArray(),
-            Struct(valid), Enumerable.Repeat((byte)0xd0, 32).ToArray(),
-        };
-        foreach (var network in invalid)
-        {
-            var fixture = BuildFixture(deploymentNetwork: network);
+            var fixture = BuildFixture(networkId: network);
             Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
                 PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
         }
-        foreach (var genesis in invalid.Append(Enumerable.Repeat((byte)0xd3, 32).ToArray()))
-        {
-            var fixture = BuildFixture(deploymentGenesis: genesis);
-            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
-        }
+        var foreign = BuildFixture(networkId: Enumerable.Repeat((byte)0xd3, 32).ToArray());
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(foreign.Manifest, foreign.Catalog);
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.RequireManifestNetwork(decoded.NetworkId, NetworkId.FromBytes(valid)));
     }
 
     [Fact]
-    public void PublicValidatorRejectsEmptyReleaseAndDeploymentEvidence()
+    public void PublicValidatorChecksCanonicalRuntimeDataWithoutMintingAnAuthenticatedOrigin()
     {
-        // The managed projection fixture omits all audits, release signatures,
-        // validator canaries and signatures. Only Rust can qualify these bytes.
+        // Structural model fixtures are not native catalog or Torii authority.
         var fixture = BuildFixture();
-        Assert.Equal(
-            PrivacyNative.IsAvailable()
-                ? PrivacyExact12CapabilityManifestValidationStatusV1.InvalidManifest
-                : PrivacyExact12CapabilityManifestValidationStatusV1.NativeUnavailable,
+        Assert.Equal(PrivacyNative.IsAvailable()
+            ? PrivacyExact12CapabilityManifestValidationStatusV1.Valid
+            : PrivacyExact12CapabilityManifestValidationStatusV1.NativeUnavailable,
             PrivacyNative.ValidateExact12CapabilityManifestV1(fixture.Manifest));
+        Assert.DoesNotContain(typeof(PrivacyExact12CapabilityManifestV1).GetConstructors(),
+            constructor => constructor.IsPublic);
     }
 
     [Fact]
-    public void LocalCatalogTupleSubstitutionFailsClosed()
+    public void OnlyTheSelectedRuntimeTupleControlsAdmission()
     {
         var fixture = BuildFixture();
-        var mismatchedProfiles = fixture.CompiledProfiles.Select(static value => (byte[])value.Clone()).ToArray();
-        mismatchedProfiles[0][^1] ^= 1;
-        var mismatchedCatalog = BuildCatalog(mismatchedProfiles);
+        var profiles = fixture.CompiledProfiles.Select(static value => (byte[])value.Clone()).ToArray();
+        // A different local X509 construction must not block the active ACE row.
+        profiles[5] = EnumValue(1, EnumValue(0));
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, BuildCatalog(profiles));
+        Assert.False(decoded.Protocols[5].LocalCompiledTupleMatches);
+        Assert.True(decoded.Protocols[0].LocalCompiledTupleMatches);
+        PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(decoded.Protocols[0]);
+        Assert.Throws<PrivacyCapabilityUnavailableException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(decoded.Protocols[5]));
 
+        profiles[0] = AvailableProfile(0, 0, 0, 0x35, EnumValue(0));
+        decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, BuildCatalog(profiles));
+        Assert.False(decoded.Protocols[0].LocalCompiledTupleMatches);
         Assert.Throws<PrivacyExact12CapabilityManifestCodecV1.LocalTupleMismatchException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                fixture.Manifest,
-                mismatchedCatalog));
+            PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(decoded.Protocols[0]));
     }
 
     [Fact]
@@ -219,85 +175,42 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     }
 
     [Fact]
-    public void ActiveProtocolWithoutRegisteredQualificationStaysUnavailable()
+    public void CompiledProtocolIsAvailableWithoutReleaseEvidenceOrRegistration()
     {
-        var fixture = BuildFixture(includeQualification: false);
-
-        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-            fixture.Manifest,
-            fixture.Catalog);
-
-        Assert.Equal(PrivacyCapabilityReadinessV1.Unavailable, decoded.Protocols[0].Readiness);
-        Assert.Equal(
-            PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification,
-            decoded.Protocols[0].UnavailableReason);
-        Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+        var fixture = BuildFixture();
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
+        Assert.Equal(PrivacyCapabilityReadinessV1.Available, decoded.Protocols[0].Readiness);
+        Assert.Null(decoded.Protocols[0].UnavailableReason);
+        Assert.True(decoded.Protocols[0].IsNetworkAvailable);
     }
 
     [Fact]
-    public void MismatchedRegisteredQualificationDerivesOnlyInvalidReadiness()
+    public void RetiredQualificationReadinessReasonsAreRejected()
     {
-        var fixture = BuildFixture(
-            rowZeroReadiness: UnavailableReadiness(6),
-            committedHeight: 4,
-            qualificationActivationHeight: 3,
-            qualificationConvergenceHeight: 4);
-        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-            fixture.Manifest,
-            fixture.Catalog);
-        Assert.Equal(
-            PrivacyCapabilityUnavailableReasonV1.InvalidProductionQualification,
-            decoded.Protocols[0].UnavailableReason);
-
-        var forged = BuildFixture(
-            committedHeight: 4,
-            qualificationActivationHeight: 3,
-            qualificationConvergenceHeight: 4);
-        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                forged.Manifest,
-                forged.Catalog));
-    }
-
-    [Fact]
-    public void GovernanceLifecycleProjectsEveryClosedUnavailableReason()
-    {
-        var cases = new[]
+        foreach (var tag in new[] { 1U, 2U, 3U, 4U, 5U, 6U })
         {
-            (
-                Lifecycle: EnumValue(0, Struct(U64(1))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.Proposed,
-                ReasonTag: 2U),
-            (
-                Lifecycle: EnumValue(2, Struct(U64(1), U64(2), U64(3))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.Suspended,
-                ReasonTag: 3U),
-            (
-                Lifecycle: EnumValue(
-                    3,
-                    Struct(U64(1), Option(U64(2), present: true), U64(3))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.Retired,
-                ReasonTag: 4U),
-        };
-
-        foreach (var item in cases)
-        {
-            var fixture = BuildFixture(
-                rowZeroReadiness: UnavailableReadiness(item.ReasonTag),
-                rowZeroLifecycle: item.Lifecycle,
-                committedHeight: 3);
-            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                fixture.Manifest,
-                fixture.Catalog);
-
-            Assert.Equal(PrivacyCapabilityReadinessV1.Unavailable, decoded.Protocols[0].Readiness);
-            Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
-            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+            var fixture = BuildFixture(rowZeroReadiness: UnavailableReadiness(tag));
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
         }
     }
 
     [Fact]
-    public void PendingTighteningAcceptsNextBlockAndRejectsInvalidSnapshotHeights()
+    public void RetiredGovernanceLifecycleRecordsCannotReenterOrdinaryPolicy()
+    {
+        foreach (var lifecycle in new[] {
+            EnumValue(0, Struct(U64(1))),
+            EnumValue(2, Struct(U64(1), U64(2), U64(3))),
+            EnumValue(3, Struct(U64(1), Option(U64(2), true), U64(3))) })
+        {
+            var fixture = BuildFixture(rowZeroLifecycle: lifecycle);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+        }
+    }
+
+    [Fact]
+    public void PendingUpdatesAcceptNextBlockAndRejectInvalidSnapshotHeights()
     {
         (ulong Scheduled, ulong Effective, ulong Committed, bool Accepted)[] cases =
         [
@@ -318,7 +231,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                     : EnumValue(6, Struct(U32(3)));
                 var pending = Struct(U64(item.Scheduled), U64(item.Effective), next);
                 var fixture = BuildFixture(
-                    committedHeight: item.Committed, includeQualification: false,
+                    committedHeight: item.Committed,
                     pendingConsensus: consensus ? pending : null,
                     pendingJindo: consensus ? null : pending);
                 if (item.Accepted)
@@ -326,7 +239,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                     var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
                         fixture.Manifest, fixture.Catalog);
                     Assert.Equal(fixture.Manifest, decoded.CanonicalArchive);
-                    Assert.False(decoded.Protocols[0].IsNetworkAvailable);
+                    Assert.True(decoded.Protocols[0].IsNetworkAvailable);
                 }
                 else
                 {
@@ -339,71 +252,35 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     }
 
     [Fact]
-    public void ProposedRemainsPendingUntilExplicitActivationAtEveryCommittedHeight()
+    public void AvailableCompiledProfilesNeedNoPolicyRegistrationAtAnyCommittedHeight()
     {
-        foreach (var committedHeight in new[] { 1UL, 3UL, ulong.MaxValue })
+        foreach (var height in new[] { 1UL, 3UL, ulong.MaxValue })
         {
-            var lifecycle = EnumValue(0, Struct(U64(1)));
-            var fixture = BuildFixture(
-                rowZeroReadiness: UnavailableReadiness(2),
-                rowZeroLifecycle: lifecycle,
-                committedHeight: committedHeight,
-                includeQualification: false);
-            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                fixture.Manifest, fixture.Catalog);
-            Assert.Equal(PrivacyCapabilityUnavailableReasonV1.Proposed,
-                decoded.Protocols[0].UnavailableReason);
-            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
-            Assert.Equal(Option(ActivationForProfileZero(lifecycleOverride: lifecycle), present: true),
-                decoded.Protocols[0].ActivationCanonicalBytes);
-
-            var forged = BuildFixture(
-                rowZeroLifecycle: lifecycle,
-                committedHeight: committedHeight,
-                includeQualification: false);
-            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                    forged.Manifest, forged.Catalog));
+            var fixture = BuildFixture(committedHeight: height);
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
+            foreach (var index in new[] { 0, 6 })
+            {
+                Assert.True(decoded.Protocols[index].IsNetworkAvailable);
+                Assert.Equal(Option(Array.Empty<byte>(), false), decoded.Protocols[index].PolicyCanonicalBytes);
+                PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(decoded.Protocols[index]);
+            }
         }
     }
 
     [Fact]
-    public void SameHeightActivationRetainsQualificationAndStrictLaterHistory()
+    public void EveryRetiredLifecycleIncludingSameHeightActivationIsRejected()
     {
-        var cases = new[]
+        foreach (var lifecycle in new[] {
+            EnumValue(1, Struct(U64(1), U64(1), U64(1))),
+            EnumValue(1, Struct(U64(1), U64(1), U64(3))),
+            EnumValue(2, Struct(U64(1), U64(1), U64(2))),
+            EnumValue(3, Struct(U64(1), Option(U64(1), true), U64(2))),
+            EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), false), U64(2))) })
         {
-            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(1))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification, Tag: 5U),
-            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(3))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.MissingProductionQualification, Tag: 5U),
-            (Lifecycle: EnumValue(2, Struct(U64(1), U64(1), U64(2))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.Suspended, Tag: 3U),
-            (Lifecycle: EnumValue(3, Struct(U64(1), Option(U64(1), present: true), U64(2))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.Retired, Tag: 4U),
-            (Lifecycle: EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), present: false), U64(2))),
-                Reason: PrivacyCapabilityUnavailableReasonV1.Retired, Tag: 4U),
-        };
-        foreach (var item in cases)
-        {
-            var fixture = BuildFixture(
-                rowZeroReadiness: UnavailableReadiness(item.Tag),
-                rowZeroLifecycle: item.Lifecycle,
-                includeQualification: false);
-            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                fixture.Manifest, fixture.Catalog);
-            Assert.Equal(item.Reason, decoded.Protocols[0].UnavailableReason);
-            Assert.False(decoded.Protocols[0].IsNetworkAvailable);
-            Assert.Equal(Option(ActivationForProfileZero(lifecycleOverride: item.Lifecycle), present: true),
-                decoded.Protocols[0].ActivationCanonicalBytes);
+            var fixture = BuildFixture(rowZeroLifecycle: lifecycle);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
         }
-
-        var qualified = BuildFixture(
-            rowZeroLifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(1))),
-            qualificationActivationHeight: 1);
-        var projected = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-            qualified.Manifest, qualified.Catalog);
-        Assert.True(projected.Protocols[0].IsNetworkAvailable);
-        // This managed projection preserves evidence; native admission still validates it.
     }
 
     [Fact]
@@ -416,10 +293,10 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             (Lifecycle: EnumValue(0, Struct()), Tag: 2U),
             (Lifecycle: EnumValue(0, Struct(U64(0))), Tag: 2U),
             (Lifecycle: EnumValue(0, Struct(U64(4))), Tag: 2U),
-            (Lifecycle: EnumValue(1, Struct(U64(2), U64(1), U64(2))), Tag: 5U),
-            (Lifecycle: EnumValue(1, Struct(U64(1), U64(2), U64(1))), Tag: 5U),
-            (Lifecycle: EnumValue(1, Struct(U64(1), U64(4), U64(4))), Tag: 5U),
-            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(4))), Tag: 5U),
+            (Lifecycle: EnumValue(1, Struct(U64(2), U64(1), U64(2))), Tag: 0U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(2), U64(1))), Tag: 0U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(4), U64(4))), Tag: 0U),
+            (Lifecycle: EnumValue(1, Struct(U64(1), U64(1), U64(4))), Tag: 0U),
             (Lifecycle: EnumValue(2, Struct(U64(1), U64(1), U64(1))), Tag: 3U),
             (Lifecycle: EnumValue(3, Struct(U64(1), Option(U64(1), present: true), U64(1))), Tag: 4U),
             (Lifecycle: EnumValue(3, Struct(U64(1), Option(Array.Empty<byte>(), present: false), U64(1))), Tag: 4U),
@@ -427,9 +304,8 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         foreach (var item in cases)
         {
             var fixture = BuildFixture(
-                rowZeroReadiness: UnavailableReadiness(item.Tag),
-                rowZeroLifecycle: item.Lifecycle,
-                includeQualification: false);
+                rowZeroReadiness: item.Tag == 0 ? EnumValue(0) : UnavailableReadiness(item.Tag),
+                rowZeroLifecycle: item.Lifecycle);
             Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
                 PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
                     fixture.Manifest, fixture.Catalog));
@@ -453,21 +329,43 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     }
 
     [Fact]
-    public void ReleaseQualificationMustBindItsCanonicalSecurityClaim()
+    public void SelectedUnavailableExceptionPreservesJointSecurityReason()
     {
-        var fixture = BuildFixture(corruptSecurityClaimDigest: true);
+        var fixture = BuildFixture();
+        var row = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog).Protocols[5];
+        var error = Assert.Throws<PrivacyCapabilityUnavailableException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.RequireSelectedRuntimeProfile(row));
+        Assert.Equal(PrivacyProtocolIdV1.IrohaZkX509StarkP256V1, error.ProtocolId);
+        Assert.Equal(PrivacyCapabilityUnavailableReasonV1.CompiledProfile, error.Reason);
+        Assert.Equal(PrivacyCompiledProfileUnavailableReasonV1.JointSecurityReductionIncomplete, error.CompiledProfileReason);
+        Assert.Null(error.SchemaError);
+        Assert.Contains("JointSecurityReductionIncomplete", error.Message);
+    }
 
+    [Fact]
+    public void JointSecurityReductionFailureIsTypedUnitAndCannotClaimAvailability()
+    {
+        var fixture = BuildFixture();
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
+        Assert.Equal(PrivacyCompiledProfileUnavailableReasonV1.JointSecurityReductionIncomplete,
+            decoded.Protocols[5].CompiledProfileUnavailableReason);
+        Assert.False(decoded.Protocols[5].IsNetworkAvailable);
+        foreach (var invalid in new[] { EnumValue(3, new byte[] { 0 }), EnumValue(4) })
+        {
+            var malformed = BuildFixture(x509UnavailableReason: invalid);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(malformed.Manifest, malformed.Catalog));
+        }
+        var forged = BuildFixture(x509AvailableReadiness: true);
         Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
-                fixture.Manifest,
-                fixture.Catalog));
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(forged.Manifest, forged.Catalog));
     }
 
     [Fact]
     public void ReadinessSurfaceContainsOnlyTheFinalHardCutStates()
     {
         Assert.Equal(
-            new[] { "ProductionQualified", "Unavailable" },
+            new[] { "Available", "Unavailable" },
             Enum.GetNames<PrivacyCapabilityReadinessV1>());
     }
 
@@ -491,6 +389,81 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
                 fixture.Manifest,
                 fixture.Catalog));
+    }
+
+    [Fact]
+    public void OrdinaryPolicyIsOptionalEvenForUnavailableProfilesAndCannotCreateReadiness()
+    {
+        var policy = Struct(EnumValue(5), EnumValue(5), Option(Array.Empty<byte>(), false));
+        var fixture = BuildFixture(x509Policy: policy);
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
+        Assert.Equal(Option(policy, true), decoded.Protocols[5].PolicyCanonicalBytes);
+        Assert.False(decoded.Protocols[5].IsNetworkAvailable);
+        Assert.Equal(PrivacyCompiledProfileUnavailableReasonV1.JointSecurityReductionIncomplete, decoded.Protocols[5].CompiledProfileUnavailableReason);
+        foreach (var malformed in new[] {
+            Struct(EnumValue(6), EnumValue(5), Option(Array.Empty<byte>(), false)),
+            Struct(EnumValue(5), EnumValue(6, Struct(U32(4))), Option(Array.Empty<byte>(), false)),
+            Struct(EnumValue(5), EnumValue(5), Option(Array.Empty<byte>(), false), U64(1)) })
+        {
+            var invalid = BuildFixture(x509Policy: malformed);
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(invalid.Manifest, invalid.Catalog));
+        }
+    }
+
+    [Theory]
+    [InlineData(0U, false)]
+    [InlineData(8U, true)]
+    [InlineData(9U, false)]
+    [InlineData(16U, false)]
+    public void VeRangeOrdinaryPolicyUsesCanonicalEightCommitmentCeiling(uint count, bool accepted)
+    {
+        var policy = Struct(EnumValue(2), EnumValue(2, Struct(U32(count))), Option(Array.Empty<byte>(), false));
+        var fixture = BuildFixture(verangePolicy: policy);
+        if (accepted)
+        {
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
+            Assert.Equal(Option(policy, true), decoded.Protocols[2].PolicyCanonicalBytes);
+            Assert.False(decoded.Protocols[2].IsNetworkAvailable);
+        }
+        else
+        {
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+        }
+    }
+
+    [Fact]
+    public void ProtocolUpdatesCanLoosenWithinHardBoundsButCannotBeNoopOrExceedBounds()
+    {
+        foreach (var next in new[] { 1U, 3U, 4U })
+        {
+            var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: Struct(U64(3), U64(4), EnumValue(6, Struct(U32(next)))));
+            var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
+            Assert.True(decoded.Protocols[6].IsNetworkAvailable);
+        }
+        foreach (var next in new[] { 0U, 2U, 5U })
+        {
+            var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: Struct(U64(3), U64(4), EnumValue(6, Struct(U32(next)))));
+            Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+        }
+    }
+
+    [Fact]
+    public void ConsensusUpdatesCanLoosenWithinHardBoundsButCannotBeNoopOrExceedBounds()
+    {
+        foreach (var next in new[] { 512U, 1536U, 2048U, 0U, 1024U, 2049U })
+        {
+            var limits = Struct(U32(1), U32(2), U32(9 * 1024 * 1024), U32(9_699_840), U32(9_699_840),
+                U32(16_711_680), U32(256 * 1024), U32(8), U32(8), U32(next));
+            var fixture = BuildFixture(retainedRootCount: 1024, pendingConsensus: Struct(U64(3), U64(4), limits));
+            if (next is > 0 and <= 2048 && next != 1024)
+                Assert.Equal(fixture.Manifest, PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog).CanonicalArchive);
+            else Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+                PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+        }
+        Assert.Equal(new[] { "CompiledProfile" }, Enum.GetNames<PrivacyCapabilityUnavailableReasonV1>());
     }
 
     [Fact]
@@ -531,18 +504,15 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         ulong committedHeight = 3,
         uint maxActionsPerTransaction = 1,
         byte activationDigestByte = 0x31,
-        bool includeQualification = true,
         bool useLegacyNineFieldRows = false,
         bool useLegacyAssurance = false,
-        bool corruptSecurityClaimDigest = false,
-        ulong qualificationActivationHeight = 2,
-        ulong qualificationConvergenceHeight = 3,
-        byte[]? deploymentNetwork = null,
-        byte[]? deploymentGenesis = null,
+        byte[]? networkId = null,
+        bool retiredQualificationField = false,
+        byte[]? x509UnavailableReason = null,
+        bool x509AvailableReadiness = false,
         byte[]? pendingConsensus = null,
         byte[]? pendingJindo = null,
-        byte[]? releaseCatalog = null,
-        byte[]? claimCatalog = null)
+        byte[]? rowZeroPolicy = null, byte[]? x509Policy = null, uint jindoCurrentLimit = 4, uint retainedRootCount = 2048, byte[]? verangePolicy = null)
     {
         var profiles = new byte[12][];
         profiles[0] = AvailableProfile(
@@ -564,7 +534,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             }
             else
             {
-                profiles[index] = EnumValue(1, EnumValue(0));
+                profiles[index] = EnumValue(1, index == 5 ? x509UnavailableReason ?? EnumValue(3) : EnumValue(0));
             }
         }
 
@@ -580,22 +550,20 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 }
                 : index switch
                 {
-                    0 => rowZeroReadiness ?? (includeQualification
-                        ? EnumValue(0)
-                        : UnavailableReadiness(5)),
-                    6 => UnavailableReadiness(pendingJindo is null ? 1U : 5U),
+                    0 => rowZeroReadiness ?? EnumValue(0),
+                    5 => x509AvailableReadiness ? EnumValue(0) : UnavailableReadiness(0, x509UnavailableReason ?? EnumValue(3)),
+                    6 => EnumValue(0),
                     _ => UnavailableReadiness(0, EnumValue(0)),
                 };
-            var activation = index == 0
-                ? Option(
-                    ActivationForProfileZero(
-                        activationDigestByte,
-                        useLegacyAssurance || useLegacyNineFieldRows,
-                        rowZeroLifecycle),
-                    present: true)
-                : index == 6 && pendingJindo is not null
-                    ? Option(ActivationForJindo(pendingJindo), present: true)
-                    : Option(Array.Empty<byte>(), present: false);
+            var policy = index == 0
+                ? rowZeroLifecycle is not null || activationDigestByte != 0x31 || useLegacyAssurance || useLegacyNineFieldRows
+                    ? Option(RetiredActivationForProfileZero(activationDigestByte, useLegacyAssurance || useLegacyNineFieldRows, rowZeroLifecycle), true)
+                    : rowZeroPolicy is null ? Option(Array.Empty<byte>(), false) : Option(rowZeroPolicy, true)
+                : index == 6 && (pendingJindo is not null || jindoCurrentLimit != 4)
+                    ? Option(Struct(EnumValue(6), EnumValue(6, Struct(U32(jindoCurrentLimit))), Option(pendingJindo ?? Array.Empty<byte>(), pendingJindo is not null)), true)
+                : index == 5 && x509Policy is not null ? Option(x509Policy, true)
+                : index == 2 && verangePolicy is not null ? Option(verangePolicy, true)
+                : Option(Array.Empty<byte>(), false);
             var fields = new List<byte[]>
             {
                 EnumValue(checked((uint)index)),
@@ -608,48 +576,45 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             if (useLegacyNineFieldRows)
             {
                 fields.Add(EnumValue(index == 0 ? 2U : 0U));
-                fields.Add(activation);
+                fields.Add(policy);
                 fields.Add(index == 6
                     ? Option(EnumValue(0), present: true)
                     : Option(Array.Empty<byte>(), present: false));
             }
             else
             {
-                fields.Add(activation);
+                fields.Add(policy);
             }
             rows[index] = Struct(fields.ToArray());
         }
 
         var catalog = BuildCatalog(profiles);
-        var qualification = includeQualification
-            ? Exact12Qualification(
-                corruptSecurityClaimDigest,
-                qualificationActivationHeight,
-                qualificationConvergenceHeight,
-                deploymentNetwork,
-                deploymentGenesis, releaseCatalog, claimCatalog)
-            : Array.Empty<byte>();
         var manifestWithZeroDigest = BuildManifestArchive(
             rows,
-            qualification,
-            includeQualification,
+            networkId ?? Enumerable.Repeat((byte)0xd1, 32).ToArray(),
+            retiredQualificationField,
             new byte[32],
             maxActionsPerTransaction,
             committedHeight,
-            pendingConsensus);
+            pendingConsensus, retainedRootCount);
         var digest = ComputeManifestDigest(manifestWithZeroDigest);
         return new Fixture(
             BuildManifestArchive(
                 rows,
-                qualification,
-                includeQualification,
+                networkId ?? Enumerable.Repeat((byte)0xd1, 32).ToArray(),
+                retiredQualificationField,
                 digest,
                 maxActionsPerTransaction,
                 committedHeight,
-                pendingConsensus),
+                pendingConsensus, retainedRootCount),
             catalog,
             profiles);
     }
+
+    private static byte[] BuildCatalog(IReadOnlyList<byte[]> profiles) => NoritoCodec.Encode(
+        PrivacyExact12CapabilityManifestCodecV1.CatalogSchemaName,
+        Struct(U32(1), Sequence(profiles.Select((profile, index) => Struct(EnumValue((uint)index), profile)).ToArray())),
+        NoritoCodec.CanonicalLayoutFlags);
 
     private static byte[] AvailableProfile(
         uint protocol,
@@ -673,17 +638,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 limits));
     }
 
-    private static byte[] ActivationForJindo(byte[] pending)
-    {
-        var digest = Struct(Enumerable.Repeat((byte)0x61, 32).ToArray());
-        return Struct(
-            EnumValue(6), EnumValue(5), EnumValue(5),
-            digest, digest, digest, digest, digest,
-            EnumValue(1, Struct(U64(1), U64(2), U64(2))),
-            EnumValue(6, Struct(U32(4))), Option(pending, present: true));
-    }
-
-    private static byte[] ActivationForProfileZero(
+    private static byte[] RetiredActivationForProfileZero(
         byte digestByte = 0x31,
         bool useLegacyAssurance = false,
         byte[]? lifecycleOverride = null)
@@ -711,161 +666,8 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         return Struct(fields.ToArray());
     }
 
-    private static (byte[] Claim, byte[] Digest) SecurityClaim(
-        int protocolIndex,
-        byte digestByte,
-        bool corruptDigest,
-        byte[]? claimCatalog)
-    {
-        var activationDigest = Struct(Enumerable.Repeat(digestByte, 32).ToArray());
-        var securityClaim = Struct(
-            claimCatalog ?? Exact12CatalogCommitment(),
-            EnumValue(checked((uint)protocolIndex)),
-            EnumValue(SecurityModels[protocolIndex]),
-            U16(128),
-            U16(128),
-            activationDigest,
-            activationDigest,
-            Struct(Enumerable.Repeat((byte)0xe1, 32).ToArray()),
-            Struct(Enumerable.Repeat((byte)0xe2, 32).ToArray()));
-        var claimDigest = ComputeSecurityClaimDigest(securityClaim);
-        if (corruptDigest)
-        {
-            claimDigest[0] ^= 0x80;
-        }
-        return (securityClaim, claimDigest);
-    }
-
-    private static byte[] Exact12Qualification(
-        bool corruptSecurityClaimDigest,
-        ulong firstActivationHeight,
-        ulong convergenceHeight,
-        byte[]? deploymentNetwork,
-        byte[]? deploymentGenesis,
-        byte[]? releaseCatalog,
-        byte[]? claimCatalog)
-    {
-        var releaseDigest = Enumerable.Repeat((byte)0xe3, 32).ToArray();
-        var bindings = Enumerable.Range(0, 12)
-            .Select(index => ReleaseBinding(
-                index,
-                ProfileDigestByte(index),
-                corruptSecurityClaimDigest && index == 0, claimCatalog))
-            .ToArray();
-        var source = Struct(
-            Digest(0xa1),
-            new byte[] { 1 },
-            CompactString("csharp-test-toolchain"),
-            Digest(0xa2),
-            Digest(0xa3));
-        var release = Struct(
-            U16(1),
-            CompactString("iroha-privacy-exact12-v1"),
-            releaseCatalog ?? Exact12CatalogCommitment(),
-            source,
-            U16(1),
-            Digest(0xa4),
-            Digest(0xa5),
-            Sequence(Array.Empty<byte[]>()),
-            Sequence(bindings),
-            Sequence(Array.Empty<byte[]>()),
-            Sequence(Array.Empty<byte[]>()),
-            Sequence(Array.Empty<byte[]>()),
-            Sequence(Array.Empty<byte[]>()),
-            Digest(0xa6),
-            Sequence(Array.Empty<byte[]>()),
-            Digest(0xe2),
-            Sequence(Array.Empty<byte[]>()),
-            Struct(releaseDigest));
-        var activations = Enumerable.Range(0, 12)
-            .Select(index => Struct(
-                EnumValue(checked((uint)index)),
-                U64(index == 0 ? firstActivationHeight : 2)))
-            .ToArray();
-        var deployment = Struct(
-            U16(1),
-            CompactString("csharp-test-chain"),
-            deploymentNetwork ?? Enumerable.Repeat((byte)0xd1, 32).ToArray(),
-            deploymentGenesis ?? Enumerable.Repeat((byte)0xd1, 32).ToArray(),
-            Struct(releaseDigest),
-            Digest(0xd1),
-            Sequence(activations),
-            Digest(0xd2),
-            CompactString("v1"),
-            U64(convergenceHeight),
-            Digest(0xd3),
-            Sequence(Array.Empty<byte[]>()),
-            Sequence(Array.Empty<byte[]>()),
-            Digest(0xe4));
-        return Struct(release, deployment);
-    }
-
-    private static byte[] ReleaseBinding(
-        int protocolIndex,
-        byte digestByte,
-        bool corruptSecurityClaimDigest,
-        byte[]? claimCatalog)
-    {
-        var binding = Digest(digestByte);
-        var claim = SecurityClaim(
-            protocolIndex,
-            digestByte,
-            corruptSecurityClaimDigest, claimCatalog);
-        return Struct(
-            EnumValue(checked((uint)protocolIndex)),
-            EnumValue(ProofSystems[protocolIndex]),
-            EnumValue(Engines[protocolIndex]),
-            binding,
-            binding,
-            binding,
-            binding,
-            binding,
-            claim.Claim,
-            Struct(claim.Digest));
-    }
-
-    private static byte ProfileDigestByte(int index) => index switch
-    {
-        0 => 0x31,
-        6 => 0x61,
-        _ => checked((byte)(0x40 + index)),
-    };
-
-    private static byte[] Digest(byte value) =>
-        Struct(Enumerable.Repeat(value, 32).ToArray());
-
-    private static byte[] Exact12CatalogCommitment() =>
-        Convert.FromHexString(
-            "5BCF366FB18D2E4361486C015DA5B41A3FB00EDF05611042CCC452120D176EB0");
-
-    private static byte[] ComputeSecurityClaimDigest(byte[] claim)
-    {
-        var domain = Encoding.UTF8.GetBytes("iroha:privacy:security-claim:v1");
-        var canonicalClaim = NoritoCodec.Encode(
-            "iroha_data_model::privacy::protocol::PrivacySecurityClaimV1",
-            claim,
-            NoritoCodec.CanonicalLayoutFlags);
-        Span<byte> length = stackalloc byte[sizeof(ulong)];
-        BinaryPrimitives.WriteUInt64LittleEndian(length, checked((ulong)canonicalClaim.Length));
-        var input = new byte[domain.Length + length.Length + canonicalClaim.Length];
-        domain.CopyTo(input, 0);
-        length.CopyTo(input.AsSpan(domain.Length));
-        canonicalClaim.CopyTo(input, domain.Length + length.Length);
-        return SHA256.HashData(input);
-    }
-
-    private static byte[] BuildCatalog(IReadOnlyList<byte[]> profiles)
-    {
-        var rows = profiles.Select((profile, index) =>
-            Struct(EnumValue(checked((uint)index)), profile)).ToArray();
-        return NoritoCodec.Encode(
-            PrivacyExact12CapabilityManifestCodecV1.CatalogSchemaName,
-            Struct(U32(1), Sequence(rows)),
-            NoritoCodec.CanonicalLayoutFlags);
-    }
-
     private static byte[] ConsensusPolicy(
-        uint maxActionsPerTransaction = 1, byte[]? pending = null)
+        uint maxActionsPerTransaction = 1, byte[]? pending = null, uint retainedRootCount = 2048, byte[]? verangePolicy = null)
     {
         var consensusLimits = Struct(
             U32(maxActionsPerTransaction),
@@ -877,7 +679,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             U32(256 * 1024),
             U32(8),
             U32(8),
-            U32(2_048));
+            U32(retainedRootCount));
         return Struct(
             consensusLimits,
             Option(pending ?? Array.Empty<byte>(), present: pending is not null));
@@ -885,23 +687,19 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
 
     private static byte[] BuildManifestArchive(
         IReadOnlyList<byte[]> rows,
-        byte[] qualification,
-        bool includeQualification,
+        byte[] networkId,
+        bool retiredQualificationField,
         byte[] digest,
         uint maxActionsPerTransaction,
         ulong committedHeight,
-        byte[]? pendingConsensus = null)
+        byte[]? pendingConsensus = null,
+        uint retainedRootCount = 2048, byte[]? verangePolicy = null)
     {
-        return NoritoCodec.Encode(
-            PrivacyExact12CapabilityManifestCodecV1.ManifestSchemaName,
-            Struct(
-                U32(1),
-                U64(committedHeight),
-                ConsensusPolicy(maxActionsPerTransaction, pendingConsensus),
-                Option(qualification, includeQualification),
-                Sequence(rows),
-                Struct(digest)),
-            NoritoCodec.CanonicalLayoutFlags);
+        var fields = new List<byte[]> { U32(1), networkId, U64(committedHeight), ConsensusPolicy(maxActionsPerTransaction, pendingConsensus, retainedRootCount) };
+        if (retiredQualificationField) fields.Add(Option(Array.Empty<byte>(), false));
+        fields.Add(Sequence(rows)); fields.Add(Struct(digest));
+        return NoritoCodec.Encode(PrivacyExact12CapabilityManifestCodecV1.ManifestSchemaName,
+            Struct(fields.ToArray()), NoritoCodec.CanonicalLayoutFlags);
     }
 
     private static byte[] ComputeManifestDigest(byte[] normalizedArchive)

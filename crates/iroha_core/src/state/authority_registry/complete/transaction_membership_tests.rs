@@ -542,6 +542,8 @@ fn original_prepared_membership_reads_staged_pair_without_a_committed_observatio
 
 #[test]
 fn original_membership_refusal_retries_same_source_and_refunds_only_actual_nodes() {
+    // Keep unrelated fixture retirements from reopening the measured pool.
+    let _fixture_retirement = crossbeam_epoch::pin();
     let state = original_state();
     let pool = state.ivm_execution_budget();
     let mut refunds = pool.deferred_refund_batch();
@@ -830,6 +832,10 @@ impl Wake for OriginalStateWake {
 #[test]
 fn original_publisher_refund_batch_keeps_success_error_and_unwind_wakes_after_writer_retirement() {
     for mode in 0..3 {
+        // Construction retires the initial AMX and parameter Cell generations.
+        // Keep those unrelated owners alive through this exact refund/wake probe;
+        // another collector thread must not refund them inside its baseline.
+        let _constructor_retirement = crossbeam_epoch::pin();
         let state = Arc::new(original_state());
         let pool = state.ivm_execution_budget();
         let mut block = state.block(original_header());

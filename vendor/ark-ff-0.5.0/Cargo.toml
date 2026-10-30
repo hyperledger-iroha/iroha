@@ -19,6 +19,7 @@ build = false
 include = [
     "Cargo.toml",
     "src",
+    "tests",
     "README.md",
     "LICENSE-APACHE",
     "LICENSE-MIT",
@@ -46,6 +47,10 @@ workspace = true
 [lib]
 name = "ark_ff"
 path = "src/lib.rs"
+
+[[test]]
+name = "native_arithmetic"
+path = "tests/native_arithmetic.rs"
 
 [dependencies.ark-ff-asm]
 version = "0.5.0"

@@ -22,6 +22,21 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 class PrivacyExact12FixtureCodecV1Test {
     @Test
+    fun eachProtocolRequiresItsExactSubmissionRoute() {
+        for (protocol in PrivacyProtocolIdV1.values()) {
+            val expected = if (protocol == PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1)
+                SubmitPrivacyZkX509CertificateV1.WIRE_ID else PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID
+            assertEquals(expected, PrivacyExact12FixtureCodecV1.submitProofWireIdV1(protocol))
+            fun row(wire: String) = PrivacyExact12TypedFixtureRowV1(protocol, byteArrayOf(1), byteArrayOf(2),
+                wire, byteArrayOf(3), byteArrayOf(4), ByteArray(32) { 5 }, byteArrayOf(6), byteArrayOf(7), ByteArray(32) { 8 })
+            row(expected)
+            val wrong = if (expected == SubmitPrivacyZkX509CertificateV1.WIRE_ID)
+                PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID else SubmitPrivacyZkX509CertificateV1.WIRE_ID
+            assertFailsWith<IllegalArgumentException> { row(wrong) }
+        }
+    }
+
+    @Test
     fun canonicalFixtureDecodesAndReencodesByteIdentically() {
         val fixture = loadFixture()
         val bundle = PrivacyExact12FixtureCodecV1.decodeCanonicalBase64(fixture.base64)
@@ -35,7 +50,7 @@ class PrivacyExact12FixtureCodecV1Test {
         bundle.rows.forEach { row ->
             assertTrue(row.statementNorito.isNotEmpty())
             assertTrue(row.envelopeNorito.isNotEmpty())
-            assertEquals(PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID, row.submitProofWireId)
+            assertEquals(PrivacyExact12FixtureCodecV1.submitProofWireIdV1(row.protocolId), row.submitProofWireId)
             assertTrue(row.submitProofInstructionNorito.isNotEmpty())
             assertTrue(row.transactionIntentProjectionNorito.isNotEmpty())
             assertEquals(PrivacyExact12FixtureCodecV1.HASH_BYTES, row.transactionIntentDigest.size)
@@ -438,7 +453,7 @@ class PrivacyExact12FixtureCodecV1Test {
         protocol,
         statement,
         byteArrayOf(2),
-        PrivacyExact12FixtureCodecV1.SUBMIT_PROOF_WIRE_ID,
+        PrivacyExact12FixtureCodecV1.submitProofWireIdV1(protocol),
         byteArrayOf(3),
         byteArrayOf(4),
         ByteArray(PrivacyExact12FixtureCodecV1.HASH_BYTES) { 5 },

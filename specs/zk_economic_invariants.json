@@ -252,7 +252,7 @@
     {
      "variant": "ZkX509Certificate",
      "value_bearing": false,
-     "arm": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(effect) => {"},
+     "arm": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "symbol": "fn apply_verified_effect("},
      "forbidden": [
       "execute_verified_",
       "withdraw_numeric_asset",
@@ -307,21 +307,11 @@
     {"variant": "ProgramState", "management": "ProofManaged", "protocols": ["ivm_private_note"]}
    ]
   },
-  "lifecycle_states": {
-   "path": "crates/iroha_data_model/src/privacy/protocol.rs",
-   "enum": "PrivacyProtocolLifecycleV1",
-   "states": [
-    {"variant": "Proposed", "admits_value_effects": false},
-    {"variant": "Active", "admits_value_effects": true},
-    {"variant": "Suspended", "admits_value_effects": false},
-    {"variant": "Retired", "admits_value_effects": false}
-   ]
-  },
   "pool_state": {
    "what": "Every committed World map that holds pool, nullifier, commitment or root state, with the protocols that own it. A map that appears under these names without an entry fails the check, so another shielded pool cannot enter the tree unrecorded.",
    "path": "crates/iroha_core/src/state.rs",
    "struct": "WorldData",
-   "pattern": "^(privacy_(?!consensus_policy$|exact12_qualification$|activations$)\\w+|private_settlement_\\w+|zk_assets|kagemusha_wallet_ledger|\\w*nullifier\\w*)$",
+   "pattern": "^(privacy_(?!consensus_policy$|protocol_policies$)\\w+|private_settlement_\\w+|zk_assets|kagemusha_wallet_ledger|\\w*nullifier\\w*)$",
    "fields": [
     {"field": "private_settlement_governance", "protocols": ["atomic_settlement"]},
     {"field": "private_settlement_pools", "protocols": ["atomic_settlement"]},
@@ -362,6 +352,15 @@
     {"variant": "IntoPool", "effect_class": "deposit"},
     {"variant": "OutOfPool", "effect_class": "withdrawal"}
    ]
+  },
+  "implementation_readiness": {
+   "path": "crates/iroha_data_model/src/privacy/capability_manifest.rs",
+   "enum": "PrivacyCapabilityReadinessV1",
+   "states": [
+    {"variant": "Available", "native_implementation_available": true},
+    {"variant": "Unavailable", "native_implementation_available": false}
+   ],
+   "meaning": "Native implementation presence only. Availability does not establish proof soundness, authorization, release qualification or an economic effect. There is no protocol lifecycle switch."
   }
  },
  "protocols": [
@@ -507,7 +506,7 @@
   },
   {
    "id": "exact12_admission",
-   "title": "Exact12 shared admission, activation records and roots",
+   "title": "Exact12 native admission, resource policies and roots",
    "value_bearing": false,
    "why_no_value": "The shared envelope, pool bootstrap and root instructions carry the effects of the protocols; each row is recorded under its protocol.",
    "rows_recorded_under": ["anonymous_pgc", "fcmp", "ivm_private_note", "orchard", "pq_masp", "zk_ace"],
@@ -678,9 +677,8 @@
       ]
      },
      "policy_revocation": {
-      "status": "not_defined",
-      "statement": "The protocol lifecycle can refuse every proof of the pool, and with it every exit; see the defect.",
-      "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
+      "status": "not_applicable",
+      "statement": "The optional ordinary resource policy has no revocation or lifecycle state. Governance updates bounded resource limits at an exact future block; it does not suspend the protocol. Credential/issuer revocation and relation-correction exits are recorded separately."
      },
      "correction": {
       "status": "not_defined",
@@ -690,7 +688,7 @@
     }
    },
    "effects": ["anonymous_pgc.bootstrap", "anonymous_pgc.payment"],
-   "defects": ["D-PGC-SUPPLY-HAS-NO-ALLOWANCE", "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS", "D-CORRECTION-NO-POOL-EXIT"],
+   "defects": ["D-PGC-SUPPLY-HAS-NO-ALLOWANCE", "D-CORRECTION-NO-POOL-EXIT"],
    "owner_tasks": ["P.10", "P.2"]
   },
   {
@@ -860,9 +858,8 @@
       ]
      },
      "policy_revocation": {
-      "status": "not_defined",
-      "statement": "The protocol lifecycle can refuse every proof of the pool, and with it every exit; see the defect.",
-      "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
+      "status": "not_applicable",
+      "statement": "The optional ordinary resource policy has no revocation or lifecycle state. Governance updates bounded resource limits at an exact future block; it does not suspend the protocol. Credential/issuer revocation and relation-correction exits are recorded separately."
      },
      "correction": {
       "status": "not_defined",
@@ -872,7 +869,7 @@
     }
    },
    "effects": ["orchard.pool_bootstrap", "orchard.shield", "orchard.transfer", "orchard.unshield"],
-   "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS", "D-CORRECTION-NO-POOL-EXIT", "D-POOL-NO-TURNSTILE-OR-CAP"],
+   "defects": ["D-CORRECTION-NO-POOL-EXIT", "D-POOL-NO-TURNSTILE-OR-CAP"],
    "owner_tasks": ["P.16", "P.2"]
   },
   {
@@ -946,9 +943,8 @@
       ]
      },
      "policy_revocation": {
-      "status": "not_defined",
-      "statement": "The protocol lifecycle can refuse every proof of the pool, and with it every exit; see the defect.",
-      "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
+      "status": "not_applicable",
+      "statement": "The optional ordinary resource policy has no revocation or lifecycle state. Governance updates bounded resource limits at an exact future block; it does not suspend the protocol. Credential/issuer revocation and relation-correction exits are recorded separately."
      },
      "correction": {
       "status": "not_defined",
@@ -958,7 +954,7 @@
     }
    },
    "effects": ["fcmp.pool_bootstrap", "fcmp.transfer"],
-   "defects": ["D-FCMP-GENESIS-OUTPUTS-UNBOUNDED", "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS", "D-CORRECTION-NO-POOL-EXIT"],
+   "defects": ["D-FCMP-GENESIS-OUTPUTS-UNBOUNDED", "D-CORRECTION-NO-POOL-EXIT"],
    "owner_tasks": ["P.17", "P.2"]
   },
   {
@@ -1059,9 +1055,8 @@
       ]
      },
      "policy_revocation": {
-      "status": "not_defined",
-      "statement": "The protocol lifecycle can refuse every proof of the pool, and with it every exit; see the defect.",
-      "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
+      "status": "not_applicable",
+      "statement": "The optional ordinary resource policy has no revocation or lifecycle state. Governance updates bounded resource limits at an exact future block; it does not suspend the protocol. Credential/issuer revocation and relation-correction exits are recorded separately."
      },
      "correction": {
       "status": "not_defined",
@@ -1077,7 +1072,7 @@
     "ivm_private_note.transfer",
     "ivm_private_note.withdraw"
    ],
-   "defects": ["D-IVM-GENESIS-NOTES-UNBACKED", "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS", "D-CORRECTION-NO-POOL-EXIT", "D-POOL-NO-TURNSTILE-OR-CAP"],
+   "defects": ["D-IVM-GENESIS-NOTES-UNBACKED", "D-CORRECTION-NO-POOL-EXIT", "D-POOL-NO-TURNSTILE-OR-CAP"],
    "owner_tasks": ["P.18", "P.2"]
   },
   {
@@ -1162,9 +1157,8 @@
       ]
      },
      "policy_revocation": {
-      "status": "not_defined",
-      "statement": "The protocol lifecycle can refuse every proof of the pool, and with it every exit; see the defect.",
-      "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
+      "status": "not_applicable",
+      "statement": "The optional ordinary resource policy has no revocation or lifecycle state. Governance updates bounded resource limits at an exact future block; it does not suspend the protocol. Credential/issuer revocation and relation-correction exits are recorded separately."
      },
      "correction": {
       "status": "not_defined",
@@ -1174,7 +1168,7 @@
     }
    },
    "effects": ["pq_masp.pool_bootstrap", "pq_masp.transfer"],
-   "defects": ["D-PQMASP-GENESIS-NOTES-UNBOUNDED", "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS", "D-CORRECTION-NO-POOL-EXIT"],
+   "defects": ["D-PQMASP-GENESIS-NOTES-UNBOUNDED", "D-CORRECTION-NO-POOL-EXIT"],
    "owner_tasks": ["P.19", "P.2"]
   },
   {
@@ -1275,14 +1269,8 @@
      "status": "defined",
      "statement": "Pools, roots, nullifiers, outputs with their encrypted payload, staged locks, receipts and abort markers are committed World records; restore validates them against each other and rebuilds the recipient index from the outputs. Every superseded policy revision is retained so an old receipt is validated against the policy of its time.",
      "sites": [
-      {
-       "path": "crates/iroha_core/src/private_settlement/global_state.rs",
-       "symbol": "pub(crate) fn validate_private_settlement_persisted_state_v1("
-      },
-      {
-       "path": "crates/iroha_core/src/private_settlement/global_state.rs",
-       "symbol": "pub(crate) fn rebuild_private_settlement_recipient_index_v1("
-      }
+      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn validate_private_settlement_persisted_state_v1("},
+      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn rebuild_private_settlement_recipient_index_v1("}
      ],
      "tests": [
       {
@@ -1304,7 +1292,7 @@
      "statement": "A registered bundle ends in exactly one of three ways: finalization, an abort marker by its sponsor, or expiry. Locks of a bundle past its expiry height are released at block start. A bundle with an abort marker cannot be finalized and a finalized bundle cannot be aborted.",
      "sites": [
       {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn reconcile_expired_private_settlement_staged_locks_v1("},
-      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_abort_v1("}
+      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_abort_v1("}
      ],
      "tests": [
       {
@@ -1341,7 +1329,7 @@
       "status": "defined",
       "statement": "The audit policy and audit key epoch of a pool are rotated by governance without resetting the pool frontier or its replay state; a bundle prepared under the old policy is refused, and a pool with a registered bundle cannot be rotated. Note keys are known only to the relation.",
       "sites": [
-       {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_pool_rotation_v1("},
+       {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_pool_rotation_v1("},
        {
         "path": "crates/iroha_core/src/state.rs",
         "symbol": "return Err(PrivateSettlementGlobalStateErrorV1::Conflict);",
@@ -1379,7 +1367,6 @@
    "defects": [
     "D-SETTLEMENT-GENESIS-COMMITMENTS-UNBOUNDED",
     "D-SETTLEMENT-CONSERVATION-NOT-ON-LEDGER",
-    "D-SETTLEMENT-NODE-ACTIVATION",
     "D-SETTLEMENT-POOL-RETIREMENT-NO-EXIT",
     "D-CORRECTION-NO-POOL-EXIT"
    ],
@@ -1725,7 +1712,7 @@
     },
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-     "test": "zk_ace_submit_has_no_activatable_compiled_profile",
+     "test": "zk_ace_submit_has_no_available_compiled_profile",
      "status": "existing",
      "shows": "The compiled profile of ZK-ACE is refused, so no submission reaches the effect today."
     }
@@ -1739,7 +1726,7 @@
    "operation": "privacy::BootstrapPrivacyPgcAccountsV1",
    "class": "private_issuance",
    "summary": "Governance creates the complete encrypted account table of a pool with a public total supply through its original signed invocation and a proof that the encrypted balances sum to it.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "pub(crate) fn execute_pgc_bootstrap("},
    "authorized_issuance_source": {
     "kind": "governance_authority",
@@ -1897,7 +1884,7 @@
     },
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-     "test": "pgc_bootstrap_rejects_authority_inactive_and_future_activation_without_mutation",
+     "test": "pgc_bootstrap_rejects_bad_authority_and_malformed_selected_policy_without_mutation",
      "status": "existing",
      "shows": "A signer without governance authority is refused without a write."
     }
@@ -1910,7 +1897,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "settlement",
    "summary": "A payment proof replaces the complete encrypted account table of a pool by its successor.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {
@@ -2028,7 +2015,7 @@
    "operation": "privacy::BootstrapPrivacyOrchardPoolV1",
    "class": "reserve_movement",
    "summary": "Governance binds one balance (asset definition, reserve account, balance scope) as the public reserve of a new Orchard pool that starts from the empty note tree. Any balance already on it is held in reserve custody but funds no withdrawal: the custody row starts with a funded allowance of zero.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for BootstrapPrivacyOrchardPoolV1"},
    "authorized_issuance_source": {
     "kind": "governance_authority",
@@ -2155,7 +2142,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "deposit",
    "summary": "An Orchard bundle with a value balance into the pool moves the submitter's transparent units into the pool reserve and appends note commitments.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"},
@@ -2455,7 +2442,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "settlement",
    "summary": "A balanced Orchard bundle consumes nullifiers and appends note commitments with no public leg.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"}
@@ -2605,7 +2592,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "withdrawal",
    "summary": "An Orchard bundle with a value balance out of the pool debits the pool reserve and credits the submitter.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"},
@@ -2982,7 +2969,7 @@
    "operation": "privacy::BootstrapPrivacyProofManagedPoolV1",
    "class": "private_issuance",
    "summary": "Governance creates a FCMP++ pool whose whole supply is the hidden value of the genesis set it supplies.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for BootstrapPrivacyProofManagedPoolV1"},
    "authorized_issuance_source": {
     "kind": "governance_authority",
@@ -3095,7 +3082,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "settlement",
    "summary": "An FCMP++ action consumes key images and appends output tuples with no public leg.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(effect) => {"}
@@ -3244,7 +3231,7 @@
    "operation": "privacy::BootstrapPrivacyProofManagedPoolV1",
    "class": "reserve_movement",
    "summary": "Governance binds one balance (asset definition, reserve account, balance scope) as the public reserve of a new private-IVM pool and pins the private program the pool accepts.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for BootstrapPrivacyProofManagedPoolV1"},
    "authorized_issuance_source": {
     "kind": "governance_authority",
@@ -3317,7 +3304,7 @@
    "operation": "privacy::BootstrapPrivacyProofManagedPoolV1",
    "class": "private_issuance",
    "summary": "The same bootstrap seeds a non-empty set of genesis note commitments whose value is hidden.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for BootstrapPrivacyProofManagedPoolV1"},
    "authorized_issuance_source": {
     "kind": "governance_authority",
@@ -3394,7 +3381,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "deposit",
    "summary": "A private-IVM action with a value balance into the pool moves the submitter's transparent units into the pool reserve and appends note commitments.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(effect) => {"},
@@ -3725,7 +3712,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "settlement",
    "summary": "A balanced private-IVM action consumes nullifiers and appends note commitments with no public leg.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(effect) => {"},
@@ -3909,7 +3896,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "withdrawal",
    "summary": "A private-IVM action with a value balance out of the pool debits the pool reserve and credits the submitter.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(effect) => {"},
@@ -4311,7 +4298,7 @@
    "operation": "privacy::BootstrapPrivacyProofManagedPoolV1",
    "class": "private_issuance",
    "summary": "Governance creates a PQ-MASP pool whose whole supply is the hidden value of the genesis set it supplies.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for BootstrapPrivacyProofManagedPoolV1"},
    "authorized_issuance_source": {
     "kind": "governance_authority",
@@ -4424,7 +4411,7 @@
    "operation": "privacy::SubmitPrivacyProofV1",
    "class": "settlement",
    "summary": "A PQ-MASP action consumes nullifiers and appends note commitments with no public leg.",
-   "effect_status": "gated",
+   "effect_status": "implemented",
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(effect) => {"},
@@ -4750,7 +4737,7 @@
       {
        "path": "crates/iroha_core/src/private_settlement/global_state.rs",
        "symbol": "Err(PrivateSettlementGlobalStateErrorV1::Substitution)",
-       "within": "pub(crate) fn plan_private_settlement_pool_bootstrap_v1("
+       "within": "pub fn plan_private_settlement_pool_bootstrap_v1("
       }
      ],
      "does_not_establish": ["proof_soundness"]
@@ -4843,7 +4830,7 @@
      "shows": "A rotation that is stale, rolls back or substitutes the asset binding is refused without a write."
     }
    ],
-   "defects": ["D-SETTLEMENT-GENESIS-COMMITMENTS-UNBOUNDED", "D-SETTLEMENT-NODE-ACTIVATION"]
+   "defects": ["D-SETTLEMENT-GENESIS-COMMITMENTS-UNBOUNDED"]
   },
   {
    "id": "atomic_settlement.prepare",
@@ -4867,7 +4854,7 @@
      "status": "enforced",
      "statement": "A pool head, nullifier, output or recipient already locked by another bundle, or already finalized, refuses the barrier whole.",
      "sites": [
-      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_prepare_locks_v1("},
+      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_prepare_locks_v1("},
       {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_prepare_locks_v1("}
      ],
      "does_not_establish": ["proof_soundness"],
@@ -5014,7 +5001,7 @@
      "shows": "Registration is idempotent under quorum replay and survives restart."
     }
    ],
-   "defects": ["D-SETTLEMENT-CONSERVATION-NOT-ON-LEDGER", "D-SETTLEMENT-NODE-ACTIVATION"]
+   "defects": ["D-SETTLEMENT-CONSERVATION-NOT-ON-LEDGER"]
   },
   {
    "id": "atomic_settlement.finalize",
@@ -5026,7 +5013,7 @@
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/private_settlement.rs", "symbol": "impl Execute for FinalizeAtomicPrivateSettlementV1"},
    "apply_sites": [
     {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_receipt_v1("},
-    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_receipt_v1("}
+    {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_receipt_v1("}
    ],
    "authorized_issuance_source": {"kind": "existing_pool_units", "statement": "No unit is issued: a leg spends and creates notes of its pool."},
    "proof": {"authorizes": true},
@@ -5039,17 +5026,17 @@
       {
        "path": "crates/iroha_core/src/private_settlement/global_state.rs",
        "symbol": "if !seen_nullifiers.insert(nullifier_key) || nullifiers.get(&nullifier_key).is_some() {",
-       "within": "pub(crate) fn plan_private_settlement_receipt_v1("
+       "within": "pub fn plan_private_settlement_receipt_v1("
       },
       {
        "path": "crates/iroha_core/src/private_settlement/global_state.rs",
        "symbol": "Err(PrivateSettlementGlobalStateErrorV1::Replay)",
-       "within": "pub(crate) fn plan_private_settlement_receipt_v1("
+       "within": "pub fn plan_private_settlement_receipt_v1("
       },
       {
        "path": "crates/iroha_core/src/private_settlement/global_state.rs",
        "symbol": "return Err(PrivateSettlementGlobalStateErrorV1::Terminal);",
-       "within": "pub(crate) fn plan_private_settlement_receipt_v1("
+       "within": "pub fn plan_private_settlement_receipt_v1("
       }
      ],
      "does_not_establish": ["proof_soundness"],
@@ -5138,7 +5125,7 @@
       {
        "path": "crates/iroha_core/src/private_settlement/global_state.rs",
        "symbol": "verify_private_settlement_receipt_v1(receipt)",
-       "within": "pub(crate) fn plan_private_settlement_receipt_v1("
+       "within": "pub fn plan_private_settlement_receipt_v1("
       },
       {
        "path": "crates/iroha_core/src/smartcontracts/isi/private_settlement.rs",
@@ -5259,7 +5246,7 @@
      "shows": "All legs are applied only when the transaction is applied."
     }
    ],
-   "defects": ["D-SETTLEMENT-CONSERVATION-NOT-ON-LEDGER", "D-SETTLEMENT-NODE-ACTIVATION", "D-SETTLEMENT-POOL-RETIREMENT-NO-EXIT"]
+   "defects": ["D-SETTLEMENT-CONSERVATION-NOT-ON-LEDGER", "D-SETTLEMENT-POOL-RETIREMENT-NO-EXIT"]
   },
   {
    "id": "atomic_settlement.abort",
@@ -5277,7 +5264,7 @@
      "status": "enforced",
      "statement": "A bundle is terminal once: an abort after finalization, a replayed abort and a substituted abort are refused; the reason is Expired exactly when the block is past the bundle's expiry height.",
      "sites": [
-      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub(crate) fn plan_private_settlement_abort_v1("},
+      {"path": "crates/iroha_core/src/private_settlement/global_state.rs", "symbol": "pub fn plan_private_settlement_abort_v1("},
       {
        "path": "crates/iroha_core/src/smartcontracts/isi/private_settlement.rs",
        "symbol": "!= (carrier.reason == PrivateSettlementAbortReasonV1::Expired)"
@@ -5387,7 +5374,7 @@
      "shows": "An abort marker excludes a later finalization of the bundle."
     }
    ],
-   "defects": ["D-SETTLEMENT-NODE-ACTIVATION"]
+   "defects": []
   },
   {
    "id": "axt.fee_sponsor_vault_allocation",
@@ -5895,30 +5882,15 @@
    "reason": "record_without_units",
    "note": "A session, roster, relay, registry, identifier, proof or governance record. It creates, moves and locks no unit."
   },
-  "privacy::RegisterPrivacyProtocolActivationV1": {
+  "privacy::SchedulePrivacyConsensusPolicyUpdateV1": {
    "value_bearing": false,
    "reason": "administrative",
    "note": "A governed record of a key, policy, profile, issuer, parameter set or lifecycle state. It creates, moves and locks no unit."
   },
-  "privacy::RegisterPrivacyExact12QualificationV1": {
+  "privacy::SchedulePrivacyProtocolLimitsUpdateV1": {
    "value_bearing": false,
    "reason": "administrative",
    "note": "A governed record of a key, policy, profile, issuer, parameter set or lifecycle state. It creates, moves and locks no unit."
-  },
-  "privacy::SchedulePrivacyConsensusPolicyTighteningV1": {
-   "value_bearing": false,
-   "reason": "administrative",
-   "note": "A governed record of a key, policy, profile, issuer, parameter set or lifecycle state. It creates, moves and locks no unit."
-  },
-  "privacy::SchedulePrivacyProtocolLimitsTighteningV1": {
-   "value_bearing": false,
-   "reason": "administrative",
-   "note": "A governed record of a key, policy, profile, issuer, parameter set or lifecycle state. It creates, moves and locks no unit."
-  },
-  "privacy::TransitionPrivacyProtocolLifecycleV1": {
-   "value_bearing": false,
-   "reason": "administrative",
-   "note": "Changes the lifecycle state of a protocol. It moves no unit and can stop every exit of the protocol's pools; see root_policy.generic_suspension_switch."
   },
   "privacy::PublishPrivacyRootV1": {
    "value_bearing": false,
@@ -6159,7 +6131,12 @@
   "ram_lfe.execute": {"value_bearing": false, "reason": "refused_no_value", "note": "Proof mode is refused; the route moves no value."},
   "ram_lfe.opening": {"value_bearing": false, "reason": "absent_no_value", "note": "No instruction or carrier exists."},
   "ram_lfe.threshold_opening": {"value_bearing": false, "reason": "absent_no_value", "note": "No instruction or carrier exists."},
-  "soracloud.threshold_decryption": {"value_bearing": false, "reason": "absent_no_value", "note": "No instruction or carrier exists."}
+  "soracloud.threshold_decryption": {"value_bearing": false, "reason": "absent_no_value", "note": "No instruction or carrier exists."},
+  "privacy::SubmitPrivacyZkX509CertificateV1": {
+   "value_bearing": false,
+   "reason": "verification_only",
+   "note": "The dedicated X509 request consumes only its certificate replay nullifier. It moves no asset value and remains natively unavailable until the joint security reduction is complete."
+  }
  },
  "tripwire": {
   "what": "Identifiers of ledger value. The handler of an operation recorded as moving no value, with the functions of its file it calls, must name none that its entry does not record.",
@@ -6186,12 +6163,12 @@
    "tests": [
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/privacy/tests/zk_x509_governance_tests.rs",
-     "test": "zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation",
+     "test": "zk_x509_governance_and_roots_are_exact_failure_atomic_without_protocol_registration",
      "status": "existing",
      "shows": "X.509 governance and its roots are exact and failure atomic."
     }
    ],
-   "defects": ["D-ROOT-PUBLICATION-CONSULTS-LIFECYCLE"]
+   "defects": []
   },
   "history": {
    "statement": "The number of retained roots per namespace and role is `retained_root_count` of the committed privacy consensus policy, and the lower pending value while a tightening is scheduled. A successor root is added and the oldest retained roots are removed in the same transaction, per namespace; a replayed, conflicting, stale or over-capacity root is refused. A statement anchored outside the retained window is refused. Settlement roots are kept with their provenance and a duplicate pool epoch is refused at restore. A governance-managed history that is full refuses a further publication instead of pruning, because no typed anchor-chain validator exists for those roles.",
@@ -6235,83 +6212,7 @@
     }
    ]
   },
-  "generic_suspension_switch": {
-   "required": "none",
-   "holds": false,
-   "found": [
-    {
-     "id": "exact12.lifecycle.suspended",
-     "state": "Suspended",
-     "site": {"path": "crates/iroha_data_model/src/privacy/protocol.rs", "symbol": "Suspended(PrivacySuspendedLifecycleV1),"},
-     "consulted_at": [
-      {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn resolve_qualified_privacy_activation_v1<'a>("},
-      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for TransitionPrivacyProtocolLifecycleV1 {"}
-     ],
-     "effect_on_roots": "No proof of the protocol is admitted, so no proof-managed root of any of its pools advances; retained history stays as it is.",
-     "effect_on_exits": "Unshield and withdrawal proofs are refused: value in an Orchard or private-IVM pool cannot leave until governance returns the protocol to Active.",
-     "defect": "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS",
-     "census": "privacy.activation"
-    },
-    {
-     "id": "exact12.lifecycle.retired",
-     "state": "Retired",
-     "site": {
-      "path": "crates/iroha_data_model/src/privacy/protocol.rs",
-      "symbol": "(Self::Retired(_), _) => Err(PrivacyLifecycleTransitionError::RetiredIsTerminal),"
-     },
-     "consulted_at": [
-      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "\"cannot publish a root for a retired privacy protocol\""}
-     ],
-     "effect_on_roots": "Generic publication is refused for the protocol and its proof-managed roots stop for good.",
-     "effect_on_exits": "Terminal: no later transition exists, so shielded value has no exit and the reserve stays locked.",
-     "defect": "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS",
-     "census": "privacy.activation"
-    },
-    {
-     "id": "exact12.lifecycle.proposed",
-     "state": "Proposed",
-     "site": {"path": "crates/iroha_data_model/src/privacy/protocol.rs", "symbol": "Proposed(PrivacyProposedLifecycleV1),"},
-     "consulted_at": [
-      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "\"cannot bootstrap a pool before Orchard is active\""}
-     ],
-     "effect_on_roots": "No pool can be bootstrapped and no root exists before an explicit activation.",
-     "effect_on_exits": "None: no pool exists yet.",
-     "defect": "D-EXACT12-ACTIVATION-BEFORE-USE",
-     "census": "privacy.activation"
-    },
-    {
-     "id": "root_publication.lifecycle_read",
-     "state": "Retired",
-     "site": {
-      "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-      "symbol": "if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Retired(_)) {"
-     },
-     "consulted_at": [
-      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for PublishPrivacyRootV1 {"}
-     ],
-     "effect_on_roots": "A governance-managed root of a retired protocol cannot be published.",
-     "effect_on_exits": "None directly: governance-managed roots belong to credential protocols.",
-     "defect": "D-ROOT-PUBLICATION-CONSULTS-LIFECYCLE",
-     "census": "privacy.activation"
-    },
-    {
-     "id": "atomic_settlement.node_activation",
-     "state": "node_configuration",
-     "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_feature_active_v1("},
-     "consulted_at": [
-      {
-       "path": "crates/iroha_core/src/state.rs",
-       "symbol": "self.ensure_private_settlement_feature_active_v1(current_height)?;",
-       "within": "pub(crate) fn apply_private_settlement_abort_v1("
-      }
-     ],
-     "effect_on_roots": "No settlement pool root is created or advanced while the node-configured switch is off or the private-IVM activation is not Active.",
-     "effect_on_exits": "Even an abort is refused, so a registered bundle ends only by expiry.",
-     "defect": "D-SETTLEMENT-NODE-ACTIVATION",
-     "census": "cfg.nexus.settlement_activation"
-    }
-   ]
-  },
+  "generic_suspension_switch": {"required": "none", "holds": true, "found": []},
   "suspension_census": {
    "what": "Count of suspension words in the non-test code of the files that hold value-bearing handlers and their state, so a new switch cannot appear unrecorded.",
    "pattern": "[Ss]uspend|SUSPEND|\\b[Pp]aus(?:e|ed|ing)\\b|PAUSE|\\b[Hh]alt(?:ed|s)?\\b|HALT|[Ff]r[eo]ze|[Ff]reez|FREEZE|FROZEN|[Ee]mergency|EMERGENCY|[Kk]ill_?[Ss]witch|[Cc]ircuit_?[Bb]reaker",
@@ -6332,84 +6233,17 @@
     "crates/iroha_core/src/state/zk_asset_state.rs"
    ],
    "exclude": ["_tests?\\.rs$", "/tests/"],
-   "files": [
-    {
-     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
-     "count": 1,
-     "class": "lifecycle_switch",
-     "note": "Validation of a restored Suspended activation.",
-     "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
-    },
-    {
-     "path": "crates/iroha_data_model/src/privacy/capability_manifest.rs",
-     "count": 3,
-     "class": "lifecycle_switch",
-     "note": "The capability manifest reports a Suspended protocol as unavailable.",
-     "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
-    },
-    {
-     "path": "crates/iroha_data_model/src/privacy/protocol.rs",
-     "count": 8,
-     "class": "lifecycle_switch",
-     "note": "The Suspended state of the protocol lifecycle, its record type and its transitions.",
-     "defects": ["D-EXACT12-LIFECYCLE-SUSPENDS-EXITS"]
-    }
-   ]
+   "files": []
   }
  },
  "defects": [
-  {
-   "id": "D-EXACT12-LIFECYCLE-SUSPENDS-EXITS",
-   "kind": "suspension_switch",
-   "owner": ["P.5"],
-   "path": "crates/iroha_data_model/src/privacy/protocol.rs",
-   "symbol": "Suspended(PrivacySuspendedLifecycleV1),",
-   "line": 2363,
-   "summary": "The governance instruction TransitionPrivacyProtocolLifecycleV1 moves a registered protocol to Suspended or Retired. Every proof of that protocol is then refused, including an Orchard unshield and a private-IVM withdrawal, and Retired is terminal. A pool reserve can be debited only by a verified proof of its pool, so value shielded in a pool has no exit while its protocol is suspended and none at all after retirement.",
-   "required": "Remove the lifecycle availability switch (plan, 'Runtime validity without activation gates'). A relation that must be corrected is replaced by an ordinary signed deployment with a defined exit for existing notes.",
-   "census": "privacy.activation"
-  },
-  {
-   "id": "D-EXACT12-ACTIVATION-BEFORE-USE",
-   "kind": "suspension_switch",
-   "owner": ["P.5"],
-   "path": "crates/iroha_data_model/src/privacy/protocol.rs",
-   "symbol": "Proposed(PrivacyProposedLifecycleV1),",
-   "line": 2357,
-   "summary": "A registered protocol starts in Proposed and its effects, pool bootstraps and generic root publication are refused until an explicit activation transition and the all-twelve qualification record exist.",
-   "required": "Registration of a supported canonical profile creates usable state; remove the activation step and the qualification record (P.5).",
-   "census": "privacy.activation"
-  },
-  {
-   "id": "D-ROOT-PUBLICATION-CONSULTS-LIFECYCLE",
-   "kind": "suspension_switch",
-   "owner": ["P.5"],
-   "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-   "symbol": "\"cannot publish a root for a retired privacy protocol\"",
-   "within": "impl Execute for PublishPrivacyRootV1 {",
-   "line": 700,
-   "summary": "Generic root publication reads the protocol lifecycle: a root of a retired protocol cannot be published, and a proof-managed root cannot advance while its protocol is not Active because only a proof advances it.",
-   "required": "Root publication and history follow the committed root policy alone; remove the lifecycle read with the lifecycle itself (P.5).",
-   "census": "privacy.activation"
-  },
-  {
-   "id": "D-SETTLEMENT-NODE-ACTIVATION",
-   "kind": "suspension_switch",
-   "owner": ["P.5", "P.20"],
-   "path": "crates/iroha_core/src/state.rs",
-   "symbol": "fn ensure_private_settlement_feature_active_v1(",
-   "line": 41671,
-   "summary": "Every settlement instruction first requires the node-configured atomic-settlement switch, its activation height and notice period, and an Active private-IVM protocol activation. Turning either off stops pool activation, prepare, finalize and abort for every pool.",
-   "required": "Atomic settlement is usable when its relation and keys are committed; remove the node-configured switch and the activation read (P.5, P.20).",
-   "census": "cfg.nexus.settlement_activation"
-  },
   {
    "id": "D-SETTLEMENT-POOL-RETIREMENT-NO-EXIT",
    "kind": "exit_not_defined",
    "owner": ["P.20", "P.2"],
    "path": "crates/iroha_core/src/private_settlement/state.rs",
    "symbol": ".is_some_and(|retirement| expiry_height >= retirement)",
-   "line": 532,
+   "line": 533,
    "summary": "A settlement pool policy can carry a retirement height. A bundle that expires at or after it is refused, and settlement pools have no transparent boundary, so notes of a retired pool can neither move nor leave.",
    "required": "Define how notes leave a pool whose policy is retired or replaced: a successor pool reachable by a settlement leg, or an explicit withdrawal with its own ledger invariant."
   },
@@ -6418,9 +6252,9 @@
    "kind": "exit_not_defined",
    "owner": ["P.2", "T.1"],
    "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
-   "symbol": "validate_compiled_privacy_activation_v1(context.activation).map_err(|source| {",
-   "line": 613,
-   "summary": "A pool is bound to the compiled profile of the binary: its activation carries the parameter, verifier, statement schema and engine manifest digests, and a proof is admitted only against that exact profile. When a relation is corrected those digests change. No instruction migrates the notes of an existing pool or releases its reserve under the replaced relation.",
+   "symbol": "validate_compiled_privacy_profile_v1(context.profile).map_err(|source| {",
+   "line": 615,
+   "summary": "A pool is bound to the exact compiled semantic parameter, verifier, statement schema and engine-manifest identities. Correcting a relation can change those identities. No instruction migrates the notes of an existing pool or releases its reserve under the replaced relation.",
    "required": "State the correction path per pool with T.1's cutover: either a fresh-genesis cutover that says what happens to pool reserves, or a governed exit instruction with an independent ledger invariant."
   },
   {
@@ -6430,7 +6264,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
    "symbol": "VerifiedPrivacyPublicBalancePurpose::PoolWithdrawal(owner),",
    "within": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer(",
-   "line": 3493,
+   "line": 3549,
    "summary": "The public turnstile is built: the custody row of an Orchard or private-IVM reserve carries a committed funded allowance that only verified pool deposits raise and verified withdrawals consume with the exact reserve balance. What stays open: no committed supply or issuance cap bound to the pool relation exists, so nothing bounds how much a pool takes in or the hidden value a deposit appends; hidden issuance is unbounded, including the genesis notes of a private-IVM bootstrap; the ledger checks neither hidden conservation nor per-depositor entitlement; and nothing reconciles value across pools. The allowance is one aggregate counter per reserve, so a wrongly accepted withdrawal can consume allowance that other depositors funded.",
    "required": "P.16 requires explicitly committed supply or issuance caps, and the private-IVM pools of P.18 need the same bound, including for the hidden value of their bootstrap notes (D-IVM-GENESIS-NOTES-UNBACKED); P.2 enforces them, with committed issuance allowances and cross-pool conservation where applicable, as ordinary committed transaction rules. Hidden conservation and per-depositor entitlement remain properties of the relations: the funded allowance bounds the public exit of a pool and does not establish them."
   },
@@ -6441,7 +6275,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "} else if let Some(commitments) = self.bootstrap.initial_note_commitments() {",
    "within": "impl Execute for BootstrapPrivacyProofManagedPoolV1 {",
-   "line": 1225,
+   "line": 1087,
    "summary": "A private-IVM pool is bootstrapped with a non-empty set of genesis note commitments chosen by governance. Their hidden value is matched by no reserve deposit and consumes no committed issuance allowance, although the pool has a transparent exit. Bootstrap starts the reserve's funded allowance at zero, so a genesis note can be withdrawn only from allowance that verified deposits funded: it is paid by other depositors.",
    "required": "Shielded value seeded at bootstrap is matched by an equal reserve deposit when the pool is admitted, or the genesis set carries a committed public amount (finding R6-22, item 2)."
   },
@@ -6452,7 +6286,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "if let Some(outputs) = self.bootstrap.initial_fcmp_outputs() {",
    "within": "impl Execute for BootstrapPrivacyProofManagedPoolV1 {",
-   "line": 1199,
+   "line": 1061,
    "summary": "The whole supply of an FCMP++ pool is the hidden value of the genesis outputs governance supplies at bootstrap. No public figure, committed allowance or backing asset movement bounds it.",
    "required": "State the issuance source of the pool: a committed public supply figure the bootstrap is checked against, or a funded bridge with its own invariant (plan: an added bridge requires explicit economics)."
   },
@@ -6473,7 +6307,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "instruction.bootstrap.total_supply,",
    "within": "pub(crate) fn execute_pgc_bootstrap(",
-   "line": 1710,
+   "line": 1527,
    "summary": "The total supply of an Anonymous PGC pool is a public number governance chooses at bootstrap. It is bound to no asset definition and consumes no committed issuance allowance; the bootstrap proof is the only check that the encrypted balances sum to it.",
    "required": "Name what a PGC unit is: bind the pool to an asset and a committed allowance, or state that the units are pool-local with no claim on any asset."
   },
@@ -6493,8 +6327,8 @@
    "owner": ["P.2", "P.20"],
    "path": "crates/iroha_core/src/private_settlement/global_state.rs",
    "symbol": "verify_private_settlement_receipt_v1(receipt)",
-   "within": "pub(crate) fn plan_private_settlement_receipt_v1(",
-   "line": 786,
+   "within": "pub fn plan_private_settlement_receipt_v1(",
+   "line": 790,
    "summary": "The ledger finalizes a settlement from committee certificates. The leg proofs, and with them conservation inside a leg and across the legs of a bundle, are checked only by the committee validators off the instruction path; the carrier omits the proofs. Nothing on the ledger relates the value leaving one pool to the value entering another.",
    "required": "P.20 puts spend authorization and conservation in a relation the ledger verifies, or P.2 names the public quantity that is conserved across legs."
   },
@@ -6505,7 +6339,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "match effects.into_ledger() {",
    "within": "fn execute_after_admission(",
-   "line": 4718,
+   "line": 4438,
    "summary": "The proof handler applies checks to a verified effect (Orchard, FCMP++, Anonymous PGC, ZK-ACE) inline after its verifier call. PGC bootstrap checks the native verifier outputs inside the original-invocation consumer and applies State changes in execute_pgc_bootstrap. No test-only entry point injects an erroneously accepted effect at either boundary to observe the remaining ledger checks. Only the public reserve bridge and the private-note apply function are reachable that way today.",
    "required": "Split the handler into verification and an apply function over the verified effect (the single state executor per role of P.1), and give every ledger effect a test-only constructor like the proof-managed one (P.3)."
   },
@@ -6515,7 +6349,7 @@
    "owner": ["P.15", "P.2"],
    "path": "crates/iroha_data_model/src/privacy/credentials.rs",
    "symbol": "pub source_allowlist: Vec<AccountId>,",
-   "line": 552,
+   "line": 575,
    "summary": "A ZK-ACE policy names an asset and a list of source accounts and no amount. A proof accepted under it moves any amount the named source holds, with no signature of the source.",
    "required": "P.15 decides whether a policy carries a committed allowance; P.2 enforces it if it does."
   },
@@ -6556,7 +6390,7 @@
    "owner": ["P.8"],
    "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
    "symbol": "fn ensure_qualified_standalone_zk_relation_v1() -> Result<(), Error> {",
-   "line": 1257,
+   "line": 1258,
    "summary": "A ZK ballot is refused before any proof is dispatched, so its bond lock cannot run.",
    "required": "P.8 delivers the ballot relation; the bond lock stays the exact transfer into escrow the plain ballot uses."
   },
@@ -6567,7 +6401,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "\"native Orchard effect is inconsistent with trusted state or its statement\"",
    "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {",
-   "line": 4863,
+   "line": 4496,
    "summary": "No test in the ledger crate submits an Orchard bundle, valid or mutated: the nullifier, anchor, successor and expiry checks of the Orchard apply arm are exercised by no test there.",
    "required": "P.16 supplies genuine Orchard proofs and mutations; P.3 supplies the shared ledger-effect tests."
   }
@@ -6575,7 +6409,7 @@
  "summary": {
   "protocols": 25,
   "value_bearing_protocols": 11,
-  "operations": 93,
+  "operations": 91,
   "value_bearing_operations": 18,
   "effects": 29,
   "effects_by_class": {
@@ -6587,11 +6421,11 @@
    "settlement": 8,
    "inter_pool_movement": 4
   },
-  "effects_by_status": {"implemented": 3, "gated": 20, "unreachable": 3, "absent": 3},
+  "effects_by_status": {"implemented": 18, "gated": 5, "unreachable": 3, "absent": 3},
   "invariants_by_status": {"enforced": 74, "enforced_by_absence": 6, "not_enforced": 11, "not_applicable": 1},
   "cited_tests": 68,
   "added_tests": 9,
-  "defects": 20,
-  "suspension_switches": 5
+  "defects": 16,
+  "suspension_switches": 0
  }
 }

@@ -104,3 +104,50 @@ fn genesis_cadence_rewrite_cannot_break_an_already_initialized_sccp_epoch() {
         1_000
     );
 }
+
+#[test]
+fn staking_policy_naming_a_route_escrow_is_refused_when_set_not_at_penalty_time() {
+    use crate::state::StateReadOnly as _;
+    use iroha_data_model::{bridge::SccpNetworkV1, parameter::system::SumeragiNposParameters};
+    let mut original = crate::sumeragi::test_chain::staking_fixture_policy(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+    );
+    original.unbonding_delay_ms = super::test_support::SCCP_UNBONDING_DELAY_MS;
+    original.max_slash_bps = 1;
+    let state = super::test_support::blank_state_with_staking(Some(original.clone()));
+    let mut block = state.block(header(2));
+    let mut stx = block.transaction();
+    // SCCP is not initialized: the escrow ids are fixed by the NetworkId alone.
+    assert!(store::parameters::get(&*stx.world).is_none());
+    let escrow =
+        super::escrow::escrow_account(stx.network_id(), SccpNetworkV1::BscMainnet).unwrap();
+    let before = stx.world.parameters.get().clone();
+    let mut next = original;
+    next.unbonding_delay_ms += 1;
+    for role in ["slash sink", "stake escrow"] {
+        let mut captured = next.clone();
+        if role == "slash sink" {
+            captured.slash_sink_account_id = escrow.clone();
+        } else {
+            captured.stake_escrow_account_id = escrow.clone();
+        }
+        let error = SetParameter::new(Parameter::Custom(captured.into_custom_parameter().unwrap()))
+            .execute(&authority(1), &mut stx)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+                    if reason == &format!("the staking {role} cannot be an SCCP route escrow")
+            ),
+            "{error:?}"
+        );
+        assert_eq!(*stx.world.parameters.get(), before);
+    }
+    SetParameter::new(Parameter::Custom(
+        next.clone().into_custom_parameter().unwrap(),
+    ))
+    .execute(&authority(1), &mut stx)
+    .unwrap();
+    assert_eq!(stx.world.parameters.get().staking_policy(), Some(&next));
+}

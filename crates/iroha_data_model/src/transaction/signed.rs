@@ -1062,6 +1062,11 @@ pub enum PrivacyTransactionIntentErrorV1 {
     /// The payload has no direct typed privacy proof submission.
     #[error("privacy transaction intent requires exactly one direct SubmitPrivacyProofV1")]
     MissingSubmission,
+    /// X.509 execution uses the proof-free request and original signed action attachment.
+    #[error(
+        "X509 execution requires SubmitPrivacyZkX509CertificateV1 with a signed proof attachment"
+    )]
+    X509RequiresSignedAttachment,
     /// More than one direct typed privacy proof submission is present.
     #[error("privacy transaction intent contains {count} direct privacy submissions")]
     MultipleSubmissions {
@@ -1205,9 +1210,21 @@ fn validate_exact_direct_privacy_submission_v1<'a>(
     if let Some(path) = scan.unsupported_path {
         return Err(PrivacyTransactionIntentErrorV1::UnsupportedPath { path });
     }
-    Ok(scan
+    let submission = scan
         .first_submission
-        .expect("a non-zero direct submission count stores its first submission"))
+        .expect("a non-zero direct submission count stores its first submission");
+    if submission.envelope.protocol_id
+        == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || submission.envelope.proof.protocol_id()
+            == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || matches!(
+            &submission.envelope.statement,
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
+        )
+    {
+        return Err(PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment);
+    }
+    Ok(submission)
 }
 impl SubmitPrivacyProofV1 {
     /// Canonical normalized instruction bytes used only inside an ordered-intent preimage.

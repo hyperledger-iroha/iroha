@@ -44,8 +44,8 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod resource_names_state;
-pub use resource_names_state::NativeReadHttpError;
 pub use authority_originals::NativeAuthorityOriginalsReadV1;
+pub use resource_names_state::NativeReadHttpError;
 mod runtime_governance_client_auth;
 /// Public SCCP v1 read API.
 pub mod sccp;
@@ -12495,8 +12495,7 @@ mod evidence_http_tests {
         };
         let client = client_with_base_url(base_url());
 
-        let message =
-            "privacy activation at 306 is too early after height 7; earliest is 307".to_owned();
+        let message = "privacy protocol-limit update is a no-op".to_owned();
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message.clone(),
@@ -21258,13 +21257,15 @@ impl Client {
     /// GET `/v1/privacy/capabilities`.
     ///
     /// Returns the authoritative committed Exact12 capability manifest as
-    /// validated canonical JSON. Static SDK catalogs are not consulted.
+    /// validated canonical JSON bound to this client's genesis network. Optional
+    /// committed policy governs ordinary limits; absent policy uses compiled
+    /// defaults. Static SDK catalogs are not consulted.
     ///
     /// # Errors
     ///
     /// Returns an error for a failed request, non-OK status, non-JSON media
     /// type, oversized response, unknown or malformed field, noncanonical
-    /// protocol ordering, or any invalid profile/activation binding.
+    /// protocol ordering, invalid profile/policy binding, or mismatched genesis network.
     pub fn get_privacy_capabilities_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/privacy/capabilities");
         let resp = self.send_builder(
@@ -21289,19 +21290,26 @@ impl Client {
         manifest
             .validate()
             .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
+        if manifest.network_id != self.network_id {
+            return Err(eyre!(
+                "privacy capabilities genesis network differs from the client network"
+            ));
+        }
         norito::json::to_value(&manifest)
             .wrap_err("failed to render validated privacy capabilities JSON")
     }
     /// GET `/v1/privacy/capabilities`.
     ///
     /// Returns the authoritative committed Exact12 capability manifest as one
-    /// canonical typed Norito payload.
+    /// canonical typed Norito payload bound to this client's genesis network.
+    /// Optional committed policy governs ordinary limits; absent policy uses
+    /// compiled defaults.
     ///
     /// # Errors
     ///
     /// Returns an error for a failed request, non-OK status, non-Norito media
     /// type, oversized response, noncanonical or malformed encoding, or any
-    /// invalid profile/activation binding.
+    /// invalid profile/policy binding or mismatched genesis network.
     pub fn get_privacy_capabilities(&self) -> Result<PrivacyExact12CapabilityManifestV1> {
         let url = join_torii_url(&self.torii_url, "v1/privacy/capabilities");
         let resp = self.send_builder(
@@ -21324,6 +21332,9 @@ impl Client {
         let manifest: PrivacyExact12CapabilityManifestV1 =
             norito::decode_from_bytes(resp.body())
                 .wrap_err("failed to decode privacy capabilities")?;
+        manifest
+            .validate()
+            .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
         if !manifest
             .canonical_bytes()
             .is_ok_and(|canonical| canonical.as_slice() == resp.body().as_slice())
@@ -21332,9 +21343,11 @@ impl Client {
                 "privacy capabilities response is not one canonical Norito payload"
             ));
         }
-        manifest
-            .validate()
-            .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
+        if manifest.network_id != self.network_id {
+            return Err(eyre!(
+                "privacy capabilities genesis network differs from the client network"
+            ));
+        }
         Ok(manifest)
     }
     /// GET `/v1/runtime/metrics`
@@ -21346,16 +21359,28 @@ impl Client {
         let resp = self.send_account_signed_get(url)?;
         Self::decode_json_ok(resp, "Failed to get runtime metrics")
     }
-    /// GET `/v1/runtime/upgrades`
+    /// GET `/v1/runtime/upgrades`: the committed runtime selection and every recorded change set.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_upgrades_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/runtime/upgrades");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::decode_json_ok(resp, "Failed to get runtime upgrades")
+    }
+    /// GET `/v1/runtime/containments`: every recorded emergency containment.
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn get_runtime_containments_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/containments");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to get runtime containments")
     }
     /// Canonically signed GET `/v1/accounts/{account_id}` account materialization read.
     ///
@@ -21479,7 +21504,9 @@ impl Client {
         let payload = Self::parse_json_ok_response(&resp, "explorer account qr request")?;
         ExplorerAccountQrSnapshot::from_value(payload)
     }
-    /// POST `/v1/runtime/upgrades/propose` with a JSON DTO body (manifest).
+    /// POST `/v1/runtime/upgrades/propose` with a JSON body of the runtime change set to schedule
+    /// and its trusted release signers' endorsements (`{"change_set": …, "provenance": […]}`);
+    /// the response drafts the SORA Parliament proposal that schedules it.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_runtime_propose_upgrade_json(
@@ -21489,28 +21516,14 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/runtime/upgrades/propose");
         let body = norito::json::to_vec(value)?;
         let resp = self
-            .default_request(HttpMethod::POST, url)
+            .operator_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
-            .body(body)
             .build()?
             .send_blocking()?;
         Self::decode_json_ok(resp, "Failed to propose runtime upgrade")
     }
-    /// POST `/v1/runtime/upgrades/activate/:id` (id hex in path)
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn post_runtime_activate_upgrade_json(&self, id_hex: &str) -> Result<norito::json::Value> {
-        let path = format!("v1/runtime/upgrades/activate/{id_hex}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(Vec::new()),
-        )?;
-        Self::decode_json_ok(resp, "Failed to activate runtime upgrade")
-    }
-    /// POST `/v1/runtime/upgrades/cancel/:id` (id hex in path)
+    /// POST `/v1/runtime/upgrades/cancel/:id` (change-set id hex in path); the response drafts the
+    /// SORA Parliament proposal that withdraws the scheduled change set.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -21518,11 +21531,41 @@ impl Client {
         let path = format!("v1/runtime/upgrades/cancel/{id_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(Vec::new()),
+            self.operator_signed_request(HttpMethod::POST, url, Vec::new())?
+                .header("Content-Type", APPLICATION_JSON),
         )?;
         Self::decode_json_ok(resp, "Failed to cancel runtime upgrade")
+    }
+    /// POST `/v1/runtime/upgrades/attest/:id` (change-set id hex in path): the node signs, with
+    /// its own validator key, its support for the scheduled change set, and the response drafts
+    /// the `AttestRuntimeSupportV1` instruction that records it.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the node refuses to attest
+    /// (its release cannot execute the successor, or it is not a committee member), or JSON
+    /// deserialization fails.
+    pub fn post_runtime_attest_upgrade_json(&self, id_hex: &str) -> Result<norito::json::Value> {
+        let path = format!("v1/runtime/upgrades/attest/{id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, Vec::new())?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to attest runtime upgrade")
+    }
+    /// GET `/v1/runtime/release`: this node's release digest and whether it executes the committed
+    /// selection and the successor of each scheduled change set.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the response is non-OK, or
+    /// JSON deserialization fails.
+    pub fn get_runtime_release_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/release");
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to get runtime release support")
     }
     /// List attachments via `/v1/zk/attachments`. Returns JSON array of metadata objects.
     /// # Errors
@@ -23858,6 +23901,7 @@ mod tests {
         secrecy::SecretString,
     };
     use base64::Engine as _;
+    use eyre::WrapErr as _;
     use iroha_crypto::{Algorithm, Hash, HashOf, Signature};
     use iroha_data_model::{
         account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
@@ -23880,10 +23924,14 @@ mod tests {
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         parameter::system::Parameters,
         privacy::{
-            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
-            PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
-            PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusPolicyV1,
-            PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1,
+            JindoLimitsV1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityReadinessV1,
+            PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
+            PrivacyCapabilityUnavailableReasonV1, PrivacyCompiledProfileResultV1,
+            PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
+            PrivacyConsensusPolicyV1, PrivacyEngineManifestDigestV1,
+            PrivacyExact12CapabilityManifestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1, PrivacyProtocolLimitsV1,
+            PrivacyProtocolPolicyV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
         },
         sorafs::{
             moderation::{
@@ -35067,17 +35115,38 @@ mod tests {
     fn sample_privacy_capabilities() -> PrivacyExact12CapabilityManifestV1 {
         let snapshot = PrivacyCapabilitySnapshotV1 {
             version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+            network_id: test_network_id(),
             committed_height: 42,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
-            qualification: None,
             protocols: PrivacyProtocolIdV1::ALL
                 .into_iter()
                 .map(|protocol_id| PrivacyCapabilityRowV1 {
                     protocol_id,
-                    compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
-                        PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
-                    ),
-                    activation: None,
+                    // This HTTP decoding fixture is not native admission evidence.
+                    compiled_profile: if protocol_id
+                        == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                    {
+                        PrivacyCompiledProfileResultV1::Available(PrivacyCompiledProfileSnapshotV1 {
+                            protocol_id,
+                            proof_system_id: protocol_id.expected_proof_system(),
+                            engine_id: protocol_id.expected_engine(),
+                            parameter_id: PrivacyParameterIdV1::new([0x11; 32]),
+                            parameter_digest: PrivacyParameterDigestV1::new([0x12; 32]),
+                            verifier_digest: PrivacyVerifierDigestV1::new([0x13; 32]),
+                            statement_schema_digest: PrivacyStatementSchemaDigestV1::new([0x14; 32]),
+                            engine_manifest_digest: PrivacyEngineManifestDigestV1::new([0x15; 32]),
+                            protocol_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+                        })
+                    } else {
+                        PrivacyCompiledProfileResultV1::Unavailable(
+                            if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+                                PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete
+                            } else {
+                                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable
+                            },
+                        )
+                    },
+                    policy: None,
                 })
                 .collect(),
         };
@@ -35205,7 +35274,9 @@ mod tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = mk_response(
             StatusCode::OK,
-            norito::to_bytes(&payload).expect("encode privacy capabilities"),
+            payload
+                .canonical_bytes()
+                .expect("encode privacy capabilities"),
             Some(APPLICATION_NORITO),
         );
         let decoded = with_mock_http(respond_with(&store, response), |mock_transport| {
@@ -35330,7 +35401,7 @@ mod tests {
             error.to_string().contains("invalid content type"),
             "{error}"
         );
-        let mut trailing = norito::to_bytes(&valid).expect("privacy capability Norito");
+        let mut trailing = valid.canonical_bytes().expect("privacy capability Norito");
         trailing.push(0xA5);
         let response = mk_response(StatusCode::OK, trailing, Some(APPLICATION_NORITO));
         let error = with_mock_http(
@@ -35350,6 +35421,263 @@ mod tests {
             "{error}"
         );
     }
+    /// Exercise the two public transports against the same server-owned model.
+    fn privacy_capability_client_results(
+        manifest: &PrivacyExact12CapabilityManifestV1,
+    ) -> [Result<PrivacyExact12CapabilityManifestV1>; 2] {
+        [false, true].map(|json| {
+            let body = if json {
+                norito::json::to_vec(manifest).expect("encode mock privacy JSON")
+            } else {
+                norito::encode_canonical(manifest).expect("encode mock privacy Norito")
+            };
+            let response = mk_response(
+                StatusCode::OK,
+                body,
+                Some(if json {
+                    APPLICATION_JSON
+                } else {
+                    APPLICATION_NORITO
+                }),
+            );
+            with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                |mock_transport| {
+                    let client = client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone());
+                    if json {
+                        let value = client.get_privacy_capabilities_json()?;
+                        norito::json::from_value(value).wrap_err("decode validated capability JSON")
+                    } else {
+                        client.get_privacy_capabilities()
+                    }
+                },
+            )
+        })
+    }
+    #[test]
+    fn privacy_capability_clients_preserve_defaults_and_bidirectional_future_policy() {
+        let default = sample_privacy_capabilities();
+        for result in privacy_capability_client_results(&default) {
+            let manifest = result.expect("compiled defaults require no registered policy");
+            let row = &manifest.protocols[6];
+            let PrivacyCompiledProfileResultV1::Available(profile) = row.compiled_profile else {
+                panic!("Jindo parser fixture must contain its typed profile")
+            };
+            assert!(row.policy.is_none());
+            assert_eq!(row.readiness, PrivacyCapabilityReadinessV1::Available);
+            assert_eq!(
+                row.effective_protocol_limits_v1(),
+                Some(profile.protocol_limits)
+            );
+        }
+        for (current, next) in [(2, 3), (3, 2)] {
+            let mut manifest = default.clone();
+            let limits = |count| {
+                PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                    max_polynomial_count: count,
+                })
+            };
+            manifest.protocols[6].policy = Some(PrivacyProtocolPolicyV1 {
+                protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+                current_limits: limits(current),
+                pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                    scheduled_at_height: 42,
+                    effective_at_height: 43,
+                    next_limits: limits(next),
+                }),
+            });
+            manifest.manifest_digest = manifest.computed_manifest_digest().expect("bind policy");
+            manifest
+                .validate()
+                .expect("bounded future policy in either direction");
+            for result in privacy_capability_client_results(&manifest) {
+                let decoded = result.expect("valid ordinary policy");
+                assert_eq!(decoded, manifest);
+                assert_eq!(
+                    decoded.protocols[6].effective_protocol_limits_v1(),
+                    Some(limits(current))
+                );
+                assert_eq!(
+                    decoded.protocols[6].compiled_profile,
+                    default.protocols[6].compiled_profile
+                );
+            }
+        }
+    }
+    #[test]
+    fn privacy_capability_clients_preserve_exact_joint_security_refusal_with_policy() {
+        let mut manifest = sample_privacy_capabilities();
+        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        manifest.protocols[5].policy = Some(PrivacyProtocolPolicyV1 {
+            protocol_id,
+            current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+            pending_update: None,
+        });
+        manifest.manifest_digest = manifest.computed_manifest_digest().expect("bind policy");
+        for result in privacy_capability_client_results(&manifest) {
+            let decoded = result.expect("policy may exist for an unavailable implementation");
+            let x509 = &decoded.protocols[5];
+            assert_eq!(
+                x509.compiled_profile,
+                PrivacyCompiledProfileResultV1::Unavailable(
+                    PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete,
+                )
+            );
+            assert_eq!(
+                x509.readiness,
+                PrivacyCapabilityReadinessV1::Unavailable(
+                    PrivacyCapabilityUnavailableReasonV1::CompiledProfile(
+                        PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete,
+                    ),
+                )
+            );
+            assert!(!x509.is_network_available());
+            assert_eq!(x509.effective_protocol_limits_v1(), None);
+        }
+    }
+    #[test]
+    fn privacy_capability_clients_reject_retired_activation_and_policy_fields() {
+        let manifest = sample_privacy_capabilities();
+        for retired_field in ["activation", "pending_tightening"] {
+            let mut json = norito::json::to_value(&manifest).expect("capability JSON");
+            let root = json.as_object_mut().expect("manifest object");
+            if retired_field == "activation" {
+                let row = root
+                    .get_mut("protocols")
+                    .expect("rows")
+                    .as_array_mut()
+                    .expect("row array")[6]
+                    .as_object_mut()
+                    .expect("row object");
+                row.remove("policy");
+                row.insert(retired_field.into(), JsonValue::Null);
+            } else {
+                let policy = root
+                    .get_mut("consensus_policy")
+                    .expect("consensus policy")
+                    .as_object_mut()
+                    .expect("policy object");
+                policy.remove("pending_update");
+                policy.insert(retired_field.into(), JsonValue::Null);
+            }
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(&json).expect("retired capability JSON"),
+            );
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                |mock_transport| {
+                    client_with_base_url(base_url())
+                        .with_test_http_transport(mock_transport.clone())
+                        .get_privacy_capabilities_json()
+                },
+            )
+            .expect_err("retired layouts must not have a compatibility decoder");
+            assert!(
+                error
+                    .to_string()
+                    .contains("decode typed privacy capabilities"),
+                "{retired_field}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn privacy_capability_clients_reject_foreign_genesis_even_with_valid_digest() {
+        let mut foreign = sample_privacy_capabilities();
+        foreign.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign-privacy-network")),
+        );
+        foreign.manifest_digest = foreign
+            .computed_manifest_digest()
+            .expect("bind foreign network");
+        foreign
+            .validate()
+            .expect("internally valid foreign manifest");
+        for result in privacy_capability_client_results(&foreign) {
+            let error = result.expect_err("a content digest is not the client's network authority");
+            assert_eq!(
+                error.to_string(),
+                "privacy capabilities genesis network differs from the client network"
+            );
+        }
+    }
+    #[test]
+    fn privacy_capability_clients_reject_redigested_profile_and_policy_substitution() {
+        let valid = sample_privacy_capabilities();
+        let mut wrong_engine = valid.clone();
+        let PrivacyCompiledProfileResultV1::Available(ref mut profile) =
+            wrong_engine.protocols[6].compiled_profile
+        else {
+            panic!("Jindo profile")
+        };
+        profile.engine_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1.expected_engine();
+        let mut malformed_policy = valid.clone();
+        malformed_policy.protocols[6].policy = Some(PrivacyProtocolPolicyV1 {
+            protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            current_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                JindoLimitsV1 {
+                    max_polynomial_count: 0,
+                },
+            ),
+            pending_update: None,
+        });
+        let mut no_op = valid.clone();
+        let limits = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            max_polynomial_count: 2,
+        });
+        no_op.protocols[6].policy = Some(PrivacyProtocolPolicyV1 {
+            protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            current_limits: limits,
+            pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: 42,
+                effective_at_height: 43,
+                next_limits: limits,
+            }),
+        });
+        let mut due = no_op.clone();
+        let update = due.protocols[6]
+            .policy
+            .as_mut()
+            .expect("policy")
+            .pending_update
+            .as_mut()
+            .expect("pending update");
+        update.scheduled_at_height = 41;
+        update.effective_at_height = 42;
+        update.next_limits =
+            PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                max_polynomial_count: 3,
+            });
+        for (mut invalid, reason) in [
+            (wrong_engine, "requires engine"),
+            (malformed_policy, "must be non-zero"),
+            (no_op, "no-op"),
+            (due, "is not after committed height"),
+        ] {
+            invalid.manifest_digest = invalid
+                .computed_manifest_digest()
+                .expect("redigest hostile model");
+            for result in privacy_capability_client_results(&invalid) {
+                let error = result.expect_err("redigesting cannot repair native model invariants");
+                assert!(
+                    error.to_string().contains("invalid privacy capabilities"),
+                    "{error}"
+                );
+                assert!(
+                    error.to_string().contains(reason),
+                    "expected {reason}: {error}"
+                );
+            }
+        }
+        let mut stale_digest = valid;
+        stale_digest.committed_height += 1;
+        for result in privacy_capability_client_results(&stale_digest) {
+            let error = result.expect_err("height substitution must invalidate content digest");
+            assert!(error.to_string().contains("digest"), "{error}");
+        }
+    }
+
     #[test]
     fn deploy_contract_proposal_draft_is_typed_locally_signed_and_response_bound() {
         let client = client_with_base_url(base_url());

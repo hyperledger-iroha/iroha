@@ -85,62 +85,47 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusLimitsV1>(
         "iroha_data_model::privacy::PrivacyConsensusLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusPolicyTighteningV1>(
-        "iroha_data_model::privacy::PrivacyConsensusPolicyTighteningV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusPolicyUpdateV1>(
+        "iroha_data_model::privacy::PrivacyConsensusPolicyUpdateV1",
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyConsensusPolicyV1>(
         "iroha_data_model::privacy::PrivacyConsensusPolicyV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProposedLifecycleV1>(
-        "iroha_data_model::privacy::PrivacyProposedLifecycleV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyActiveLifecycleV1>(
-        "iroha_data_model::privacy::PrivacyActiveLifecycleV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacySuspendedLifecycleV1>(
-        "iroha_data_model::privacy::PrivacySuspendedLifecycleV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyRetiredLifecycleV1>(
-        "iroha_data_model::privacy::PrivacyRetiredLifecycleV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolLifecycleV1>(
-        "iroha_data_model::privacy::PrivacyProtocolLifecycleV1",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacySecurityClaimV1>(
         "iroha_data_model::privacy::PrivacySecurityClaimV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::AnonymousPgcActivationLimitsV1>(
-        "iroha_data_model::privacy::AnonymousPgcActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::AnonymousPgcLimitsV1>(
+        "iroha_data_model::privacy::AnonymousPgcLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::VeRangeActivationLimitsV1>(
-        "iroha_data_model::privacy::VeRangeActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::VeRangeLimitsV1>(
+        "iroha_data_model::privacy::VeRangeLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::ZkAmsActivationLimitsV1>(
-        "iroha_data_model::privacy::ZkAmsActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::ZkAmsLimitsV1>(
+        "iroha_data_model::privacy::ZkAmsLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::JindoActivationLimitsV1>(
-        "iroha_data_model::privacy::JindoActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::JindoLimitsV1>(
+        "iroha_data_model::privacy::JindoLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::OrchardActivationLimitsV1>(
-        "iroha_data_model::privacy::OrchardActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::OrchardLimitsV1>(
+        "iroha_data_model::privacy::OrchardLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::FcmpActivationLimitsV1>(
-        "iroha_data_model::privacy::FcmpActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::FcmpLimitsV1>(
+        "iroha_data_model::privacy::FcmpLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::IvmPrivateNoteActivationLimitsV1>(
-        "iroha_data_model::privacy::IvmPrivateNoteActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::IvmPrivateNoteLimitsV1>(
+        "iroha_data_model::privacy::IvmPrivateNoteLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PqMaspActivationLimitsV1>(
-        "iroha_data_model::privacy::PqMaspActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::PqMaspLimitsV1>(
+        "iroha_data_model::privacy::PqMaspLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolActivationLimitsV1>(
-        "iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolLimitsV1>(
+        "iroha_data_model::privacy::PrivacyProtocolLimitsV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolLimitsTighteningV1>(
-        "iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolLimitsUpdateV1>(
+        "iroha_data_model::privacy::PrivacyProtocolLimitsUpdateV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolActivationRecordV1>(
-        "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1",
+    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyProtocolPolicyV1>(
+        "iroha_data_model::privacy::PrivacyProtocolPolicyV1",
     ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyCompiledProfileSnapshotV1>(
         "iroha_data_model::privacy::PrivacyCompiledProfileSnapshotV1",

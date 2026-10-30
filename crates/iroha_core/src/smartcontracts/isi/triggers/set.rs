@@ -25,7 +25,6 @@ mod contract_relation;
 mod detachment;
 #[path = "set_time_source.rs"]
 mod time_source;
-pub(crate) use time_source::{ApplyingTimeSourceError, ApplyingTimeSourceWork, CapturedApplyingTimeSource};
 pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use action_relation::{ActionTable, scheduled_work as action_source_work};
 pub(crate) use authority_registry::{AUTHORITY_FIELDS, SetReadReleases};
@@ -34,6 +33,9 @@ pub(crate) use contract_relation::{TriggerContractError, scheduled_work as contr
 pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
     SetBlockCapture, SetPublicationError,
+};
+pub(crate) use time_source::{
+    ApplyingTimeSourceError, ApplyingTimeSourceWork, CapturedApplyingTimeSource,
 };
 
 use crate::state::block_field::{AggregatePublication, BlockField, StorageField};

@@ -8,7 +8,7 @@ route: Sumeragi lane state is the operator route `GET /v1/sumeragi/lanes`
 catalog aliases.
 
 TODO(N12): bind the lane source to `GET /v1/sumeragi/lanes` with a fixture
-captured from a real node once the lane DTOs are projected to the SDKs.
+captured from a real node. The lane DTOs are already projected to the SDKs.
 """
 
 import argparse

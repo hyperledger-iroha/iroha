@@ -97,80 +97,241 @@ function normalizeManifestProvenance(value, context) {
   };
 }
 
+/**
+ * Admit the exact `RuntimeUpgradeProposal`: the change set SORA Parliament schedules, or the
+ * scheduled change set it withdraws, with the notice and proposal time frozen at admission.
+ * Every number-encoded u64, including the change set's effective height, is a JSON safe integer.
+ */
 function normalizeRuntimeUpgrade(value, context) {
-  const record = exactRecord(value, ["proposal_operator", "manifest"], context);
-  const manifestContext = `${context}.manifest`;
-  const manifest = exactRecord(record.manifest, [
-    "name",
-    "description",
-    "abi_version",
-    "abi_hash",
-    "added_syscalls",
-    "added_pointer_types",
-    "start_height",
-    "end_height",
-    "sbom_digests",
-    "slsa_attestation",
-    "provenance",
-  ], manifestContext);
-  if (manifest.abi_version !== 1) {
-    throw new TypeError(`${manifestContext}.abi_version must be the number 1`);
-  }
-  const addedSyscalls = uint16Array(
-    manifest.added_syscalls,
-    `${manifestContext}.added_syscalls`,
+  const record = exactRecord(
+    value,
+    ["proposal_operator", "action", "notice", "proposed_ms"],
+    context,
   );
-  const addedPointerTypes = uint16Array(
-    manifest.added_pointer_types,
-    `${manifestContext}.added_pointer_types`,
-  );
-  if (addedSyscalls.length !== 0 || addedPointerTypes.length !== 0) {
-    throw new TypeError(`${manifestContext} ABI delta lists must be empty in V1`);
-  }
-  const startHeight = jsonUint(manifest.start_height, `${manifestContext}.start_height`);
-  const endHeight = jsonUint(manifest.end_height, `${manifestContext}.end_height`);
-  if (endHeight <= startHeight) {
-    throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
-  }
   return {
     proposal_operator: canonicalAccountId(
       record.proposal_operator,
       `${context}.proposal_operator`,
     ),
-    manifest: {
-      name: nonEmptyString(manifest.name, `${manifestContext}.name`),
-      description: exactString(manifest.description, `${manifestContext}.description`),
-      abi_version: 1,
-      abi_hash: byteArray(manifest.abi_hash, 32, `${manifestContext}.abi_hash`),
-      added_syscalls: addedSyscalls,
-      added_pointer_types: addedPointerTypes,
-      start_height: startHeight,
-      end_height: endHeight,
-      sbom_digests: array(manifest.sbom_digests, `${manifestContext}.sbom_digests`)
-        .map((item, index) => {
-          const itemContext = `${manifestContext}.sbom_digests[${index}]`;
-          const digest = exactRecord(item, ["algorithm", "digest"], itemContext);
-          return {
-            algorithm: nonEmptyString(digest.algorithm, `${itemContext}.algorithm`),
-            digest: canonicalBase64(digest.digest, `${itemContext}.digest`),
-          };
-        }),
-      slsa_attestation: canonicalBase64(
-        manifest.slsa_attestation,
-        `${manifestContext}.slsa_attestation`,
-      ),
-      provenance: array(manifest.provenance, `${manifestContext}.provenance`)
-        .map((item, index) => normalizeManifestProvenance(
-          item,
-          `${manifestContext}.provenance[${index}]`,
-        )),
-    },
+    action: normalizeRuntimeUpgradeAction(record.action, `${context}.action`),
+    notice: normalizeRuntimeNotice(record.notice, `${context}.notice`),
+    proposed_ms: jsonUint(record.proposed_ms, `${context}.proposed_ms`),
   };
 }
 
-const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
+function normalizeRuntimeUpgradeAction(value, context) {
+  const record = exactRecord(value, ["kind", "content"], context);
+  switch (record.kind) {
+    case "Schedule":
+      return {
+        kind: "Schedule",
+        content: normalizeRuntimeChangeSetV1(record.content, `${context}.content`),
+      };
+    case "Cancel":
+      return { kind: "Cancel", content: lowerHex32(record.content, `${context}.content`) };
+    default:
+      throw new TypeError(`${context}.kind must be Schedule or Cancel`);
+  }
+}
 
-function normalizeSccpRoute(value, context) {
+function normalizeRuntimeNotice(value, context) {
+  const record = exactRecord(value, ["blocks", "ms", "approval_cushion_ms"], context);
+  return {
+    blocks: jsonUint(record.blocks, `${context}.blocks`),
+    ms: jsonUint(record.ms, `${context}.ms`),
+    approval_cushion_ms: jsonUint(
+      record.approval_cushion_ms,
+      `${context}.approval_cushion_ms`,
+    ),
+  };
+}
+
+/**
+ * Validate and rebuild one exact `ChangeSetV1` JSON object
+ * (`specs/live_runtime_upgrades.md` §6).
+ *
+ * This release implements change sets of the universal root only. Published definitions and
+ * transitions keep their canonical `{kind, content}` envelopes with opaque JSON content;
+ * integers in that content must be safe JSON numbers or bigint. The node checks the
+ * transitions against the selection the change set meets when the proposal is admitted.
+ */
+export function normalizeRuntimeChangeSetV1(value, context = "changeSet") {
+  const record = exactRecord(value, [
+    "network",
+    "root",
+    "predecessor",
+    "successor",
+    "effective_height",
+    "publish",
+    "transitions",
+    "qualification",
+  ], context);
+  const network = nonEmptyString(record.network, `${context}.network`);
+  try {
+    NetworkId.parse(network);
+  } catch (error) {
+    throw new TypeError(
+      `${context}.network must be an exact canonical NetworkId literal`,
+      { cause: error },
+    );
+  }
+  const root = exactRecord(record.root, ["kind", "content"], `${context}.root`);
+  if (root.kind !== "Universal" || root.content !== null) {
+    throw new TypeError(`${context}.root must be the universal root with null content`);
+  }
+  return {
+    network,
+    root: { kind: "Universal", content: null },
+    predecessor: lowerHex32(record.predecessor, `${context}.predecessor`),
+    successor: lowerHex32(record.successor, `${context}.successor`),
+    effective_height: jsonUint(record.effective_height, `${context}.effective_height`, {
+      allowZero: false,
+    }),
+    publish: taggedJsonArray(record.publish, `${context}.publish`),
+    transitions: taggedJsonArray(record.transitions, `${context}.transitions`),
+    qualification: lowerHex32(record.qualification, `${context}.qualification`),
+  };
+}
+
+/**
+ * Validate and rebuild the trusted release signers' `ChangeSetEndorsementV1` JSON objects a
+ * runtime-upgrade proposal carries (`specs/live_runtime_upgrades.md` §6, "Who governs").
+ *
+ * The node verifies every signature against the committed `runtime_provenance_policy_v1` when
+ * the proposal executes; a root without that policy takes no endorsements.
+ */
+export function normalizeRuntimeChangeSetEndorsementsV1(value, context = "provenance") {
+  return array(value, context).map((item, index) => {
+    const itemContext = `${context}[${index}]`;
+    const endorsement = exactRecord(item, ["change_set", "signer", "signature"], itemContext);
+    const signature = nonEmptyString(endorsement.signature, `${itemContext}.signature`);
+    if (!/^(?:[0-9A-F]{2})+$/u.test(signature)) {
+      throw new TypeError(`${itemContext}.signature must be uppercase byte-aligned hexadecimal`);
+    }
+    return {
+      change_set: lowerHex32(endorsement.change_set, `${itemContext}.change_set`),
+      signer: nonEmptyString(endorsement.signer, `${itemContext}.signer`),
+      signature,
+    };
+  });
+}
+
+function taggedJsonArray(value, context) {
+  return array(value, context).map((item, index) => {
+    const itemContext = `${context}[${index}]`;
+    const entry = exactRecord(item, ["kind", "content"], itemContext);
+    return {
+      kind: nonEmptyString(entry.kind, `${itemContext}.kind`),
+      content: jsonValue(entry.content, `${itemContext}.content`, 0),
+    };
+  });
+}
+
+const OPAQUE_JSON_MAX_DEPTH = 128;
+
+function jsonValue(value, context, depth) {
+  if (depth > OPAQUE_JSON_MAX_DEPTH) {
+    throw new RangeError(`${context} exceeds the ${OPAQUE_JSON_MAX_DEPTH}-level JSON nesting limit`);
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || Object.is(value, -0)) {
+      throw new TypeError(`${context} must contain only safe integer numbers or bigint`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Array.from(value, (item, index) => jsonValue(item, `${context}[${index}]`, depth + 1));
+  }
+  if (!plainObject(value)) {
+    throw new TypeError(`${context} must contain only JSON values`);
+  }
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    Object.defineProperty(result, key, {
+      value: jsonValue(item, `${context}.${key}`, depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return result;
+}
+
+const SCCP_GOVERNANCE_MAX_ACTIONS_V1 = 16;
+// Declaration order in SccpGovernanceSubjectV1 and SccpNetworkV1 fixes S(P).
+const SCCP_SUBJECTS = Object.freeze([
+  "route", "route_control", "light_client", "parameters", "forgery_hold",
+  "fast_hold", "fast_pause_control",
+]);
+const SCCP_EXTERNAL_NETWORKS = Object.freeze([
+  "ethereum_mainnet", "bsc_mainnet", "ton_mainnet",
+]);
+const SCCP_ACTION_SUBJECTS = Object.freeze({
+  register_route: "route",
+  activate_revision: "route",
+  switch_revision: "route",
+  deactivate_outbound: "route",
+  retire_revision: "route",
+  remove_staged: "route",
+  release_stranded: "route",
+  set_taira_paused: "route",
+  set_destination_paused: "route_control",
+  initialize_light_client: "light_client",
+  install_trusted_checkpoint: "light_client",
+  freeze_light_client: "light_client",
+  set_parameters: "parameters",
+  activate_light_client_profile: "light_client",
+  attest_deployment_progress: "forgery_hold",
+  quarantine_revision: "forgery_hold",
+  open_reconciliation: "forgery_hold",
+  set_fast_pause_suspended: "fast_pause_control",
+});
+const SCCP_ACTION_FIELDS = Object.freeze({
+  register_route: ["revision", "deployment", "initial_committee", "max_wrapped_supply"],
+  release_stranded: ["amount", "recipient", "memo"],
+  initialize_light_client: ["expected", "params", "bootstrap"],
+  activate_revision: ["revision"],
+  deactivate_outbound: ["revision"],
+  retire_revision: ["revision"],
+  remove_staged: ["revision"],
+  quarantine_revision: ["revision"],
+  switch_revision: ["from", "to"],
+  set_taira_paused: ["paused"],
+  set_destination_paused: ["revision", "paused"],
+  freeze_light_client: [],
+  install_trusted_checkpoint: ["checkpoint"],
+  activate_light_client_profile: ["version", "profile_hash"],
+  attest_deployment_progress: ["revision", "at"],
+  open_reconciliation: ["revision", "window_ms"],
+  set_fast_pause_suspended: ["duration_ms"],
+  set_parameters: ["next"],
+});
+// Three immutable maximum pause periods (sccp/params.rs), independent of live policy.
+const SCCP_FAST_PAUSE_SUSPENSION_MAX_MS_V1 = 3 * 2_592_000_000;
+// Own-field bounds from SccpParametersV1::check_own_bounds; joint rules are below.
+const SCCP_PARAMETER_INTEGER_BOUNDS = Object.freeze({
+  committee_validity_ms: [0, 2_592_000_000],
+  committee_heartbeat_ms: [3_600_000, Number.MAX_SAFE_INTEGER],
+  forgery_evidence_grace_ms: [86_400_000, 2_592_000_000],
+  destination_progress_cap_ms: [0, 2_592_000_000],
+  outbound_ttl_ms: [86_400_000, 7_776_000_000],
+  max_exempt_transactions_per_block: [8, 1024],
+  fast_pause_panel_seats: [5, 9],
+  fast_pause_panel_term_ms: [3_600_000, Number.MAX_SAFE_INTEGER],
+  fast_pause_seat_accept_window_ms: [600_000, Number.MAX_SAFE_INTEGER],
+  fast_pause_endorse_window_ms: [300_000, 21_600_000],
+  fast_pause_renew_lead_ms: [0, Number.MAX_SAFE_INTEGER],
+  fast_pause_hold_ms: [0, 2_505_600_000],
+});
+
+/** Admit the SCCP proposal envelope, static action rules and exact subject-revision set. */
+export function normalizeSccpRoute(value, context) {
   const record = exactRecord(value, ["proposal"], context);
   const proposalContext = `${context}.proposal`;
   const proposal = exactRecord(
@@ -180,16 +341,65 @@ function normalizeSccpRoute(value, context) {
   );
   const networkId = nonEmptyString(proposal.network_id, `${proposalContext}.network_id`);
   NetworkId.parse(networkId);
-  const baseRevisions = array(proposal.base_revisions, `${proposalContext}.base_revisions`);
-  const actions = array(proposal.actions, `${proposalContext}.actions`);
-  if (actions.length === 0 || actions.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
+  const basesContext = `${proposalContext}.base_revisions`;
+  const bases = array(proposal.base_revisions, basesContext);
+  const actionsContext = `${proposalContext}.actions`;
+  const rawActions = array(proposal.actions, actionsContext);
+  for (const [entries, label] of [[bases, basesContext], [rawActions, actionsContext]]) {
+    if (entries.length === 0 || entries.length > SCCP_GOVERNANCE_MAX_ACTIONS_V1) {
+      throw new TypeError(
+        `${label} must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} entries`,
+      );
+    }
+  }
+  const baseRevisions = Array.from(bases, (item, index) => {
+    const label = `${basesContext}[${index}]`;
+    const entry = exactRecord(item, ["subject", "revision"], label);
+    return {
+      subject: normalizeSccpSubject(entry.subject, `${label}.subject`),
+      revision: jsonUint(entry.revision, `${label}.revision`),
+    };
+  });
+  const actionSubjects = new Set();
+  const destinations = new Set();
+  const actions = Array.from(rawActions, (item, index) => {
+    const label = `${actionsContext}[${index}]`;
+    const entry = exactRecord(item, ["action", "payload"], label);
+    const action = nonEmptyString(entry.action, `${label}.action`);
+    if (!Object.hasOwn(SCCP_ACTION_SUBJECTS, action)) {
+      throw new TypeError(`${label}.action contains an unsupported SCCP action: ${action}`);
+    }
+    if (!plainObject(entry.payload)) {
+      throw new TypeError(`${label}.payload must be an object`);
+    }
+    const tag = SCCP_ACTION_SUBJECTS[action];
+    const key = tag === "parameters"
+      ? null
+      : normalizeSccpNetwork(entry.payload.network, `${label}.payload.network`);
+    actionSubjects.add(sccpSubjectOrder({ subject: tag, key }));
+    const payload = normalizeSccpActionPayload(action, entry.payload, key, `${label}.payload`);
+    if (action === "register_route") {
+      const deployment = payload.deployment.deployment;
+      const word = payload.deployment.family === "evm"
+        ? [...Array(12).fill(0), ...deployment.address] : deployment.master_account;
+      const destination = word.join(",");
+      if (destinations.has(destination)) {
+        throw new TypeError(`${label}.payload.deployment repeats a registered destination word`);
+      }
+      destinations.add(destination);
+    }
+    return {
+      action,
+      payload,
+    };
+  });
+  const expected = [...actionSubjects].sort((left, right) => left - right);
+  if (baseRevisions.length !== expected.length
+      || baseRevisions.some((entry, index) => sccpSubjectOrder(entry.subject) !== expected[index])) {
     throw new TypeError(
-      `${proposalContext}.actions must contain 1..${SCCP_GOVERNANCE_MAX_ACTIONS_V1} actions`,
+      `${basesContext} must list exactly the action subjects in canonical order, without duplicates`,
     );
   }
-  // TODO: validate each SccpGovernanceBaseRevisionV1 and SccpGovernanceActionV1
-  // entry statically (specs/sccp.md §4.14.3) once the SDK carries typed SCCP
-  // governance codecs; Torii and the node remain authoritative for them today.
   return {
     proposal: {
       network_id: networkId,
@@ -197,6 +407,295 @@ function normalizeSccpRoute(value, context) {
       actions,
     },
   };
+}
+
+function normalizeSccpActionPayload(action, value, network, context) {
+  const fields = SCCP_ACTION_FIELDS[action];
+  const record = exactRecord(value, network === null ? fields : ["network", ...fields], context);
+  const result = network === null ? { ...record } : { ...record, network };
+  if (Object.hasOwn(record, "revision")) {
+    result.revision = sccpUint32(record.revision, `${context}.revision`);
+  }
+  switch (action) {
+    case "release_stranded": {
+      result.amount = sccpAmount(record.amount, 1n, (1n << 128n) - 1n, `${context}.amount`);
+      if (typeof record.memo !== "string" || record.memo.length > 256) {
+        throw new TypeError(`${context}.memo must be a string of at most 256 UTF-8 bytes`);
+      }
+      for (const character of record.memo) {
+        const codePoint = character.codePointAt(0);
+        if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+          throw new TypeError(`${context}.memo must not contain unpaired UTF-16 surrogates`);
+        }
+      }
+      if (Buffer.byteLength(record.memo, "utf8") > 256) {
+        throw new TypeError(`${context}.memo exceeds 256 UTF-8 bytes`);
+      }
+      result.recipient = canonicalAccountId(record.recipient, `${context}.recipient`);
+      break;
+    }
+    case "register_route":
+      result.deployment = normalizeSccpDeployment(record.deployment, network, `${context}.deployment`);
+      result.initial_committee = normalizeSccpCommitteePin(record.initial_committee, `${context}.initial_committee`);
+      result.max_wrapped_supply = sccpAmount(record.max_wrapped_supply, 1n,
+        (1n << (network.network === "ton_mainnet" ? 96n : 128n)) - 1n, `${context}.max_wrapped_supply`);
+      break;
+    case "initialize_light_client": {
+      const expected = exactRecord(record.expected, ["expected", "detail"], `${context}.expected`);
+      if (!["absent", "unusable"].includes(expected.expected) || expected.detail !== null) {
+        throw new TypeError(`${context}.expected must name absent or unusable with null detail`);
+      }
+      result.expected = { expected: expected.expected, detail: null };
+      result.params = normalizeSccpLightClientParams(record.params, network, `${context}.params`);
+      result.bootstrap = normalizeSccpBootstrap(record.bootstrap, network, `${context}.bootstrap`);
+      break;
+    }
+    case "set_parameters":
+      result.next = normalizeSccpParameters(record.next, `${context}.next`);
+      break;
+    case "switch_revision":
+      result.from = sccpUint32(record.from, `${context}.from`);
+      result.to = sccpUint32(record.to, `${context}.to`);
+      if (result.from === result.to) {
+        throw new TypeError(`${context}.from and .to must name distinct revisions`);
+      }
+      break;
+    case "set_taira_paused":
+    case "set_destination_paused":
+      if (typeof record.paused !== "boolean") {
+        throw new TypeError(`${context}.paused must be a boolean`);
+      }
+      break;
+    case "activate_light_client_profile":
+      result.version = sccpUint32(record.version, `${context}.version`);
+      if (result.version < 2) {
+        throw new TypeError(`${context}.version must be at least 2; version 1 is active from genesis`);
+      }
+      result.profile_hash = byteArray(record.profile_hash, 32, `${context}.profile_hash`, {
+        nonZero: true,
+      });
+      break;
+    case "install_trusted_checkpoint":
+      if (network.network === "ton_mainnet") {
+        throw new TypeError(`${context}.network cannot be TON; its light client reads no checkpoints`);
+      }
+      result.checkpoint = normalizeSccpCheckpoint(record.checkpoint, `${context}.checkpoint`);
+      break;
+    case "attest_deployment_progress":
+      result.at = normalizeSccpProgress(record.at, `${context}.at`);
+      break;
+    case "open_reconciliation":
+      result.window_ms = jsonUint(record.window_ms, `${context}.window_ms`, { allowZero: false });
+      break;
+    case "set_fast_pause_suspended":
+      result.duration_ms = jsonUint(record.duration_ms, `${context}.duration_ms`);
+      if (result.duration_ms > SCCP_FAST_PAUSE_SUSPENSION_MAX_MS_V1) {
+        throw new TypeError(`${context}.duration_ms exceeds three maximum pause periods`);
+      }
+      break;
+    default:
+      break;
+  }
+  return result;
+}
+
+function normalizeSccpDeployment(value, network, context) {
+  const record = exactRecord(value, ["family", "deployment"], context);
+  const label = `${context}.deployment`;
+  if (record.family === "evm" && network.network !== "ton_mainnet") {
+    const deployed = exactRecord(record.deployment, ["address", "runtime_code_hash"], label);
+    return { family: "evm", deployment: {
+      address: byteArray(deployed.address, 20, `${label}.address`, { nonZero: true }),
+      runtime_code_hash: byteArray(deployed.runtime_code_hash, 32, `${label}.runtime_code_hash`),
+    } };
+  }
+  if (record.family === "ton" && network.network === "ton_mainnet") {
+    const deployed = exactRecord(record.deployment, ["master_account", "minter_code", "wallet_code", "bucket_code"], label);
+    return { family: "ton", deployment: {
+      master_account: byteArray(deployed.master_account, 32, `${label}.master_account`, { nonZero: true }),
+      minter_code: normalizeSccpTonCode(deployed.minter_code, `${label}.minter_code`),
+      wallet_code: normalizeSccpTonCode(deployed.wallet_code, `${label}.wallet_code`),
+      bucket_code: normalizeSccpTonCode(deployed.bucket_code, `${label}.bucket_code`),
+    } };
+  }
+  throw new TypeError(`${context}.family must match the external network`);
+}
+
+function normalizeSccpTonCode(value, context) {
+  const record = exactRecord(value, ["hash", "depth"], context);
+  const depth = jsonUint(record.depth, `${context}.depth`);
+  if (depth > 65535) throw new TypeError(`${context}.depth must fit in an unsigned 16-bit integer`);
+  return { hash: byteArray(record.hash, 32, `${context}.hash`), depth };
+}
+
+function normalizeSccpCommitteePin(value, context) {
+  const record = exactRecord(value, ["generation", "committee_root", "start_height", "until_ms"], context);
+  return {
+    generation: jsonUint(record.generation, `${context}.generation`, { allowZero: false }),
+    committee_root: byteArray(record.committee_root, 32, `${context}.committee_root`, { nonZero: true }),
+    start_height: jsonUint(record.start_height, `${context}.start_height`, { allowZero: false }),
+    until_ms: jsonUint(record.until_ms, `${context}.until_ms`, { allowZero: false }),
+  };
+}
+
+function normalizeSccpLightClientParams(value, network, context) {
+  const jsonFields = ["ws_bound_ms", "set_retention_ms", "checkpoint_stride", "checkpoint_prune_after_ms"];
+  const uint32Fields = ["max_updates_per_advance", "max_segment_headers", "max_ancestry_headers", "max_backfill_headers", "max_advance_bytes", "max_proof_bytes"];
+  const record = exactRecord(value, ["network", ...jsonFields, ...uint32Fields], context);
+  const result = { network: normalizeSccpNetwork(record.network, `${context}.network`) };
+  if (result.network.network !== network.network) {
+    throw new TypeError(`${context}.network must match the action network`);
+  }
+  for (const field of jsonFields) {
+    const tonDerived = network.network === "ton_mainnet" && ["ws_bound_ms", "checkpoint_stride"].includes(field);
+    result[field] = jsonUint(record[field], `${context}.${field}`, { allowZero: tonDerived });
+    if (tonDerived && result[field] !== 0) {
+      throw new TypeError(`${context}.${field} must be zero for TON`);
+    }
+  }
+  for (const field of uint32Fields) result[field] = sccpUint32(record[field], `${context}.${field}`);
+  return result;
+}
+
+function normalizeSccpBootstrap(value, network, context) {
+  const record = exactRecord(value, ["network", "bytes"], context);
+  const source = normalizeSccpNetwork(record.network, `${context}.network`);
+  if (source.network !== network.network) {
+    throw new TypeError(`${context}.network must match the action network`);
+  }
+  const maximum = 1_048_576;
+  if (typeof record.bytes !== "string" || record.bytes.length === 0
+      || record.bytes.length > 4 * Math.ceil(maximum / 3)) {
+    throw new TypeError(`${context}.bytes must encode 1..${maximum} bytes`);
+  }
+  const bytes = canonicalBase64(record.bytes, `${context}.bytes`);
+  const length = bytes.length / 4 * 3 - (bytes.endsWith("==") ? 2 : bytes.endsWith("=") ? 1 : 0);
+  if (length > maximum) throw new TypeError(`${context}.bytes exceeds ${maximum} bytes`);
+  // Per-chain native decoding and bootstrap authentication are node-owned checks.
+  return { network: source, bytes };
+}
+
+function normalizeSccpParameters(value, context) {
+  const record = exactRecord(value, [
+    "enabled", ...Object.keys(SCCP_PARAMETER_INTEGER_BOUNDS),
+    "min_outbound_amount", "inbound_self_claim_fee",
+  ], context);
+  if (typeof record.enabled !== "boolean") {
+    throw new TypeError(`${context}.enabled must be a boolean`);
+  }
+  const result = { ...record };
+  for (const [field, [minimum, maximum]] of Object.entries(SCCP_PARAMETER_INTEGER_BOUNDS)) {
+    const integer = jsonUint(record[field], `${context}.${field}`);
+    if (integer < minimum || integer > maximum) {
+      throw new TypeError(`${context}.${field} must be within ${minimum}..${maximum}`);
+    }
+    result[field] = integer;
+  }
+  result.min_outbound_amount = sccpAmount(
+    record.min_outbound_amount, 1n, 1_000_000_000_000_000n, `${context}.min_outbound_amount`,
+  );
+  result.inbound_self_claim_fee = sccpAmount(
+    record.inbound_self_claim_fee, 0n, 10_000_000_000n, `${context}.inbound_self_claim_fee`,
+  );
+  if (![5, 7, 9].includes(result.fast_pause_panel_seats)) {
+    throw new TypeError(`${context}.fast_pause_panel_seats must be 5, 7 or 9`);
+  }
+  // BigInt keeps sums and doubled values exact even at the JSON-safe input maximum.
+  const validityFloor = BigInt(result.fast_pause_hold_ms)
+    + 2n * BigInt(result.committee_heartbeat_ms) + 86_400_000n;
+  if (BigInt(result.committee_validity_ms) < validityFloor) {
+    throw new TypeError(`${context}.committee_validity_ms is below the hold, heartbeat and pin margin`);
+  }
+  if (2n * BigInt(result.fast_pause_seat_accept_window_ms) > BigInt(result.fast_pause_panel_term_ms)) {
+    throw new TypeError(`${context}.fast_pause_seat_accept_window_ms exceeds half the panel term`);
+  }
+  const renewLead = BigInt(result.fast_pause_renew_lead_ms);
+  if (renewLead < 2n * BigInt(result.fast_pause_endorse_window_ms)
+      || 2n * renewLead > BigInt(result.fast_pause_hold_ms)) {
+    throw new TypeError(`${context}.fast_pause_renew_lead_ms must span two endorsement windows and fit half the hold`);
+  }
+  // Enactment checks the committed staking delay and Parliament attempt latency.
+  return result;
+}
+
+function sccpAmount(value, minimum, maximum, context) {
+  if (typeof value !== "string" || value.length > maximum.toString().length
+      || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    throw new TypeError(`${context} must be a bounded canonical unsigned decimal string`);
+  }
+  const integer = BigInt(value);
+  if (integer < minimum || integer > maximum) {
+    throw new TypeError(`${context} must be within ${minimum}..${maximum}`);
+  }
+  return value;
+}
+
+function normalizeSccpCheckpoint(value, context) {
+  const record = exactRecord(value, [
+    "source_height", "block_hash", "state_root", "receipts_or_tx_root", "source_time_ms",
+  ], context);
+  return {
+    source_height: jsonUint(record.source_height, `${context}.source_height`),
+    block_hash: byteArray(record.block_hash, 32, `${context}.block_hash`),
+    state_root: record.state_root === null ? null : byteArray(record.state_root, 32, `${context}.state_root`),
+    receipts_or_tx_root: byteArray(record.receipts_or_tx_root, 32, `${context}.receipts_or_tx_root`),
+    source_time_ms: jsonUint(record.source_time_ms, `${context}.source_time_ms`),
+  };
+}
+
+function sccpUint32(value, context) {
+  const integer = jsonUint(value, context, { allowZero: false });
+  if (integer > 0xffff_ffff) {
+    throw new TypeError(`${context} must fit in an unsigned 32-bit integer`);
+  }
+  return integer;
+}
+
+function normalizeSccpProgress(value, context) {
+  const record = exactRecord(value, ["at", "detail"], context);
+  if (record.at === "frozen") {
+    if (record.detail !== null) throw new TypeError(`${context}.detail must be null`);
+    return { at: "frozen", detail: null };
+  }
+  if (record.at !== "generation") {
+    throw new TypeError(`${context}.at must be frozen or generation`);
+  }
+  const label = `${context}.detail`;
+  const detail = exactRecord(record.detail, ["generation", "committee_root"], label);
+  return {
+    at: "generation",
+    detail: {
+      generation: jsonUint(detail.generation, `${label}.generation`, { allowZero: false }),
+      committee_root: byteArray(detail.committee_root, 32, `${label}.committee_root`, { nonZero: true }),
+    },
+  };
+}
+
+function normalizeSccpSubject(value, context) {
+  const record = exactRecord(value, ["subject", "key"], context);
+  const tag = nonEmptyString(record.subject, `${context}.subject`);
+  if (!SCCP_SUBJECTS.includes(tag)) {
+    throw new TypeError(`${context}.subject contains an unsupported SCCP subject: ${tag}`);
+  }
+  if (tag === "parameters") {
+    if (record.key !== null) throw new TypeError(`${context}.key must be null`);
+    return { subject: tag, key: null };
+  }
+  return { subject: tag, key: normalizeSccpNetwork(record.key, `${context}.key`) };
+}
+
+function normalizeSccpNetwork(value, context) {
+  const record = exactRecord(value, ["network", "profile"], context);
+  if (!SCCP_EXTERNAL_NETWORKS.includes(record.network)) {
+    throw new TypeError(`${context}.network must name a supported external SCCP network`);
+  }
+  if (record.profile !== null) throw new TypeError(`${context}.profile must be null`);
+  return { network: record.network, profile: null };
+}
+
+function sccpSubjectOrder({ subject, key }) {
+  return SCCP_SUBJECTS.indexOf(subject) * 4
+    + (key === null ? 0 : SCCP_EXTERNAL_NETWORKS.indexOf(key.network) + 1);
 }
 
 function requireNativeFeeHash(value, context) {
@@ -950,7 +1449,7 @@ function byteArray(value, length, context, options = {}) {
   const bytes = array(value, context);
   if (
     bytes.length !== length ||
-    bytes.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+    Array.from(bytes).some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
   ) {
     throw new TypeError(`${context} must contain exactly ${length} JSON byte values`);
   }
@@ -973,16 +1472,6 @@ function stringTuple(value, context) {
     throw new TypeError(`${context} must be the exact one-field string tuple`);
   }
   return value[0];
-}
-
-function uint16Array(value, context) {
-  return array(value, context).map((item, index) => {
-    const normalized = jsonUint(item, `${context}[${index}]`);
-    if (normalized > 0xffff) {
-      throw new TypeError(`${context}[${index}] must fit in an unsigned 16-bit integer`);
-    }
-    return normalized;
-  });
 }
 
 function jsonUint(value, context, options = {}) {

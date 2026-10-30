@@ -15,8 +15,15 @@
 //! - **Accumulator.** The lane-wise sum of the elements of all entries modulo `2^16`, with the
 //!   entry count modulo `2^64`. Adding and removing an element are inverse operations and the
 //!   sum is independent of entry order, so the value is a function of the World content alone.
-//! - **Root.** `H(ROOT ‖ S ‖ entries ‖ lanes)`, where `H` is the chain hash and `S` binds every
-//!   canonical field identity, kind and key/value schema of the registry in identity order.
+//! - **Root.** `H(ROOT ‖ S ‖ entries ‖ lanes)`, where `H` is the chain hash and `S` binds the
+//!   commitment profile and every storage definition the root's selection installs, in identity
+//!   order (`specs/live_runtime_upgrades.md` §5.1). A storage definition fixes its field's
+//!   identity, kind and key/value schema.
+//! - **Installed storage.** A canonical field compiled into this release whose storage
+//!   definition the selection does not install is empty, unwritten and outside the commitment,
+//!   so a release that adds a field changes no root until a change set installs it. A block
+//!   that installs a field absorbs its complete content; its parent root keeps the parent
+//!   selection's `S`, its result root takes the successor's.
 //!
 //! A block updates the accumulator from its complete change set: every entry of every canonical
 //! World storage and cell that the block's overlay touched, from the overlay's own undo journal
@@ -27,7 +34,8 @@
 //!
 //! Every pass visits exactly the registry's canonical fields: an unclassified, mistyped,
 //! repeated or missing field fails the pass, so a new World field cannot silently escape the
-//! commitment (the registry itself destructures `WorldData` without `..`).
+//! commitment (the registry itself destructures `WorldData` without `..`). Every canonical field
+//! implements one storage definition of the release catalog (`crate::runtime::catalog`).
 //!
 //! All arithmetic is wrapping integer arithmetic on fixed-width lanes; the element expansion is
 //! BLAKE3, whose SIMD back ends are bit-identical to its portable implementation. The lane
@@ -42,6 +50,7 @@ use iroha_data_model::musubi::{
     ArchiveId, MusubiArchiveAvailabilityV1, MusubiOrderedPackageEntryV1, MusubiPackageSelectorV1,
     MusubiReleaseIdV1, MusubiResolverReleaseRowV1,
 };
+use iroha_data_model::runtime::definition::{DefinitionId, RootSelectionV1};
 use iroha_data_model::sumeragi_finality::{
     WorldStateElementKindV1, world_state_element_v1, world_state_path_hash_v1,
     world_state_root_from_accumulator_v1,
@@ -56,6 +65,8 @@ const SCHEMA_START: &[u8] = b"iroha:world-state:schema:start:v1\0";
 const SCHEMA_FIELD: &[u8] = b"iroha:world-state:schema:field:v1\0";
 const SCHEMA_VALUE: &[u8] = b"iroha:world-state:schema:value:v1\0";
 const SCHEMA_NO_KEY: &[u8] = b"iroha:world-state:schema:no-key:v1\0";
+const SCHEMA_SELECTION: &[u8] = b"iroha:world-state:schema:selection:v1\0";
+const PROFILE: &[u8] = b"iroha:world-state:profile:lthash16:v1\0";
 const TABLE: u8 = 0;
 const CELL: u8 = 1;
 
@@ -82,9 +93,9 @@ impl Default for WorldStateAccumulator {
 
 impl core::fmt::Debug for WorldStateAccumulator {
     fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // The root depends on the selection whose schema it commits, so only the count shows.
         out.debug_struct("WorldStateAccumulator")
             .field("entries", &self.entries)
-            .field("root", &self.root())
             .finish_non_exhaustive()
     }
 }
@@ -114,15 +125,13 @@ impl WorldStateAccumulator {
         self.entries
     }
 
-    /// The complete World state root: the value `R` binds (§4.1).
+    /// The complete World state root under `selection`: the value `R` binds (§4.1).
     ///
     /// # Errors
-    /// The authority registry declares an unresolved canonical schema (a build defect that this
-    /// module's tests catch).
-    pub(crate) fn root(&self) -> Result<Hash, String> {
-        let schema = field_index().as_ref().map_err(Clone::clone)?.schema;
+    /// This release does not implement the selection's commitment profile.
+    pub(crate) fn root(&self, selection: &RootSelectionV1) -> Result<Hash, String> {
         Ok(world_state_root_from_accumulator_v1(
-            schema,
+            selection_schema(selection)?,
             self.entries,
             &self.lanes,
         ))
@@ -269,13 +278,17 @@ enum Classified {
     Excluded,
 }
 
-/// The registry, indexed by projection name, with its schema digest.
+/// The registry, indexed by projection name, with each canonical field's storage definition.
 struct FieldIndex {
     by_name: BTreeMap<&'static str, Classified>,
     /// Canonical registry identities in slot order.
     ids: Vec<&'static str>,
+    /// The storage definition each canonical slot implements.
+    storage: Vec<DefinitionId>,
     canonical: usize,
-    schema: Hash,
+    /// Kind and key/value schema fingerprints of every canonical field, by registry identity:
+    /// the predecessor root rule of an upgrade checkpoint.
+    fingerprints: BTreeMap<&'static str, Fingerprint>,
 }
 
 fn field_index() -> &'static Result<FieldIndex, String> {
@@ -315,20 +328,24 @@ impl FieldIndex {
                 return Err(format!("World field registered twice: {}", field.id));
             }
         }
-        let mut schema = Hash::new(SCHEMA_START);
+        let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+        let mut fingerprints = BTreeMap::new();
+        let mut storage = Vec::with_capacity(canonical.len());
         for (slot, (id, (kind, key, value))) in canonical.iter().enumerate() {
+            storage.push(
+                *catalog.world_storage.get(id).ok_or_else(|| {
+                    format!("canonical World field {id} has no storage definition")
+                })?,
+            );
             let path = path_hash(id, *kind)?;
-            let key = key
-                .map(schema_fingerprint)
-                .transpose()?
-                .unwrap_or_else(|| Hash::new(SCHEMA_NO_KEY));
-            schema = Hash::new_from_chunks(&[
-                SCHEMA_FIELD,
-                schema.as_ref(),
-                path.as_ref(),
-                key.as_ref(),
-                schema_fingerprint(*value)?.as_ref(),
-            ]);
+            fingerprints.insert(
+                *id,
+                (
+                    *kind,
+                    key.map(schema_fingerprint).transpose()?,
+                    schema_fingerprint(*value)?,
+                ),
+            );
             let name = id.strip_prefix("world.").unwrap_or(id);
             by_name.insert(
                 name,
@@ -342,16 +359,186 @@ impl FieldIndex {
         Ok(Self {
             by_name,
             ids: canonical.keys().copied().collect(),
+            storage,
             canonical: canonical.len(),
-            schema: Hash::new_from_chunks(&[
-                SCHEMA_START,
-                schema.as_ref(),
-                &u64::try_from(canonical.len())
-                    .map_err(|_| "canonical World field count exceeds u64")?
-                    .to_le_bytes(),
-            ]),
+            fingerprints,
         })
     }
+}
+
+/// Kind and key/value schema fingerprints of one canonical field (no key for a cell).
+type Fingerprint = (u8, Option<Hash>, Hash);
+
+/// Digest of the fixed parameters of this release's commitment profile: the lane count of the
+/// `LtHash16` accumulator whose element, path and root rules
+/// (`iroha_data_model::sumeragi_finality`) the profile's scheme names.
+pub(crate) fn commitment_parameters() -> [u8; 32] {
+    Hash::new_from_chunks(&[PROFILE, &(LANES as u64).to_le_bytes()]).into()
+}
+
+/// `S` of a selection: its commitment profile, then every storage definition it installs in
+/// identity order, then their count.
+///
+/// # Errors
+/// This release does not implement the selection's commitment profile.
+pub(crate) fn selection_schema(selection: &RootSelectionV1) -> Result<Hash, String> {
+    let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+    if selection.commitment_profile != catalog.baseline.commitment_profile {
+        return Err(format!(
+            "commitment profile {} is not implemented by this release",
+            selection.commitment_profile
+        ));
+    }
+    let mut schema = Hash::new_from_chunks(&[SCHEMA_SELECTION, &selection.commitment_profile.0]);
+    for storage in &selection.installed_storage {
+        schema = Hash::new_from_chunks(&[SCHEMA_FIELD, schema.as_ref(), &storage.0]);
+    }
+    let count = u64::try_from(selection.installed_storage.len())
+        .map_err(|_| "installed storage count exceeds u64")?;
+    Ok(Hash::new_from_chunks(&[
+        SCHEMA_SELECTION,
+        schema.as_ref(),
+        &count.to_le_bytes(),
+    ]))
+}
+
+/// Whether each canonical slot's storage is installed by `selection`.
+///
+/// # Errors
+/// The selection installs storage no canonical field of this release implements.
+fn installed_slots(index: &FieldIndex, selection: &RootSelectionV1) -> Result<Vec<bool>, String> {
+    let installed: Vec<bool> = index
+        .storage
+        .iter()
+        .map(|storage| selection.installed_storage.binary_search(storage).is_ok())
+        .collect();
+    if installed.iter().filter(|installed| **installed).count() != selection.installed_storage.len()
+    {
+        return Err("the selection installs storage this release does not implement".into());
+    }
+    Ok(installed)
+}
+
+/// `S`: every canonical field's identity, kind and key/value schema folded in identity order,
+/// followed by the field count.
+fn schema_digest(fingerprints: &BTreeMap<&'static str, Fingerprint>) -> Result<Hash, String> {
+    let mut schema = Hash::new(SCHEMA_START);
+    for (id, (kind, key, value)) in fingerprints {
+        let path = path_hash(id, *kind)?;
+        let key = key.unwrap_or_else(|| Hash::new(SCHEMA_NO_KEY));
+        schema = Hash::new_from_chunks(&[
+            SCHEMA_FIELD,
+            schema.as_ref(),
+            path.as_ref(),
+            key.as_ref(),
+            value.as_ref(),
+        ]);
+    }
+    Ok(Hash::new_from_chunks(&[
+        SCHEMA_START,
+        schema.as_ref(),
+        &u64::try_from(fingerprints.len())
+            .map_err(|_| "canonical World field count exceeds u64")?
+            .to_le_bytes(),
+    ]))
+}
+
+/// The accumulator and World root that the predecessor release of an upgrade checkpoint
+/// certified for an imported World (`state::upgrade_checkpoint`).
+///
+/// `current` is a cold capture, under this release's registry, of a World imported from the
+/// predecessor's snapshot with the added tables still empty and the runtime fields founded on
+/// the baseline. The predecessor's registry held the retired tables instead and none of the
+/// founded fields. An import admits only the retired tables' empty values, which add no
+/// element; the founded fields' baseline elements are removed again.
+///
+/// # Errors
+/// The registry of this release no longer matches the predecessor profile, or a value fails to
+/// encode.
+pub(in crate::state) fn predecessor_root(
+    current: &WorldStateAccumulator,
+) -> Result<(WorldStateAccumulator, Hash), String> {
+    use crate::state::upgrade_checkpoint::{
+        ADDED_WORLD_FIELDS, FOUNDED_WORLD_FIELDS, retired_world_fields,
+    };
+    let mut fingerprints = field_index()
+        .as_ref()
+        .map_err(Clone::clone)?
+        .fingerprints
+        .clone();
+    for added in &ADDED_WORLD_FIELDS {
+        if fingerprints.remove(added.id).is_none() {
+            return Err(format!(
+                "{} is not a canonical World field of this release",
+                added.id
+            ));
+        }
+    }
+    let mut predecessor = current.clone();
+    for (id, _) in &FOUNDED_WORLD_FIELDS {
+        if fingerprints.remove(id).is_none() {
+            return Err(format!(
+                "{id} is not a canonical World field of this release"
+            ));
+        }
+    }
+    let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+    let definitions = path_hash(FOUNDED_WORLD_FIELDS[0].0, TABLE)?;
+    for id in &catalog.baseline_definitions {
+        let descriptor = catalog
+            .definitions
+            .get(id)
+            .ok_or("the baseline names an unknown definition")?;
+        predecessor.remove(&element(
+            &definitions,
+            Some(&hash_value(id)?),
+            &hash_value(descriptor)?,
+        ));
+    }
+    predecessor.remove(&element(
+        &path_hash(FOUNDED_WORLD_FIELDS[1].0, CELL)?,
+        None,
+        &hash_value(&catalog.baseline)?,
+    ));
+    for retired in retired_world_fields() {
+        let kind = if retired.key.is_some() { TABLE } else { CELL };
+        let key = retired.key.map(norito_identity_fingerprint).transpose()?;
+        let value = norito_identity_fingerprint(retired.value)?;
+        if kind == CELL {
+            // An empty cell still holds one element, whose value this release can no longer type.
+            return Err(format!(
+                "{} is a retired cell, which no import admits",
+                retired.id
+            ));
+        }
+        if fingerprints
+            .insert(retired.id, (kind, key, value))
+            .is_some()
+        {
+            return Err(format!(
+                "{} is still a canonical World field of this release",
+                retired.id
+            ));
+        }
+    }
+    let root = world_state_root_from_accumulator_v1(
+        schema_digest(&fingerprints)?,
+        predecessor.entries,
+        &predecessor.lanes,
+    );
+    Ok((predecessor, root))
+}
+
+/// [`schema_fingerprint`] of a Norito schema whose nominal identity was `identity`.
+fn norito_identity_fingerprint(identity: &str) -> Result<Hash, String> {
+    let layout = crate::state::authority_registry::V1_LAYOUT;
+    let length = u64::try_from(identity.len()).map_err(|_| "World schema identity exceeds u64")?;
+    Ok(Hash::new_from_chunks(&[
+        SCHEMA_VALUE,
+        &[0, layout.major, layout.minor, layout.flags],
+        &length.to_le_bytes(),
+        identity.as_bytes(),
+    ]))
 }
 
 fn flatten(fields: &'static [Field], out: &mut Vec<&'static Field>) {
@@ -404,12 +591,25 @@ fn element(path: &Hash, key: Option<&Hash>, value: &Hash) -> [u8; LANE_BYTES] {
     world_state_element_v1(path, key, value)
 }
 
+/// How a pass treats one canonical field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Installation {
+    /// Not installed: empty, unwritten and outside the commitment.
+    Absent,
+    /// Installed by this block: its complete current content enters the commitment.
+    Fresh,
+    /// Installed before this block: only its changes enter.
+    Installed,
+}
+
 /// One projection pass over the World overlay.
 struct Builder<'a> {
     index: &'a FieldIndex,
     accumulator: WorldStateAccumulator,
     direction: Direction,
     visited: Vec<bool>,
+    /// How the pass treats each canonical slot.
+    installation: Vec<Installation>,
     snapshot: Option<world_state_snapshot::SnapshotCollector<'a>>,
     snapshot_field: Option<(usize, u8)>,
 }
@@ -426,6 +626,7 @@ impl Builder<'_> {
             accumulator,
             direction,
             visited: vec![false; index.canonical],
+            installation: installation(index, world, direction)?,
             snapshot: None,
             snapshot_field: None,
         };
@@ -446,8 +647,8 @@ impl Builder<'_> {
         }
     }
 
-    /// The field's path hash, or `None` when the registry excludes it.
-    fn field(&mut self, name: &str, kind: u8) -> Result<Option<Hash>, String> {
+    /// The field's path hash and installation, or `None` when the registry excludes it.
+    fn field(&mut self, name: &str, kind: u8) -> Result<Option<(Hash, Installation)>, String> {
         match self.index.by_name.get(name) {
             None => Err(format!("unclassified World state field: {name}")),
             Some(Classified::Excluded) => Ok(None),
@@ -467,7 +668,7 @@ impl Builder<'_> {
                 if self.snapshot.is_some() {
                     self.snapshot_field = Some((*slot, kind));
                 }
-                Ok(Some(*path))
+                Ok(Some((*path, self.installation[*slot])))
             }
         }
     }
@@ -506,6 +707,37 @@ impl Builder<'_> {
         }
         Ok(())
     }
+}
+
+/// How a pass over `world` treats each canonical slot: a capture follows the current selection;
+/// a block pass also compares it with the selection before the block.
+///
+/// # Errors
+/// A selection installs storage this release does not implement, or the block retires storage,
+/// which only a migration cutover may do and this release does not implement.
+fn installation(
+    index: &FieldIndex,
+    world: &WorldBlock<'_>,
+    direction: Direction,
+) -> Result<Vec<Installation>, String> {
+    let successor = installed_slots(index, world.runtime_selection.get())?;
+    let parent = match direction {
+        Direction::Capture => successor.clone(),
+        _ => installed_slots(index, world.runtime_selection.get_before_block())?,
+    };
+    successor
+        .iter()
+        .zip(&parent)
+        .zip(&index.ids)
+        .map(|((successor, parent), id)| match (*parent, *successor) {
+            (false, false) => Ok(Installation::Absent),
+            (false, true) => Ok(Installation::Fresh),
+            (true, true) => Ok(Installation::Installed),
+            (true, false) => Err(format!(
+                "World field {id} is retired without a migration cutover"
+            )),
+        })
+        .collect()
 }
 
 impl WorldProjection for Builder<'_> {
@@ -553,17 +785,31 @@ impl WorldProjection for Builder<'_> {
         storage: &StorageField<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
-        let Some(path) = self.field(name, TABLE)? else {
+        let Some((path, installation)) = self.field(name, TABLE)? else {
             return Ok(());
         };
-        match self.direction {
-            Direction::Capture => {
+        match (installation, self.direction) {
+            (Installation::Absent, Direction::Capture) => {
+                if storage.iter().next().is_some() {
+                    return Err(
+                        format!("World field {name} holds entries but is not installed").into(),
+                    );
+                }
+            }
+            (Installation::Absent, _) => {
+                if storage.touched_entries().next().is_some() {
+                    return Err(
+                        format!("World field {name} was written but is not installed").into(),
+                    );
+                }
+            }
+            (Installation::Fresh, _) | (Installation::Installed, Direction::Capture) => {
                 for (key, value) in storage.iter() {
                     let key = hash_value(key)?;
                     self.change(&path, Some(&key), None, Some(encode(value)?))?;
                 }
             }
-            _ => {
+            (Installation::Installed, _) => {
                 for entry in storage.touched_entries() {
                     let before = entry.before.map(&encode).transpose()?;
                     let after = entry.after.map(&encode).transpose()?;
@@ -583,12 +829,22 @@ impl WorldProjection for Builder<'_> {
         cell: &CellField<'_, V, C>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error> {
-        let Some(path) = self.field(name, CELL)? else {
+        let Some((path, installation)) = self.field(name, CELL)? else {
             return Ok(());
         };
-        match self.direction {
-            Direction::Capture => self.change(&path, None, None, Some(encode(cell.get())?))?,
-            _ => {
+        match (installation, self.direction) {
+            (Installation::Absent, Direction::Capture) => {}
+            (Installation::Absent, _) => {
+                if cell.touched_value().is_some() {
+                    return Err(
+                        format!("World field {name} was written but is not installed").into(),
+                    );
+                }
+            }
+            (Installation::Fresh, _) | (Installation::Installed, Direction::Capture) => {
+                self.change(&path, None, None, Some(encode(cell.get())?))?;
+            }
+            (Installation::Installed, _) => {
                 if let Some(value) = cell.touched_value() {
                     self.change(
                         &path,
@@ -654,8 +910,9 @@ impl crate::state::StateBlock<'_> {
     ) -> Result<crate::sumeragi::commitment::WorldStateTransition, String> {
         let (parent, post) = self.world.state_transition(self._curr_block.is_genesis())?;
         Ok(crate::sumeragi::commitment::WorldStateTransition {
-            parent_world_state_root: parent.root()?,
-            world_state_root: post.root()?,
+            parent_world_state_root: parent
+                .root(self.world.runtime_selection.get_before_block())?,
+            world_state_root: post.root(self.world.runtime_selection.get())?,
             event_commitment: crate::sumeragi::commitment::event_commitment(
                 &self.world.external_event_buf,
             )
@@ -701,7 +958,9 @@ impl crate::state::State {
         &self,
     ) -> Result<Hash, WorldStateVerificationError> {
         // The value every reader of the committed World sees.
-        let stored = self.view().world.state_accumulator.get().clone();
+        let view = self.view();
+        let stored = view.world.state_accumulator.get().clone();
+        drop(view);
         self.world
             .verify_captured_accumulator(&stored, &self.ivm_execution_budget())
     }
@@ -723,6 +982,47 @@ impl crate::state::World {
         self.verify_captured_accumulator(&stored, execution_budget)
     }
 
+    /// Take over a World imported at an upgrade checkpoint (`state::upgrade_checkpoint`).
+    ///
+    /// The decoded accumulator Cell is the predecessor's. A cold capture of this World under
+    /// this release's registry must equal it once the predecessor's retired fields are added back
+    /// ([`predecessor_root`]), which proves every canonical entry was imported exactly, and the
+    /// predecessor's root of it must equal `certified`, the checkpoint block's certified World
+    /// root. The Cell then holds the capture under this release's registry, from which the next
+    /// block chains. Returns that root.
+    ///
+    /// # Errors
+    /// The import differs from the predecessor's World, the root differs from `certified`, the
+    /// World cannot be acquired or a value cannot be encoded.
+    pub(crate) fn adopt_checkpoint_accumulator(
+        &mut self,
+        execution_budget: &iroha_allocation::AllocationBudget,
+        certified: Hash,
+    ) -> Result<Hash, WorldStateVerificationError> {
+        let stored = self.state_accumulator.view().get().clone();
+        let block = self
+            .try_block(execution_budget)
+            .map_err(WorldStateVerificationError::Acquisition)?;
+        let captured =
+            WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
+        drop(block);
+        let (predecessor, root) =
+            predecessor_root(&captured).map_err(WorldStateVerificationError::Capture)?;
+        if predecessor != stored || root != certified {
+            return Err(WorldStateVerificationError::Mismatch {
+                stored_root: certified,
+                stored_entries: stored.entries(),
+                captured_root: root,
+                captured_entries: predecessor.entries(),
+            });
+        }
+        let current = captured
+            .root(self.runtime_selection.view().get())
+            .map_err(WorldStateVerificationError::Capture)?;
+        self.state_accumulator = mv::cell::Cell::new(captured);
+        Ok(current)
+    }
+
     fn verify_captured_accumulator(
         &self,
         stored: &WorldStateAccumulator,
@@ -737,22 +1037,41 @@ impl crate::state::World {
         })?;
         let captured =
             WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
+        let selection = block.runtime_selection.get();
         if *stored != captured {
             return Err(WorldStateVerificationError::Mismatch {
                 stored_root: stored
-                    .root()
+                    .root(selection)
                     .map_err(WorldStateVerificationError::Capture)?,
                 stored_entries: stored.entries(),
                 captured_root: captured
-                    .root()
+                    .root(selection)
                     .map_err(WorldStateVerificationError::Capture)?,
                 captured_entries: captured.entries(),
             });
         }
         captured
-            .root()
+            .root(selection)
             .map_err(WorldStateVerificationError::Capture)
     }
+}
+
+#[cfg(test)]
+impl WorldStateAccumulator {
+    /// The root under the baseline selection, which every World a test founds keeps unless
+    /// the test changes it.
+    pub(crate) fn baseline_root(&self) -> Result<Hash, String> {
+        self.root(&baseline_selection())
+    }
+}
+
+/// The selection every World of this release is founded on.
+#[cfg(test)]
+pub(crate) fn baseline_selection() -> RootSelectionV1 {
+    crate::runtime::release_catalog()
+        .expect("release catalog")
+        .baseline
+        .clone()
 }
 
 #[cfg(test)]

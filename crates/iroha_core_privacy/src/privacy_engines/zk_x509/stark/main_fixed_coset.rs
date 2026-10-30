@@ -2,8 +2,8 @@
 //!
 //! Fixed polynomials have degree below their native domain. Unlike masked
 //! witness polynomials, they therefore fit in every quotient stripe without
-//! folding. Recovering the shifted coefficients in place permits moving to the
-//! next stripe without retaining separate coefficient and evaluation matrices.
+//! folding. A public coefficient prefix borrows explicitly unspent registration
+//! cache space. The uncached suffix recovers shifted coefficients in place.
 
 use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
 use super::*;
@@ -16,15 +16,16 @@ use fastpq_prover::goldilocks_transform::{
     transform_goldilocks_columns_v1,
 };
 
-pub(super) struct MainFixedCosetV1 {
+pub(super) struct MainFixedCosetV1<'a> {
     columns: ZeroizingBaseColumnsV1,
     native_log2: u8,
     previous: Option<main_quotient_stripes::MainQuotientStripeV1>,
     poisoned: bool,
     transform_policy: MainBoundedTransformPolicyV1,
+    coefficient_prefix: &'a [super::super::super::private_table::PrivateTableV1<F>],
 }
 
-impl MainFixedCosetV1 {
+impl<'a> MainFixedCosetV1<'a> {
     pub(super) fn new_v1(
         native_log2: u8,
         coefficients: Vec<Vec<F>>,
@@ -35,6 +36,7 @@ impl MainFixedCosetV1 {
             previous: None,
             poisoned: false,
             transform_policy: MainBoundedTransformPolicyV1::cpu_v1(),
+            coefficient_prefix: &[],
         };
         let rows = 1_usize
             .checked_shl(u32::from(native_log2))
@@ -59,6 +61,28 @@ impl MainFixedCosetV1 {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
         self.transform_policy = policy;
+        Ok(self)
+    }
+
+    /// Bind the immutable, separately charged prefix to these original public
+    /// coefficients before any stripe is evaluated. The lifetime prevents the
+    /// cache from being replaced or dropped while an evaluation can borrow it.
+    pub(super) fn with_coefficient_prefix_v1(
+        mut self,
+        prefix: &'a [super::super::super::private_table::PrivateTableV1<F>],
+    ) -> Result<Self, ZkX509StarkErrorV1> {
+        if self.previous.is_some()
+            || self.poisoned
+            || !self.coefficient_prefix.is_empty()
+            || prefix.len() > self.columns.len()
+            || prefix
+                .iter()
+                .zip(&self.columns.0)
+                .any(|(original, column)| &**original != column.as_slice())
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        self.coefficient_prefix = prefix;
         Ok(self)
     }
 
@@ -159,8 +183,9 @@ impl MainFixedCosetV1 {
         };
         // The fixed matrix is public. Reserve before padding, then reuse each
         // allocation for inverse/diagonal/forward operations. A device path
-        // charges one bounded word batch; no full second matrix is copied and
-        // no output is exposed until every column has completed.
+        // charges one bounded word batch. The immutable prefix remains in its
+        // separately charged cache; output allocations are reused, and no
+        // output is exposed until every column has completed.
         for column in &mut self.columns.0 {
             if column.len() < stripe.rows {
                 column
@@ -175,18 +200,31 @@ impl MainFixedCosetV1 {
         } else {
             device_columns
         };
+        let has_recovery = previous.is_some() && self.coefficient_prefix.len() < self.columns.len();
         let (forward_powers, inverse_powers) = if device_columns == 0 {
             self.transform_policy
-                .cpu_power_pair_v1(stripe.rows, stripe.root, previous.is_some())?
+                .cpu_power_pair_v1(stripe.rows, stripe.root, has_recovery)?
         } else {
             (None, None)
         };
-        for batch in self.columns.0.chunks_mut(batch_columns) {
-            check_completion_v1(uncertain())?;
-            if device_columns == 0 {
-                // The bounded outer batch owns parallelism on the CPU path.
-                batch.par_iter_mut().try_for_each(|column| {
-                    if previous.is_some() {
+        let (retained, recovered) = self.columns.0.split_at_mut(self.coefficient_prefix.len());
+        for (columns, recovery, diagonal, prefix) in [
+            (retained, false, stripe.shift, self.coefficient_prefix),
+            (recovered, previous.is_some(), diagonal, &[][..]),
+        ] {
+            for (batch_index, batch) in columns.chunks_mut(batch_columns).enumerate() {
+                check_completion_v1(uncertain())?;
+                if !prefix.is_empty() {
+                    let first = batch_index * batch_columns;
+                    for (column, coefficients) in batch.iter_mut().zip(&prefix[first..]) {
+                        column.fill(F::ZERO);
+                        column[..coefficients.len()].copy_from_slice(coefficients);
+                    }
+                }
+                if device_columns == 0 {
+                    // The bounded outer batch owns parallelism on the CPU path.
+                    batch.par_iter_mut().try_for_each(|column| {
+                    if recovery {
                         if let Some(powers) = &inverse_powers {
                             crate::privacy_engines::transparent_stark::goldilocks_ifft_coarse_with_powers_v1(column, stripe.root, powers)
                         } else { goldilocks_ifft_coarse_v1(column, stripe.root) }
@@ -202,37 +240,38 @@ impl MainFixedCosetV1 {
                     } else { goldilocks_fft_coarse_v1(column, stripe.root) }
                     .map_err(map_transparent_error_v1)
                 })?;
-                #[cfg(test)]
-                {
-                    super::super::super::prover_observation::completed_fixed_backend_v1(
-                        false,
-                        false,
-                        batch.len(),
-                    );
-                    if previous.is_some() {
+                    #[cfg(test)]
+                    {
                         super::super::super::prover_observation::completed_fixed_backend_v1(
                             false,
-                            true,
+                            false,
                             batch.len(),
                         );
+                        if recovery {
+                            super::super::super::prover_observation::completed_fixed_backend_v1(
+                                false,
+                                true,
+                                batch.len(),
+                            );
+                        }
                     }
+                } else {
+                    self.transform_policy.apply_with_v1(
+                        batch,
+                        stripe.root,
+                        diagonal,
+                        recovery,
+                        &mut transform,
+                        &mut uncertain,
+                    )?;
                 }
-            } else {
-                self.transform_policy.apply_with_v1(
-                    batch,
-                    stripe.root,
-                    diagonal,
-                    previous.is_some(),
-                    &mut transform,
-                    &mut uncertain,
-                )?;
+                #[cfg(test)]
+                super::super::super::prover_observation::completed_fixed_coset_v1(
+                    batch.len(),
+                    stripe.rows,
+                    recovery,
+                );
             }
-            #[cfg(test)]
-            super::super::super::prover_observation::completed_fixed_coset_v1(
-                batch.len(),
-                stripe.rows,
-                previous.is_some(),
-            );
         }
         check_completion_v1(uncertain())?;
         self.previous = Some(stripe);
@@ -241,7 +280,7 @@ impl MainFixedCosetV1 {
     }
 }
 
-impl Drop for MainFixedCosetV1 {
+impl Drop for MainFixedCosetV1<'_> {
     fn drop(&mut self) {
         for column in &mut self.columns.0 {
             super::super::super::private_table::zeroize_fields_v1(column);

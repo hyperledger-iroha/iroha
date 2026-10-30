@@ -107,6 +107,9 @@ fn initial_authenticated_genesis_failure_keeps_original_body_raw_and_pool_until_
 
 #[test]
 fn initial_prefix_decoder_refusal_reuses_original_genesis_body_raw_and_cumulative_context() {
+    // Keep retired fixture cells fixed while checking the reader's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit_at(2_000, Vec::new());
     let view = chain.state().view();

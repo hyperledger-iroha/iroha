@@ -18,6 +18,9 @@ fn original_attempt(worker: &Worker<'_>, block: &AvailableBody) -> SignatureDeco
         decoded: None,
         returned_refusal: None,
         amx_legs: None,
+        uid_bindings: None,
+        successor_context: Default::default(),
+        policy_decode_controls: None,
         parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(),
     }
 }

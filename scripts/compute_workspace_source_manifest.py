@@ -180,6 +180,10 @@ def _root_excluded_policy_directories(root: Path) -> tuple[list[str], str | None
     unchanged source inventory. Bind root-policy bytes across this optimization.
     """
 
+    if not _descriptor_source_manifest_supported():
+        # Without a descriptor-bound root policy, use complete discovery and
+        # retain the ordinary effective-policy and source-inventory checks.
+        return [], None
     if ".gitignore" not in _git_paths(root, "ls-files", "--cached", "--", ".gitignore"):
         return [], None
     policy_before = _manifest_for_paths(root, [".gitignore"])

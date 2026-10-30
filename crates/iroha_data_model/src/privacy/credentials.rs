@@ -158,8 +158,11 @@ pub struct PrivacyStatementContextV1 {
     pub network_id: NetworkId,
     /// Zero-based privacy action index within the transaction.
     pub action_index: u32,
-    /// Digest of the canonical transaction projection with derived privacy
-    /// digests zeroed and the typed proof payload empty.
+    /// Canonical transaction binding. Ordinary privacy statements use the normalized
+    /// privacy transaction projection. Attached X.509 statements use the original
+    /// signed ActionStatementV1 digest, binding its ordered intent, operation,
+    /// authority, invocation and proof-free inputs. The proof-free X.509 request
+    /// requires ZERO here; only canonical materialization fills this derived value.
     pub transaction_intent_digest: PrivacyTransactionIntentDigestV1,
     /// Exact governed parameter-set identifier.
     pub parameter_id: PrivacyParameterIdV1,
@@ -183,6 +186,20 @@ impl PrivacyStatementContextV1 {
         &self,
         limits: &PrivacyConsensusLimitsV1,
     ) -> Result<(), PrivacyStatementValidationError> {
+        self.validate_intent_shape_v1(limits, false)
+    }
+    /// Validate a proof-free request context without manufacturing a derived digest.
+    pub(crate) fn validate_proof_free_v1(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyStatementValidationError> {
+        self.validate_intent_shape_v1(limits, true)
+    }
+    fn validate_intent_shape_v1(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+        proof_free: bool,
+    ) -> Result<(), PrivacyStatementValidationError> {
         if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
             return Err(PrivacyStatementValidationError::ZeroNetworkId);
         }
@@ -192,7 +209,13 @@ impl PrivacyStatementContextV1 {
                 max_actions: limits.max_actions_per_transaction,
             });
         }
-        if self.transaction_intent_digest.is_zero() {
+        if proof_free {
+            if !self.transaction_intent_digest.is_zero() {
+                return Err(
+                    PrivacyStatementValidationError::NonZeroProofFreeTransactionIntentDigest,
+                );
+            }
+        } else if self.transaction_intent_digest.is_zero() {
             return Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest);
         }
         if self.parameter_id.is_zero() {

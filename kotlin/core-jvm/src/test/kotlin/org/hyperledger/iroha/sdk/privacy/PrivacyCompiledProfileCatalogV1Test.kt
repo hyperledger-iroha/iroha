@@ -47,6 +47,10 @@ class PrivacyCompiledProfileCatalogV1Test {
                 null,
             ),
             PrivacyCompiledProfileResultV1.Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+                null,
+            ),
+            PrivacyCompiledProfileResultV1.Unavailable(
                 PrivacyCompiledProfileUnavailableReasonV1.STATEMENT_SCHEMA_INVALID,
                 PrivacyCompiledStatementSchemaErrorV1.CONFLICTING_STABLE_TYPE_ID,
             ),
@@ -156,6 +160,61 @@ class PrivacyCompiledProfileCatalogV1Test {
                 PrivacyCompiledStatementSchemaErrorV1.MISSING_TYPE_REFERENCE,
             )
         }
+    }
+
+    @Test
+    fun jointSecurityReasonUsesExactFourthTagAndRejectsUnknownOrExtraDetail() {
+        fun catalog(reason: PrivacyCompiledProfileResultV1.Unavailable) =
+            PrivacyCompiledProfileCatalogV1(
+                1,
+                PrivacyProtocolIdV1.values().map { PrivacyCompiledProfileCatalogRowV1(it, reason) },
+            )
+        val joint = PrivacyCompiledProfileResultV1.Unavailable(
+            PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+            null,
+        )
+        val canonical = PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(catalog(joint))
+        val offset = firstUnavailableReasonOffset(canonical)
+        assertEquals(3, ByteBuffer.wrap(canonical).order(ByteOrder.LITTLE_ENDIAN).getInt(offset))
+        assertEquals(catalog(joint), PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(canonical))
+        for (tag in listOf(4, -1)) {
+            val unknown = canonical.copyOf().also {
+                ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN).putInt(offset, tag)
+            }.withRecomputedChecksum()
+            assertFailsWith<IllegalArgumentException> {
+                PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(unknown)
+            }
+        }
+        val schema = PrivacyCompiledProfileResultV1.Unavailable(
+            PrivacyCompiledProfileUnavailableReasonV1.STATEMENT_SCHEMA_INVALID,
+            PrivacyCompiledStatementSchemaErrorV1.MISSING_TYPE_REFERENCE,
+        )
+        val extraDetail = PrivacyCompiledProfileCatalogCodecV1.encodeCanonical(catalog(schema)).also {
+            ByteBuffer.wrap(it).order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(firstUnavailableReasonOffset(it), 3)
+        }.withRecomputedChecksum()
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyCompiledProfileCatalogCodecV1.decodeCanonical(extraDetail)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyCompiledProfileResultV1.Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+                PrivacyCompiledStatementSchemaErrorV1.MISSING_TYPE_REFERENCE,
+            )
+        }
+    }
+
+    private fun firstUnavailableReasonOffset(archive: ByteArray): Int {
+        val cursor = Cursor(archive, NoritoHeader.HEADER_LENGTH)
+        cursor.skipSizedField() // Version.
+        cursor.readVarint() // Rows frame.
+        cursor.position += 8 // Fixed row count.
+        cursor.readVarint() // First row frame.
+        cursor.skipSizedField() // Protocol.
+        cursor.readVarint() // Compiled result frame.
+        cursor.position += 4 // Unavailable result tag.
+        cursor.readVarint() // Reason frame.
+        return cursor.position
     }
 
     private fun availableCatalog(): PrivacyCompiledProfileCatalogV1 =
@@ -279,7 +338,8 @@ class PrivacyCompiledProfileCatalogV1Test {
         }
 
         fun skipSizedField() {
-            position += readVarint().toInt()
+            val length = readVarint().toInt()
+            position += length
         }
     }
 }

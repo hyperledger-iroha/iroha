@@ -3,9 +3,6 @@ extends = "base.toml"
 [nexus]
 
 [nexus.atomic_private_settlement]
-enabled = true
-activation_height = 100_000
-minimum_activation_notice_blocks = 7_200
 proof_profile_version = 1
 max_participants = 16
 max_expiry_blocks = 7_200

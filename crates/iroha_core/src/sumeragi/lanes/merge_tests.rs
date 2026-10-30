@@ -972,7 +972,14 @@ fn merged_rejection_event_retains_the_original_native_proposal_header() {
         &bytes,
         state,
         None,
+        &crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+            state.world.sccp_committee_generations.allocation_budget(),
+        )
+        .unwrap(),
         None,
+        &mut Default::default(),
+        &crate::execution_attempt::PolicyDecodeControls::try_new(&state.ivm_execution_budget())
+            .unwrap(),
     )
     .unpack(|event| events.push(event))
     .err()

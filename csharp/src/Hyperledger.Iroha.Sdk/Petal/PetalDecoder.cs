@@ -139,8 +139,8 @@ public sealed class PetalDecodedFrame
         get
         {
             var count = D is null ? 0 : 1;
-            foreach (var field in fields)
-                count += field is null ? 0 : 1;
+            foreach (var lane in fields)
+                count += lane is null ? 0 : 1;
             return count;
         }
     }

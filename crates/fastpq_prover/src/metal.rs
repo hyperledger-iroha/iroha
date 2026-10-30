@@ -8,7 +8,7 @@ pub mod exact_root;
 pub mod keccak256;
 #[path = "metal_ticket_lifetime.rs"]
 mod ticket_lifetime;
-use ticket_lifetime::{Completion, DrainBudget, DrainScope};
+use ticket_lifetime::{Completion, CompletionNotification, DrainBudget, DrainScope};
 
 #[cfg(test)]
 use crate::bn254;
@@ -104,7 +104,11 @@ const DISCRETE_QUEUE_FANOUT: usize = 2;
 const MIN_QUEUE_COLUMN_THRESHOLD: u32 = 1;
 const DEFAULT_QUEUE_COLUMN_THRESHOLD: u32 = 16;
 const MAX_BUFFER_POOL_BUFFERS: usize = 8;
-const MAX_BUFFER_POOL_PAGES_PER_BUFFER: usize = 1_024;
+// Native19 x eight columns (or common22 x one) occupies exactly 32MiB.
+// Every retained loan requires an exact-capacity match. Another caller may
+// refill the idle pool while this allocation is live, so no borrowed excess
+// capacity can be charged to the idle-pool allowance.
+const MAX_BUFFER_POOL_PAGES_PER_BUFFER: usize = 2_048;
 const MAX_BUFFER_POOL_CACHED_PAGES: usize = crate::gpu_memory::METAL_POOL_MAX_CACHED_PAGES;
 const MAX_RETAINED_DISPATCH_TICKETS: usize = 16;
 const MAX_RETAINED_TELEMETRY_SAMPLES: usize = 4_096;
@@ -1516,14 +1520,14 @@ const METAL_KERNEL_DESCRIPTORS: &[MetalKernelDescriptor] = &[
         kind: KernelKind::Fft,
         threadgroup_cap: Some(256),
         tile_stage_cap: Some(8),
-        notes: "One independent 256-word tile per threadgroup. Uses supplied stage roots and normalizes inverse transforms when this is the last stage.",
+        notes: "One independent 256-word tile per threadgroup with threadgroup barriers between stages; inverse transforms normalize when this is the final tile.",
     },
     MetalKernelDescriptor {
         entry_point: exact_root::GLOBAL_STAGE_KERNEL,
         kind: KernelKind::Fft,
         threadgroup_cap: Some(256),
         tile_stage_cap: None,
-        notes: "One independent group per 2048 butterflies, with an explicit resource barrier between stages. Final inverse scaling occurs before publication.",
+        notes: "One independent group per 1024 radix-four cells, fusing two global stages in registers; an odd final stage uses 2048 radix-two butterflies. Resource barriers separate dispatches. Final inverse scaling occurs before publication.",
     },
     MetalKernelDescriptor {
         entry_point: "fastpq_fft_columns",
@@ -1863,11 +1867,19 @@ impl ColumnBatchTicket {
             });
         }
         let wait_start = Instant::now();
+        #[cfg(test)]
+        let diagnostic_wait = exact_root::diagnostic_start();
         wait_for_tickets(tickets)?;
+        #[cfg(test)]
+        exact_root::diagnostic_ticket_wait(diagnostic_wait);
         if record_wait {
             record_staging_wait(ColumnStagingPhase::Fft, wait_start.elapsed());
         }
+        #[cfg(test)]
+        let diagnostic_copy = exact_root::diagnostic_start();
         restore_range(columns, range, &buffer, extent);
+        #[cfg(test)]
+        exact_root::diagnostic_copy_back(diagnostic_copy);
         Ok(())
     }
 }
@@ -4699,9 +4711,17 @@ fn wait_for_ticket_inner(ticket: &mut DispatchTicket, dropping: bool) -> MetalRe
         _ => Completion::Pending,
     };
     let status = if dropping {
-        ticket.drain_budget.wait(poll, backend_quarantined)
+        ticket.drain_budget.wait(
+            poll,
+            backend_quarantined,
+            &ticket.permit.completion.notification,
+        )
     } else {
-        ticket.drain_budget.wait_one(poll, backend_quarantined)
+        ticket.drain_budget.wait_one(
+            poll,
+            backend_quarantined,
+            &ticket.permit.completion.notification,
+        )
     };
     if status == Completion::Uncertain {
         // Establish the safety state before diagnostics can call a subscriber.
@@ -4724,6 +4744,8 @@ fn wait_for_ticket_inner(ticket: &mut DispatchTicket, dropping: bool) -> MetalRe
         });
     }
     if status == Completion::Completed {
+        #[cfg(test)]
+        exact_root::diagnostic_completed_command(&ticket.command);
         if let (Some(context), Some(elapsed)) = (ticket.kernel_context.as_ref(), duration) {
             record_kernel_stats(context, elapsed);
         }
@@ -4923,15 +4945,10 @@ fn buffer_pool_capacity_is_cacheable(page_capacity: usize) -> bool {
 }
 impl BufferPool {
     fn take(&mut self, min_pages: usize) -> MetalResult<Vec<MetalBufferPage>> {
-        let mut candidate = None;
-        let mut best_capacity = usize::MAX;
-        for (idx, buffer) in self.spare.iter().enumerate() {
-            let capacity = buffer.capacity();
-            if capacity >= min_pages && capacity < best_capacity {
-                candidate = Some(idx);
-                best_capacity = capacity;
-            }
-        }
+        let candidate = self
+            .spare
+            .iter()
+            .position(|buffer| buffer.capacity() == min_pages);
         if let Some(idx) = candidate {
             Ok(self.spare.swap_remove(idx))
         } else {
@@ -4939,6 +4956,11 @@ impl BufferPool {
             buffer.try_reserve_exact(min_pages).map_err(|_| {
                 GpuError::InvalidInput("Metal pooled buffer pages exceed available host memory")
             })?;
+            if buffer.capacity() != min_pages {
+                return Err(GpuError::InvalidInput(
+                    "Metal pooled buffer capacity differs from requested pages",
+                ));
+            }
             Ok(buffer)
         }
     }
@@ -4983,6 +5005,8 @@ impl PooledBufferBacking {
 }
 impl Drop for PooledBufferBacking {
     fn drop(&mut self) {
+        #[cfg(test)]
+        let diagnostic_drop = exact_root::diagnostic_start();
         self.wipe_sensitive_pages();
         let pages = mem::take(&mut self.pages);
         if pages.capacity() == 0 {
@@ -4991,6 +5015,8 @@ impl Drop for PooledBufferBacking {
         if let Ok(mut pool) = buffer_pool().lock() {
             pool.recycle(pages);
         }
+        #[cfg(test)]
+        exact_root::diagnostic_backing_drop(diagnostic_drop);
     }
 }
 struct PooledBuffer {
@@ -5453,6 +5479,7 @@ struct CommandPermitCompletion {
     queue_index: usize,
     launched: AtomicBool,
     released: AtomicBool,
+    notification: CompletionNotification,
 }
 impl CommandPermitCompletion {
     fn new(semaphore: &'static CommandSemaphore, queue_index: usize) -> Self {
@@ -5461,6 +5488,7 @@ impl CommandPermitCompletion {
             queue_index,
             launched: AtomicBool::new(false),
             released: AtomicBool::new(false),
+            notification: CompletionNotification::default(),
         }
     }
     fn mark_launched(&self) {
@@ -5482,6 +5510,7 @@ impl CommandPermitCompletion {
         if !self.released.swap(true, Ordering::AcqRel) {
             self.semaphore.release();
         }
+        self.notification.notify();
     }
 }
 #[derive(Default)]

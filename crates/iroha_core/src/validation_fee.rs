@@ -1330,9 +1330,34 @@ fn direct_conversion_transfer(
             },
         )
 }
+#[cfg(test)]
 fn validate_treasury_payout_effect_plan(
     groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
     ordered: &[(AccountId, InstructionBox)],
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    terms: &ValidationFeePayoutTerms,
+) -> Result<bool, ValidationFeeAdmissionError> {
+    validate_treasury_payout_effect_views(
+        groups.iter().flat_map(|(authority, instructions)| {
+            instructions
+                .iter()
+                .map(move |instruction| (authority, instruction))
+        }),
+        groups.len(),
+        ordered
+            .iter()
+            .map(|(authority, instruction)| (authority, instruction)),
+        binding,
+        terms,
+    )
+}
+
+// The host lends its original queue. Only the three payout references are retained
+// on the stack; no instruction, authority or authorization graph is cloned.
+fn validate_treasury_payout_effect_views<'a>(
+    groups: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    group_count: usize,
+    mut ordered: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)>,
     binding: &ValidationFeeTreasuryPayoutBindingV1,
     terms: &ValidationFeePayoutTerms,
 ) -> Result<bool, ValidationFeeAdmissionError> {
@@ -1341,32 +1366,37 @@ fn validate_treasury_payout_effect_plan(
     if binding.invariant_error().is_some() {
         return Err(mismatch("invalid enacted conversion policy"));
     }
-    let (Some(pool_effects), Some(wrapper_effects)) = (
-        groups.get(&binding.pool_vault_account_id),
-        groups.get(&binding.treasury_account_id),
+    let (Some(first), Some(second), Some(third), None) = (
+        ordered.next(),
+        ordered.next(),
+        ordered.next(),
+        ordered.next(),
     ) else {
         return Err(mismatch(
-            "conversion effects must retain the governed pool and wrapper subjects",
+            "conversion must use exactly three ordered effects",
         ));
     };
-    if groups.len() != 2
-        || pool_effects.len() != 2
-        || wrapper_effects.len() != 1
-        || ordered.len() != 3
-        || ordered[0].0 != binding.pool_vault_account_id
-        || ordered[1].0 != binding.pool_vault_account_id
-        || ordered[2].0 != binding.treasury_account_id
-        || pool_effects[0] != ordered[0].1
-        || pool_effects[1] != ordered[1].1
-        || wrapper_effects[0] != ordered[2].1
+    let mut pool = groups
+        .clone()
+        .filter(|(authority, _)| *authority == &binding.pool_vault_account_id);
+    let mut wrapper = groups.filter(|(authority, _)| *authority == &binding.treasury_account_id);
+    if group_count != 2
+        || first.0 != &binding.pool_vault_account_id
+        || second.0 != &binding.pool_vault_account_id
+        || third.0 != &binding.treasury_account_id
+        || pool.next().map(|(_, instruction)| instruction) != Some(first.1)
+        || pool.next().map(|(_, instruction)| instruction) != Some(second.1)
+        || pool.next().is_some()
+        || wrapper.next().map(|(_, instruction)| instruction) != Some(third.1)
+        || wrapper.next().is_some()
     {
         return Err(mismatch(
             "conversion must preserve two nested pool effects followed by the wrapper reservation",
         ));
     }
-    let sbd = direct_conversion_transfer(&ordered[0].1)?;
-    let output = direct_conversion_transfer(&ordered[1].1)?;
-    let reserve = direct_conversion_transfer(&ordered[2].1)?;
+    let sbd = direct_conversion_transfer(first.1)?;
+    let output = direct_conversion_transfer(second.1)?;
+    let reserve = direct_conversion_transfer(third.1)?;
     if sbd.source.definition != binding.ds_asset_id
         || sbd.source.account != binding.treasury_account_id
         || sbd.destination != binding.pool_vault_account_id
@@ -1407,10 +1437,40 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     stx: &mut StateTransaction<'_, '_>,
     origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
 ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
+    enforce_opaque_deferred_instruction_views(
+        groups.iter().flat_map(|(authority, instructions)| {
+            instructions
+                .iter()
+                .map(move |instruction| (authority, instruction))
+        }),
+        groups.len(),
+        ordered
+            .iter()
+            .map(|(authority, instruction)| (authority, instruction)),
+        stx,
+        origin,
+    )
+}
+/// Validate borrowed effects without copying host-owned attachment requests.
+pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(
+    groups: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    group_count: usize,
+    ordered: impl Iterator<Item = (&'a AccountId, &'a InstructionBox)> + Clone,
+    stx: &mut StateTransaction<'_, '_>,
+    origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
+) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
     // Committee and monetary staking authority are independent of native fee
     // accounting. Resolve deferred approvals against this execution overlay first.
-    crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)
-        .map_err(|error| transaction_attempt_rejection(stx, error))?;
+    crate::deferred_authority::reject_opaque_instruction_authority(
+        groups.clone().map(|(_, instruction)| instruction),
+        stx,
+    )
+    .map_err(|error| {
+        transaction_attempt_rejection(
+            stx,
+            error.map_rejection(TransactionRejectionReason::Validation),
+        )
+    })?;
     let registry = validated_policy_registry(stx)
         .map_err(|error| transaction_attempt_rejection(stx, error))?;
     let _ = active_policy_from_validated_registry(registry.as_ref(), stx)
@@ -1423,7 +1483,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         // at the common asset mutation boundary, including contract-driven legs.
         return Ok(OpaqueDeferredValidationOutcome::Apply);
     };
-    if ordered.is_empty() && groups.is_empty() {
+    if ordered.clone().next().is_none() && group_count == 0 {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
     let binding = &lifecycle.binding;
@@ -1449,13 +1509,19 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             .map_err(|error| admission_rejection(&error))?,
         xor_scale: scale,
     };
-    if !validate_treasury_payout_effect_plan(groups, ordered, binding, &terms)
+    if !validate_treasury_payout_effect_views(groups, group_count, ordered.clone(), binding, &terms)
         .map_err(|error| admission_rejection(&error))?
     {
         return Ok(OpaqueDeferredValidationOutcome::NoOp);
     }
-    let output =
-        direct_conversion_transfer(&ordered[1].1).map_err(|error| admission_rejection(&error))?;
+    let output = direct_conversion_transfer(
+        ordered
+            .clone()
+            .nth(1)
+            .expect("validated three-effect plan")
+            .1,
+    )
+    .map_err(|error| admission_rejection(&error))?;
     let output_minor = quantity_to_minor_units_u128(&output.object, scale)
         .map_err(|error| admission_rejection(&error))?;
     crate::validation_fee_rewards::reserve_conversion(stx, binding, &offer, output_minor)

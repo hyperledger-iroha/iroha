@@ -66,6 +66,9 @@ fn target_pointer<V: StateReadOnly + ?Sized>(
 
 #[test]
 fn terminal_certifier_refusal_retains_original_target_gap_decoder_and_public_reset() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let view = chain.state().view();
     let budget = view.execution_budget();
@@ -160,6 +163,9 @@ fn terminal_certifier_refusal_retains_original_target_gap_decoder_and_public_res
 
 #[test]
 fn terminal_source_substitution_and_other_height_refuse_without_replacing_original() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let view = chain.state().view();
     let budget = view.execution_budget();
@@ -230,6 +236,9 @@ fn terminal_source_substitution_and_other_height_refuse_without_replacing_origin
 
 #[test]
 fn terminal_schedule_failure_after_valid_qc_cannot_deliver_original_target() {
+    // Keep constructor-retired State generations outside this operation's
+    // original-pool refusal and synchronous refund observations.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let view = chain.state().view();
     let budget = view.execution_budget();
@@ -309,6 +318,9 @@ fn terminal_schedule_failure_after_valid_qc_cannot_deliver_original_target() {
 fn terminal_amx_original_scratch_admission(rs16_only: bool) {
     use iroha_sumeragi::availability::AvailabilityFrame;
 
+    // Keep retired fixture cells fixed while checking the reader's
+    // exact synchronous refunds from the same State allocation pool.
+    let _state_retirement = crossbeam_epoch::pin();
     let chain = chain();
     let view = chain.state().view();
     let budget = view.execution_budget();

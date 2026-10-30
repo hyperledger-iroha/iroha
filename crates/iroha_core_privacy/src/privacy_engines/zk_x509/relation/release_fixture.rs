@@ -913,7 +913,8 @@ fn release_resource_shape_v1(
             .any(|sibling| *sibling != [0; 32]),
     })
 }
-fn authoritative_state_v1(
+/// Rebuild the exact retained public state through the canonical storage loader.
+pub(crate) fn authoritative_state_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
     certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
     crl: PrivacyZkX509CrlRecordV1,
@@ -981,7 +982,7 @@ fn authoritative_state_v1(
             PrivacyRootRoleV1::CertificateAuthorityMembership,
         )
         .map_err(|_| "release CA root-head key failed")?,
-        PrivacyRootHeadRecordV1::new(root_key.epoch(), root_key.root(), provenance, None)
+        PrivacyRootHeadRecordV1::new(root_key.epoch(), root_key.root(), provenance, None, 1)
             .map_err(|_| "release CA root head failed")?,
     );
     load_privacy_zk_x509_authoritative_state_v1(

@@ -251,6 +251,67 @@ fn snapshot_requires_both_exact_offence_cuts_and_matching_maximum() {
     );
 }
 #[test]
+fn snapshot_maximum_follows_records_without_offenders() {
+    use crate::state::{
+        World,
+        sccp_snapshot_state::{SnapshotSccpState, serialize_envelope},
+    };
+    use crate::sumeragi::evidence::record::{parse_record, sccp_storage_claim_for_testing};
+    use iroha_data_model::block::consensus::RecordedEvidenceV1;
+    // A forgery whose signers G6 left unresolved names generation 7 without offenders.
+    let mut source = sccp_storage_claim_for_testing();
+    let RecordedEvidenceV1::SccpForgery(material) = &mut source.evidence else {
+        unreachable!()
+    };
+    assert_eq!(material.generation, 7);
+    material.offenders.clear();
+    source.attribution.offenders.clear();
+    let text = norito::json::to_json(&source).unwrap();
+    let envelope = |maximum: Option<u64>| {
+        let mut world = World::new();
+        let original = world.sccp_forgery_offences.allocation_budget().clone();
+        let record = parse_record(&mut norito::json::Parser::new(&text), &original).unwrap();
+        let id = record.sccp_evidence_id().unwrap();
+        {
+            let mut block = world.consensus_evidence.block();
+            block.insert(iroha_crypto::Hash::prehashed(id), record);
+            block.commit();
+        }
+        world.sccp_forgery_max_generation =
+            initialize_max(maximum, MaxGenerationPredecessor::Value(None), &original).unwrap();
+        let mut encoded = String::new();
+        serialize_envelope(&world, &mut encoded);
+        (encoded, id)
+    };
+    let (recorded, id) = envelope(Some(7));
+    let mut restored = with_evidence(&text, id);
+    let budget = restored
+        .sccp_committee_generations
+        .allocation_budget()
+        .clone();
+    norito::json::from_json::<SnapshotSccpState>(&recorded)
+        .unwrap()
+        .restore(&mut restored, &budget)
+        .unwrap();
+    assert!(restored.sccp_forgery_offences.view().is_empty());
+    assert_eq!(*restored.sccp_forgery_max_generation.view().get(), Some(7));
+    // Dropping the maximum would release the hold that this record engaged.
+    let (released, _) = envelope(None);
+    let mut restored = with_evidence(&text, id);
+    let budget = restored
+        .sccp_committee_generations
+        .allocation_budget()
+        .clone();
+    let error = norito::json::from_json::<SnapshotSccpState>(&released)
+        .unwrap()
+        .restore(&mut restored, &budget)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("maximum does not match"),
+        "{error}"
+    );
+}
+#[test]
 fn snapshot_rejects_each_mixed_predecessor_cut_and_keeps_original_world() {
     use crate::state::sccp_snapshot_state::SnapshotSccpState;
     let (encoded, text, id) = snapshot_claim();

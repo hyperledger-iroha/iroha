@@ -11,8 +11,9 @@
 //!
 //! [`profile`] fixes the intended relation and AIR resource envelope, while [`merkle`] implements
 //! accumulator semantics shared by the native reference relation and constrained execution.
-//! Consensus activation is controlled by the frozen soundness, resource, and governance release
-//! gates; no projection-only or unbound collection of subproofs is treated as a credential proof.
+//! Consensus use remains unsupported until the concrete joint round-by-round/Fiat–Shamir
+//! security reduction is complete. Reviewer and resource receipts never authorize validity;
+//! no projection-only or unbound collection of subproofs is treated as a credential proof.
 pub(crate) mod accumulator_air;
 pub(crate) mod accumulator_stark;
 pub(crate) mod air;

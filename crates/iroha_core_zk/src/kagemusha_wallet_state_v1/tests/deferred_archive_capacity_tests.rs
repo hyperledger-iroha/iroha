@@ -9,7 +9,7 @@ fn deferred_capacity_covers_redundant_bounded_paths_and_retained_intent() {
     let plain = deferred_archive_capacity(receipt, false).unwrap();
     let anchored = deferred_archive_capacity(receipt, true).unwrap();
     let envelope = archive::METADATA_BOUND as u64;
-    let paths = 5 * 258 * (index::INDEX_VALUE_LIMIT as u64 + 2 * envelope);
+    let paths = 6 * 258 * (index::INDEX_VALUE_LIMIT as u64 + 2 * envelope);
     assert!(plain.storage_bytes > 2 * (receipt as u64 + envelope + paths));
     assert!(plain.memory_bytes > 6 * (receipt as u64 + envelope + paths));
     assert!(anchored.storage_bytes >= plain.storage_bytes + 2 * REQUEST_MAX_BYTES as u64);

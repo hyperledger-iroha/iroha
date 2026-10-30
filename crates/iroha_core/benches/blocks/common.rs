@@ -78,9 +78,7 @@ pub fn start_chain(
         let mut block = world.block();
         for parameter in world_parameters() {
             block
-                .parameters
-                .get_mut()
-                .set_parameter(parameter)
+                .set_parameter_for_testing(parameter)
                 .expect("valid fixture parameters");
         }
         block.commit();

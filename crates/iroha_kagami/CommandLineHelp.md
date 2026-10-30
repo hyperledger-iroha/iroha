@@ -13,6 +13,10 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami localnet down`↴](#kagami-localnet-down)
 * [`kagami localnet reset`↴](#kagami-localnet-reset)
 * [`kagami localnet generate`↴](#kagami-localnet-generate)
+* [`kagami node`↴](#kagami-node)
+* [`kagami node init`↴](#kagami-node-init)
+* [`kagami network`↴](#kagami-network)
+* [`kagami network create`↴](#kagami-network-create)
 * [`kagami dataspace`↴](#kagami-dataspace)
 * [`kagami dataspace up`↴](#kagami-dataspace-up)
 * [`kagami dataspace register-amx`↴](#kagami-dataspace-register-amx)
@@ -45,8 +49,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami genesis embed-pop`↴](#kagami-genesis-embed-pop)
 * [`kagami genesis normalize`↴](#kagami-genesis-normalize)
 * [`kagami privacy-bootstrap`↴](#kagami-privacy-bootstrap)
-* [`kagami privacy-bootstrap emit-taira-v1`↴](#kagami-privacy-bootstrap-emit-taira-v1)
-* [`kagami privacy-bootstrap validate-taira-v1`↴](#kagami-privacy-bootstrap-validate-taira-v1)
+* [`kagami privacy-bootstrap catalog`↴](#kagami-privacy-bootstrap-catalog)
 * [`kagami privacy-bootstrap validate-taira-nevo-review-v1`↴](#kagami-privacy-bootstrap-validate-taira-nevo-review-v1)
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
@@ -61,6 +64,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
 * [`kagami advanced kura finality`↴](#kagami-advanced-kura-finality)
+* [`kagami advanced kura pack-native-contexts`↴](#kagami-advanced-kura-pack-native-contexts)
 * [`kagami advanced kura sidecar`↴](#kagami-advanced-kura-sidecar)
 * [`kagami advanced markdown-help`↴](#kagami-advanced-markdown-help)
 * [`kagami advanced schema`↴](#kagami-advanced-schema)
@@ -80,6 +84,8 @@ Common tasks:
   kagami wizard
   kagami localnet generate --out-dir ./localnet
   kagami sora-network generate --profile nexus --out-dir ./nexus
+  kagami node init --dir ./node --public-address 203.0.113.7:1337
+  kagami network create --validator PUBLIC_KEY@HOST:PORT=POP_HEX ... --out-dir ./network
   kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml
   kagami keys --out-dir ./key-custody
   kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody
@@ -90,6 +96,8 @@ Common tasks:
 
 * `wizard` — Guided onboarding flow for staging a Sora Nexus observer configuration
 * `localnet` — Start and manage a persistent localnet without supplying configuration
+* `node` — Prepare one node directory (keys and starter config) for an existing or new network
+* `network` — Sign genesis for validators that hold their own keys and write the files nodes share
 * `dataspace` — Run an owner-private local dataspace attached to an installed remote network
 * `context` — Select and inspect managed developer environments
 * `contract` — Build and deploy native IVM contracts in one invocation
@@ -98,7 +106,7 @@ Common tasks:
 * `sora-network` — Generate Sora network bundles: Nexus, the public Taira chain and private dataspace presets
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `genesis` — Commands related to genesis
-* `privacy-bootstrap` — Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+* `privacy-bootstrap` — Inspect native privacy profiles and prepare reviewed Taira release inputs
 * `verify` — Verify a genesis manifest against a preset profile
 * `advanced` — Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
 
@@ -173,9 +181,11 @@ Generate, start, verify, and select a localnet without supplying configuration
 * `--workspace <WORKSPACE>` — Workspace whose managed context is selected (defaults to the current directory)
 * `--json` — Emit one public JSON result; progress remains on stderr
 * `--with-storage` — Provision local storage and package-registry services when creating this network
-* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds
+* `--timeout <TIMEOUT>` — Complete generation and readiness budget in seconds.
 
-  Default value: `30`
+   A ready localnet returns as soon as all four validators are verified; the budget only bounds slow first starts, such as debug builds on a loaded machine.
+
+  Default value: `120`
 
 
 
@@ -308,6 +318,78 @@ Generate a developer network bundle without starting validators
 
   Possible values: `permissioned`, `npos`
 
+
+
+
+## `kagami node`
+
+Prepare one node directory (keys and starter config) for an existing or new network
+
+**Usage:** `kagami node <COMMAND>`
+
+###### **Subcommands:**
+
+* `init` — Create a node's validator, SoraNet transport and streaming keys plus a starter config
+
+
+
+## `kagami node init`
+
+Create a node's validator, SoraNet transport and streaming keys plus a starter config
+
+**Usage:** `kagami node init [OPTIONS] --dir <DIR>`
+
+###### **Options:**
+
+* `--dir <DIR>` — Node directory: keys go to `<DIR>/secrets/`, state to `<DIR>/state/`.
+
+   It is created owner-only when missing; an existing `secrets/` or `config.toml` is never replaced.
+* `--public-address <HOST:PORT>` — P2P address other peers dial (`host:port`); the node binds the same port on all interfaces in the address's IP family (IPv4 for a DNS name)
+
+  Default value: `127.0.0.1:1337`
+* `--api-address <HOST:PORT>` — Torii API listener (`host:port`)
+
+  Default value: `127.0.0.1:8080`
+
+
+
+## `kagami network`
+
+Sign genesis for validators that hold their own keys and write the files nodes share
+
+**Usage:** `kagami network <COMMAND>`
+
+###### **Subcommands:**
+
+* `create` — Sign genesis for `kagami node init` validators and write the files every node shares
+
+
+
+## `kagami network create`
+
+Sign genesis for `kagami node init` validators and write the files every node shares
+
+**Usage:** `kagami network create [OPTIONS] --validator <PUBLIC_KEY@HOST:PORT=POP_HEX> --out-dir <DIR>`
+
+###### **Options:**
+
+* `--validator <PUBLIC_KEY@HOST:PORT=POP_HEX>` — One genesis validator, exactly as `kagami node init` prints it on the validator's host.
+
+   Repeat once per validator. The roster must be an exact Sumeragi `3f + 1` committee (4, 7, 10, ...) of distinct BLS-normal keys, each with a valid proof of possession and a distinct `HOST:PORT` that the other validators dial.
+* `--out-dir <DIR>` — Output directory, created owner-only; an existing directory must be empty
+* `--chain-id <CHAIN_ID>` — Canonical chain identifier; a fresh random UUID when omitted
+* `--chain-discriminant <PREFIX>` — Account-address chain prefix written into genesis and the shared configuration.
+
+   Omit it to use the node default.
+* `--consensus-mode <MODE>` — Consensus mode committed in genesis
+
+  Default value: `permissioned`
+
+  Possible values: `permissioned`, `npos`
+
+* `--torii-url <URL>` — Torii API that the operator's `client.toml` dials; any validator's Torii works
+
+  Default value: `http://127.0.0.1:8080/`
 
 
 
@@ -510,7 +592,7 @@ Deploy source, bytecode, or a Musubi package; automatically start a default loca
 * `--max-fee <MAX_FEE>` — Bound the aggregate quoted fees in their single fee asset before dispatch
 * `--timeout <TIMEOUT>` — Startup budget in seconds when the deployment has to start its localnet first
 
-  Default value: `30`
+  Default value: `120`
 
 
 
@@ -986,42 +1068,23 @@ Expand a genesis manifest and show the final ordered transactions
 
 ## `kagami privacy-bootstrap`
 
-Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+Inspect native privacy profiles and prepare reviewed Taira release inputs
 
 **Usage:** `kagami privacy-bootstrap <COMMAND>`
 
 ###### **Subcommands:**
 
-* `emit-taira-v1` — Emit one height-1 template of twelve ordered registration/activation pairs
-* `validate-taira-v1` — Validate an emitted exact-12 instruction set and its digest inventory
+* `catalog` — Print the complete native catalog, including concrete unavailable implementations
 * `validate-taira-nevo-review-v1` — Validate a reviewed Taira NEVO genesis source template without creating release artifacts
 * `render-taira-release-v1` — Compose a secret-free Taira release plan, config, and non-signable genesis source template
 
 
 
-## `kagami privacy-bootstrap emit-taira-v1`
+## `kagami privacy-bootstrap catalog`
 
-Emit one height-1 template of twelve ordered registration/activation pairs
+Print the complete native catalog, including concrete unavailable implementations
 
-**Usage:** `kagami privacy-bootstrap emit-taira-v1 --instructions-output <INSTRUCTIONS_OUTPUT> --report-output <REPORT_OUTPUT>`
-
-###### **Options:**
-
-* `--instructions-output <INSTRUCTIONS_OUTPUT>` — New file receiving the canonical governance-template instruction array
-* `--report-output <REPORT_OUTPUT>` — New file receiving base64 Norito instructions and deterministic digests
-
-
-
-## `kagami privacy-bootstrap validate-taira-v1`
-
-Validate an emitted exact-12 instruction set and its digest inventory
-
-**Usage:** `kagami privacy-bootstrap validate-taira-v1 --instructions <INSTRUCTIONS> --report <REPORT>`
-
-###### **Options:**
-
-* `--instructions <INSTRUCTIONS>` — Canonical genesis instruction JSON array emitted by this command group
-* `--report <REPORT>` — Canonical digest inventory emitted alongside the instruction array
+**Usage:** `kagami privacy-bootstrap catalog`
 
 
 
@@ -1042,12 +1105,10 @@ Validate a reviewed Taira NEVO genesis source template without creating release 
 
 Compose a secret-free Taira release plan, config, and non-signable genesis source template
 
-**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --activation-instructions <ACTIVATION_INSTRUCTIONS> --activation-report <ACTIVATION_REPORT> --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
+**Usage:** `kagami privacy-bootstrap render-taira-release-v1 --broker-public-export <BROKER_PUBLIC_EXPORT> --plan-template <PLAN_TEMPLATE> --config-template <CONFIG_TEMPLATE> --genesis-template <GENESIS_TEMPLATE> --nevo-review <NEVO_REVIEW> --plan-output <PLAN_OUTPUT> --config-output <CONFIG_OUTPUT> --genesis-output <GENESIS_OUTPUT> --broker-public-output <BROKER_PUBLIC_OUTPUT>`
 
 ###### **Options:**
 
-* `--activation-instructions <ACTIVATION_INSTRUCTIONS>` — Exact-12 instruction JSON emitted by `emit-taira-v1`
-* `--activation-report <ACTIVATION_REPORT>` — Digest report emitted together with the exact-12 instructions
 * `--broker-public-export <BROKER_PUBLIC_EXPORT>` — Canonical public JSON emitted by the qualified peer-1 broker
 * `--plan-template <PLAN_TEMPLATE>` — Canonical disabled Taira privacy plan template
 * `--config-template <CONFIG_TEMPLATE>` — Canonical disabled peer-1 Taira config template
@@ -1185,6 +1246,7 @@ Commands related to block inspection
 * `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
 * `finality` — Verify a locally anchored retained prefix and export its exact finality proof
+* `pack-native-contexts` — Rewrite a stopped node's canonical native context records in packed form
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
 
 
@@ -1242,6 +1304,23 @@ Verify a locally anchored retained prefix and export its exact finality proof
 * `--chain-id <CHAIN_ID>` — Exact chain label used to derive the native consensus instance
 * `-H`, `--height <HEIGHT>` — Verify all heights from genesis through this height (1..=4096)
 * `-o`, `--output <OUTPUT>` — Write the public JSON outside the inspected store (default: stdout)
+
+
+
+## `kagami advanced kura pack-native-contexts`
+
+Rewrite a stopped node's canonical native context records in packed form
+
+**Usage:** `kagami advanced kura pack-native-contexts [OPTIONS] <STORE_ROOT>`
+
+###### **Arguments:**
+
+* `<STORE_ROOT>` — Kura store root of the stopped node (its configured `kura.store_dir`)
+
+###### **Options:**
+
+* `--dry-run` — Report the space packing would recover without writing anything
+* `--unpack` — Restore packed records to canonical form for a release that cannot read them
 
 
 

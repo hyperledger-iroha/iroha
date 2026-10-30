@@ -46,6 +46,7 @@ const KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS: &[&str] = &[
     "NftView",
     "QueryPage",
     "AssetUidHoldingQuote",
+    "PendingAction",
     "AxtDescriptor",
     "AxtAnchoredSpendV1",
     "ProofBlob",
@@ -1272,7 +1273,10 @@ pub fn is_canonical_kotodama_struct_name(value: &str) -> bool {
         return false;
     }
     if is_core_query_view_name(value)
-        || matches!(value, "kotodama::QueryPage" | "kotodama::StatePage" | "kotodama::AssetUidHoldingQuote")
+        || matches!(
+            value,
+            "kotodama::QueryPage" | "kotodama::StatePage" | "kotodama::AssetUidHoldingQuote"
+        )
     {
         return true;
     }

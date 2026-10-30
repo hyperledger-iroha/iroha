@@ -25,6 +25,8 @@ mod genesis;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
+mod network;
+mod node;
 mod privacy_bootstrap;
 mod schema;
 use iroha_deploy::secret_toml;
@@ -55,6 +57,8 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami wizard\n",
     "  kagami localnet generate --out-dir ./localnet\n",
     "  kagami sora-network generate --profile nexus --out-dir ./nexus\n",
+    "  kagami node init --dir ./node --public-address 203.0.113.7:1337\n",
+    "  kagami network create --validator PUBLIC_KEY@HOST:PORT=POP_HEX ... --out-dir ./network\n",
     "  kagami docker --peers 4 --config-dir ./localnet --image hyperledger/iroha:dev --out-file docker-compose.yml\n",
     "  kagami keys --out-dir ./key-custody\n",
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
@@ -126,6 +130,12 @@ enum Command {
     /// Start and manage a persistent localnet without supplying configuration
     #[command(subcommand)]
     Localnet(developer::LocalnetCommand),
+    /// Prepare one node directory (keys and starter config) for an existing or new network
+    #[command(subcommand)]
+    Node(node::NodeCommand),
+    /// Sign genesis for validators that hold their own keys and write the files nodes share
+    #[command(subcommand)]
+    Network(network::NetworkCommand),
     /// Run an owner-private local dataspace attached to an installed remote network
     #[command(subcommand)]
     Dataspace(developer::DataspaceCommand),
@@ -151,7 +161,7 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
-    /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
+    /// Inspect native privacy profiles and prepare reviewed Taira release inputs
     PrivacyBootstrap(privacy_bootstrap::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
@@ -190,6 +200,8 @@ impl<T: Write> RunArgs<T> for Command {
         match self {
             Wizard(args) => args.run(writer),
             Localnet(args) => args.run(writer),
+            Node(args) => args.run(writer),
+            Network(args) => args.run(writer),
             Dataspace(args) => args.run(writer),
             Context(args) => args.run(writer),
             Contract(args) => args.run(writer),
@@ -227,22 +239,9 @@ mod tests {
     }
     #[test]
     fn privacy_bootstrap_commands_require_complete_exact_v1_artifact_paths() {
-        assert!(
-            parse(
-                "kagami privacy-bootstrap emit-taira-v1 \
-                 --instructions-output ./privacy-instructions.json \
-                 --report-output ./privacy-report.json"
-            )
-            .is_ok()
-        );
-        assert!(
-            parse(
-                "kagami privacy-bootstrap validate-taira-v1 \
-                 --instructions ./privacy-instructions.json \
-                 --report ./privacy-report.json"
-            )
-            .is_ok()
-        );
+        assert!(parse("kagami privacy-bootstrap catalog").is_ok());
+        assert!(parse("kagami privacy-bootstrap emit-taira-v1").is_err());
+        assert!(parse("kagami privacy-bootstrap validate-taira-v1").is_err());
         assert!(
             parse(
                 "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
@@ -254,8 +253,6 @@ mod tests {
         assert!(
             parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
-                 --activation-instructions ./privacy-instructions.json \
-                 --activation-report ./privacy-report.json \
                  --broker-public-export ./broker-public.json \
                  --plan-template ./privacy-plan.staging.json \
                  --config-template ./config.staging.toml \
@@ -268,11 +265,21 @@ mod tests {
             )
             .is_ok()
         );
+        for retired_flag in [
+            "--activation-instructions ./old.json",
+            "--activation-report ./old-report.json",
+        ] {
+            let command = format!(
+                "kagami privacy-bootstrap render-taira-release-v1 --broker-public-export ./broker.json --plan-template ./plan.json --config-template ./config.toml --genesis-template ./genesis.template.json --nevo-review ./review.json --plan-output ./out-plan.json --config-output ./out-config.toml --genesis-output ./out-genesis.template.json --broker-public-output ./out-broker.json {retired_flag}"
+            );
+            assert!(
+                parse(&command).is_err(),
+                "retired activation flags must not be accepted"
+            );
+        }
         assert!(
             parse(
                 "kagami privacy-bootstrap render-taira-release-v1 \
-                 --activation-instructions ./privacy-instructions.json \
-                 --activation-report ./privacy-report.json \
                  --broker-public-export ./broker-public.json"
             )
             .is_err(),
@@ -292,7 +299,7 @@ mod tests {
                  --instructions-output ./privacy-instructions.json"
             )
             .is_err(),
-            "emission without its digest inventory must remain unavailable"
+            "retired activation emission commands must be rejected"
         );
         assert!(
             parse("kagami privacy-bootstrap emit --output ./legacy.json").is_err(),
@@ -456,6 +463,16 @@ mod tests {
             parse("kagami localnet generate --sora-profile nexus --out-dir ./localnet").is_err()
         );
         assert!(parse(&format!("kagami localnet {BEACON_LAUNCH}")).is_err());
+    }
+    #[test]
+    fn network_create_requires_a_roster_and_an_output_directory() {
+        assert!(parse("kagami network").is_err());
+        assert!(parse("kagami network create --out-dir ./network").is_err());
+        assert!(
+            parse("kagami network create --out-dir ./network --validator ea0130@host:1337=00")
+                .is_err(),
+            "roster entries are validated while parsing"
+        );
     }
     #[test]
     fn removed_top_level_commands_fail() {

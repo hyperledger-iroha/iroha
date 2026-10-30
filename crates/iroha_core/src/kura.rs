@@ -407,6 +407,9 @@ pub struct Kura {
     _store_root_lock_file: Option<std::fs::File>,
     /// Retains the temporary storage directory used by isolated Kura instances.
     temp_store_dir: Option<tempfile::TempDir>,
+    /// Last block of this chain that the previous node release executed, when this release took
+    /// over the running network there (`state::upgrade_checkpoint`).
+    upgrade_checkpoint: std::sync::OnceLock<crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
 }
 #[derive(Debug)]
 struct KuraInstanceIdentityMarker;
@@ -1141,7 +1144,7 @@ impl Kura {
         kura_inner.temp_store_dir = Some(temp_store_dir);
         Ok(kura)
     }
-    fn acquire_store_root_lock(
+    pub(crate) fn acquire_store_root_lock(
         store_root: &Path,
         create_if_missing: bool,
     ) -> Result<std::fs::File> {
@@ -1601,6 +1604,7 @@ impl Kura {
             #[cfg(test)]
             total_disk_usage_scan_paused: AtomicBool::new(false),
             temp_store_dir: None,
+            upgrade_checkpoint: std::sync::OnceLock::new(),
         });
 
         if config.init_mode == InitMode::Strict {
@@ -1818,6 +1822,7 @@ impl Kura {
             #[cfg(test)]
             total_disk_usage_scan_paused: AtomicBool::new(false),
             temp_store_dir: Some(temp_store_dir),
+            upgrade_checkpoint: std::sync::OnceLock::new(),
         })
     }
     /// Attach a telemetry sink for storage and durable finality reporting.
@@ -6644,6 +6649,27 @@ impl Kura {
     /// Return whether this process deliberately skipped historical startup audits.
     pub const fn emergency_fast_startup_enabled(&self) -> bool {
         self.auxiliary_history_deferred
+    }
+    /// Record the upgrade checkpoint of this chain before any State is restored from it.
+    ///
+    /// # Errors
+    /// A different checkpoint was already recorded.
+    pub fn set_upgrade_checkpoint(
+        &self,
+        checkpoint: crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
+    ) -> Result<(), &'static str> {
+        let recorded = self.upgrade_checkpoint.get_or_init(|| checkpoint.clone());
+        if *recorded == checkpoint {
+            Ok(())
+        } else {
+            Err("Kura already records a different upgrade checkpoint")
+        }
+    }
+    /// The upgrade checkpoint of this chain, when this release took it over from a predecessor.
+    pub fn upgrade_checkpoint(
+        &self,
+    ) -> Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1> {
+        self.upgrade_checkpoint.get()
     }
     /// Read the one canonical hash needed to bind a restored snapshot in emergency Fast mode.
     ///

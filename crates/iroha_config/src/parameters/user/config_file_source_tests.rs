@@ -270,7 +270,7 @@ fn complete_node_parser_reads_every_reference_from_supplied_bytes_and_preserves_
     );
     assert_eq!(
         parsed.streaming.codec.rans_tables_path,
-        path.with_file_name("tables.toml")
+        Some(path.with_file_name("tables.toml"))
     );
     assert_eq!(files.values.len(), 7);
     assert!(parsed.torii.account_onboarding.is_some());

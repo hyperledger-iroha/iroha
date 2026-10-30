@@ -44,8 +44,7 @@ pub enum PauseRecordError {
     Account(#[from] norito::core::DecodeAttemptError),
 }
 
-#[derive(Default)]
-#[derive(Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 struct Demand {
     bytes: usize,
     charges: usize,

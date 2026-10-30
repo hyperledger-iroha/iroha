@@ -632,7 +632,7 @@ impl StateBlock<'_> {
                 .sumeragi_schedule,
         );
         match step {
-            crate::sumeragi::schedule::ScheduleStep::Done(inputs) => Ok(inputs),
+            crate::sumeragi::schedule::ScheduleStep::Done(inputs) => Ok(inputs.into_inputs()),
             other => {
                 self.fields
                     .as_mut()

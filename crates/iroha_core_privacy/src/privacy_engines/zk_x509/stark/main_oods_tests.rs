@@ -310,6 +310,12 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         &layout,
         &statement,
         ZkX509Rfc5280StarkShapeV1::from_statement(&main_log19_statement_fixture_v1()).unwrap(),
+        crate::privacy_engines::zk_x509::verifier_profile::ZkX509CrlPublicInputsV1 {
+            crl_der: [7; 32],
+            issuer_spki: [8; 32],
+            this_update: 1,
+            next_update: 2,
+        },
     )
     .unwrap();
     assert!(key_plan.admissible_v1(point, &shared).unwrap());
@@ -792,7 +798,14 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
         let powers =
             main_deep_replay::MainDeepPointPowersV1::new_v1([point, next], 1_usize << native_log)
                 .unwrap();
-        stream_main_fixed_polynomial_sets_v1(provider, |set| {
+        stream_main_fixed_polynomial_sets_v1(
+            provider,
+            main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+                &layout,
+                assembly.allocated_payload_bytes_v1(),
+            )
+            .unwrap(),
+            |set| {
             let registration = set.registration;
             let index = canonical_main_registration_index_v1(&layout, registration)?;
             assert_eq!(registration.segment.trace_log2, native_log);
@@ -821,7 +834,8 @@ fn maximum_fixed_polynomials_match_verifier_at_extension_point_and_native_shifts
             }
             seen[index] += 1;
             Ok(())
-        })
+            },
+        )
         .unwrap();
     }
     assert!(seen.iter().all(|count| *count == 1), "{seen:?}");

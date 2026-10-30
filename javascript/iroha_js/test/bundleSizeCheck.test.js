@@ -570,7 +570,7 @@ test("public browser aggregate audits eager, lazy, and unique combined closures"
   // schemas, product identities, and the two shared Norito metadata/value owners.
   // Noble 2 removes the separate hash wrappers and shares one hashes owner
   // with Bip39; the reviewed local module membership is unchanged.
-  assert.equal(Object.keys(result.metafile.inputs).length, 124);
+  assert.equal(Object.keys(result.metafile.inputs).length, 127);
   assertSplitByteInventory(result, metrics);
   assert.deepEqual(metrics.lazyChunks.map(({ specifier }) => specifier), [
     "./sumeragiTyped.js",
@@ -614,9 +614,9 @@ test("IVM artifact browser leaf excludes Node and Buffer shims", async () => {
 
 test("bundle targets retain canonical module ownership and accurate byte inventories", async () => {
   const expected = new Map([
-    ["toriiClient.js", { modules: 151 }],
-    ["transactionCodec.js (browser)", { modules: 71 }],
-    ["nexusApp.js (browser)", { modules: 80 }],
+    ["toriiClient.js", { modules: 154 }],
+    ["transactionCodec.js (browser)", { modules: 72 }],
+    ["nexusApp.js (browser)", { modules: 81 }],
     ["canonicalRequest.js (browser)", { modules: 44 }],
   ]);
   const { build } = await import("esbuild");

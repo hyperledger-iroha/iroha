@@ -3,7 +3,7 @@
 //! Governance does not get to turn arbitrary non-zero digests into executable consensus code. Every
 //! activatable protocol must have one compiled profile whose parameter, verifier, structurally
 //! derived statement-schema, engine-manifest, and limit bindings exactly match the proposed
-//! activation record. A protocol whose complete verifier is not compiled is rejected before it
+//! profile snapshot. A protocol whose complete verifier is not compiled is rejected before it
 //! enters world state.
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
@@ -166,8 +166,7 @@ use crate::privacy_engines::{
             ZK_X509_MAX_PROOF_BYTES_V1, ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
             ZK_X509_PROOF_VERSION_V1, ZK_X509_SOURCE_PROFILE_V1,
             ZK_X509_STARK_PROFILE_DESCRIPTOR_V1, ZK_X509_SUITE_V1, ZkX509ProfileErrorV1,
-            require_activation_readiness_v1, validate_profile_v1 as validate_zk_x509_profile_v1,
-            zk_x509_activation_readiness_v1,
+            require_consensus_security_v1, validate_profile_v1 as validate_zk_x509_profile_v1,
         },
         stark::{ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1},
     },
@@ -176,39 +175,38 @@ use crate::privacy_engines::{
 use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
-    AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
+    AnonymousPgcKOutOfNStatementV1, AnonymousPgcLimitsV1,
     BOOTLE_LANTERN_APPLICATION_MODULUS_V1 as BOOTLE_LANTERN_MODEL_APPLICATION_MODULUS_V1,
     BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 as BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1,
     BOOTLE_LANTERN_RING_DEGREE_V1 as BOOTLE_LANTERN_MODEL_RING_DEGREE_V1,
-    BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1, FcmpActivationLimitsV1,
+    BootleLanternIssuerPolicyV1, FCMP_MAX_INPUTS_V1, FCMP_MAX_OUTPUTS_V1, FcmpLimitsV1,
     IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
     IrohaBootleLanternAnoncredStatementV1, IrohaIvmPrivateNoteStarkStatementV1,
     IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsStatementV1,
-    IrohaZkX509StarkP256StatementV1, IvmPrivateNoteActivationLimitsV1, JindoActivationLimitsV1,
+    IrohaZkX509StarkP256StatementV1, IvmPrivateNoteLimitsV1, JindoLimitsV1,
     MoneroFcmpPlusPlusStatementV1, ORCHARD_MAX_ACTIONS_V1 as ORCHARD_MODEL_MAX_ACTIONS_V1,
-    OrchardActivationLimitsV1, OrchardHalo2ActionsStatementV1, PQ_MASP_MAX_INPUTS_V1,
-    PQ_MASP_MAX_OUTPUTS_V1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
-    PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1,
-    PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
-    PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PqMaspActivationLimitsV1, PqMaspStarkStatementV1, PrivacyCapabilityRowV1,
-    PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1,
+    OrchardHalo2ActionsStatementV1, OrchardLimitsV1, PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1,
+    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
+    PRIVACY_FCMP_ENCRYPTED_OUTPUT_BYTES_V1, PRIVACY_FCMP_ENCRYPTED_OUTPUT_MAGIC_V1,
+    PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_MAGIC_V1,
+    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PqMaspLimitsV1, PqMaspStarkStatementV1,
+    PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
+    PrivacyCapabilitySnapshotValidationErrorV1,
     PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogRowV1,
     PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1,
     PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
     PrivacyConsensusPolicyV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
-    PrivacyExact12QualificationRecordV1, PrivacyFcmpPoolBootstrapV1,
-    PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1,
-    PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPqMaspPoolBootstrapV1,
-    PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+    PrivacyFcmpPoolBootstrapV1, PrivacyIvmPrivateNotePoolBootstrapV1,
+    PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+    PrivacyPgcAccountBootstrapV1, PrivacyPqMaspPoolBootstrapV1, PrivacyProofEnvelopeV1,
+    PrivacyProofSystemIdV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
     PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
     TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VERANGE_HARD_MAX_AGGREGATION_COUNT_V1,
-    VeRangeActivationLimitsV1, VeRangeTransparentRangeStatementV1, ZK_AMS_MAX_BATCH_SIZE_V1,
-    ZK_AMS_MAX_RING_SIZE_V1, ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1,
-    ZkAmsActivationLimitsV1, validate_privacy_compiled_profile_catalog_archive_v1,
+    VeRangeLimitsV1, VeRangeTransparentRangeStatementV1, ZK_AMS_MAX_BATCH_SIZE_V1,
+    ZK_AMS_MAX_RING_SIZE_V1, ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsLimitsV1,
+    validate_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 use iroha_zkp_halo2::vega::{
@@ -354,9 +352,15 @@ pub struct CompiledPrivacyProfileV1 {
     /// Digest of the complete compiled engine manifest.
     pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
     /// Exact protocol-specific limits compiled into the verifier.
-    pub protocol_limits: PrivacyProtocolActivationLimitsV1,
+    pub protocol_limits: PrivacyProtocolLimitsV1,
 }
 impl CompiledPrivacyProfileV1 {
+    /// Copy the canonical semantic profile without any governed activation state.
+    #[must_use]
+    pub fn snapshot(self) -> PrivacyCompiledProfileSnapshotV1 {
+        self.into()
+    }
+
     /// Whether a canonically bound envelope carries exactly this profile's identities.
     ///
     /// [`PrivacyProofEnvelopeV1::bind_v1`] derives every envelope identity from
@@ -372,26 +376,6 @@ impl CompiledPrivacyProfileV1 {
             && envelope.verifier_digest == self.verifier_digest
             && envelope.statement_schema_digest == self.statement_schema_digest
             && envelope.engine_manifest_digest == self.engine_manifest_digest
-    }
-    /// Build the only valid activation record for this compiled profile.
-    #[must_use]
-    pub fn activation_record(
-        self,
-        lifecycle: PrivacyProtocolLifecycleV1,
-    ) -> PrivacyProtocolActivationRecordV1 {
-        PrivacyProtocolActivationRecordV1 {
-            protocol_id: self.protocol_id,
-            proof_system_id: self.proof_system_id,
-            engine_id: self.engine_id,
-            parameter_id: self.parameter_id,
-            parameter_digest: self.parameter_digest,
-            verifier_digest: self.verifier_digest,
-            statement_schema_digest: self.statement_schema_digest,
-            engine_manifest_digest: self.engine_manifest_digest,
-            lifecycle,
-            protocol_limits: self.protocol_limits,
-            pending_protocol_limits_tightening: None,
-        }
     }
 }
 impl From<CompiledPrivacyProfileV1> for PrivacyCompiledProfileSnapshotV1 {
@@ -421,6 +405,11 @@ pub fn compiled_privacy_profile_snapshot_result_v1(
                 PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
             )
         }
+        Err(CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete { .. }) => {
+            PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete,
+            )
+        }
         Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { .. }) => {
             PrivacyCompiledProfileResultV1::Unavailable(
                 PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed,
@@ -445,7 +434,7 @@ pub fn compiled_privacy_profile_snapshot_result_v1(
 ///
 /// The result contains one row for every closed first-release protocol in
 /// canonical discriminant order. It intentionally contains no committed
-/// height, policy, activation, lifecycle, or readiness projection; those are
+/// height, policy, or readiness projection; those are
 /// authoritative only in a live Torii [`PrivacyCapabilitySnapshotV1`].
 ///
 /// # Errors
@@ -476,7 +465,7 @@ fn compiled_privacy_profile_catalog_cache_v1() -> &'static PrivacyCompiledProfil
 /// The data-model validator first enforces canonical bounded decoding and the exact twelve-row
 /// shape. This second layer then requires byte-equivalent typed content to the catalog derived from
 /// the current binary, preventing a canonical but substituted profile digest from being accepted as
-/// local build metadata. Success still does not establish network activation or readiness.
+/// local build metadata. The caller separately validates the network binding and actual selected implementation readiness.
 #[must_use]
 pub fn validate_local_privacy_compiled_profile_catalog_archive_v1(
     archive: &[u8],
@@ -499,7 +488,7 @@ pub fn validate_local_privacy_compiled_profile_catalog_archive_v1(
 }
 /// Build and validate an authoritative committed privacy capability snapshot.
 ///
-/// `qualification` and `activation_for` must read from the same immutable
+/// `network_id` and `policy_for` must read from the same immutable
 /// committed world view as `consensus_policy` and `committed_height`. The
 /// closure is invoked exactly once for every protocol in canonical
 /// discriminant order.
@@ -509,10 +498,10 @@ pub fn validate_local_privacy_compiled_profile_catalog_archive_v1(
 /// Returns a deterministic structural or height-consistency error if the
 /// committed state cannot be represented by the closed snapshot contract.
 pub fn committed_privacy_capability_snapshot_v1(
+    network_id: iroha_data_model::NetworkId,
     committed_height: u64,
     consensus_policy: PrivacyConsensusPolicyV1,
-    qualification: Option<PrivacyExact12QualificationRecordV1>,
-    mut activation_for: impl FnMut(PrivacyProtocolIdV1) -> Option<PrivacyProtocolActivationRecordV1>,
+    mut policy_for: impl FnMut(PrivacyProtocolIdV1) -> Option<PrivacyProtocolPolicyV1>,
 ) -> Result<PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1> {
     // Compiled profiles are immutable binary metadata. Reuse the exact catalog
     // initialized during node startup instead of rebuilding expensive fixed
@@ -523,14 +512,14 @@ pub fn committed_privacy_capability_snapshot_v1(
         .map(|row| PrivacyCapabilityRowV1 {
             protocol_id: row.protocol_id,
             compiled_profile: row.compiled_profile,
-            activation: activation_for(row.protocol_id),
+            policy: policy_for(row.protocol_id),
         })
         .collect();
     let snapshot = PrivacyCapabilitySnapshotV1 {
         version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+        network_id,
         committed_height,
         consensus_policy,
-        qualification,
         protocols,
     };
     snapshot.validate()?;
@@ -541,7 +530,9 @@ pub fn committed_privacy_capability_snapshot_v1(
 /// # Errors
 ///
 /// Returns [`CompiledPrivacyProfileErrorV1::EngineUnavailable`] for a protocol whose complete
-/// end-to-end verifier is not compiled or whose independent release-readiness gates remain closed,
+/// end-to-end verifier is not compiled, or
+/// [`CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete`] when the X509 joint
+/// security construction is incomplete,
 /// or [`CompiledPrivacyProfileErrorV1::ProfileInitializationFailed`] if fixed transparent
 /// parameters cannot be derived, or [`CompiledPrivacyProfileErrorV1::StatementSchemaInvalid`] when
 /// the emitted schema is ambiguous or internally unresolved.
@@ -576,10 +567,10 @@ pub fn compiled_privacy_profile_v1(
 fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
 {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
-    match require_activation_readiness_v1(zk_x509_activation_readiness_v1()) {
+    match require_consensus_security_v1() {
         Ok(()) => zk_x509_profile_material_v1(),
-        Err(ZkX509ProfileErrorV1::EngineIncomplete) => {
-            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        Err(ZkX509ProfileErrorV1::JointSecurityReductionIncomplete) => {
+            Err(CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete { protocol_id })
         }
         Err(_) => Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id }),
     }
@@ -696,7 +687,7 @@ fn zk_x509_profile_material_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaZkX509StarkP256V1,
+        protocol_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
     })
 }
 fn compiled_ivm_private_note_profile_v1()
@@ -888,8 +879,8 @@ fn compiled_ivm_private_note_profile_v1_with_randomness_policies(
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaIvmPrivateNoteStarkV1(
-            IvmPrivateNoteActivationLimitsV1 {
+        protocol_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+            IvmPrivateNoteLimitsV1 {
                 max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
                 max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             },
@@ -1106,12 +1097,10 @@ fn compiled_pq_masp_profile_v1_with_schemas(
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::PqMaspStarkV1(
-            PqMaspActivationLimitsV1 {
-                max_input_count: PQ_MASP_MAX_INPUTS_V1,
-                max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
-            },
-        ),
+        protocol_limits: PrivacyProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
+            max_input_count: PQ_MASP_MAX_INPUTS_V1,
+            max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
+        }),
     })
 }
 fn compiled_fcmp_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -1319,12 +1308,10 @@ fn compiled_fcmp_profile_v1_with_randomness_policy(
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::MoneroFcmpPlusPlusV1(
-            FcmpActivationLimitsV1 {
-                max_input_count: FCMP_MAX_INPUTS_V1,
-                max_output_count: FCMP_MAX_OUTPUTS_V1,
-            },
-        ),
+        protocol_limits: PrivacyProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
+            max_input_count: FCMP_MAX_INPUTS_V1,
+            max_output_count: FCMP_MAX_OUTPUTS_V1,
+        }),
     })
 }
 fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
@@ -1466,63 +1453,60 @@ fn compiled_orchard_profile_v1_with_randomness_policies(
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(
-            OrchardActivationLimitsV1 {
-                max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1,
-            },
-        ),
+        protocol_limits: PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+            max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1,
+        }),
     })
 }
-/// Require exact compiled cryptographic bindings and bounded governed policy.
+/// Require exact compiled cryptographic bindings and bounded semantic profile.
 ///
 /// # Errors
 ///
 /// Returns a typed mismatch for the first differing consensus binding, or an
 /// unavailable/initialization error when no executable profile exists.
-pub fn validate_compiled_privacy_activation_v1(
-    activation: &PrivacyProtocolActivationRecordV1,
+pub fn validate_compiled_privacy_profile_v1(
+    profile: &PrivacyCompiledProfileSnapshotV1,
 ) -> Result<(), CompiledPrivacyProfileValidationErrorV1> {
-    let compiled = compiled_privacy_profile_v1(activation.protocol_id)
+    let compiled = compiled_privacy_profile_v1(profile.protocol_id)
         .map_err(CompiledPrivacyProfileValidationErrorV1::Profile)?;
-    validate_compiled_privacy_activation_against_profile_v1(activation, &compiled)
+    validate_compiled_privacy_profile_against_profile_v1(profile, &compiled)
 }
-/// Validate a governance record against an already selected compiled profile.
+/// Validate a semantic profile against an already selected compiled profile.
 ///
-/// This contains the consensus-critical binding comparison shared by normal activation admission
+/// This contains the consensus-critical binding comparison shared by normal profile admission
 /// and production verification. The caller selecting `compiled` is responsible for the separate
-/// availability and readiness decision.
-pub(crate) fn validate_compiled_privacy_activation_against_profile_v1(
-    activation: &PrivacyProtocolActivationRecordV1,
+/// actual implementation availability decision.
+pub(crate) fn validate_compiled_privacy_profile_against_profile_v1(
+    profile: &PrivacyCompiledProfileSnapshotV1,
     compiled: &CompiledPrivacyProfileV1,
 ) -> Result<(), CompiledPrivacyProfileValidationErrorV1> {
-    if activation.protocol_id != compiled.protocol_id {
+    if profile.protocol_id != compiled.protocol_id {
         return Err(CompiledPrivacyProfileValidationErrorV1::ProtocolMismatch);
     }
-    if activation.proof_system_id != compiled.proof_system_id {
+    if profile.proof_system_id != compiled.proof_system_id {
         return Err(CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch);
     }
-    if activation.engine_id != compiled.engine_id {
+    if profile.engine_id != compiled.engine_id {
         return Err(CompiledPrivacyProfileValidationErrorV1::EngineMismatch);
     }
-    if activation.parameter_id != compiled.parameter_id {
+    if profile.parameter_id != compiled.parameter_id {
         return Err(CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch);
     }
-    if activation.parameter_digest != compiled.parameter_digest {
+    if profile.parameter_digest != compiled.parameter_digest {
         return Err(CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch);
     }
-    if activation.verifier_digest != compiled.verifier_digest {
+    if profile.verifier_digest != compiled.verifier_digest {
         return Err(CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch);
     }
-    if activation.statement_schema_digest != compiled.statement_schema_digest {
+    if profile.statement_schema_digest != compiled.statement_schema_digest {
         return Err(CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch);
     }
-    if activation.engine_manifest_digest != compiled.engine_manifest_digest {
+    if profile.engine_manifest_digest != compiled.engine_manifest_digest {
         return Err(CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch);
     }
-    activation
-        .protocol_limits
-        .validate_with_ceiling(&compiled.protocol_limits)
-        .map_err(|_| CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch)?;
+    if profile.protocol_limits != compiled.protocol_limits {
+        return Err(CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch);
+    }
     Ok(())
 }
 #[cfg(feature = "zk-stark")]
@@ -1639,7 +1623,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV1,
+        protocol_limits: PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
     })
 }
 fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -1841,7 +1825,7 @@ fn zk_ams_profile_material_v1(
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+        protocol_limits: PrivacyProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
             max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
             max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
         }),
@@ -1993,12 +1977,10 @@ fn compiled_anonymous_pgc_profile_v1()
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
-            AnonymousPgcActivationLimitsV1 {
-                max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
-                max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
-            },
-        ),
+        protocol_limits: PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
+            max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
+        }),
     })
 }
 fn bootle_lantern_parameter_digest_v1(
@@ -2457,7 +2439,7 @@ fn compiled_bootle_lantern_profile_material_v1()
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaBootleLanternAnoncredV1,
+        protocol_limits: PrivacyProtocolLimitsV1::IrohaBootleLanternAnoncredV1,
     })
 }
 fn compiled_jindo_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -2580,11 +2562,9 @@ fn compiled_jindo_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriva
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV1(
-            JindoActivationLimitsV1 {
-                max_polynomial_count,
-            },
-        ),
+        protocol_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            max_polynomial_count,
+        }),
     })
 }
 fn compiled_verange_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
@@ -2687,11 +2667,9 @@ fn compiled_verange_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
         verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
         statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
-        protocol_limits: PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
-            VeRangeActivationLimitsV1 {
-                max_aggregation_count,
-            },
-        ),
+        protocol_limits: PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+            max_aggregation_count,
+        }),
     })
 }
 fn digest_fields_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
@@ -2918,7 +2896,13 @@ pub enum CompiledPrivacyProfileErrorV1 {
     /// The protocol is not exposed to governance in this binary.
     #[error("native privacy engine for {protocol_id:?} is not governance-available")]
     EngineUnavailable {
-        /// Protocol whose verifier is absent or whose release gates are closed.
+        /// Protocol whose complete verifier is absent.
+        protocol_id: PrivacyProtocolIdV1,
+    },
+    /// The X509 joint protocol lacks its concrete round-by-round/Fiat–Shamir reduction.
+    #[error("joint X509 security reduction is incomplete for {protocol_id:?}")]
+    JointSecurityReductionIncomplete {
+        /// Protocol whose security construction is incomplete.
         protocol_id: PrivacyProtocolIdV1,
     },
     /// Deterministic transparent parameter initialization failed.
@@ -2943,32 +2927,32 @@ pub enum CompiledPrivacyProfileValidationErrorV1 {
     #[error(transparent)]
     Profile(CompiledPrivacyProfileErrorV1),
     /// Protocol identity differs from the selected compiled profile.
-    #[error("privacy activation protocol differs from compiled profile")]
+    #[error("privacy profile protocol differs from compiled profile")]
     ProtocolMismatch,
     /// Proof-system identity differs.
-    #[error("privacy activation proof system differs from compiled profile")]
+    #[error("privacy profile proof system differs from compiled profile")]
     ProofSystemMismatch,
     /// Engine identity differs.
-    #[error("privacy activation engine differs from compiled profile")]
+    #[error("privacy profile engine differs from compiled profile")]
     EngineMismatch,
     /// Parameter-set identity differs.
-    #[error("privacy activation parameter id differs from compiled profile")]
+    #[error("privacy profile parameter id differs from compiled profile")]
     ParameterIdMismatch,
     /// Parameter digest differs.
-    #[error("privacy activation parameter digest differs from compiled profile")]
+    #[error("privacy profile parameter digest differs from compiled profile")]
     ParameterDigestMismatch,
     /// Verifier digest differs.
-    #[error("privacy activation verifier digest differs from compiled profile")]
+    #[error("privacy profile verifier digest differs from compiled profile")]
     VerifierDigestMismatch,
     /// Public-statement schema digest differs.
-    #[error("privacy activation statement schema differs from compiled profile")]
+    #[error("privacy profile statement schema differs from compiled profile")]
     StatementSchemaDigestMismatch,
     /// Engine manifest digest differs.
-    #[error("privacy activation engine manifest differs from compiled profile")]
+    #[error("privacy profile engine manifest differs from compiled profile")]
     EngineManifestDigestMismatch,
     /// Protocol-specific limits are invalid, target another protocol, or exceed
     /// the compiled hard ceilings.
-    #[error("privacy activation protocol limits are outside the compiled profile ceilings")]
+    #[error("privacy profile protocol limits differ from the canonical compiled profile")]
     ProtocolLimitsMismatch,
 }
 include!("privacy_profiles_tests.rs");

@@ -141,6 +141,7 @@ pub use committed_transaction_query::{
 mod connect_approval_ffi;
 #[cfg(test)]
 mod privacy_capability_ffi_tests;
+mod privacy_construction;
 #[cfg(test)]
 use connect_approval_ffi::{
     connect_norito_connect_approval_preimage, connect_norito_connect_verify_approval,
@@ -153,12 +154,14 @@ use connect_approval_ffi::{
 mod confidential_note_ffi;
 mod confidential_prover_ffi;
 mod zk_x509_holder_ffi;
+mod zk_x509_transaction_ffi;
 pub use zk_x509_holder_ffi::connect_norito_zk_x509_prepare_ownership_signing_v1;
-#[cfg(not(unix))]
-compile_error!(
-    "Native KAGEMUSHA wallet storage is not implemented for non-Unix targets; \
-     a genuine platform custody backend is required."
-);
+pub use zk_x509_transaction_ffi::{
+    connect_norito_zk_x509_transaction_close_v1, connect_norito_zk_x509_transaction_prepare_v1,
+    connect_norito_zk_x509_transaction_projection_v1, connect_norito_zk_x509_transaction_sign_v1,
+};
+#[cfg(not(any(unix, windows)))]
+compile_error!("Native KAGEMUSHA wallet storage requires the Unix or Windows custody backend.");
 /// Native KAGEMUSHA custody callbacks and exclusive shared-wallet ownership.
 pub mod kagemusha_wallet_ffi;
 mod kagemusha_wallet_load_original;
@@ -1253,8 +1256,8 @@ pub unsafe extern "C" fn iroha_privacy_validate_compiled_profile_catalog_v1(
 /// Validate canonical Exact12 capability evidence with the authoritative Rust verifier.
 ///
 /// Returns the stable [`PrivacyCapabilityArchiveValidationStatusV1`] code. Only zero accepts the
-/// complete archive, including release/audit signatures, deployment signatures, exact evidence
-/// counts, and recomputed digests. Callers must additionally compare the committed compiled
+/// canonical policy archive and recomputed digest. No release, audit or activation record
+/// enables an implementation. Callers must additionally compare the selected compiled
 /// tuples to their local catalog and obtain network state through authenticated Torii transport.
 ///
 /// # Safety

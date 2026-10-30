@@ -375,12 +375,65 @@ pub fn resign(evidence: &mut SubmitSccpForgeryEvidenceV1, keys: &[KeyPair], inst
     evidence.aggregate_signature = aggregate(shares).unwrap();
 }
 
+/// Generation 1 with every G6 member unresolved (`None`), ended by a heartbeat, and an E1
+/// certificate of it that the exact quorum `0b0111` signed. Genesis refuses an unresolved
+/// initial committee (G1), so the committed record is edited before the heartbeat block.
+/// Returns the chain, its committee keys, the ordinary genesis signer and the certificate.
+pub fn unresolved_member_chain() -> (
+    CertifiedTestChain,
+    Vec<KeyPair>,
+    KeyPair,
+    SubmitSccpForgeryEvidenceV1,
+) {
+    use crate::smartcontracts::isi::sccp::test_support::{
+        generation_fixture_data, install_generation,
+    };
+    let (mut chain, keys, ordinary) = configured_chain_with_output(4, None, None, Some(2));
+    let mut evidence = original(&chain);
+    let started = store::committee_generations::get(chain.state().view().world(), &1)
+        .unwrap()
+        .start_timestamp_ms;
+    let heartbeat = started + SccpParametersV1::taira_default().committee_heartbeat_ms;
+    chain.setup_world_at(heartbeat, |stx| {
+        let mut generation =
+            generation_fixture_data(store::committee_generations::get(&*stx.world, &1).unwrap());
+        generation.members = vec![None; generation.keys.len()];
+        install_generation(stx, 1, &generation).unwrap();
+    });
+    chain.commit_at(heartbeat, Vec::new());
+    {
+        let view = chain.state().view();
+        let generation = store::committee_generations::get(view.world(), &1).unwrap();
+        assert!(generation.members.iter().all(Option::is_none));
+        assert!(generation.end.is_some(), "the heartbeat ended generation 1");
+    }
+    change_header(&mut evidence, |x| x.height = chain.height() + 1);
+    let mut qc = QcFixedV1::parse(&evidence.qc).unwrap();
+    qc.signers = 0b0111;
+    evidence.qc = qc.encode();
+    resign(&mut evidence, &keys, chain.instance());
+    (chain, keys, ordinary, evidence)
+}
+
 /// Produce a genuine exact-quorum signature on an adversarial future-height claim.
 pub fn future(chain: &CertifiedTestChain, keys: &[KeyPair]) -> SubmitSccpForgeryEvidenceV1 {
     let mut evidence = original(chain);
     change_header(&mut evidence, |fields| fields.height = chain.height() + 1);
     resign(&mut evidence, keys, chain.instance());
     evidence
+}
+
+#[test]
+fn step_seven_duplicate_needs_no_new_signer_and_a_recorded_generation() {
+    // A new slashable signer always records.
+    assert!(!is_duplicate(0b10, None, 2));
+    assert!(!is_duplicate(0b10, Some(5), 2));
+    // Unresolved signers only: the first record names the generation and engages the hold.
+    assert!(!is_duplicate(0, None, 2));
+    assert!(!is_duplicate(0, Some(1), 2));
+    // Once a record names g, or a higher generation that already holds more, it is spent.
+    assert!(is_duplicate(0, Some(2), 2));
+    assert!(is_duplicate(0, Some(3), 2));
 }
 
 #[test]

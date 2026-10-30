@@ -13,6 +13,12 @@
 //! bsc = []
 //! ton_liteservers = []
 //!
+//! [sccp.fee_caps]                     # refuse EIP-1559 quotes above these (wei, nonzero)
+//! ethereum_max_fee_per_gas_wei = 200000000000         # 200 gwei
+//! ethereum_max_total_fee_wei = 250000000000000000     # 0.25 ETH: gasLimit × maxFeePerGas
+//! bsc_max_fee_per_gas_wei = 20000000000               # 20 gwei
+//! bsc_max_total_fee_wei = 50000000000000000           # 0.05 BNB
+//!
 //! [[sccp.secret_headers]]             # optional, repeatable
 //! endpoint = "https://rpc.example/key"
 //! header = "x-api-key"
@@ -36,6 +42,7 @@
 //! with [`SccpClientConfig::from_user`]; it never loads a second configuration file.
 //! Empty endpoint lists use the compiled public lists. Pinned deployments remain the trust
 //! anchor for registry reads: unknown networks and mismatched deployments are refused.
+//! Fee caps bound what one EVM transaction may charge its payer, whichever endpoint quoted it.
 
 use core::fmt;
 use std::{
@@ -46,8 +53,8 @@ use std::{
 };
 
 use iroha::config::sccp::{
-    SccpClientConfigUser, SccpClientEndpointsUser, SccpClientSecretHeaderUser,
-    SccpPinnedDeploymentEntry, SccpTonCodeEntry, defaults,
+    SccpClientConfigUser, SccpClientEndpointsUser, SccpClientFeeCapsUser,
+    SccpClientSecretHeaderUser, SccpPinnedDeploymentEntry, SccpTonCodeEntry, defaults,
 };
 use iroha_config::parameters::{
     actual::{
@@ -66,6 +73,8 @@ use iroha_data_model::{
     },
 };
 use iroha_sccp_rpc::{EndpointSet, HttpConfig, HttpEndpointKind, endpoints::EndpointError};
+
+use crate::pure::evm::EvmFeeCapsV1;
 
 /// Why the `[sccp]` table could not be read or is invalid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,9 +142,23 @@ pub struct SccpClientConfig {
     pub secret_headers: Vec<SccpSecretHeader>,
     /// Pinned deployments.
     pub deployments: SccpPinnedDeploymentsV1,
+    /// EIP-1559 fee caps of Ethereum transactions.
+    pub ethereum_fee_caps: EvmFeeCapsV1,
+    /// EIP-1559 fee caps of BSC transactions.
+    pub bsc_fee_caps: EvmFeeCapsV1,
 }
 
 impl SccpClientConfig {
+    /// The EIP-1559 fee caps of `network`; `None` for a network without EVM transactions.
+    #[must_use]
+    pub fn evm_fee_caps(&self, network: SccpNetworkV1) -> Option<EvmFeeCapsV1> {
+        match network {
+            SccpNetworkV1::EthereumMainnet => Some(self.ethereum_fee_caps),
+            SccpNetworkV1::BscMainnet => Some(self.bsc_fee_caps),
+            _ => None,
+        }
+    }
+
     /// The HTTP transport limits of wallet requests.
     #[must_use]
     pub fn http_config(&self) -> HttpConfig {
@@ -245,6 +268,7 @@ impl SccpClientConfig {
             user.journal_dir.resolve_relative_path()
         };
         let endpoints = parse_endpoints(&user.endpoints, &mut errors);
+        let (ethereum_fee_caps, bsc_fee_caps) = parse_fee_caps(&user.fee_caps, &mut errors);
         let secret_headers = parse_secret_headers(user.secret_headers, &mut errors);
         let deployments = parse_deployments(&user.deployments, &mut errors);
         if !errors.is_empty() {
@@ -258,8 +282,39 @@ impl SccpClientConfig {
             endpoints,
             secret_headers,
             deployments,
+            ethereum_fee_caps,
+            bsc_fee_caps,
         })
     }
+}
+
+/// The Ethereum and BSC fee caps; a zero cap would refuse every transaction and is invalid.
+fn parse_fee_caps(
+    user: &SccpClientFeeCapsUser,
+    errors: &mut Vec<String>,
+) -> (EvmFeeCapsV1, EvmFeeCapsV1) {
+    let mut cap = |value: u64, name: &str| {
+        if value == 0 {
+            errors.push(format!("sccp.fee_caps.{name} must be nonzero"));
+        }
+        u128::from(value)
+    };
+    (
+        EvmFeeCapsV1 {
+            max_fee_per_gas: cap(
+                user.ethereum_max_fee_per_gas_wei,
+                "ethereum_max_fee_per_gas_wei",
+            ),
+            max_total_fee: cap(
+                user.ethereum_max_total_fee_wei,
+                "ethereum_max_total_fee_wei",
+            ),
+        },
+        EvmFeeCapsV1 {
+            max_fee_per_gas: cap(user.bsc_max_fee_per_gas_wei, "bsc_max_fee_per_gas_wei"),
+            max_total_fee: cap(user.bsc_max_total_fee_wei, "bsc_max_total_fee_wei"),
+        },
+    )
 }
 
 fn parse_endpoints(
@@ -612,6 +667,21 @@ mod tests {
         );
         assert!(config.secret_headers.is_empty());
         assert!(config.deployments.is_empty());
+        assert_eq!(
+            config.evm_fee_caps(SccpNetworkV1::EthereumMainnet),
+            Some(EvmFeeCapsV1 {
+                max_fee_per_gas: u128::from(defaults::ETHEREUM_MAX_FEE_PER_GAS_WEI),
+                max_total_fee: u128::from(defaults::ETHEREUM_MAX_TOTAL_FEE_WEI),
+            })
+        );
+        assert_eq!(
+            config.evm_fee_caps(SccpNetworkV1::BscMainnet),
+            Some(EvmFeeCapsV1 {
+                max_fee_per_gas: u128::from(defaults::BSC_MAX_FEE_PER_GAS_WEI),
+                max_total_fee: u128::from(defaults::BSC_MAX_TOTAL_FEE_WEI),
+            })
+        );
+        assert_eq!(config.evm_fee_caps(SccpNetworkV1::TonMainnet), None);
         assert_eq!(config.http_config().request_timeout, config.request_timeout);
         let set = config
             .endpoint_set(HttpEndpointKind::EthereumExecution)
@@ -635,6 +705,10 @@ journal_dir = "journal"
 [sccp.endpoints]
 ethereum_execution = ["https://rpc.example/key", "http://127.0.0.1:8545"]
 ton_liteservers = ["5.9.10.47:19949:n4VDnSCUuSpjnCyUk9e3QOOd6o0ItSWYbTnW3Wnn8wk="]
+
+[sccp.fee_caps]
+ethereum_max_fee_per_gas_wei = 50_000_000_000
+bsc_max_total_fee_wei = 10_000_000_000_000_000
 
 [[sccp.secret_headers]]
 endpoint = "https://rpc.example/key"
@@ -695,6 +769,21 @@ bucket_code = {{ hash = "0x{h}", depth = 3 }}
             .expect("configured list");
         assert_eq!(set.len(), 2);
         assert_eq!(set.endpoints()[0].secret_headers().len(), 1);
+        // A configured cap replaces only its own default.
+        assert_eq!(
+            config.ethereum_fee_caps,
+            EvmFeeCapsV1 {
+                max_fee_per_gas: 50_000_000_000,
+                max_total_fee: u128::from(defaults::ETHEREUM_MAX_TOTAL_FEE_WEI),
+            }
+        );
+        assert_eq!(
+            config.bsc_fee_caps,
+            EvmFeeCapsV1 {
+                max_fee_per_gas: u128::from(defaults::BSC_MAX_FEE_PER_GAS_WEI),
+                max_total_fee: 10_000_000_000_000_000,
+            }
+        );
     }
 
     #[test]
@@ -771,7 +860,7 @@ bucket_code = {{ hash = "0x{h}", depth = 3 }}
         );
         let invalid = write_config(
             dir.path(),
-            "[sccp]\npoll_interval_ms = 0\n[sccp.endpoints]\nbsc = [\"http://rpc.example\", \"https://a.example\", \"https://a.example\"]\n",
+            "[sccp]\npoll_interval_ms = 0\n[sccp.endpoints]\nbsc = [\"http://rpc.example\", \"https://a.example\", \"https://a.example\"]\n[sccp.fee_caps]\nbsc_max_fee_per_gas_wei = 0\n",
         );
         let Err(ConfigError::Invalid(messages)) = load_fixture(&invalid) else {
             panic!("invalid values must be rejected");
@@ -779,6 +868,16 @@ bucket_code = {{ hash = "0x{h}", depth = 3 }}
         assert!(messages.iter().any(|m| m.contains("poll_interval_ms")));
         assert!(messages.iter().any(|m| m.contains("bsc[0]")));
         assert!(messages.iter().any(|m| m.contains("bsc[2] duplicates")));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("sccp.fee_caps.bsc_max_fee_per_gas_wei must be nonzero"))
+        );
+        let misspelled_cap = write_config(dir.path(), "[sccp.fee_caps]\nmax_fee_per_gas = 1\n");
+        assert!(matches!(
+            load_fixture(&misspelled_cap),
+            Err(ConfigError::Read(_))
+        ));
         let error = ConfigError::Invalid(messages).to_string();
         assert!(error.starts_with("invalid [sccp] table"));
     }

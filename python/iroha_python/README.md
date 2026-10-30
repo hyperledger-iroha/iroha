@@ -348,21 +348,34 @@ The first-release native surface exposes local build metadata only:
 `is_privacy_native_available()` and
 `privacy_compiled_profile_catalog_v1()`. The latter returns this binary's
 canonical Norito `PrivacyCompiledProfileCatalogV1` archive and contains no
-committed height, governance activation, or readiness state. The distinct
+committed height, committed protocol policy, or readiness state. The distinct
 `ToriiClient.privacy_capabilities_v1(canonical_auth=...)` method fetches the exact
 canonical Norito `PrivacyExact12CapabilityManifestV1` through authenticated HTTPS
-for its immutable local signing network. Native validation verifies the release
-and deployment evidence before retaining a private origin and network binding.
+for its immutable local signing network. Native validation checks the canonical runtime manifest, exact top-level network,
+compiled construction availability and committed per-protocol policy before retaining
+a private origin and network binding. Release and deployment records are separate diagnostics.
 Public `privacy_exact12_capability_manifest_v1(archive)` decoding is inspection-only;
 re-decoding archived bytes cannot mint transaction admission. Both the draft and
 native transaction builder reject missing origin or a different network. There is no
 local `privacy_capabilities_v1()` alias, generic request/build/verify
 dispatcher, or legacy algorithm alias.
 
-The retained X509 preparation path checks the resolved intent-bound statement against
-the effective governed activation and current consensus limits. Signing checks the
-complete candidate envelope, proof size, and action size before using the signing key.
-These checks do not enable an unavailable native engine or replace release qualification.
+`TransactionDraft.prepare_privacy_zk_x509_identity_presentation_action_v1` accepts
+one canonical proof-free request archive and returns a frozen native
+`PrivacyX509PreparedTransactionV1`. Its `materialized_statement_norito` is the
+holder prover input. `prepared.sign(private_key, credential_proof)` completes
+exactly one original Proof/ActionProof occurrence and returns a signed envelope.
+The owner retains the original network, authority, time, TTL, nonce, fee intent,
+metadata and action; changing the draft or returned byte projections cannot
+replace them. Both preparation and signing check the authenticated selected
+capability and exact local profile. The statement-only/inline-envelope producer
+and separate mutable-draft X509 signing method are retired.
+
+Signing checks the current request/materialized statement and proof bounds, the
+X5S1 public container binding and matching authority key. It does not prove current
+State or grant execution authority. X509 remains unavailable with
+`joint-security-reduction-incomplete` until that construction is complete.
+Native fixture/SDK execution and full operation delivery remain pending.
 
 `PRIVACY_PROTOCOL_IDS_V1` contains exactly twelve identities in wire order:
 `zk-ace-pq-authorization-v1`, `anonymous-pgc-k-out-of-n-v1`,
@@ -2034,40 +2047,82 @@ under the referendum asset's frozen smallest-unit scale by Core.
 
 ## Runtime upgrades and ABI helpers
 
-```python
-from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
+A network changes its runtime through governed change sets: SORA Parliament
+schedules a `ChangeSetV1` that moves the universal root from its committed
+selection to a successor selection at an effective height.
 
-operator_context = OperatorSigningContext(
-    NetworkId.parse(exact_network_id),
-    runtime_operator_key_pair,
-)
+The change-set routes (`/v1/runtime/upgrades*`) are operator routes: the client
+signs them with its `operator_signing_context`, so construct it with the
+operator's key, loaded from runtime-only configuration.
+
+```python
+import json
+
+from iroha_python import OperatorSigningContext, ToriiCanonicalRequestAuth, ToriiClient
+
 client = ToriiClient(
     "http://127.0.0.1:8080",
-    operator_signing_context=operator_context,
+    operator_signing_context=OperatorSigningContext(network_id, operator_key_pair),
+)
+canonical_auth = ToriiCanonicalRequestAuth(
+    network_id=exact_network_id,
+    account_id=canonical_i105_account_id,
+    signer=wallet.sign,
 )
 
-# Inspect ABI policy advertised by the node
-abi_state = client.get_runtime_abi_active()
-abi_hash = client.get_runtime_abi_hash()
-metrics = client.get_runtime_metrics()
+# ABI policy and change-set counters advertised by the node
+abi_state = client.get_runtime_abi_active_typed(canonical_auth=canonical_auth)
+abi_hash = client.get_runtime_abi_hash_typed()
+counts = client.get_runtime_metrics_typed(canonical_auth=canonical_auth).upgrade_events_total
+print(counts.scheduled, counts.activated, counts.lapsed, counts.canceled)
 
-# Draft a runtime upgrade manifest (ABI stays fixed to v1 in the first release)
-manifest = {
-    "name": "Refresh runtime provenance",
-    "description": "Schedules a no-ABI-change runtime rollout.",
-    "abi_version": 1,
-    "abi_hash": "00" * 32,
-    "added_syscalls": [],
-    "added_pointer_types": [],
-    "start_height": 1_500_000,
-    "end_height": 1_500_256,
-}
-proposal = client.propose_runtime_upgrade(manifest)
+# The committed selection, the validator committee and every recorded change set
+snapshot = client.list_runtime_upgrades_typed()
+print("Selection:", snapshot.selection_id_hex, "committee:", len(snapshot.committee))
+for item in snapshot.items:
+    print(item.id_hex, item.effective_height, item.status.kind, item.status.height)
 
-# Later, coordinate activation/cancellation using the manifest id (hex string)
-activation = client.activate_runtime_upgrade("deadbeef" * 4)
-cancel = client.cancel_runtime_upgrade("0x" + "feedface" * 4)
+# Draft the SORA Parliament proposal that schedules a change set. The change set
+# names the committed selection as its predecessor and is sent as given, with the
+# endorsements of the trusted release signers the committed provenance policy
+# requires (each printed by `iroha runtime upgrade endorse`; none without a policy).
+with open("change_set.json", encoding="utf-8") as handle:
+    change_set = json.load(handle)
+assert change_set["predecessor"] == snapshot.selection_id_hex
+endorsements = []
+for path in ("endorsement_a.json", "endorsement_b.json"):
+    with open(path, encoding="utf-8") as handle:
+        endorsements.append(json.load(handle))
+schedule = client.propose_runtime_upgrade_typed(change_set, endorsements)
+
+# Draft the proposal that withdraws a scheduled change set by its identity
+cancel = client.cancel_runtime_upgrade_typed(snapshot.items[0].id_hex)
+
+# Validator operators: ask the node which selections its release executes, then have it
+# sign its support for a scheduled change set with its own validator key
+release = client.get_runtime_release()
+attestation = client.attest_runtime_upgrade_typed(snapshot.items[0].id_hex)
 ```
+
+Both proposal drafts return the `ProposeRuntimeUpgradeProposal` instruction for
+local signing and submission. There is no activation call: at the start of its
+effective height a scheduled change set activates when every committee member
+has attested support for it, its frozen notice has elapsed and it still applies
+to the committed selection; otherwise it lapses. The node, not its operator,
+decides support: `attest_runtime_upgrade` returns one
+`iroha.runtime.support.attest.v1` instruction the node signed only if its release
+executes the successor selection and its key is a committee member, and
+`get_runtime_release` names any committed or scheduled selection the release
+cannot execute with the first definition it lacks.
+
+`RuntimeUpgradeListItem` types the change-set identity, effective height,
+predecessor and successor selections, status (`Scheduled`, or `Activated`,
+`Lapsed` and `Cancelled` with their height) and frozen `RuntimeNotice`; `record`
+keeps the complete `ChangeSetRecordV1` object, including published definitions,
+transitions and attestations. Change-set identities are exact lowercase
+64-character hex. `GovernanceProposalRuntimeUpgrade` reads a `RuntimeUpgrade`
+Parliament proposal: its `Schedule` or `Cancel` action, the frozen notice and
+`proposed_ms`, each integer at most 2^53 − 1.
 
 ## Peer inventory & Network Time Service
 
@@ -2760,10 +2815,10 @@ no environment variables need to be exported.
   operators can script parity checks without massaging raw JSON from
   `/v1/configuration`, `/v1/peers`, `/v1/time/{now,status}`, `/v1/node/capabilities`,
   and `/v1/runtime/*`.
-- Add typed runtime upgrade helpers (`list_runtime_upgrades_typed`, the
-  `RuntimeUpgrade*` dataclasses, and typed wrappers around `propose_runtime_upgrade`,
-  `activate_runtime_upgrade`, `cancel_runtime_upgrade`) to inspect manifests and
-  instruction bundles without hand-decoding JSON payloads.
+- Add typed runtime change-set helpers (`list_runtime_upgrades_typed` returning
+  `RuntimeUpgradesSnapshot`, and typed wrappers around `propose_runtime_upgrade` and
+  `cancel_runtime_upgrade`) to inspect the committed selection, the change-set
+  lifecycle and the drafted Parliament proposals without hand-decoding JSON payloads.
 - Provide trigger helpers for registering time/pre-commit actions, executing triggers, and
   minting/burning/unregistering repetitions so automation flows avoid manual Norito. Typed trigger
   listings (`TriggerRecord`, `TriggerListPage`) and mutation responses
@@ -2886,3 +2941,10 @@ last-resort stderr handler. Other client routes retain their configured hooks.
 Configured ordinary request headers (including API authorization) are preserved.
 Other platforms are explicitly unsupported by this bounded owner. There are no
 redirects, retries, transport fallback or credentials in IPC files/arguments.
+
+The Exact12 fixture codec uses the dedicated proof-free X509 request and its original
+signed proof occurrence. Its X509 projection is the canonical ActionStatement; the
+other eleven protocols retain their existing projection. Old inline X509 Submit
+archives are rejected. These byte checks do not implement authenticated holder
+preparation, signing, transport or proof verification. Shared fixture bytes must be
+regenerated by the current Rust model after the schema changes are composed.

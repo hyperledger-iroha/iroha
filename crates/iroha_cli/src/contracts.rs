@@ -1229,7 +1229,9 @@ fn execute_local_contract_debug_view<C: RunContext>(
         host.finish_local_contract_result(&vm, &descriptor.name)
             .map(|_| ())
     }))?;
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .map_err(|error| eyre!("contract inspection cannot discard attachment custody: {error}"))?;
     let durable_state_overlay = host.drain_durable_state_overlay();
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
     let fault = run_result
@@ -1397,7 +1399,9 @@ fn execute_local_contract_debug_call<C: RunContext>(
         host.finish_local_contract_result(&vm, &descriptor.name)
             .map(|_| ())
     }))?;
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .map_err(|error| eyre!("contract inspection cannot discard attachment custody: {error}"))?;
     let durable_state_overlay = host.drain_durable_state_overlay();
     let queued_instruction_count = queued.len();
     let durable_state_mutation_count = durable_state_overlay.len();

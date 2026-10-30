@@ -34,6 +34,20 @@ fn limits() -> LeafLimits {
         max_streamed_value_bytes: 131_072,
     }
 }
+/// Bounds of `table` in a fresh State: the definitions table holds the founded catalog.
+fn limits_for(table: &str) -> LeafLimits {
+    if table == "world.runtime_definitions" {
+        LeafLimits {
+            max_tables: 1,
+            max_rows: 4096,
+            max_payload_bytes: 1 << 20,
+            max_ordered_table_bytes: 16 << 20,
+            max_streamed_value_bytes: 16 << 20,
+        }
+    } else {
+        limits()
+    }
+}
 fn path(value: &str) -> StatePath {
     value.parse().unwrap()
 }
@@ -43,7 +57,7 @@ fn freeze_world(block: &mut StateBlock<'_>) {
     block.world.retire_frozen_cleanup();
 }
 fn capture(block: &StateBlock<'_>, table: &str) -> CanonicalTablePairedSnapshot {
-    capture_original_table_once(block, table, limits(), 100_000)
+    capture_original_table_once(block, table, limits_for(table), 100_000)
         .unwrap()
         .unwrap()
 }
@@ -92,7 +106,7 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
             "duplicate raw adapter {id}"
         );
         let frozen = capture(&block, id);
-        let control = live(&state, limits()).unwrap().unwrap();
+        let control = live(&state, limits_for(id)).unwrap().unwrap();
         assert_equal(&frozen, &control);
         assert_eq!(frozen.table_id(), *id);
         // Fresh State initializes actual SNS records; even this baseline must
@@ -101,6 +115,12 @@ fn every_generated_raw_adapter_matches_its_declared_committed_encoder() {
             frozen.row_count(),
             if *id == "world.smart_contract_state" {
                 3
+            } else if *id == "world.runtime_definitions" {
+                // A fresh World is founded on the baseline catalog.
+                crate::runtime::release_catalog()
+                    .expect("catalog")
+                    .baseline_definitions
+                    .len()
             } else {
                 0
             }

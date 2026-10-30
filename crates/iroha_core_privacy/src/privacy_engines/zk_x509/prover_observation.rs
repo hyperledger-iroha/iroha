@@ -99,8 +99,10 @@ pub(super) enum PhaseV1 {
     CaJointOracleCommitment,
     MainProofEncodingAndExplicitCleanup,
     CaFinalProof,
+    CompositionShaFixedRows,
+    CompositionShaFixedInverseTransform,
 }
-const PHASES: [PhaseV1; 69] = [
+const PHASES: [PhaseV1; 71] = [
     PhaseV1::Preparation,
     PhaseV1::Assembly,
     PhaseV1::BaseSources,
@@ -170,6 +172,8 @@ const PHASES: [PhaseV1; 69] = [
     PhaseV1::CaJointOracleCommitment,
     PhaseV1::MainProofEncodingAndExplicitCleanup,
     PhaseV1::CaFinalProof,
+    PhaseV1::CompositionShaFixedRows,
+    PhaseV1::CompositionShaFixedInverseTransform,
 ];
 
 /// Static public labels of [`PHASES`] in the shared phase tree, in that order.
@@ -243,6 +247,8 @@ const PHASE_LABELS_V1: [&str; PHASES.len()] = [
     "CaJointOracleCommitment",
     "MainProofEncodingAndExplicitCleanup",
     "CaFinalProof",
+    "CompositionShaFixedRows",
+    "CompositionShaFixedInverseTransform",
 ];
 
 /// Workload label of the X509 credential prover in the shared phase tree.
@@ -639,7 +645,7 @@ impl ReceiptV1 {
     }
     pub(super) fn public_text_v1(&self) -> String {
         let mut text = format!(
-            "observation_scope=calling-thread-public-geometry-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=observed\nfixed_coset_failed_calls={}\nfixed_coset_cpu_forward_columns={}\nfixed_coset_cpu_inverse_columns={}\nfixed_coset_metal_forward_columns={}\nfixed_coset_metal_inverse_columns={}\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nquotient_stripe_backend=observed\nquotient_stripe_cpu_forward_columns={}\nquotient_stripe_metal_forward_columns={}\nnative_replay_backend=observed\nnative_replay_scope=initial-resident-and-original-mask-replay\nnative_replay_cpu_inverse_columns={}\nnative_replay_metal_inverse_columns={}\nother_transform_backends=unobserved",
+            "observation_scope=calling-thread-public-geometry-counters\nphase_durations=nested-not-additive\ntransform_scope=MAIN-common-domain-FFT-only\ntransform_policy_counts_by_max_device_columns={:?}\ntransform_cpu_calls={}\ntransform_cpu_columns={}\ntransform_metal_calls={}\ntransform_metal_columns={}\ntransform_failed_calls={}\nfixed_coset_backend=observed\nfixed_coset_failed_calls={}\nfixed_coset_cpu_forward_columns={}\nfixed_coset_cpu_inverse_columns={}\nfixed_coset_metal_forward_columns={}\nfixed_coset_metal_inverse_columns={}\nfixed_coset_forward_columns={}\nfixed_coset_recovery_inverse_columns={}\nfixed_coset_forward_butterflies={}\nfixed_coset_recovery_inverse_butterflies={}\nquotient_stripe_backend=observed\nquotient_stripe_cpu_forward_columns={}\nquotient_stripe_metal_forward_columns={}\nnative_replay_backend=observed\nnative_replay_scope=initial-resident-original-mask-replay-and-public-fixed-setup\nnative_replay_cpu_inverse_columns={}\nnative_replay_metal_inverse_columns={}\nother_transform_backends=unobserved",
             self.policies,
             self.cpu_calls,
             self.cpu_columns,
@@ -734,7 +740,7 @@ mod tests {
 
     #[test]
     fn fine_phase_inventory_is_fixed_unique_and_preserves_every_old_phase() {
-        assert_eq!(PHASES.len(), 69);
+        assert_eq!(PHASES.len(), 71);
         let observation = ObservationV1::begin_v1();
         for (index, phase) in PHASES.iter().copied().enumerate() {
             assert_eq!(phase as usize, index);
@@ -750,7 +756,7 @@ mod tests {
             text.lines()
                 .filter(|line| line.starts_with("phase="))
                 .count(),
-            69
+            71
         );
         for phase in [
             PhaseV1::Composition,
@@ -787,7 +793,9 @@ mod tests {
         let text = receipt.public_text_v1();
         assert!(text.contains("BaseSampleAndCommit") && text.contains("AuxSampleAndCommit"));
         assert!(!text.contains("BaseMasks") && !text.contains("AuxMasks"));
-        assert!(text.contains("native_replay_scope=initial-resident-and-original-mask-replay"));
+        assert!(text.contains(
+            "native_replay_scope=initial-resident-original-mask-replay-and-public-fixed-setup"
+        ));
     }
 
     #[test]
@@ -906,7 +914,7 @@ mod tests {
 
     #[test]
     fn observation_is_bounded_scoped_and_does_not_claim_worker_thread_coverage() {
-        // Diagnostic-only fixed public counters: 69 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 71 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let observation = ObservationV1::begin_v1();
         std::thread::spawn(|| completed_transform_v1(true, 8))
@@ -970,6 +978,8 @@ mod tests {
         let phases = [
             PhaseV1::CompositionArithmeticFixedRows,
             PhaseV1::CompositionArithmeticFixedInverseTransform,
+            PhaseV1::CompositionShaFixedRows,
+            PhaseV1::CompositionShaFixedInverseTransform,
             PhaseV1::CompositionRegistration,
             PhaseV1::CompositionTraceCache,
             PhaseV1::CompositionDenominators,
@@ -995,7 +1005,7 @@ mod tests {
         .join()
         .unwrap();
         let receipt = observation.finish_v1();
-        // Diagnostic-only fixed public counters: 69 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 71 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         for phase in phases {
             let count = receipt.phases[phase as usize];
@@ -1038,7 +1048,7 @@ mod tests {
             assert_eq!(count.unwound, 1);
         }
         assert_eq!(receipt.phases[PhaseV1::QueryOpenings as usize].calls, 0);
-        // Diagnostic-only fixed public counters: 69 phase slots, never witness-sized.
+        // Diagnostic-only fixed public counters: 71 phase slots, never witness-sized.
         assert!(core::mem::size_of::<ReceiptV1>() < 4_096);
         let next = ObservationV1::begin_v1();
         stale.complete_v1();

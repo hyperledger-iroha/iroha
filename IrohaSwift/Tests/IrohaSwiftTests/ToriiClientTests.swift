@@ -9732,7 +9732,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeMetricsAsync() async throws {
         let payload = """
-        {"abi_version":1,"upgrade_events_total":{"proposed":5,"activated":6,"canceled":1}}
+        {"abi_version":1,"upgrade_events_total":{"scheduled":2,"activated":6,"lapsed":3,"canceled":1}}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -9743,9 +9743,34 @@ final class ToriiClientHeaderTests: XCTestCase {
 
         let metrics = try await makeClient().getRuntimeMetrics(canonicalAuth: canonicalReadAuth)
         XCTAssertEqual(metrics.abiVersion, 1)
-        XCTAssertEqual(metrics.upgradeEventsTotal.proposed, 5)
+        XCTAssertEqual(metrics.upgradeEventsTotal.scheduled, 2)
         XCTAssertEqual(metrics.upgradeEventsTotal.activated, 6)
+        XCTAssertEqual(metrics.upgradeEventsTotal.lapsed, 3)
         XCTAssertEqual(metrics.upgradeEventsTotal.canceled, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetRuntimeMetricsRejectsRetiredCountersAsync() async {
+        for counters in [
+            #"{"proposed":5,"activated":6,"canceled":1}"#,
+            #"{"proposed":0,"scheduled":2,"activated":6,"lapsed":3,"canceled":1}"#,
+            #"{"scheduled":2,"activated":6,"lapsed":3,"cancelled":1}"#,
+            #"{"scheduled":2.5,"activated":6,"lapsed":3,"canceled":1}"#,
+        ] {
+            let payload = Data("{\"abi_version\":1,\"upgrade_events_total\":\(counters)}".utf8)
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                return (response, payload)
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().getRuntimeMetrics(canonicalAuth: canonicalReadAuth),
+                counters
+            ) { error in
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9781,190 +9806,370 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(hash.abiHashHex, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     }
 
+    private static let runtimeCommitteeKey = "ed0120" + String(repeating: "AB", count: 32)
+
+    /// One `ChangeSetV1` object as Torii encodes it.
+    private func runtimeChangeSetJSON(
+        predecessor: String = String(repeating: "1", count: 64),
+        effectiveHeight: String = "4200",
+        publish: String = "[]"
+    ) -> String {
+        """
+        {"network":"\(TestNetworkIds.canonical.literal)","root":{"kind":"Universal","content":null},"predecessor":"\(predecessor)","successor":"\(String(repeating: "2", count: 64))","effective_height":\(effectiveHeight),"publish":\(publish),"transitions":[{"kind":"Activate","content":"\(String(repeating: "4", count: 64))"}],"qualification":"\(String(repeating: "3", count: 64))"}
+        """
+    }
+
+    /// One `ChangeSetRecordV1` object with the given status object.
+    private func runtimeChangeSetRecordJSON(
+        status: String,
+        effectiveHeight: String = "4200"
+    ) -> String {
+        """
+        {"change_set":\(runtimeChangeSetJSON(effectiveHeight: effectiveHeight)),"status":\(status),"proposed_ms":1000,"approved_height":40,"approved_ms":2000,"notice":{"blocks":3600,"ms":1209600000,"approval_cushion_ms":86400000},"attestations":[]}
+        """
+    }
+
+    private func runtimeUpgradesSnapshotJSON(items: [(id: String, record: String)]) -> String {
+        let renderedItems = items
+            .map { "{\"id_hex\":\"\($0.id)\",\"record\":\($0.record)}" }
+            .joined(separator: ",")
+        return """
+        {"selection_id_hex":"\(String(repeating: "1", count: 64))","selection":{"kernel":"\(String(repeating: "5", count: 64))","commitment_profile":"\(String(repeating: "6", count: 64))","services_profile":"\(String(repeating: "7", count: 64))","installed_storage":[],"active":[],"bindings":[],"restrictions":[],"completion_closures":[]},"committee":["\(Self.runtimeCommitteeKey)"],"committee_digest_hex":"\(String(repeating: "d", count: 64))","items":[\(renderedItems)]}
+        """
+    }
+
+    /// Decode with the exact number lexemes `ToriiClient` installs on every response.
+    private func decodeExactRuntimeJSON<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        let data = Data(json.utf8)
+        let decoder = JSONDecoder()
+        decoder.userInfo[exactJSONNumberLexemesUserInfoKey] = try ExactJSONNumberLexemeScanner.scan(data)
+        return try decoder.decode(T.self, from: data)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testListRuntimeUpgradesAsync() async throws {
-        let upgradeId = String(repeating: "9", count: 64)
-        let payload = """
-        {
-          "items": [
-            {
-              "id_hex": "\(upgradeId)",
-              "record": {
-                "manifest": {
-                  "name": "Upgrade Foo",
-                  "description": "Test upgrade",
-                  "abi_version": 1,
-                  "abi_hash": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-                  "added_syscalls": [],
-                  "added_pointer_types": [],
-                  "start_height": 100,
-                  "end_height": 200
-                },
-                "status": { "ActivatedAt": 123 },
-                "proposer": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "created_height": 90
-              }
-            }
-          ]
-        }
-        """.data(using: .utf8)!
+        let scheduledId = String(repeating: "a", count: 64)
+        let explicitScheduledId = String(repeating: "b", count: 64)
+        let cancelledId = String(repeating: "c", count: 64)
+        let activatedId = String(repeating: "e", count: 64)
+        let lapsedId = String(repeating: "f", count: 64)
+        let payload = Data(runtimeUpgradesSnapshotJSON(items: [
+            (scheduledId, runtimeChangeSetRecordJSON(status: #"{"kind":"Scheduled"}"#)),
+            (explicitScheduledId, runtimeChangeSetRecordJSON(status: #"{"kind":"Scheduled","content":null}"#)),
+            (cancelledId, runtimeChangeSetRecordJSON(status: #"{"kind":"Cancelled","content":4100}"#)),
+            (activatedId, runtimeChangeSetRecordJSON(status: #"{"kind":"Activated","content":4200}"#)),
+            (lapsedId, runtimeChangeSetRecordJSON(status: #"{"kind":"Lapsed","content":4200}"#)),
+        ]).utf8)
 
         StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
             XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, payload)
         }
 
-        let upgrades = try await makeClient().listRuntimeUpgrades()
-        XCTAssertEqual(upgrades.count, 1)
-        let item = upgrades[0]
-        XCTAssertEqual(item.idHex, upgradeId)
-        XCTAssertEqual(item.record.proposer, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        XCTAssertEqual(item.record.createdHeight, 90)
-        guard case let .activatedAt(height) = item.record.status else {
-            return XCTFail("Expected ActivatedAt status")
+        let snapshot = try await makeClient().listRuntimeUpgrades()
+        XCTAssertEqual(snapshot.selectionIdHex, String(repeating: "1", count: 64))
+        XCTAssertEqual(snapshot.selection["kernel"], .string(String(repeating: "5", count: 64)))
+        XCTAssertEqual(snapshot.committee, [Self.runtimeCommitteeKey])
+        XCTAssertEqual(snapshot.committeeDigestHex, String(repeating: "d", count: 64))
+        XCTAssertEqual(
+            snapshot.items.map(\.idHex),
+            [scheduledId, explicitScheduledId, cancelledId, activatedId, lapsedId]
+        )
+        XCTAssertEqual(
+            snapshot.items.map(\.record.status),
+            [.scheduled, .scheduled, .cancelled(height: 4100), .activated(height: 4200), .lapsed(height: 4200)]
+        )
+        let record = snapshot.items[0].record
+        XCTAssertEqual(record.changeSet.effectiveHeight, 4200)
+        XCTAssertEqual(record.changeSet.predecessorHex, String(repeating: "1", count: 64))
+        XCTAssertEqual(record.changeSet.successorHex, String(repeating: "2", count: 64))
+        XCTAssertEqual(record.changeSet.json["network"], .string(TestNetworkIds.canonical.literal))
+        XCTAssertEqual(record.notice.blocks, 3_600)
+        XCTAssertEqual(record.notice.ms, 1_209_600_000)
+        XCTAssertEqual(record.notice.approvalCushionMs, 86_400_000)
+        XCTAssertEqual(record.json["approved_height"], .number(40))
+        XCTAssertEqual(record.json["attestations"], .array([]))
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListRuntimeUpgradesRejectsRetiredAndInexactShapesAsync() async {
+        let id = String(repeating: "a", count: 64)
+        let scheduled = #"{"kind":"Scheduled"}"#
+        let retiredManifestListing = """
+        {"items":[{"id_hex":"\(id)","record":{"manifest":{"name":"Upgrade Foo","description":"Test upgrade","abi_version":1,"abi_hash":"\(String(repeating: "ab", count: 32))","added_syscalls":[],"added_pointer_types":[],"start_height":100,"end_height":200},"status":{"ActivatedAt":123},"proposer":"\(Self.runtimeCommitteeKey)","created_height":90}}]}
+        """
+        for payload in [
+            retiredManifestListing,
+            runtimeUpgradesSnapshotJSON(items: [(id, runtimeChangeSetRecordJSON(status: #"{"kind":"Scheduled","content":4200}"#))]),
+            runtimeUpgradesSnapshotJSON(items: [(id, runtimeChangeSetRecordJSON(status: #"{"kind":"Canceled","content":4100}"#))]),
+            runtimeUpgradesSnapshotJSON(items: [(id, runtimeChangeSetRecordJSON(status: #"{"kind":"Activated","content":4200.0}"#))]),
+            runtimeUpgradesSnapshotJSON(items: [(id, runtimeChangeSetRecordJSON(status: scheduled, effectiveHeight: "9007199254740992"))]),
+            runtimeUpgradesSnapshotJSON(items: [(id.uppercased(), runtimeChangeSetRecordJSON(status: scheduled))]),
+            runtimeUpgradesSnapshotJSON(items: [
+                (id, runtimeChangeSetRecordJSON(status: scheduled).replacingOccurrences(of: ",\"attestations\":[]", with: "")),
+            ]),
+        ] {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                return (response, Data(payload.utf8))
+            }
+            await XCTAssertThrowsErrorAsync(try await makeClient().listRuntimeUpgrades(), payload) { error in
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
         }
-        XCTAssertEqual(height, 123)
-        let manifest = item.record.manifest
-        XCTAssertEqual(manifest.name, "Upgrade Foo")
-        XCTAssertEqual(manifest.description, "Test upgrade")
-        XCTAssertEqual(manifest.abiVersion, 1)
-        XCTAssertEqual(manifest.addedSyscalls, [])
-        XCTAssertEqual(manifest.addedPointerTypes, [])
-        XCTAssertEqual(manifest.startHeight, 100)
-        XCTAssertEqual(manifest.endHeight, 200)
-        XCTAssertEqual(manifest.abiHashHex, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+    }
+
+    func testRuntimeChangeSetStatusDecodesTheClosedLifecycle() throws {
+        let accepted: [(String, ToriiRuntimeChangeSetStatus)] = [
+            (#"{"kind":"Scheduled"}"#, .scheduled),
+            (#"{"kind":"Scheduled","content":null}"#, .scheduled),
+            (#"{"kind":"Activated","content":7}"#, .activated(height: 7)),
+            (#"{"kind":"Lapsed","content":8}"#, .lapsed(height: 8)),
+            (#"{"kind":"Cancelled","content":9}"#, .cancelled(height: 9)),
+        ]
+        for (json, expected) in accepted {
+            XCTAssertEqual(try decodeExactRuntimeJSON(ToriiRuntimeChangeSetStatus.self, json), expected, json)
+            XCTAssertEqual(
+                try JSONDecoder().decode(ToriiRuntimeChangeSetStatus.self, from: Data(json.utf8)),
+                expected,
+                json
+            )
+        }
+        for json in [
+            #"{"kind":"Scheduled","content":1}"#,
+            #"{"kind":"Scheduled","content":{}}"#,
+            #"{"kind":"Canceled","content":9}"#,
+            #"{"kind":"Proposed","content":null}"#,
+            #"{"ActivatedAt":5}"#,
+            #"{"kind":"Activated"}"#,
+            #"{"kind":"Activated","content":null}"#,
+            #"{"kind":"Activated","content":"5"}"#,
+            #"{"kind":"Activated","content":5.0}"#,
+            #"{"kind":"Activated","content":5,"height":5}"#,
+        ] {
+            XCTAssertThrowsError(try decodeExactRuntimeJSON(ToriiRuntimeChangeSetStatus.self, json), json)
+        }
+    }
+
+    func testRuntimeChangeSetValidatesItsExactShape() throws {
+        let maximum = try ToriiRuntimeChangeSet(
+            json: ToriiJSONValue.decodeExact(
+                from: Data(runtimeChangeSetJSON(effectiveHeight: "9007199254740991").utf8)
+            )
+        )
+        XCTAssertEqual(maximum.effectiveHeight, 9_007_199_254_740_991)
+        XCTAssertThrowsError(
+            try decodeExactRuntimeJSON(ToriiRuntimeChangeSet.self, runtimeChangeSetJSON(effectiveHeight: "4200.0"))
+        )
+
+        let valid = runtimeChangeSetJSON()
+        for json in [
+            runtimeChangeSetJSON(effectiveHeight: "9007199254740992"),
+            runtimeChangeSetJSON(effectiveHeight: "4200.5"),
+            runtimeChangeSetJSON(effectiveHeight: "\"4200\""),
+            runtimeChangeSetJSON(predecessor: String(repeating: "A", count: 64)),
+            runtimeChangeSetJSON(predecessor: String(repeating: "1", count: 62)),
+            valid.replacingOccurrences(of: ",\"qualification\":", with: ",\"manifest\":{},\"qualification\":"),
+            valid.replacingOccurrences(of: "\"publish\":[],", with: ""),
+            "[\(valid)]",
+        ] {
+            XCTAssertThrowsError(
+                try ToriiRuntimeChangeSet(json: ToriiJSONValue.decodeExact(from: Data(json.utf8))),
+                json
+            ) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
+    }
+
+    private func runtimeChangeSetEndorsementJSON(signature: String = String(repeating: "CD", count: 64)) -> String {
+        """
+        {"change_set":"\(String(repeating: "5a", count: 32))","signer":"ed0120\(String(repeating: "AB", count: 32))","signature":"\(signature)"}
+        """
+    }
+
+    func testRuntimeChangeSetEndorsementIsExact() throws {
+        let valid = runtimeChangeSetEndorsementJSON()
+        XCTAssertNoThrow(
+            try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(valid.utf8)))
+        )
+        for json in [
+            runtimeChangeSetEndorsementJSON(signature: String(repeating: "cd", count: 64)),
+            runtimeChangeSetEndorsementJSON(signature: "ABC"),
+            valid.replacingOccurrences(of: "\"change_set\"", with: "\"changeSet\""),
+            valid.replacingOccurrences(of: "}", with: ",\"signed_at\":1}"),
+            "[\(valid)]",
+        ] {
+            XCTAssertThrowsError(
+                try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(json.utf8))),
+                json
+            ) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testProposeRuntimeUpgradeAsync() async throws {
-        let manifest = ToriiRuntimeUpgradeManifest(
-            name: "Upgrade Foo",
-            description: "Test",
-            abiVersion: 1,
-            abiHashHex: "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-            addedSyscalls: [],
-            addedPointerTypes: [],
-            startHeight: 123,
-            endHeight: 456
+        let changeSet = try ToriiRuntimeChangeSet(
+            json: ToriiJSONValue.decodeExact(from: Data(runtimeChangeSetJSON().utf8))
         )
-        let expectedResponse = """
-        {"ok":true,"tx_instructions":[{"wire_id":"Upgrade","payload_hex":"00"}]}
-        """.data(using: .utf8)!
+        XCTAssertEqual(changeSet.effectiveHeight, 4200)
+        let endorsement = try ToriiRuntimeChangeSetEndorsement(
+            json: ToriiJSONValue.decodeExact(from: Data(runtimeChangeSetEndorsementJSON().utf8))
+        )
+        XCTAssertEqual(endorsement.changeSetHex, String(repeating: "5a", count: 32))
+        let expectedBody = try ToriiJSONValue.object([
+            "change_set": changeSet.json,
+            "provenance": .array([endorsement.json]),
+        ]).encodedData()
+        let wireId = ToriiRuntimeUpgradeActionResponse.proposalInstructionWireId
+        let expectedResponse = Data("""
+        {"ok":true,"tx_instructions":[{"wire_id":"\(wireId)","payload_hex":"0a0b"}]}
+        """.utf8)
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades/propose")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            let json = self.bodyJSON(from: request)
-            guard let manifestJSON = json["manifest"] as? [String: Any] else {
-                return (HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!, Data())
-            }
-            XCTAssertEqual(manifestJSON["name"] as? String, "Upgrade Foo")
-            XCTAssertEqual(manifestJSON["abi_version"] as? Int, 1)
-            XCTAssertEqual(manifestJSON["abi_hash"] as? String, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-            XCTAssertEqual(manifestJSON["start_height"] as? Int, 123)
-            XCTAssertEqual(manifestJSON["end_height"] as? Int, 456)
-            if let syscalls = manifestJSON["added_syscalls"] as? [NSNumber] {
-                XCTAssertTrue(syscalls.isEmpty)
-            }
-            if let pointerTypes = manifestJSON["added_pointer_types"] as? [NSNumber] {
-                XCTAssertTrue(pointerTypes.isEmpty)
-            }
+            XCTAssertEqual(self.bodyData(from: request), expectedBody)
+            // The operator signature covers the exact proposal body.
+            let operatorKey = try Curve25519.Signing.PublicKey(
+                rawRepresentation: SigningKey.ed25519(privateKey: Data(repeating: 0x5A, count: 32))
+                    .publicKey()
+            )
+            let timestampMs = try XCTUnwrap(request.value(forHTTPHeaderField: "X-Iroha-Operator-Timestamp-Ms"))
+            let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: "X-Iroha-Operator-Nonce"))
+            var signed = Data("iroha.operator.http-request.network.v1\0".utf8)
+            signed.append(TestNetworkIds.canonical.bytes)
+            signed.append(
+                try ToriiCanonicalRequest.canonicalRequestMessage(
+                    method: "POST",
+                    url: try XCTUnwrap(request.url),
+                    body: expectedBody
+                )
+            )
+            signed.append(Data("\n\(timestampMs)\n\(nonce)".utf8))
+            let signature = try XCTUnwrap(
+                Data(base64Encoded: try XCTUnwrap(request.value(forHTTPHeaderField: "X-Iroha-Operator-Signature")))
+            )
+            XCTAssertTrue(operatorKey.isValidSignature(signature, for: signed))
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(Set(body.keys), ["change_set", "provenance"])
+            let json = try XCTUnwrap(body["change_set"] as? [String: Any])
+            XCTAssertEqual(
+                Set(json.keys),
+                [
+                    "network", "root", "predecessor", "successor", "effective_height", "publish",
+                    "transitions", "qualification",
+                ]
+            )
+            XCTAssertEqual(json["effective_height"] as? Int, 4200)
+            XCTAssertEqual(json["predecessor"] as? String, String(repeating: "1", count: 64))
+            let provenance = try XCTUnwrap(body["provenance"] as? [[String: Any]])
+            XCTAssertEqual(provenance.count, 1)
+            XCTAssertEqual(provenance.first?["signature"] as? String, String(repeating: "CD", count: 64))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, expectedResponse)
         }
 
-        let action = try await makeClient().proposeRuntimeUpgrade(manifest: manifest)
+        let action = try await makeClient().proposeRuntimeUpgrade(
+            changeSet: changeSet,
+            provenance: [endorsement]
+        )
         XCTAssertTrue(action.ok)
-        XCTAssertEqual(action.txInstructions.first?.wireId, "Upgrade")
-        XCTAssertEqual(action.txInstructions.first?.payloadHex, "00")
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testListRuntimeUpgradesRejectsNonV1ManifestAsync() async throws {
-        let upgradeId = String(repeating: "9", count: 64)
-        let payload = """
-        {
-          "items": [
-            {
-              "id_hex": "\(upgradeId)",
-              "record": {
-                "manifest": {
-                  "name": "Upgrade Foo",
-                  "description": "Test upgrade",
-                  "abi_version": 2,
-                  "abi_hash": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-                  "added_syscalls": [],
-                  "added_pointer_types": [],
-                  "start_height": 100,
-                  "end_height": 200
-                },
-                "status": { "Proposed": null },
-                "proposer": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "created_height": 90
-              }
-            }
-          ]
-        }
-        """.data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            return (response, payload)
-        }
-
-        do {
-            _ = try await makeClient().listRuntimeUpgrades()
-            XCTFail("expected listRuntimeUpgrades to reject non-v1 ABI manifests")
-        } catch {
-            XCTAssertTrue(String(describing: error).contains("abi_version must be 1"))
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testActivateRuntimeUpgradeAsync() async throws {
-        let upgradeId = String(repeating: "a", count: 64)
-        let expectedResponse = """
-        {"ok":true,"tx_instructions":[{"wire_id":"Activate","payload_hex":"11"}]}
-        """.data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades/activate/\(upgradeId)")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            XCTAssertEqual(request.httpBody ?? Data(), Data())
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            return (response, expectedResponse)
-        }
-
-        let action = try await makeClient().activateRuntimeUpgrade(idHex: "  \(upgradeId) ")
-        XCTAssertTrue(action.ok)
-        XCTAssertEqual(action.txInstructions.first?.wireId, "Activate")
-        XCTAssertEqual(action.txInstructions.first?.payloadHex, "11")
+        XCTAssertEqual(action.txInstructions.count, 1)
+        XCTAssertEqual(action.txInstructions.first?.wireId, wireId)
+        XCTAssertEqual(action.txInstructions.first?.payloadHex, "0a0b")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testCancelRuntimeUpgradeAsync() async throws {
-        let upgradeId = String(repeating: "b", count: 64)
-        let expectedResponse = """
-        {"ok":true,"tx_instructions":[{"wire_id":"Cancel","payload_hex":"22"}]}
-        """.data(using: .utf8)!
+        let changeSetId = String(repeating: "b", count: 64)
+        let wireId = ToriiRuntimeUpgradeActionResponse.proposalInstructionWireId
+        let expectedResponse = Data("""
+        {"ok":true,"tx_instructions":[{"wire_id":"\(wireId)","payload_hex":"22"}]}
+        """.utf8)
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades/cancel/\(upgradeId)")
+            XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades/cancel/\(changeSetId)")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.httpBody ?? Data(), Data())
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, expectedResponse)
         }
 
-        let action = try await makeClient().cancelRuntimeUpgrade(idHex: upgradeId)
+        let action = try await makeClient().cancelRuntimeUpgrade(idHex: "  0x\(changeSetId.uppercased()) ")
         XCTAssertTrue(action.ok)
-        XCTAssertEqual(action.txInstructions.first?.wireId, "Cancel")
+        XCTAssertEqual(action.txInstructions.first?.wireId, wireId)
         XCTAssertEqual(action.txInstructions.first?.payloadHex, "22")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRuntimeUpgradeRoutesRequireOperatorSigningContextAsync() async throws {
+        var dispatchCount = 0
+        StubURLProtocol.handler = { request in
+            dispatchCount += 1
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        let client = makeClient(operatorSigningContext: nil)
+        let changeSet = try ToriiRuntimeChangeSet(
+            json: ToriiJSONValue.decodeExact(from: Data(runtimeChangeSetJSON().utf8))
+        )
+        let calls: [(String, () async throws -> Void)] = [
+            ("list", { _ = try await client.listRuntimeUpgrades() }),
+            ("propose", { _ = try await client.proposeRuntimeUpgrade(changeSet: changeSet) }),
+            ("cancel", { _ = try await client.cancelRuntimeUpgrade(idHex: String(repeating: "b", count: 64)) }),
+        ]
+        for (name, call) in calls {
+            await XCTAssertThrowsErrorAsync(try await call(), name) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
+        XCTAssertEqual(dispatchCount, 0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRuntimeUpgradeDraftResponseIsExactAsync() async {
+        let wireId = ToriiRuntimeUpgradeActionResponse.proposalInstructionWireId
+        let instruction = #"{"wire_id":"\#(wireId)","payload_hex":"22"}"#
+        for payload in [
+            #"{"ok":false,"tx_instructions":[\#(instruction)]}"#,
+            #"{"ok":true,"tx_instructions":[]}"#,
+            #"{"ok":true,"tx_instructions":[\#(instruction),\#(instruction)]}"#,
+            #"{"ok":true,"tx_instructions":[{"wire_id":"Cancel","payload_hex":"22"}]}"#,
+            #"{"ok":true,"tx_instructions":[{"wire_id":"\#(wireId)","payload_hex":"AB"}]}"#,
+            #"{"ok":true,"tx_instructions":[{"wire_id":"\#(wireId)","payload_hex":"abc"}]}"#,
+            #"{"ok":true,"tx_instructions":[{"wire_id":"\#(wireId)","payload_hex":"22","extra":0}]}"#,
+            #"{"ok":true,"tx_instructions":[\#(instruction)],"manifest":null}"#,
+        ] {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+                return (response, Data(payload.utf8))
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().cancelRuntimeUpgrade(idHex: String(repeating: "b", count: 64)),
+                payload
+            ) { error in
+                guard case ToriiClientError.decoding = error else {
+                    return XCTFail("unexpected error: \(error)")
+                }
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

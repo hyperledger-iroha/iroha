@@ -860,6 +860,7 @@
     ]
   },
   "ChainId": "String",
+  "ChangeSetId": "Array<u8, 32>",
   "Compact<u32>": {
     "Int": "Compact"
   },
@@ -911,6 +912,14 @@
       }
     ]
   },
+  "CryptoAdmissionPolicyV1": {
+    "Struct": [
+      {
+        "name": "allowed_algorithms",
+        "type": "Vec<Algorithm>"
+      }
+    ]
+  },
   "CustomParameter": {
     "Struct": [
       {
@@ -924,6 +933,12 @@
     ]
   },
   "CustomParameterId": "Name",
+  "CustomParameters": {
+    "Map": {
+      "key": "CustomParameterId",
+      "value": "CustomParameter"
+    }
+  },
   "DataAvailabilityLayout": {
     "Struct": [
       {
@@ -1132,6 +1147,7 @@
       }
     ]
   },
+  "DefinitionId": "Array<u8, 32>",
   "DomainEventFilter": {
     "Struct": [
       {
@@ -2067,6 +2083,11 @@
         "discriminant": 10,
         "tag": "InvariantViolation",
         "type": "String"
+      },
+      {
+        "discriminant": 11,
+        "tag": "Runtime",
+        "type": "RuntimeRejectionV1"
       }
     ]
   },
@@ -2475,34 +2496,6 @@
       }
     ]
   },
-  "ManifestCrypto": {
-    "Struct": [
-      {
-        "name": "sm_openssl_preview",
-        "type": "bool"
-      },
-      {
-        "name": "sm_intrinsics",
-        "type": "String"
-      },
-      {
-        "name": "default_hash",
-        "type": "String"
-      },
-      {
-        "name": "allowed_signing",
-        "type": "Vec<Algorithm>"
-      },
-      {
-        "name": "sm2_distid_default",
-        "type": "String"
-      },
-      {
-        "name": "allowed_curve_ids",
-        "type": "Vec<u8>"
-      }
-    ]
-  },
   "ManifestDigest": "Array<u8, 32>",
   "MathError": {
     "Enum": [
@@ -2908,6 +2901,9 @@
   "Option<BlockStatus>": {
     "Option": "BlockStatus"
   },
+  "Option<ChangeSetId>": {
+    "Option": "ChangeSetId"
+  },
   "Option<ConsensusFingerprint>": {
     "Option": "ConsensusFingerprint"
   },
@@ -2970,9 +2966,6 @@
   },
   "Option<RoleId>": {
     "Option": "RoleId"
-  },
-  "Option<RuntimeUpgradeId>": {
-    "Option": "RuntimeUpgradeId"
   },
   "Option<RwaId>": {
     "Option": "RwaId"
@@ -3107,7 +3100,7 @@
       },
       {
         "name": "custom",
-        "type": "SortedMap<CustomParameterId, CustomParameter>"
+        "type": "CustomParameters"
       }
     ]
   },
@@ -3403,8 +3396,8 @@
         "type": "SumeragiGenesisContextParameters"
       },
       {
-        "name": "crypto",
-        "type": "ManifestCrypto"
+        "name": "crypto_admission_policy",
+        "type": "CryptoAdmissionPolicyV1"
       }
     ]
   },
@@ -3462,6 +3455,30 @@
     ]
   },
   "ReputationJournalSourceIdV1": "Array<u8, 32>",
+  "RestrictionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Deprecated",
+        "type": "u64"
+      },
+      {
+        "discriminant": 1,
+        "tag": "AdmissionClosed",
+        "type": "u64"
+      },
+      {
+        "discriminant": 2,
+        "tag": "CompletionOnly",
+        "type": "u64"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Disabled",
+        "type": "u64"
+      }
+    ]
+  },
   "RoleEventFilter": {
     "Struct": [
       {
@@ -3505,11 +3522,58 @@
       }
     ]
   },
+  "RuntimeRejectionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "DefinitionInactive",
+        "type": "RuntimeRejectionV1::DefinitionInactive"
+      },
+      {
+        "discriminant": 1,
+        "tag": "DefinitionRestricted",
+        "type": "RuntimeRejectionV1::DefinitionRestricted"
+      },
+      {
+        "discriminant": 2,
+        "tag": "ExpectationMismatch",
+        "type": "RuntimeRejectionV1::ExpectationMismatch"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::DefinitionInactive": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::DefinitionRestricted": {
+    "Struct": [
+      {
+        "name": "definition",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "restriction",
+        "type": "RestrictionV1"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::ExpectationMismatch": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "Option<String>"
+      }
+    ]
+  },
   "RuntimeUpgradeEventFilter": {
     "Struct": [
       {
         "name": "id_matcher",
-        "type": "Option<RuntimeUpgradeId>"
+        "type": "Option<ChangeSetId>"
       },
       {
         "name": "event_set",
@@ -3522,21 +3586,36 @@
       "masks": [
         {
           "mask": 1,
-          "name": "Proposed"
+          "name": "Scheduled"
         },
         {
           "mask": 2,
-          "name": "Activated"
+          "name": "Attested"
         },
         {
           "mask": 4,
+          "name": "Activated"
+        },
+        {
+          "mask": 8,
+          "name": "Lapsed"
+        },
+        {
+          "mask": 16,
           "name": "Canceled"
+        },
+        {
+          "mask": 32,
+          "name": "Contained"
+        },
+        {
+          "mask": 64,
+          "name": "ContainmentExpired"
         }
       ],
       "repr": "u32"
     }
   },
-  "RuntimeUpgradeId": "Array<u8, 32>",
   "RwaEventFilter": {
     "Struct": [
       {
@@ -4120,12 +4199,6 @@
         "type": "Array<u8, 32>"
       }
     ]
-  },
-  "SortedMap<CustomParameterId, CustomParameter>": {
-    "Map": {
-      "key": "CustomParameterId",
-      "value": "CustomParameter"
-    }
   },
   "SpaceDirectoryEventFilter": {
     "Struct": [

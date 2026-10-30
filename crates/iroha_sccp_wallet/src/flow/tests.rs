@@ -385,3 +385,112 @@ fn evidence_recovery_finds_original_before_changed_source_recheck() {
         &original
     );
 }
+
+#[test]
+fn a_refused_guard_blocks_the_first_dispatch_and_rebroadcast_but_never_reconciliation() {
+    let root = root();
+    let flow = open(root.path(), SccpFlowKindV1::Inbound);
+    let step = flow
+        .prepare(
+            SccpFlowActionV1::Burn,
+            SccpNetworkV1::EthereumMainnet,
+            vec![0x02, 7],
+            evidence(),
+        )
+        .unwrap();
+    let sent = Cell::new(0);
+    let refuse = || Err(invalid("the route is quarantined now"));
+    // A crash before the first dispatch: a resumed run asks the guard, which refuses. Nothing is
+    // sent and no marker is written, so the refusal never looks like an earlier dispatch.
+    assert!(
+        drive_step_guarded::<JournalError>(
+            &step,
+            false,
+            |_| Ok(None),
+            refuse,
+            |_| {
+                sent.set(sent.get() + 1);
+                Ok(())
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(sent.get(), 0);
+    assert!(!step.submission_recorded().unwrap());
+    assert_eq!(flow.phase().unwrap(), SccpFlowPhaseV1::Ready);
+    // Once the guard accepts, the identical original bytes are dispatched once.
+    let asked = Cell::new(0);
+    assert!(
+        drive_step_guarded::<JournalError>(
+            &step,
+            false,
+            |_| Ok(None),
+            || {
+                asked.set(asked.get() + 1);
+                Ok(())
+            },
+            |bytes| {
+                assert_eq!(bytes, [0x02, 7]);
+                sent.set(sent.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!((asked.get(), sent.get()), (1, 1));
+    assert!(step.submission_recorded().unwrap());
+    // After the marker, plain reconciliation never asks the guard and never resends.
+    assert!(
+        drive_step_guarded::<JournalError>(
+            &step,
+            false,
+            |_| Ok(None),
+            || panic!("observation alone needs no guard"),
+            |_| panic!("the marker blocks redispatch"),
+        )
+        .unwrap()
+        .is_none()
+    );
+    // A rebroadcast is refused while the guard refuses, and resends identical bytes otherwise.
+    assert!(
+        drive_step_guarded::<JournalError>(
+            &step,
+            true,
+            |_| Ok(None),
+            refuse,
+            |_| { panic!("a refused rebroadcast sends nothing") }
+        )
+        .is_err()
+    );
+    assert!(
+        drive_step_guarded::<JournalError>(
+            &step,
+            true,
+            |_| Ok(None),
+            || Ok(()),
+            |bytes| {
+                assert_eq!(bytes, [0x02, 7]);
+                sent.set(sent.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(sent.get(), 2);
+    // A refusing guard cannot block recording an outcome that is already observable.
+    let confirmed = outcome(SccpStepOutcomeKindV1::Confirmed);
+    assert_eq!(
+        drive_step_guarded::<JournalError>(
+            &step,
+            true,
+            |_| Ok(Some(confirmed.clone())),
+            refuse,
+            |_| panic!("an observed burn is never resent"),
+        )
+        .unwrap(),
+        Some(confirmed)
+    );
+    assert_eq!(flow.phase().unwrap(), SccpFlowPhaseV1::AwaitingProof);
+}

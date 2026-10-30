@@ -93,6 +93,7 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "NftView",
     "QueryPage",
     "AssetUidHoldingQuote",
+    "PendingAction",
     "AxtDescriptor",
     "AxtAnchoredSpendV1",
     "ProofBlob",

@@ -103,7 +103,10 @@ pub struct UpArgs {
     #[arg(long)]
     with_storage: bool,
     /// Complete generation and readiness budget in seconds.
-    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+    ///
+    /// A ready localnet returns as soon as all four validators are verified; the budget only
+    /// bounds slow first starts, such as debug builds on a loaded machine.
+    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=600))]
     timeout: u64,
 }
 
@@ -364,7 +367,7 @@ pub struct DeployArgs {
     #[arg(long, conflicts_with = "resume")]
     max_fee: Option<Quantity>,
     /// Startup budget in seconds when the deployment has to start its localnet first.
-    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..=600))]
     timeout: u64,
 }
 
@@ -2354,7 +2357,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_auto_start_budget_defaults_to_thirty_seconds_and_is_bounded() {
+    fn auto_start_budgets_default_to_two_minutes_and_are_bounded() {
         let parse = |extra: &[&str]| {
             let mut command_line = vec!["kagami", "contract", "deploy", "hello.ko"];
             command_line.extend_from_slice(extra);
@@ -2363,10 +2366,16 @@ mod tests {
                 _ => unreachable!("deploy parses as a deploy command"),
             })
         };
-        assert_eq!(parse(&[]).unwrap(), 30);
+        assert_eq!(parse(&[]).unwrap(), 120);
         assert_eq!(parse(&["--timeout", "180"]).unwrap(), 180);
         assert!(parse(&["--timeout", "0"]).is_err());
         assert!(parse(&["--timeout", "601"]).is_err());
+        // `localnet up` shares the budget: a ready network returns as soon as it is verified.
+        let up = crate::Cli::try_parse_from(["kagami", "localnet", "up"]).unwrap();
+        let crate::Command::Localnet(LocalnetCommand::Up(args)) = up.command else {
+            unreachable!("localnet up parses as localnet up");
+        };
+        assert_eq!(args.timeout, 120);
     }
 
     #[test]

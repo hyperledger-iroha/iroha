@@ -836,17 +836,17 @@ state_test! { sync feature_stable_fallible_constructor_preserves_chain_id
 constructor_world.sccp_committee_generations.allocation_budget().clone(), constructor_world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), chain_id.clone(), StateTelemetry::default(), ) .expect("feature-stable State construction must validate empty durable storage") };
     assert_eq!(state.chain_id, chain_id);
 }
-fn world_with_privacy_tightenings(
+fn world_with_privacy_updates(
     protocol_scheduled_at_height: u64,
     protocol_effective_at_height: u64,
 ) -> (
     World,
     iroha_data_model::privacy::PrivacyConsensusLimitsV1,
-    iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1,
+    iroha_data_model::privacy::PrivacyProtocolLimitsV1,
 ) {
     use iroha_data_model::privacy::{
-        PrivacyConsensusPolicyTighteningV1, PrivacyConsensusPolicyV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        PrivacyConsensusPolicyUpdateV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1,
+        PrivacyProtocolLimitsUpdateV1,
     };
     let mut world = World::default();
     let current_limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
@@ -855,54 +855,56 @@ fn world_with_privacy_tightenings(
     next_limits.retained_root_count -= 1;
     world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
         current_limits,
-        pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+        pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
             scheduled_at_height: 100,
             effective_at_height: 400,
             next_limits,
         }),
     });
-    let_row! { mut activation = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) .expect("compiled VeRange profile") .activation_record(PrivacyProtocolLifecycleV1::Proposed( PrivacyProposedLifecycleV1 { proposed_at_height: 100, }, )) };
-    let mut next_protocol_limits = activation.protocol_limits;
-    let_row! { iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
+    let mut protocol_policy = iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
+        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        current_limits: iroha_data_model::privacy::PrivacyProtocolLimitsV1::canonical_default_v1(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        ),
+        pending_update: None,
+    };
+    let mut next_protocol_limits = protocol_policy.current_limits;
+    let_row! { iroha_data_model::privacy::PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
     limits.max_aggregation_count -= 1;
-    activation.pending_protocol_limits_tightening = Some(PrivacyProtocolLimitsTighteningV1 {
+    protocol_policy.pending_update = Some(PrivacyProtocolLimitsUpdateV1 {
         scheduled_at_height: protocol_scheduled_at_height,
         effective_at_height: protocol_effective_at_height,
         next_limits: next_protocol_limits,
     });
-    world.privacy_activations.insert(
-        crate::privacy_state::PrivacyActivationKeyV1::new(
+    world.privacy_protocol_policies.insert(
+        crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
         ),
-        activation,
+        protocol_policy,
     );
     (world, next_limits, next_protocol_limits)
 }
-state_test! { sync privacy_policy_and_protocol_tightenings_apply_atomically_at_block_start
+state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block_start
     use iroha_data_model::privacy::{
-        PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-    };
-    let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+        PrivacyProtocolLimitsV1, PrivacyProtocolIdV1, };
+    let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let policy = *block.world.privacy_consensus_policy.get();
     assert_eq!(policy.current_limits, next_limits);
-    assert_eq!(policy.pending_tightening, None);
+    assert_eq!(policy.pending_update, None);
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
-    let_row! { key = crate::privacy_state::PrivacyActivationKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
-    let_row! { activation = *block .world .privacy_activations .get(&key) .expect("activation with updated limits") };
-    assert_eq!(activation.protocol_limits, next_protocol_limits);
-    assert_eq!(activation.pending_protocol_limits_tightening, None);
+    let_row! { key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { protocol_policy = *block .world .privacy_protocol_policies .get(&key) .expect("protocol_policy with updated limits") };
+    assert_eq!(protocol_policy.current_limits, next_protocol_limits);
+    assert_eq!(protocol_policy.pending_update, None);
+
     assert!(matches!(
-        activation.lifecycle,
-        PrivacyProtocolLifecycleV1::Proposed(_)
-    ), "a protocol-limit schedule must not activate a pending proposal");
-    assert!(matches!(
-        activation.protocol_limits,
-        PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(_)
+        protocol_policy.current_limits,
+        PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(_)
     ));
     {
         let mut transaction = block.transaction();
@@ -920,39 +922,43 @@ state_test! { sync privacy_policy_and_protocol_tightenings_apply_atomically_at_b
 state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    let (world, _, _) = world_with_privacy_tightenings(99, 399);
+    let (world, _, _) = world_with_privacy_updates(99, 399);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let_row! { activation_key = crate::privacy_state::PrivacyActivationKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
-    let_row! { original_activation = *world .privacy_activations .view() .get(&activation_key) .expect("scheduled activation") };
+    let_row! { protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { original_protocol_policy = *world .privacy_protocol_policies .view() .get(&protocol_policy_key) .expect("scheduled protocol_policy") };
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
     let_row! { error = catch_unwind(AssertUnwindSafe(|| { let _block = state.block(header); })) .expect_err("missed protocol schedule must abort block construction") };
     let_row! { panic_text = error .downcast_ref::<String>() .map(String::as_str) .or_else(|| error.downcast_ref::<&str>().copied()) .unwrap_or("") };
-    assert!(panic_text.contains("missed"), "{panic_text}");
+    assert!(
+        panic_text.contains("persisted privacy protocol policy table is invalid at block height 400")
+            && panic_text.contains("effective height 399 is not after committed height 399"),
+        "{panic_text}"
+    );
     assert_eq!(
         state.world.privacy_consensus_policy.view().get(),
         &original_policy,
         "a failed later start hook must not publish the earlier due policy write"
     );
     assert_eq!(
-        state.world.privacy_activations.view().get(&activation_key),
-        Some(&original_activation),
-        "a failed start hook must leave the base activation unchanged"
+        state.world.privacy_protocol_policies.view().get(&protocol_policy_key),
+        Some(&original_protocol_policy),
+        "a failed start hook must leave the base protocol_policy unchanged"
     );
 }
 state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overlay
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
 
-    let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+    let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(
+    let protocol_policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
     );
-    let original_activation = *world
-        .privacy_activations
+    let original_protocol_policy = *world
+        .privacy_protocol_policies
         .view()
-        .get(&activation_key)
-        .expect("scheduled activation");
+        .get(&protocol_policy_key)
+        .expect("scheduled protocol_policy");
     let state = State::new(
         world,
         Kura::blank_kura_for_testing(),
@@ -963,22 +969,22 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
         assert!(!block.start_of_block_effects_applied);
         assert_eq!(block.world.privacy_consensus_policy.get(), &original_policy);
         assert_eq!(
-            block.world.privacy_activations.get(&activation_key),
-            Some(&original_activation),
+            block.world.privacy_protocol_policies.get(&protocol_policy_key),
+            Some(&original_protocol_policy),
             "the pristine stage must precede due privacy effects",
         );
-        let mut staged_activation = original_activation;
+        let mut staged_activation = original_protocol_policy;
         // If construction continues past the failed stage, the start hook must
         // reject this missed schedule instead of silently discarding its writes.
         staged_activation
-            .pending_protocol_limits_tightening
+            .pending_update
             .as_mut()
             .expect("pending protocol tightening")
             .effective_at_height = 399;
         block
             .world
-            .privacy_activations
-            .insert(activation_key, staged_activation);
+            .privacy_protocol_policies
+            .insert(protocol_policy_key, staged_activation);
         Err("rejected pristine stage")
     }) {
         Ok(_) => panic!("a rejected pristine stage must not construct a block"),
@@ -987,29 +993,29 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
     assert!(matches!(error, StateBlockStartError::Stage("rejected pristine stage")));
     assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
     assert_eq!(
-        state.world.privacy_activations.view().get(&activation_key),
-        Some(&original_activation),
-        "a failed stage must discard its activation write",
+        state.world.privacy_protocol_policies.view().get(&protocol_policy_key),
+        Some(&original_protocol_policy),
+        "a failed stage must discard its protocol_policy write",
     );
 
     // Taking a new block scope also proves that failure released every overlay lock.
     let block = state.block(header);
     assert!(block.start_of_block_effects_applied);
     assert_eq!(block.world.privacy_consensus_policy.get().current_limits, next_limits);
-    assert_eq!(block.world.privacy_consensus_policy.get().pending_tightening, None);
+    assert_eq!(block.world.privacy_consensus_policy.get().pending_update, None);
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
-    let activation = block
+    let protocol_policy = block
         .world
-        .privacy_activations
-        .get(&activation_key)
-        .expect("activation survives the discarded stage");
-    assert_eq!(activation.protocol_limits, next_protocol_limits);
-    assert_eq!(activation.pending_protocol_limits_tightening, None);
+        .privacy_protocol_policies
+        .get(&protocol_policy_key)
+        .expect("protocol_policy survives the discarded stage");
+    assert_eq!(protocol_policy.current_limits, next_protocol_limits);
+    assert_eq!(protocol_policy.pending_update, None);
     drop(block);
     assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
     assert_eq!(
-        state.world.privacy_activations.view().get(&activation_key),
-        Some(&original_activation),
+        state.world.privacy_protocol_policies.view().get(&protocol_policy_key),
+        Some(&original_protocol_policy),
         "dropping a successful block scope must also discard its start effects",
     );
 }
@@ -2999,7 +3005,8 @@ state_test! { sync explicit_asset_ownership_survives_alias_changes_and_snapshot_
 fn unregister_domain_after_snapshot_restore_removes_owned_asset_state_atomically() {
     use crate::smartcontracts::Execute as _;
     use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
-    let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+    let (mut state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+    set_staking_minimum_for_test(&mut state.world, 1);
     let_row! { domain_id = state .world_view() .asset_definitions() .get(&definition_id) .expect("fixture definition") .owning_domain() .clone() .expect("fixture definition has an explicit owner") };
     let_row! { role_id: RoleId = "owned_asset_domain_cleanup" .parse() .expect("role identifier") };
     let_row! { definition_permission: Permission = CanMintAssetWithDefinition { asset_definition: definition_id.clone(), } .into() };
@@ -3225,9 +3232,8 @@ state_test! { sync asset_domain_index_rebuild_uses_only_definition_ownership
 }
 fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     use iroha_data_model::privacy::{
-        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1, PrivacyNamespaceScopeV1,
-        PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRootRoleV1,
     };
     let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -3247,19 +3253,6 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     let_row! { root_key = crate::privacy_state::PrivacyRootKeyV1::new( namespace, PrivacyRootRoleV1::NoteCommitmentAnchor, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, root, ) .expect("canonical Orchard bootstrap root key") };
     let_row! { head_key = crate::privacy_state::PrivacyRootHeadKeyV1::new( namespace, PrivacyRootRoleV1::NoteCommitmentAnchor, ) .expect("canonical Orchard root-head key") };
     let_row! { state_key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace) .expect("canonical Orchard pool-state key") };
-    let_row! { profile = crate::privacy_profiles::compiled_privacy_profile_v1( PrivacyProtocolIdV1::OrchardHalo2ActionsV1, ) .expect("compiled Orchard profile") };
-    world.privacy_activations.insert(
-        crate::privacy_state::PrivacyActivationKeyV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-        ),
-        profile.activation_record(PrivacyProtocolLifecycleV1::Active(
-            PrivacyActiveLifecycleV1 {
-                proposed_at_height: 1,
-                activated_at_height: 1,
-                state_since_height: 1,
-            },
-        )),
-    );
     world.privacy_commitments.insert(
         state_key,
         crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
@@ -3294,6 +3287,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
             root,
             provenance,
             None,
+            1,
         )
         .expect("canonical Orchard root head"),
     );
@@ -3797,10 +3791,10 @@ state_test! { sync nexus_runtime_roundtrips_through_state_json
         Some(lane_incarnation)
     );
     let value = norito::json::to_value(&state).expect("serialize state");
-    assert!(matches!(
-        deserialize_state_snapshot_value(value.clone()),
-        Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
-    ), "a decoded projection cannot establish native history");
+    // This structural component has no certified native successor or authority.
+    assert_snapshot_requires_certified_successor(
+        value.clone(), Kura::blank_kura_for_testing(), 5,
+    );
     let (restored, actual) = snapshot_runtime_component(&value, &state, None)
         .expect("decode and validate both original Nexus runtime cuts");
     assert!(!state.nexus_runtime_restored_from_snapshot());
@@ -3878,6 +3872,40 @@ fn set_nexus_alias_relabel_preserves_catalog_and_lane_identity() {
         activation_heights
     );
 }
+state_test! { sync set_nexus_keeps_committed_rows_naming_a_dataspace_outside_an_unchanged_catalog
+    // Taira held a test account's alias permissions in a dataspace no catalog lists: dropping them
+    // at a restart left the restarted node's World one entry short of the one its blocks certify.
+    let mut state = blank_test_state();
+    let holder = (*ALICE_ID).clone();
+    let outside = DataSpaceId::new(17_301_767_951_379_993_708);
+    assert!(
+        !state
+            .nexus_snapshot()
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .any(|entry| entry.id == outside)
+    );
+    let permission = Permission::from(
+        iroha_executor_data_model::permission::query::CanReadRestrictedDataspace {
+            dataspace: outside,
+        },
+    );
+    state
+        .world
+        .account_permissions
+        .insert(holder.clone(), BTreeSet::from([permission.clone()]));
+    state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new(
+        b"committed-post-genesis-height",
+    )));
+    let unchanged = state.nexus_snapshot();
+    state.set_nexus(unchanged).expect("an unchanged catalog installs");
+    assert_eq!(
+        state.world.account_permissions.view().get(&holder),
+        Some(&BTreeSet::from([permission])),
+        "a committed row survives a restart's catalog install"
+    );
+}
 state_test! { sync set_nexus_rejects_post_genesis_catalog_mutation_atomically
     let mut state = blank_test_state();
     let_row! { lane_one = LaneConfig { id: LaneId::new(1), alias: "lane-one".to_owned(), ..LaneConfig::default() } };
@@ -3949,10 +3977,10 @@ state_test! { sync autoscale_lane_and_cooldown_roundtrip_through_state_json
     let expected_runtime = state.canonical_runtime.view().get().clone();
     let expected_predecessor = state.canonical_runtime.predecessor_view().get().clone();
     let value = norito::json::to_value(&state).expect("serialize autoscale state");
-    assert!(matches!(
-        deserialize_state_snapshot_value(value.clone()),
-        Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
-    ), "autoscale component bytes cannot authenticate native history");
+    // Round-tripping autoscale bytes never manufactures certified native history.
+    assert_snapshot_requires_certified_successor(
+        value.clone(), Kura::blank_kura_for_testing(), 2,
+    );
     let (restored, nexus) = snapshot_runtime_component(&value, &state, None)
         .expect("validate original current and predecessor autoscale runtime cuts");
     assert_eq!(*restored.view().get(), expected_runtime);
@@ -10956,10 +10984,9 @@ state_test! { sync serialized_snapshot_restart_preserves_runtime_lane_history
     assert_eq!(expected_activations.get(&LaneId::new(1)), Some(&0));
     assert_eq!(expected_activations.get(&LaneId::new(2)), Some(&5));
     let snapshot_value = norito::json::to_value(&restored).expect("serialize original runtime component state");
-    assert!(matches!(
-        deserialize_state_snapshot_value_with_kura(snapshot_value.clone(), Arc::clone(&original_kura)),
-        Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
-    ));
+    assert_snapshot_requires_certified_successor(
+        snapshot_value.clone(), Arc::clone(&original_kura), 5,
+    );
     let (runtime, decoded_nexus) = snapshot_runtime_component(&snapshot_value, &restored, None)
         .expect("decode retained current and predecessor runtime component cuts");
     assert_eq!(*runtime.view().get(), *restored.canonical_runtime.view().get());
@@ -11059,14 +11086,18 @@ state_test! { sync certified_runtime_snapshot_replay_preserves_lane_history
     assert_eq!(original.height(), 5);
     let state = original.state();
     let snapshot = norito::json::to_value(state.as_ref()).expect("original native snapshot projection");
-    assert!(matches!(deserialize::KuraSeed {
+    let projected = deserialize::KuraSeed {
         execution_budget: state.ivm_execution_budget(),
         lane_manifests: Arc::clone(&state.lane_manifests.read()),
         kura: Arc::clone(original.kura()),
         query_handle: LiveQueryStore::start_test(),
         #[cfg(feature = "telemetry")]
         telemetry: crate::telemetry::StateTelemetry::default(),
-    }.into_state_from_json(snapshot), Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)));
+    }.into_state_from_json(snapshot);
+    assert!(matches!(projected.as_ref(),
+        Err(deserialize::StateRestoreError::SuccessorRequired { height: 5 })),
+        "the final native runtime projection requires its certified successor: {:?}",
+        projected.as_ref().err());
     let mut restarted = CertifiedTestChain::start(genesis_config()).expect("same original signed genesis");
     assert_eq!(restarted.state().network_id_ref(), state.network_id_ref(),
         "both independently built configurations bind the same signed genesis");
@@ -11351,12 +11382,15 @@ state_test! { sync emergency_fast_restored_config_preserves_staking_owner_and_cu
 
         let original = state.world.parameters.view().get().clone();
         assert_eq!(original.require_staking_policy().unwrap(), &monetary);
+        let retained_capacity = before.staking.max_validators;
         let mut recoverable = before;
         recoverable.staking.max_validators = NonZeroU32::new(7).unwrap();
         let requested_capacity = recoverable.staking.max_validators;
         state.set_nexus_from_config(recoverable)
-            .expect("Fast recovery may update local capacity while committed policy and custody retain their exact source");
-        assert_eq!(state.nexus_snapshot().staking.max_validators, requested_capacity);
+            .expect("Fast recovery may retain a local recipe while committed policy and custody retain their exact source");
+        assert_eq!(state.nexus.read().staking.max_validators, requested_capacity);
+        assert_eq!(state.nexus_snapshot().staking.max_validators, retained_capacity,
+            "a local recipe cannot replace the restored committee owner policy");
         let current = state.world.parameters.view();
         assert_eq!(current.get().require_staking_policy().unwrap(), &monetary);
         assert!(std::ptr::eq(
@@ -11509,13 +11543,20 @@ state_test! { sync lane_lifecycle_rejects_unknown_dataspace
 }
 state_test! { sync set_nexus_cannot_replace_committed_monetary_policy
     let mut state = blank_test_state();
-    let committed = state.nexus_snapshot().fees;
+    let original = state.world.parameters.view().get().clone();
+    let committed = original.root_fees().expect("original fixture fee policy");
     let mut nexus = state.nexus_snapshot();
     nexus.fees.base_fee = 999_u32.into();
     nexus.fees.fee_sink_account_id = iroha_test_samples::BOB_ID.clone();
+    let local_recipe = nexus.fees.clone();
     state.set_nexus(nexus).expect("node-local geometry remains valid");
-    assert_eq!(state.nexus_snapshot().fees, committed,
+    assert_eq!(state.nexus_snapshot().fees, local_recipe);
+    let current = state.world.parameters.view();
+    let retained = current.get().root_fees().expect("retained original fee policy");
+    assert_eq!(retained, committed,
         "the existing parameter owner is the only monetary authority");
+    assert!(std::ptr::eq(retained, committed),
+        "local configuration must preserve the exact original fee policy owner");
 }
 state_test! { sync set_nexus_rejects_external_autoscale_managed_lane
     let mut state = blank_test_state();
@@ -13779,7 +13820,8 @@ state_test! { sync lane_relay_committee_from_pool_is_deterministic
     }
 }
 state_test! { sync lane_relay_validator_pool_uses_stake_when_no_manifest
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
 
     let (validator, validator_keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, std::slice::from_ref(&validator_keypair));
@@ -13815,6 +13857,7 @@ state_test! { sync same_dataspace_stake_authority_projects_to_public_sibling_lan
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    set_staking_minimum_for_test(&mut state.world, 1);
     configure_two_universal_authority_lanes_for_test(&mut state);
 
     let source_lane = LaneId::SINGLE;
@@ -14763,7 +14806,8 @@ state_test! { sync set_nexus_rejects_live_single_lane_stake_owner_reassignment
 }
 
 state_test! { sync authoritative_lane_peers_for_stake_elected_lane_require_present_live_peer
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
 
     let live_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let removed_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -15614,7 +15658,8 @@ state_test! { sync authoritative_lane_peers_ignore_future_created_autoscale_elas
     );
 }
 state_test! { sync authoritative_lane_validators_ignore_stale_stake_records_for_unknown_lane
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
 
     let stale_lane = LaneId::new(1);
     let (validator, validator_keypair) = bls_account_in("validators");
@@ -15732,7 +15777,8 @@ state_test! { sync authoritative_lane_validators_ignore_stale_geometry_for_remov
 
 }
 state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unknown_lane
-    let state = blank_test_state();
+    let mut state = blank_test_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
 
     let stale_lane = LaneId::new(1);
     let (validator, validator_keypair) = bls_account_in("validators");
@@ -19767,7 +19813,8 @@ state_test! { sync remove_asset_and_metadata_with_total_decrements_definition_to
     );
 }
 state_test! { sync asset_definition_domain_index_tracks_exact_membership
-    let state = blank_state();
+    let mut state = blank_state();
+    set_staking_minimum_for_test(&mut state.world, 1);
     // Component account registration owns an explicit policy before its first snapshot.
     let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
         .expect("fund original fixture parameter cell");
@@ -21186,19 +21233,20 @@ state_test! { sync state_restore_rejects_inexact_nested_proposal_number
         proposer: ALICE_ID.clone(),
         kind: ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
             proposal_operator: ALICE_ID.clone(),
-            manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
-                name: "hostile restore".to_owned(),
-                description: "inexact runtime height".to_owned(),
-                abi_version: 1,
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: maximum + 1,
-                end_height: maximum + 2,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
+            action: crate::runtime::change_set::test_support::schedule(
+                iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                        [0x11; 32],
+                    )),
+                ),
+                maximum + 1,
+            ),
+            notice: iroha_data_model::runtime::lifecycle::RuntimeNoticeV1 {
+                blocks: 1,
+                ms: 0,
+                approval_cushion_ms: 0,
             },
+            proposed_ms: 0,
         }),
         created_height: 0,
         status: GovernanceProposalStatus::Proposed,
@@ -21216,7 +21264,9 @@ state_test! { sync state_restore_rejects_inexact_nested_proposal_number
         .err()
         .expect("an inexact nested proposal number must fail closed");
     assert!(
-        error.to_string().contains("runtime-upgrade proposal start height"),
+        error
+            .to_string()
+            .contains("runtime-upgrade proposal effective height"),
         "unexpected nested proposal error: {error}"
     );
 }
@@ -22751,6 +22801,35 @@ fn assert_financial_snapshot_requires_native_replay(snapshot: norito::json::Valu
         Err(deserialize::StateRestoreError::NativeExecutionReplayRequired)
     ));
 }
+// Both structural claims and a genuine final-tip projection remain unauthenticated
+// without a certified successor. Component decoding below never grants State authority.
+fn assert_snapshot_requires_certified_successor(
+    snapshot: norito::json::Value,
+    kura: Arc<Kura>,
+    expected_height: u64,
+) {
+    assert!(
+        expected_height > 1,
+        "genesis-only restart has a separate replay requirement"
+    );
+    let claimed_height = snapshot
+        .as_object()
+        .and_then(|state| state.get("block_hashes"))
+        .and_then(norito::json::Value::as_array)
+        .expect("the rejected projection carries its exact hash-prefix length")
+        .len();
+    assert_eq!(u64::try_from(claimed_height).unwrap(), expected_height);
+    let projected = deserialize_state_snapshot_value_with_kura(snapshot, kura);
+    assert!(
+        matches!(
+            projected.as_ref(),
+            Err(deserialize::StateRestoreError::SuccessorRequired { height })
+                if *height == expected_height
+        ),
+        "projection at {expected_height} must require its exact certified successor: {:?}",
+        projected.as_ref().err()
+    );
+}
 state_test! { sync financial_world_component_retains_independent_signed_replay_and_anchor_refusal
     use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
     let mut original = CertifiedTestChain::start(TestChainConfig::new(World::default(), 1_000))
@@ -22758,7 +22837,9 @@ state_test! { sync financial_world_component_retains_independent_signed_replay_a
     original.commit(Vec::new());
     let state = original.state();
     let snapshot = norito::json::to_value(state.as_ref()).expect("native financial projection");
-    assert_financial_snapshot_requires_native_replay(snapshot.clone());
+    assert_snapshot_requires_certified_successor(
+        snapshot.clone(), Arc::clone(original.kura()), original.height(),
+    );
     let reference = state.block_hashes.view().iter().copied().collect::<Vec<_>>();
     let decoded = decode_financial_snapshot_world_component(snapshot.clone(), &reference)
         .expect("typed component preserves the real original history references");
@@ -25776,7 +25857,11 @@ fn state_snapshot_restore_rebuilds_governance_and_bounded_vpn_indexes() {
         snapshot_world.contains_key("governance_unlock_stats"),
         "authoritative O(1) unlock snapshot must be persisted"
     );
-    assert_financial_snapshot_requires_native_replay(snapshot.clone());
+    assert_snapshot_requires_certified_successor(
+        snapshot.clone(),
+        Kura::blank_kura_for_testing(),
+        144,
+    );
     let reference_hashes = state
         .block_hashes
         .view()
@@ -31197,14 +31282,18 @@ fn governance_restore_uses_exact_retained_parameter_predecessor_without_touching
     use iroha_data_model::parameter::{BlockParameter, FastpqSourcePolicyV1};
     let mut world = World::default();
     let mut locks = GovernanceLocksForReferendum::default();
-    for owner in [ALICE_ID.clone(), BOB_ID.clone()] {
-        locks
-            .locks
-            .insert(owner.clone(), indexed_governance_lock(owner, 100));
+    let referendum = indexed_plain_referendum();
+    // The default escrow is ALICE; both positive obligations must belong to
+    // distinct voters so the retained-cap refusal is the first invalidity.
+    for owner in [BOB_ID.clone(), iroha_test_samples::CARPENTER_ID.clone()] {
+        let lock = indexed_governance_lock(owner.clone(), 100);
+        lock.validate_plain_context(referendum.plain_policy().unwrap())
+            .expect("the current retained corpus has valid original custody");
+        locks.locks.insert(owner, lock);
     }
     world
         .governance_referenda
-        .insert("parameter-cut".into(), indexed_plain_referendum());
+        .insert("parameter-cut".into(), referendum);
     world.governance_locks.insert("parameter-cut".into(), locks);
     for cap in [1, 2] {
         let mut cell = crate::state::parameter_cell_block_for_testing(&world).unwrap();

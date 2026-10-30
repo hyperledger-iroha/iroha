@@ -429,7 +429,6 @@ mod time_journal;
 #[path = "output_time_journal_test_support.rs"]
 mod time_journal_test_support;
 
-
 #[path = "output_pipeline.rs"]
 mod pipeline;
 
@@ -702,16 +701,12 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     | ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
                         execution: output,
                         ..
-                    }) => {
-                        output.invocation.execution_call_hash(self.source.hash())?
-                    }
+                    }) => output.invocation.execution_call_hash(self.source.hash())?,
                     ExecutionOutputV1::Time(output)
                     | ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
                         execution: output,
                         ..
-                    }) => {
-                        output.invocation.execution_call_hash(self.source.hash())?
-                    }
+                    }) => output.invocation.execution_call_hash(self.source.hash())?,
                 };
                 if original.call() != call {
                     return Err("retained output row differs from its original invocation".into());

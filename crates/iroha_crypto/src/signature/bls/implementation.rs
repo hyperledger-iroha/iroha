@@ -214,7 +214,7 @@ impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
 impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     fn new(secret: &W3fSecretKey<C::Engine>) -> Self {
         Self {
-            bytes: Zeroizing::new(secret.into_vartime().to_bytes()),
+            bytes: Zeroizing::new(secret.to_vartime().to_bytes()),
             _marker: PhantomData,
         }
     }
@@ -231,7 +231,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         self.bytes.as_slice()
     }
     pub fn try_public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
-        Ok(self.try_load_secret()?.into_public())
+        Ok(self.try_load_secret()?.to_public())
     }
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         if !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0) {
@@ -370,8 +370,8 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 h.expand(&info[..], okm.as_mut_slice())
                     .map_err(|_| Error::KeyGen("BLS HKDF seed expansion failed".into()))?;
                 let deterministic_rng = crate::rng::bls_rng_from_seed_slice(okm.as_slice());
-                let secret = SecretKeyVT::<C::Engine>::from_seed(okm.as_slice())
-                    .into_split(deterministic_rng);
+                let secret =
+                    SecretKeyVT::<C::Engine>::from_seed(okm.as_slice()).to_split(deterministic_rng);
                 ManagedSecretKey::new(&secret)
             }
             KeyGenOption::FromPrivateKey(key) => key,
@@ -391,7 +391,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         let seed = checked_entropy_from_rng("key generation", C::Engine::SECRET_KEY_SIZE, rng)?;
         let split_seed = checked_entropy_from_rng("key split", BLS_RNG_SEED_LEN, rng)?;
         let split_rng = crate::rng::bls_rng_from_seed_slice(split_seed.as_slice());
-        let secret = SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
+        let secret = SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).to_split(split_rng);
         let private_key = ManagedSecretKey::new(&secret);
         let public_key = private_key
             .try_public_key()
@@ -802,7 +802,7 @@ mod tests {
             .expect("reference BLS HKDF expands");
         ikm.zeroize();
         let deterministic_rng = crate::rng::bls_rng_from_seed_slice(&okm);
-        let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
+        let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).to_split(deterministic_rng);
         okm.zeroize();
         let private = ManagedSecretKey::new(&secret);
         let public = private

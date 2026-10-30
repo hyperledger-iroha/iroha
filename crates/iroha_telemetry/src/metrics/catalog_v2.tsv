@@ -255,8 +255,7 @@ p2p_handshake_ms_sum	p2p_handshake_ms_sum	Sum of handshake latencies in millisec
 p2p_handshake_ms_count	p2p_handshake_ms_count	Count of observed handshakes	registered
 p2p_handshake_error_total	p2p_handshake_error_total	Handshake error counts by kind	registered
 p2p_frame_cap_violations_total	p2p_frame_cap_violations_total	Inbound per-topic frame-cap violations (dropped oversized messages)	registered
-runtime_upgrade_events_total	runtime_upgrade_events_total	Runtime upgrade lifecycle events total labeled by kind	registered
-runtime_upgrade_provenance_rejections_total	runtime_upgrade_provenance_rejections_total	Runtime upgrade provenance rejections total labeled by reason	registered
+runtime_upgrade_events_total	runtime_upgrade_events_total	Runtime change-set lifecycle events total labeled by kind	registered
 runtime_abi_version	runtime_abi_version	ABI version allowed by runtime	registered
 sumeragi_round_height	sumeragi_round_height	Height of the current Sumeragi round per instance	registered
 sumeragi_round_view	sumeragi_round_view	View of the current Sumeragi round per instance	registered

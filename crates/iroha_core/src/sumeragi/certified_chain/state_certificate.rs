@@ -378,6 +378,9 @@ mod allocation_tests {
     fn admitted_parent_pair_retains_exact_original_slots_and_refunds_on_unwind() {
         use std::alloc::Layout;
 
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let view = chain.state().view();
         let reader = CertifiedChain::new_for_parent_service(&view).unwrap();
@@ -446,6 +449,9 @@ mod allocation_tests {
     fn admitted_receipt_refusal_preserves_original_pool_source_and_exact_retry() {
         use std::alloc::Layout;
 
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let budget = chain.state().ivm_execution_budget();
         let block = chain
@@ -518,6 +524,9 @@ mod allocation_tests {
     fn admitted_result_slot_refusal_releases_receipt_and_retries_original_frame() {
         use std::alloc::Layout;
 
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let budget = chain.state().ivm_execution_budget();
         let block = chain
@@ -752,6 +761,9 @@ mod allocation_tests {
 
     #[test]
     fn parent_pair_completion_releases_receipts_after_transferring_exact_source_owner() {
+        // Keep retired fixture cells fixed while checking the reader's
+        // exact synchronous refunds from the same State allocation pool.
+        let _state_retirement = crossbeam_epoch::pin();
         let chain = pair_chain();
         let view = chain.state().view();
         let reader = CertifiedChain::new_for_parent_service(&view).unwrap();

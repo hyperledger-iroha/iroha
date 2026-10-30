@@ -683,7 +683,7 @@ pub mod base64_json {
         }
         let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
         let quads = bytes.len() / 4;
-        for (index, quad) in bytes.chunks_exact(4).enumerate() {
+        for (index, quad) in bytes.as_chunks::<4>().0.iter().enumerate() {
             let last = index + 1 == quads;
             let padding = quad.iter().rev().take_while(|byte| **byte == b'=').count();
             if padding > 2 || (padding > 0 && !last) {

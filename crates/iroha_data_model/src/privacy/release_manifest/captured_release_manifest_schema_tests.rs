@@ -52,9 +52,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyExact12ReleaseManifestV1>(
         "iroha_data_model::privacy::release_manifest::PrivacyExact12ReleaseManifestV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::PrivacyDeploymentActivationV1>(
-        "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyDeploymentValidatorCanaryV1>(
         "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorCanaryV1",
     ),

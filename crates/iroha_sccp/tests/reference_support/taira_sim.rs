@@ -68,7 +68,7 @@ impl Committee {
     /// When an index repeats: a committee holds distinct keys.
     pub fn new(name: &str, indices: impl IntoIterator<Item = u8>) -> Self {
         let mut members: Vec<&'static TestKey> = indices.into_iter().map(test_key).collect();
-        members.sort_by(|left, right| left.public.cmp(&right.public));
+        members.sort_by_key(|key| key.public);
         assert!(
             members
                 .windows(2)

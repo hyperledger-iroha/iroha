@@ -11,6 +11,9 @@ intrinsics, are byte-identical to that release.
 
 Repository changes:
 
+- The crate always links Rust `std`; the retired no-std crate attribute and
+  package category are removed. This does not change the portable backend.
+
 - `hardware` is a positive, default Cargo feature. Without it only the portable
   backend is compiled, and top-level cipher names alias the portable types.
   The upstream `aes_backend="soft"` configuration also selects this behavior.

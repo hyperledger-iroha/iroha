@@ -2910,23 +2910,31 @@ pub mod runtime_governance {
         "operator.node.query_projection.shard_export",
         "/v1/node/query/projection/shards/{resource}/{partition_id}",
     );
-    /// List staged runtime upgrades.
+    /// The committed runtime selection and every recorded change set.
     pub const RUNTIME_UPGRADES: RouteDescriptor =
         operator_get("operator.runtime.upgrade.list", "/v1/runtime/upgrades");
-    /// Propose a runtime upgrade.
+    /// Draft the Parliament proposal that schedules a runtime change set.
     pub const RUNTIME_UPGRADE_PROPOSE: RouteDescriptor = operator_post(
         "operator.runtime.upgrade.propose",
         "/v1/runtime/upgrades/propose",
     );
-    /// Activate a runtime upgrade.
-    pub const RUNTIME_UPGRADE_ACTIVATE: RouteDescriptor = operator_post(
-        "operator.runtime.upgrade.activate",
-        "/v1/runtime/upgrades/activate/{id}",
-    );
-    /// Cancel a runtime upgrade.
+    /// Draft the Parliament proposal that withdraws a scheduled runtime change set.
     pub const RUNTIME_UPGRADE_CANCEL: RouteDescriptor = operator_post(
         "operator.runtime.upgrade.cancel",
         "/v1/runtime/upgrades/cancel/{id}",
+    );
+    /// Sign this node's support attestation of a scheduled runtime change set.
+    pub const RUNTIME_UPGRADE_ATTEST: RouteDescriptor = operator_post(
+        "operator.runtime.upgrade.attest",
+        "/v1/runtime/upgrades/attest/{id}",
+    );
+    /// This release's support for the committed and the scheduled runtime selections.
+    pub const RUNTIME_RELEASE: RouteDescriptor =
+        operator_get("operator.runtime.release", "/v1/runtime/release");
+    /// Every recorded emergency containment of runtime definitions.
+    pub const RUNTIME_CONTAINMENTS: RouteDescriptor = operator_get(
+        "operator.runtime.containment.list",
+        "/v1/runtime/containments",
     );
     /// Draft a ministry agenda proposal for local signing.
     pub const MINISTRY_AGENDA_DRAFT: RouteDescriptor = app_signed_post(
@@ -3123,8 +3131,10 @@ pub mod runtime_governance {
         NODE_PROJECTION_SHARD_EXPORT,
         RUNTIME_UPGRADES,
         RUNTIME_UPGRADE_PROPOSE,
-        RUNTIME_UPGRADE_ACTIVATE,
         RUNTIME_UPGRADE_CANCEL,
+        RUNTIME_UPGRADE_ATTEST,
+        RUNTIME_RELEASE,
+        RUNTIME_CONTAINMENTS,
         MINISTRY_AGENDA_DRAFT,
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,

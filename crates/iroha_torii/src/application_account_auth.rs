@@ -225,7 +225,7 @@ mod application_account_auth_tests {
             "owner PRF route authentication regression",
         );
         let account = iroha_data_model::account::AccountId::new(key.public_key().clone());
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+        let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests_with_world(
             crate::tests_runtime_handlers::world_with_account(&account),
         );
         let router_for_body_limit = |max_body_bytes| {

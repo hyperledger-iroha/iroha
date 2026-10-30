@@ -830,20 +830,7 @@ Root {
         staking: NexusStaking {
             public_validator_mode: StakeElected,
             restricted_validator_mode: AdminManaged,
-            min_validator_stake: Quantity(
-                Numeric {
-                    mantissa: 1,
-                    scale: 0,
-                },
-            ),
             max_validators: 32,
-            max_stake_shares_per_validator: 256,
-            max_pending_unbonds_per_share: 8,
-            unbonding_delay: 0ns,
-            max_slash_bps: 10000,
-            stake_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-            stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         },
         fees: RootFeePolicy {
             fee_asset_id: AssetDefinitionId {
@@ -914,9 +901,6 @@ Root {
             replay_retention_slots: 128,
         },
         atomic_private_settlement: NexusAtomicPrivateSettlement {
-            enabled: false,
-            activation_height: None,
-            minimum_activation_notice_blocks: 7200,
             proof_profile_version: 1,
             max_participants: 255,
             max_expiry_blocks: 7200,
@@ -1126,6 +1110,7 @@ Root {
                 latency_decay: 0.25,
             },
         },
+        legacy_genesis: None,
     },
     snapshot: Snapshot {
         mode: ReadWrite,
@@ -1150,6 +1135,11 @@ Root {
         },
         verification_public_key: None,
         signing_private_key: None,
+        upgrade_checkpoint: SnapshotUpgradeCheckpoint {
+            height: None,
+            block_hash: None,
+            signer: None,
+        },
     },
     telemetry_profile: Operator,
     telemetry: None,
@@ -1728,13 +1718,6 @@ Root {
         jdg_signature_schemes: {
             SimpleThreshold,
         },
-        runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy {
-            mode: Optional,
-            require_sbom: false,
-            require_slsa: false,
-            trusted_signers: {},
-            signature_threshold: 0,
-        },
         viral_incentives: ViralIncentives {
             incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
             escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
@@ -2063,7 +2046,7 @@ Root {
         codec: StreamingCodec {
             cabac_mode: Disabled,
             trellis_block_sizes: [],
-            rans_tables_path: "codec/rans/tables/rans_seed0.toml",
+            rans_tables_path: None,
             entropy_mode: RansBundled,
             bundle_width: 2,
             bundle_accel: None,

@@ -17,6 +17,7 @@ use norito::json::{self, Value};
 use crate::SharedAppState;
 
 const JSON_MIME_TYPE: &str = "application/json";
+const TEXT_MIME_TYPE: &str = "text/plain";
 const PRIVATE_CACHE_SCOPE: &str = "private";
 const RESOURCE_LIST_TTL_MS: u64 = 30_000;
 
@@ -34,6 +35,9 @@ struct ResourceSpec {
     route_id: &'static str,
     route_path: &'static str,
     request_target: &'static str,
+    // The route's own representation, sent as `Accept`. Resource contents are
+    // always the JSON encoding of the decoded route body.
+    route_media_type: &'static str,
     surface: ApiSurface,
     authentication: AuthenticationPolicy,
     ttl_ms: u64,
@@ -48,6 +52,7 @@ const RESOURCE_SPECS: &[ResourceSpec] = &[
         route_id: "protocol.health",
         route_path: "/health",
         request_target: "/health",
+        route_media_type: TEXT_MIME_TYPE,
         surface: ApiSurface::Protocol,
         authentication: AuthenticationPolicy::Unauthenticated,
         ttl_ms: 0,
@@ -60,6 +65,7 @@ const RESOURCE_SPECS: &[ResourceSpec] = &[
         route_id: "core.api_version",
         route_path: "/v1/api/version",
         request_target: "/v1/api/version",
+        route_media_type: JSON_MIME_TYPE,
         surface: ApiSurface::Public,
         authentication: AuthenticationPolicy::ToriiDefault,
         ttl_ms: 300_000,
@@ -72,6 +78,7 @@ const RESOURCE_SPECS: &[ResourceSpec] = &[
         route_id: "ledger.headers",
         route_path: "/v1/ledger/headers",
         request_target: "/v1/ledger/headers?limit=1",
+        route_media_type: JSON_MIME_TYPE,
         surface: ApiSurface::Public,
         authentication: AuthenticationPolicy::ToriiDefault,
         ttl_ms: 0,
@@ -85,6 +92,7 @@ const RESOURCE_SPECS: &[ResourceSpec] = &[
         route_id: "application.parameters_get",
         route_path: "/v1/parameters",
         request_target: "/v1/parameters",
+        route_media_type: JSON_MIME_TYPE,
         surface: ApiSurface::Public,
         authentication: AuthenticationPolicy::ToriiDefault,
         ttl_ms: 5_000,
@@ -97,6 +105,7 @@ const RESOURCE_SPECS: &[ResourceSpec] = &[
         route_id: "runtime.abi.hash",
         route_path: "/v1/runtime/abi/hash",
         request_target: "/v1/runtime/abi/hash",
+        route_media_type: JSON_MIME_TYPE,
         surface: ApiSurface::Public,
         authentication: AuthenticationPolicy::ToriiDefault,
         ttl_ms: 30_000,
@@ -233,6 +242,9 @@ pub fn resources_list_result() -> Result<Value, ResourceRegistryError> {
 }
 
 /// Read one exact resource through Torii's existing in-process router.
+///
+/// The route is asked for its own representation; a text body becomes a JSON
+/// string in the resource contents.
 pub async fn read_resource(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -256,7 +268,7 @@ pub async fn read_resource(
         None,
         Vec::new(),
         None,
-        Some(JSON_MIME_TYPE.to_owned()),
+        Some(spec.route_media_type.to_owned()),
     )
     .await
     .map_err(ResourceReadError::DispatchFailed)?;
@@ -482,6 +494,23 @@ mod tests {
     }
 
     #[test]
+    fn reads_request_each_route_representation() {
+        for spec in RESOURCE_SPECS {
+            let expected = if spec.uri == "iroha://node/health" {
+                TEXT_MIME_TYPE
+            } else {
+                JSON_MIME_TYPE
+            };
+            assert_eq!(spec.route_media_type, expected, "{}", spec.uri);
+            // Torii defers typed negotiation only on protocol and diagnostic
+            // routes; any other route answers a text-only `Accept` with 406.
+            if spec.route_media_type != JSON_MIME_TYPE {
+                assert_eq!(spec.surface, ApiSurface::Protocol, "{}", spec.uri);
+            }
+        }
+    }
+
+    #[test]
     fn validation_rejects_path_drift() {
         let mut drifted = RESOURCE_SPECS[0];
         drifted.route_path = "/readyz";
@@ -510,6 +539,7 @@ mod tests {
             route_id: "core.peers",
             route_path: "/v1/peers",
             request_target: "/v1/peers",
+            route_media_type: JSON_MIME_TYPE,
             surface: ApiSurface::Operator,
             authentication: AuthenticationPolicy::OperatorSignature,
             ttl_ms: 0,
@@ -534,6 +564,7 @@ mod tests {
             route_id: "application.parameters_get",
             route_path: "/v1/parameters",
             request_target: "/v1/parameters",
+            route_media_type: JSON_MIME_TYPE,
             surface: ApiSurface::Public,
             authentication: AuthenticationPolicy::ToriiDefault,
             ttl_ms: 5_000,

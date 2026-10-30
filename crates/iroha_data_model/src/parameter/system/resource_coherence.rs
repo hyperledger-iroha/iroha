@@ -149,28 +149,30 @@ pub enum SuccessorResourceCoherenceError {
     /// Limits which become effective at the named height are incoherent.
     #[error("incoherent resource policy at height {effective_height}: {error}")]
     AtHeight {
-        /// Exact first or second successor height.
+        /// Exact successor height or later pending-policy boundary.
         effective_height: u64,
         /// Original typed byte-coherence failure.
         error: ResourceCoherenceError,
     },
 }
 
-/// Validate a complete candidate against its two applicable successor block caps.
+/// Validate every committed resource-policy boundary against its applicable block cap.
 ///
 /// Transaction limits apply immediately to the next block. The caller supplies
 /// each authenticated block cap explicitly because consensus parameters have a
 /// two-block scheduling lag. Genesis supplies its final cap for both successors.
-/// A pending privacy tightening is selected only at its signed effective height.
-/// Later tightenings cannot increase any byte ceiling, so validating the current
-/// profile against the second successor also covers the intervening future.
+/// The second successor's cap remains effective until another committed change.
+/// Validate both successors, then any later pending privacy-policy boundary using
+/// that cap. Select the current or pending limits at each exact effective height;
+/// ordinary increases and decreases follow the same byte and context checks.
+/// Every later chain-cap change must revalidate the still-pending policy.
 ///
-/// Each successor's privacy profile is also checked against the committed signature cap:
+/// Each boundary's privacy profile is also checked against the committed signature cap:
 /// one maximal action with its required context must fit the transaction cap.
 ///
 /// # Errors
 /// Rejects invalid privacy policy/schedule, height overflow, and the first
-/// incoherent successor, preserving its exact height and typed numeric error.
+/// incoherent boundary, preserving its exact height and typed numeric error.
 pub fn validate_successor_resource_limits(
     committed_height: u64,
     max_transaction_bytes: NonZeroU64,
@@ -193,12 +195,20 @@ pub fn validate_successor_resource_limits(
     let after_next = next
         .checked_add(1)
         .ok_or(SuccessorResourceCoherenceError::HeightOverflow { committed_height })?;
+    let later_policy_boundary = privacy
+        .pending_update
+        .as_ref()
+        .filter(|pending| pending.effective_at_height > after_next)
+        .map(|pending| (pending.effective_at_height, after_next_max_block_bytes));
     for (effective_height, cap) in [
         (next, next_max_block_bytes),
         (after_next, after_next_max_block_bytes),
-    ] {
+    ]
+    .into_iter()
+    .chain(later_policy_boundary)
+    {
         let limits = privacy
-            .pending_tightening
+            .pending_update
             .as_ref()
             .filter(|pending| pending.effective_at_height <= effective_height)
             .map_or(&privacy.current_limits, |pending| &pending.next_limits);
@@ -358,7 +368,7 @@ pub fn validate_privacy_chain_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::privacy::PrivacyConsensusPolicyTighteningV1;
+    use crate::privacy::PrivacyConsensusPolicyUpdateV1;
 
     fn tx(value: u64) -> NonZeroU64 {
         NonZeroU64::new(value).unwrap()
@@ -597,10 +607,212 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pending_privacy_limit_increase_requires_capacity_at_its_effective_height() {
+        let current = privacy_limits(512, 512, 512 * 1024);
+        let next_limits = privacy_limits(1024, 1024, 1024 * 1024);
+        let policy = PrivacyConsensusPolicyV1 {
+            current_limits: current,
+            pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
+                scheduled_at_height: 1,
+                effective_at_height: 3,
+                next_limits,
+            }),
+        };
+        policy.validate_at_committed_height(1).unwrap();
+        let transaction_cap = tx(maximal_action_transaction_bytes(
+            next_limits.max_action_bytes,
+            signatures(),
+        )
+        .unwrap());
+        let current_block = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 512 * 1024);
+        let expanded_block = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 1024 * 1024);
+        assert!(matches!(
+            validate_successor_resource_limits(
+                1,
+                transaction_cap,
+                signatures(),
+                current_block,
+                current_block,
+                &policy,
+            ),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 3,
+                error: ResourceCoherenceError::PrivacyBlockExceedsPayload { .. },
+            })
+        ));
+        assert_eq!(
+            validate_successor_resource_limits(
+                1,
+                transaction_cap,
+                signatures(),
+                current_block,
+                expanded_block,
+                &policy,
+            ),
+            Ok(())
+        );
+        assert_eq!(policy.current_limits, current);
+        assert_eq!(policy.pending_update.unwrap().next_limits, next_limits);
+    }
+
+    #[test]
+    fn later_privacy_increase_checks_the_exact_future_boundary_and_second_successor_cap() {
+        let reserve = BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
+        let current = privacy_limits(512, 512, 512 * 1024);
+        let next_limits = privacy_limits(1024, 1024, 1024 * 1024);
+        let transaction = tx(maximal_action_transaction_bytes(
+            next_limits.max_action_bytes,
+            signatures(),
+        )
+        .unwrap());
+        let exact_cap = block(reserve + next_limits.max_privacy_bytes_per_block);
+        let one_below = block(exact_cap.get() - 1);
+        // Neither the much larger first successor nor the two initially coherent
+        // heights can authorize a later budget which exceeds the persistent cap.
+        let first_cap = block(2 * 1024 * 1024);
+        for effective_at_height in [4, 100, u64::MAX] {
+            let policy = PrivacyConsensusPolicyV1 {
+                current_limits: current,
+                pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
+                    scheduled_at_height: 1,
+                    effective_at_height,
+                    next_limits,
+                }),
+            };
+            let original = policy;
+            assert_eq!(
+                validate_successor_resource_limits(
+                    1,
+                    transaction,
+                    signatures(),
+                    first_cap,
+                    one_below,
+                    &policy,
+                ),
+                Err(SuccessorResourceCoherenceError::AtHeight {
+                    effective_height: effective_at_height,
+                    error: ResourceCoherenceError::PrivacyBlockExceedsPayload {
+                        max_privacy_bytes_per_block: next_limits.max_privacy_bytes_per_block,
+                        reserve_bytes: reserve,
+                        required_block_bytes: u64::from(exact_cap.get()),
+                        max_block_bytes: one_below.get(),
+                    },
+                })
+            );
+            assert_eq!(
+                validate_successor_resource_limits(
+                    1,
+                    transaction,
+                    signatures(),
+                    first_cap,
+                    exact_cap,
+                    &policy,
+                ),
+                Ok(())
+            );
+            assert_eq!(policy, original, "validation never mutates either policy");
+            let decrease = PrivacyConsensusPolicyV1 {
+                current_limits: next_limits,
+                pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
+                    scheduled_at_height: 1,
+                    effective_at_height,
+                    next_limits: current,
+                }),
+            };
+            assert_eq!(
+                validate_successor_resource_limits(
+                    1,
+                    transaction,
+                    signatures(),
+                    first_cap,
+                    exact_cap,
+                    &decrease,
+                ),
+                Ok(()),
+                "later ordinary decreases remain valid"
+            );
+        }
+    }
+
+    #[test]
+    fn later_privacy_increase_checks_signed_action_context_and_transaction_budget() {
+        let current = privacy_limits(512, 512, 1024 * 1024);
+        let future = privacy_limits(1024, 1024, 1024 * 1024);
+        let cap = block(2 * 1024 * 1024);
+        let current_required =
+            maximal_action_transaction_bytes(current.max_action_bytes, signatures()).unwrap();
+        let future_required =
+            maximal_action_transaction_bytes(future.max_action_bytes, signatures()).unwrap();
+        let policy = PrivacyConsensusPolicyV1 {
+            current_limits: current,
+            pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
+                scheduled_at_height: 1,
+                effective_at_height: 100,
+                next_limits: future,
+            }),
+        };
+        assert_eq!(
+            validate_successor_resource_limits(
+                1,
+                tx(current_required),
+                signatures(),
+                cap,
+                cap,
+                &policy,
+            ),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 100,
+                error: ResourceCoherenceError::PrivacyActionContextExceedsTransaction {
+                    max_action_bytes: future.max_action_bytes,
+                    max_signatures: signatures().get(),
+                    required_transaction_bytes: future_required,
+                    max_transaction_bytes: current_required,
+                },
+            })
+        );
+        assert_eq!(
+            validate_successor_resource_limits(
+                1,
+                tx(future_required),
+                signatures(),
+                cap,
+                cap,
+                &policy,
+            ),
+            Ok(())
+        );
+        let transaction = u32::try_from(future_required).unwrap();
+        let mut aggregate = policy;
+        aggregate
+            .pending_update
+            .as_mut()
+            .unwrap()
+            .next_limits
+            .max_privacy_bytes_per_transaction = transaction + 1;
+        assert_eq!(
+            validate_successor_resource_limits(
+                1,
+                tx(future_required),
+                signatures(),
+                cap,
+                cap,
+                &aggregate,
+            ),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 100,
+                error: ResourceCoherenceError::PrivacyTransactionExceedsTransaction {
+                    max_privacy_bytes_per_transaction: transaction + 1,
+                    max_transaction_bytes: future_required,
+                },
+            })
+        );
+    }
+
     fn genesis_tightening(effective_at_height: u64) -> PrivacyConsensusPolicyV1 {
         PrivacyConsensusPolicyV1 {
             current_limits: PrivacyConsensusLimitsV1::taira_default(),
-            pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+            pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
                 scheduled_at_height: 1,
                 effective_at_height,
                 next_limits: privacy_limits(2 * 1024 * 1024, 2 * 1024 * 1024, 3 * 1024 * 1024),
@@ -672,7 +884,7 @@ mod tests {
     fn second_successor_checks_its_own_block_cap() {
         let privacy = PrivacyConsensusPolicyV1 {
             current_limits: privacy_limits(1, 1, 1),
-            pending_tightening: None,
+            pending_update: None,
         };
         // The smallest transaction cap that holds one action with its required context.
         let fitting = maximal_action_transaction_bytes(1, signatures()).unwrap();
@@ -816,7 +1028,7 @@ mod tests {
         );
         let pending = PrivacyConsensusPolicyV1 {
             current_limits: current,
-            pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+            pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
                 scheduled_at_height: 5,
                 effective_at_height: 7,
                 next_limits: tightened,

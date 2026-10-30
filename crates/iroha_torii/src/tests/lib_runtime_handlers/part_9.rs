@@ -1423,13 +1423,20 @@ struct RuntimeApiRouterFixture {
     _data_dir: tempfile::TempDir,
 }
 impl RuntimeApiRouterFixture {
+    fn native_state(chain_id: &'static str, world: World) -> (Arc<Kura>, Arc<IrohaState>) {
+        let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, 1_000);
+        config.chain_id = ChainId::from(chain_id);
+        let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+            .expect("runtime router retains its original signed genesis");
+        assert_eq!(
+            chain.state().authenticated_root_scope(),
+            Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        );
+        (Arc::clone(chain.kura()), Arc::clone(chain.state()))
+    }
+
     fn standard(chain_id: &'static str) -> Self {
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(IrohaState::new_for_testing(
-            World::default(),
-            kura.clone(),
-            LiveQueryStore::start_test(),
-        ));
+        let (kura, state) = Self::native_state(chain_id, World::default());
         Self::with_runtime(
             chain_id,
             kura,
@@ -1488,6 +1495,7 @@ impl RuntimeApiRouterFixture {
             tokio::sync::broadcast::channel(1).0,
         ));
         let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
         let torii = Torii::new_with_handle(
             ChainId::from(chain_id),
             *state.network_id_ref(),
@@ -1501,7 +1509,10 @@ impl RuntimeApiRouterFixture {
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
             None,
-            runtime_deps,
+            crate::test_utils::with_private_settlement_test_signers(
+                runtime_deps,
+                &private_settlement_node_key,
+            ),
         )
         .expect("valid Torii runtime API fixture");
         Self {
@@ -1519,26 +1530,12 @@ impl RuntimeApiRouterFixture {
 }
 #[tokio::test]
 async fn node_capabilities_http_bootstraps_without_registered_account() {
-    // The original world has an explicitly authored policy and no registered
-    // accounts. Mount the production catalog and authentication middleware to
-    // retain the account-registration/SDK-preflight bootstrap control.
-    let mut world = World::default();
-    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-        Algorithm::Ed25519,
-        Algorithm::Secp256k1,
-    ])
-    .expect("explicit public capability fixture policy");
-    let mut block = world.block();
-    block
-        .set_parameter_for_testing(policy.into_parameter().expect("canonical fixture policy"))
-        .expect("author policy before State construction");
-    block.commit();
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(IrohaState::new_for_testing(
-        world,
-        kura.clone(),
-        LiveQueryStore::start_test(),
-    ));
+    // An unsigned caller needs no registered account to discover the node.
+    // The listener still authenticates its root and ordinary policy through genesis.
+    let (kura, state) =
+        RuntimeApiRouterFixture::native_state("public-node-capabilities-test", World::default());
+    let unregistered = checked_torii_test_account_id(0x35, "unregistered capability caller");
+    assert!(state.world_view().account(&unregistered).is_err());
     let fixture = RuntimeApiRouterFixture::with_runtime(
         "public-node-capabilities-test",
         kura,
@@ -1667,12 +1664,10 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(IrohaState::new_for_testing(
+    let (kura, state) = RuntimeApiRouterFixture::native_state(
+        "sorafs-retired-storage-pin-router-test",
         World::default(),
-        kura.clone(),
-        LiveQueryStore::start_test(),
-    ));
+    );
     let storage_dir = tempfile::tempdir().expect("storage tempdir");
     let storage_root = storage_dir
         .path()
@@ -1999,12 +1994,8 @@ async fn appeal_finance_publication_routes_authenticate_before_decoding() {
             .parse()
             .expect("publisher role"),
     );
-    let kura = Kura::blank_kura_for_testing();
-    let state = Arc::new(IrohaState::new_for_testing(
-        world,
-        kura.clone(),
-        LiveQueryStore::start_test(),
-    ));
+    let (kura, state) =
+        RuntimeApiRouterFixture::native_state("sorafs-appeal-publication-router-test", world);
     let network_id = *state.network_id_ref();
     let storage_dir = tempfile::tempdir().expect("appeal publication storage tempdir");
     let storage_root = storage_dir

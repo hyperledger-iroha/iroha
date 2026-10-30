@@ -152,7 +152,7 @@ cp scripts/contract_tooling/evm-runtime/package.json \
 )
 
 echo "Running the EDR provider test (EIP-2537 precompiles under Prague and Osaka)."
-NODE_PATH="$RUNTIME_DIR/node_modules" "$NODE_BIN" --test scripts/tests/contract_edr_provider_test.cjs
+SCCP_EVM_RUNTIME_DIR="$RUNTIME_DIR" "$NODE_BIN" --test scripts/tests/contract_edr_provider_test.cjs
 
 # These adapter checks use committed structural fixtures, not a live export or
 # an EDR fork run, so keep them outside the fork-suite and gas-report guards.

@@ -150,7 +150,9 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: workspace-release-diagnostics-1.99.1
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-nextest
       - name: Fetch locked dependencies
         run: cargo fetch --locked
       - name: Run the release-gate test profile
@@ -297,8 +299,9 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: workspace-release-coverage-1.99.1
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
       - name: Collect workspace test coverage
         run: >-
           mold --run cargo llvm-cov nextest

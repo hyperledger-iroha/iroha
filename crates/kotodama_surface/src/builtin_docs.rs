@@ -367,6 +367,10 @@ pub const BUILTIN_DOCS: &[(&str, &str)] = &[
         "ledger::asset_lock::open",
         "Fund a native lock from its payer under the executing contract and immutable deadlines.",
     ),
+    (
+        "ledger::credentials::present_x509",
+        "Queue a proof-free X509 instruction using its signed attachment reference. PendingAction is a local queue token; final effects and acceptance exist only in the transaction receipt.",
+    ),
     ("ledger::domain::register", "Register a ledger domain."),
     (
         "ledger::domain::transfer",

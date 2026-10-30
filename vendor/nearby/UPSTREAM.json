@@ -481,21 +481,26 @@
       "upstream_path": "connections/implementation/injected_bluetooth_device_store.h"
     },
     "connections/implementation/internal_payload.cc": {
-      "git_blob": "96623e444e53c811f55bac4002fc08ce58712742",
+      "git_blob": "ab3119600f93f10b3e7f6c48f3e952cbe856331c",
       "owner": "",
-      "sha256": "44bdf2d4177fe10d921114fd394e92db895ae4dfd56411be20ffef291eb1d482",
+      "sha256": "35730d41a03227981950c7d7226505f4445c8d27b981e333117d7535972b8802",
       "upstream_path": "connections/implementation/internal_payload.cc"
     },
     "connections/implementation/internal_payload.h": {
-      "git_blob": "2865261c6399e4c72182d966e440c1a666b67a9f",
+      "git_blob": "084f09bc1c10215ae4303d307158b287d7bf1c68",
       "owner": "",
-      "sha256": "86e835efc23f0bfa2e8884a16f21179d3b0a0f890f2c9e358c7912558dec12ad",
+      "sha256": "7f3fb14420d9d53572fce3f4f619a924d377a4bc1040dda3a4f061a29f91f28d",
       "upstream_path": "connections/implementation/internal_payload.h"
     },
     "connections/implementation/internal_payload_factory.cc": {
-      "git_blob": "7f867a6c334bbbc6e110801c999d4fb5a5a74e9d",
+      "git_blob": "fcbf77c0fe9ce983b4a1aeaea22ed02100e455eb",
+      "local_patch": {
+        "git_blob": "584f30eac97ff139e28f5e231c703f556bbb59b4",
+        "reason": "Seed incoming file metadata before Payload caches it; restore again at completion.",
+        "sha256": "1214acccf78d240875c63acd5bd38ca7ce27cec328ea43489789dda9d0f17d60"
+      },
       "owner": "",
-      "sha256": "bc34062b20d88f2621cbb171090540622076c0d58440443346957d939c44e8c7",
+      "sha256": "33038b3d9ad6a2e882b7e7f92f14bf23b47c0db36aa6ab1ebc67807eca978b8a",
       "upstream_path": "connections/implementation/internal_payload_factory.cc"
     },
     "connections/implementation/internal_payload_factory.h": {
@@ -1033,9 +1038,9 @@
       "upstream_path": "connections/implementation/mock_service_controller_router.h"
     },
     "connections/implementation/offline_frames.cc": {
-      "git_blob": "0d229b436bf43e178bddb792b32561ad18b00dc9",
+      "git_blob": "043172351b835988dc7c57262ed9d5d275b07b5e",
       "owner": "",
-      "sha256": "e01feaf97369a906096075b4d79e65708d4e9379b3d71a8fe58b68857def547c",
+      "sha256": "0e48e33d439aba1fda1407fc6e8797324963721ddf08d299a60af405f0a55538",
       "upstream_path": "connections/implementation/offline_frames.cc"
     },
     "connections/implementation/offline_frames.h": {
@@ -1045,9 +1050,9 @@
       "upstream_path": "connections/implementation/offline_frames.h"
     },
     "connections/implementation/offline_frames_validator.cc": {
-      "git_blob": "f2a4683cb9b53738c67d7057a00be1e02b164b31",
+      "git_blob": "18c116febce3e221d67455ab5c3294f0d6446b7e",
       "owner": "",
-      "sha256": "da91980e64ba0418c07bf21124c6acb8042fed379deb27d8ae3905f3968ed99a",
+      "sha256": "5a9974e6970dc49e302096e335991035223c0b95a593078e774693781d81f029",
       "upstream_path": "connections/implementation/offline_frames_validator.cc"
     },
     "connections/implementation/offline_frames_validator.h": {
@@ -1111,15 +1116,15 @@
       "upstream_path": "connections/implementation/p2p_star_pcp_handler.h"
     },
     "connections/implementation/payload_manager.cc": {
-      "git_blob": "4cb77e80a7dbdbeab570d2f57ce06b00d7c673d7",
+      "git_blob": "2daf0658fffed5e6611c47a4302c5e9312212b6e",
       "owner": "",
-      "sha256": "5ca2da6f7a2524f9d72aaebe883e1e8a8723299da19c529a63f2a0d7ddd4568f",
+      "sha256": "5e8ecbd564f5db291f8a1e01f81ef3eab3860a9197ecdbf32348726746eebbd2",
       "upstream_path": "connections/implementation/payload_manager.cc"
     },
     "connections/implementation/payload_manager.h": {
-      "git_blob": "c678c547c2ef8648860b8f209c79fa7435b7eeb1",
+      "git_blob": "06bc73e4745fb52750da965f7fcf0700644f116b",
       "owner": "",
-      "sha256": "09bfdf49f82fa4486c7fdac33e9b0dda3257cb6da96d965984f0a18987584b9c",
+      "sha256": "23341162ff662eb1aacbce123ea20e6f67acb7d8993c9bc1a74f0ff549accc96",
       "upstream_path": "connections/implementation/payload_manager.h"
     },
     "connections/implementation/pcp.h": {
@@ -3914,6 +3919,11 @@
     },
     "internal/platform/implementation/shared/file.cc": {
       "git_blob": "1c798269df4455b548d594341424d5d11e497bd6",
+      "local_patch": {
+        "git_blob": "c07a2864f71c381e0791a3b644f9b7b54539282a",
+        "reason": "Implement native POSIX file modification timestamps used by the Apple SwiftPM provider.",
+        "sha256": "e3f9481eb998797591a686a1d0668c03da995b826db07ce8436ef4d11a32cdba"
+      },
       "owner": "",
       "sha256": "88219e458473c6b3ce5116e26423702d645555ab3b88d02b76002f99f676423e",
       "upstream_path": "internal/platform/implementation/shared/file.cc"
@@ -8969,7 +8979,7 @@
   "upstreams": [
     {
       "path": "",
-      "revision": "c80c38efe4b8a5fa72586b58d381bb546702f062",
+      "revision": "2cd9371cd0aab2d3ea1c2e74c92563288ea10784",
       "url": "https://github.com/google/nearby.git"
     },
     {

@@ -11,6 +11,8 @@ pub(super) struct BuiltInWireId {
     #[cfg(test)]
     pub(super) type_label: &'static str,
     pub(super) type_name: TypeName,
+    /// Declared Norito identity of the payload type.
+    pub(super) payload: fn() -> std::borrow::Cow<'static, str>,
     pub(super) wire_id: &'static str,
     frame_len: fn(usize) -> Option<usize>,
     #[cfg(test)]
@@ -23,6 +25,7 @@ macro_rules! built_in_wire_id_with_scope {
             #[cfg(test)]
             type_label: stringify!($ty),
             type_name: std::any::type_name::<$ty>,
+            payload: norito::schema::identity::nominal_name::<$ty>,
             wire_id: $wire_id,
             frame_len: crate::isi::framed_instruction_payload_len_for::<$ty>,
             #[cfg(test)]
@@ -382,11 +385,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(smart_contract_code::RemoveSmartContractBytes => "iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes"),
     built_in_wire_id!(zk::VerifyProof => "iroha.instruction.v1::zk::VerifyProof"),
     built_in_wire_id!(zk::PruneProofs => "iroha.instruction.v1::zk::PruneProofs"),
-    built_in_wire_id!(privacy::RegisterPrivacyProtocolActivationV1 => "iroha.privacy.register_protocol_activation.v1"),
-    built_in_wire_id!(privacy::RegisterPrivacyExact12QualificationV1 => "iroha.privacy.register_exact12_qualification.v1"),
-    built_in_wire_id!(privacy::SchedulePrivacyConsensusPolicyTighteningV1 => "iroha.privacy.schedule_consensus_policy_tightening.v1"),
-    built_in_wire_id!(privacy::SchedulePrivacyProtocolLimitsTighteningV1 => "iroha.privacy.schedule_protocol_limits_tightening.v1"),
-    built_in_wire_id!(privacy::TransitionPrivacyProtocolLifecycleV1 => "iroha.privacy.transition_protocol_lifecycle.v1"),
+    built_in_wire_id!(privacy::SchedulePrivacyConsensusPolicyUpdateV1 => "iroha.privacy.schedule_consensus_policy_update.v1"),
+    built_in_wire_id!(privacy::SchedulePrivacyProtocolLimitsUpdateV1 => "iroha.privacy.schedule_protocol_limits_update.v1"),
     built_in_wire_id!(privacy::PublishPrivacyRootV1 => "iroha.privacy.publish_root.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyOrchardPoolV1 => "iroha.privacy.bootstrap_orchard_pool.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyProofManagedPoolV1 => "iroha.privacy.bootstrap_proof_managed_pool.v1"),
@@ -411,6 +411,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(privacy::RotatePrivacyZkX509CrlV1 => "iroha.privacy.rotate_zk_x509_crl.v1"),
     built_in_wire_id!(privacy::RevokePrivacyZkX509CrlV1 => "iroha.privacy.revoke_zk_x509_crl.v1"),
     built_in_wire_id!(privacy::SubmitPrivacyProofV1 => "iroha.privacy.submit_proof.v1"),
+    built_in_wire_id!(privacy::SubmitPrivacyZkX509CertificateV1 => "iroha.privacy.submit_zk_x509_certificate.v1"),
     built_in_wire_id!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1 => "iroha.private_settlement.activate_pool.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1 => "iroha.private_settlement.rotate_pool_policy.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1 => "iroha.private_settlement.register_atomic_prepare.v1", register),
@@ -468,9 +469,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::RestituteGovernanceLock => "iroha.instruction.v1::governance::RestituteGovernanceLock"),
     governance_wire_id!(governance::RegisterCitizen => "iroha.instruction.v1::governance::RegisterCitizen"),
     governance_wire_id!(governance::UnregisterCitizen => "iroha.instruction.v1::governance::UnregisterCitizen"),
-    built_in_wire_id!(runtime_upgrade::ProposeRuntimeUpgrade => "iroha.runtime_upgrade.propose"),
-    built_in_wire_id!(runtime_upgrade::ActivateRuntimeUpgrade => "iroha.runtime_upgrade.activate"),
-    built_in_wire_id!(runtime_upgrade::CancelRuntimeUpgrade => "iroha.runtime_upgrade.cancel"),
+    built_in_wire_id!(runtime_upgrade::AttestRuntimeSupportV1 => "iroha.runtime.support.attest.v1"),
+    built_in_wire_id!(runtime_upgrade::ContainRuntimeV1 => "iroha.runtime.contain.v1"),
 ];
 /// Borrow encoding metadata from this same canonical registration inventory.
 pub(super) fn encoding_entry(

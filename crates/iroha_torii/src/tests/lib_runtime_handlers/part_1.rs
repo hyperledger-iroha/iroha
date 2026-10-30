@@ -899,11 +899,21 @@ async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network(
     assert_eq!(state.chain_id_ref(), &chain_id);
     assert_eq!(state.network_id_ref(), &network_id);
     assert_eq!(
-        state.nexus_snapshot().fees.per_instruction_fee,
+        state
+            .world_view()
+            .parameters()
+            .root_fees()
+            .unwrap()
+            .per_instruction_fee,
         Quantity::zero()
     );
     assert_eq!(
-        state.nexus_snapshot().fees.per_gas_unit_fee,
+        state
+            .world_view()
+            .parameters()
+            .root_fees()
+            .unwrap()
+            .per_gas_unit_fee,
         Quantity::zero()
     );
     let view = state.view();
@@ -965,15 +975,14 @@ async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network(
     assert!(!pipeline.parallel_apply);
     assert!(!pipeline.ready_queue_heap);
     assert_eq!(pipeline.workers, 1);
-    let fees = app.state.nexus_snapshot().fees;
-    assert_eq!(
-        fees,
-        *app.state
-            .world_view()
-            .parameters()
-            .root_fees()
-            .expect("fixture committed root fee policy")
-    );
+    assert_eq!(app.state.nexus_snapshot().fees, nexus.fees);
+    let fees = app
+        .state
+        .world_view()
+        .parameters()
+        .root_fees()
+        .expect("fixture committed root fee policy")
+        .clone();
     assert_eq!(
         fees.per_instruction_fee,
         Quantity::zero(),
@@ -1723,7 +1732,6 @@ fn roundtrip_request_for_test(
     )
     .expect("query request should decode deterministically")
 }
-#[cfg(feature = "app_api")]
 pub fn bind_account_alias_for_test(app: &SharedAppState, account_id: &AccountId, alias: &str) {
     let dataspace_catalog = app.state.nexus_snapshot().dataspace_catalog.clone();
     let label =
@@ -2234,7 +2242,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
 }
 
 /// Author the signed query for the exact network established by this fixture's genesis.
-fn authorize_native_query_for_fixture(
+pub(crate) fn authorize_native_query_for_fixture(
     network: NetworkId,
     request: iroha_data_model::query::QueryRequest,
     authority: AccountId,
@@ -2256,7 +2264,7 @@ fn authorize_native_query_for_fixture(
         nonce,
     )
 }
-fn signed_native_find_triggers_query_for_fixture(
+pub(crate) fn signed_native_find_triggers_query_for_fixture(
     network: NetworkId,
     authority: AccountId,
     key: &KeyPair,
@@ -2862,6 +2870,7 @@ fn mk_app_state_for_tests_with_native_scope(
             checked_torii_test_ed25519_keypair(0xb5, "derive Torii proxy bridge fixture signer")
         }),
         vpn_operator_signer: None,
+        runtime_attestation_signer: None,
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]
@@ -3042,7 +3051,7 @@ async fn runtime_handlers_ok_without_token_and_rate_limit() {
 async fn explorer_transaction_detail_not_found_returns_json_response() {
     let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
-    let missing_hash = "00".repeat(32);
+    let missing_hash = Hash::new(b"uncommitted explorer detail fixture").to_string();
     let uri: axum::http::Uri = format!("/v1/explorer/transactions/{missing_hash}")
         .parse()
         .expect("valid Explorer transaction URI");
@@ -3068,7 +3077,7 @@ async fn explorer_transaction_detail_not_found_returns_json_response() {
 async fn explorer_instruction_detail_not_found_returns_json_response() {
     let app = mk_native_app_state_for_tests();
     let headers = HeaderMap::new();
-    let missing_hash = "00".repeat(32);
+    let missing_hash = Hash::new(b"uncommitted explorer detail fixture").to_string();
     let uri: axum::http::Uri = format!("/v1/explorer/instructions/{missing_hash}/0")
         .parse()
         .expect("valid Explorer instruction URI");
@@ -3278,6 +3287,7 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let torii = Torii::new_with_handle(
         ChainId::from("tx-rate-test"),
         signed_query_test_network_id(),
@@ -3291,9 +3301,12 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");
@@ -3351,6 +3364,7 @@ async fn torii_ram_lfe_uses_config_runtime() {
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let torii = Torii::new_with_handle(
         ChainId::from("identifier-resolver-config-test"),
         signed_query_test_network_id(),
@@ -3364,9 +3378,12 @@ async fn torii_ram_lfe_uses_config_runtime() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");
@@ -3593,7 +3610,7 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
 
 #[tokio::test]
 async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
@@ -3896,6 +3913,7 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
     let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
+    let private_settlement_node_key = crate::test_utils::private_settlement_test_node_key();
     let _torii = Torii::new_with_handle(
         ChainId::from("alias-route-registration-test"),
         signed_query_test_network_id(),
@@ -3909,9 +3927,12 @@ async fn alias_route_registration_preserves_signed_index_and_bounded_dispatch() 
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        crate::ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
+        crate::test_utils::with_private_settlement_test_signers(
+            crate::ToriiRuntimeDeps::new(
+                crate::build_identity_test_fixture::build_identity(),
+                routing::MaybeTelemetry::disabled(),
+            ),
+            &private_settlement_node_key,
         ),
     )
     .expect("valid Torii test fixture");

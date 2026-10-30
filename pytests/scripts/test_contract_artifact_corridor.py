@@ -1456,7 +1456,7 @@ def test_evm_runtime_is_locked_audited_native_edr_that_mines_reverts() -> None:
     tooling = ROOT / "scripts" / "contract_tooling" / "evm-runtime"
     package = json.loads((tooling / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((tooling / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["dependencies"] == {"@noble/curves": "2.4.0", "@noble/hashes": "2.4.0", "ethers": "6.17.0", "@nomicfoundation/edr": "0.24.0"}
+    assert package["dependencies"] == {"@noble/curves": "2.4.0", "@noble/hashes": "2.4.0", "ethers": "6.17.0", "@nomicfoundation/edr": "0.25.0"}
     assert package["overrides"] == {"ws": "8.21.0"}
     assert_registry_locked(package_lock)
     assert package_lock["packages"][""]["dependencies"] == package["dependencies"]
@@ -1469,7 +1469,7 @@ def test_evm_runtime_is_locked_audited_native_edr_that_mines_reverts() -> None:
         "reported the wrong chain id",
         'path.basename(packageRoot), "edr"',
         'path.basename(path.dirname(path.dirname(packageRoot))), "node_modules"',
-        'metadata.version, "0.24.0"',
+        'metadata.version, "0.25.0"',
         "context.createProvider(edr.L1_CHAIN_TYPE",
         "bailOnTransactionFailure: true",
         "allowUnlimitedContractSize: false",

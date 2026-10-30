@@ -189,6 +189,88 @@ class AccountHistoryRow internal constructor(json: JsonObject) : CollectionRow(j
     @JvmField val resultOk: Boolean? = row.booleanOrNull("result_ok")
 }
 
+/**
+ * One committed movement of an asset definition (`/v1/assets/{definition_id}/movements`), from the
+ * node's movement index. [Kind.TRANSFER], [Kind.MINT] and [Kind.BURN] are instruction legs, applied
+ * batch receipts and executed multisig transfers, as account history projects them;
+ * [Kind.OFFLINE_LOAD], [Kind.OFFLINE_UNLOAD] and [Kind.OFFLINE_FEE] are KAGEMUSHA Loads (payer to
+ * reserve), paid Unloads (reserve to the unloading account) and paid fee claims; [Kind.OFFLINE_CHARGE]
+ * is the online charge of a Load or an Unload, paid to the charge beneficiary. A failed transaction
+ * keeps its attempted movements with [resultOk] false; sum only successful rows for balances.
+ *
+ * Decoding is exact, like the JS SDK's `decodeAssetMovementRow`: every field must be present, and an
+ * unknown kind, a non-canonical amount, a null account outside [Kind.MINT]/[Kind.BURN], an [id] other
+ * than `<tx_hash>:<movement_index>` or a failed KAGEMUSHA row is rejected. Fields Torii adds later
+ * are kept in [json] and otherwise ignored.
+ */
+class AssetMovementRow internal constructor(json: JsonObject) : CollectionRow(json) {
+    companion object {
+        /** Decode one complete movement row. */
+        @JvmStatic
+        fun fromJson(json: JsonObject): AssetMovementRow = AssetMovementRow(json)
+
+        private val CANONICAL_AMOUNT = Regex("(?:0|[1-9][0-9]*)(?:\\.[0-9]*[1-9])?")
+        private val TX_HASH = Regex("[0-9a-f]{64}")
+    }
+
+    /** What one movement moved, in the order Torii documents the kinds. */
+    enum class Kind {
+        TRANSFER, MINT, BURN, OFFLINE_LOAD, OFFLINE_UNLOAD, OFFLINE_FEE, OFFLINE_CHARGE;
+
+        /** A KAGEMUSHA movement, read from the ledger records of the transaction that moved the value. */
+        val isOffline: Boolean get() = this >= OFFLINE_LOAD
+    }
+
+    private val row = RowReader(json)
+    /** `<tx_hash>:<movement_index>`. */
+    @JvmField val id: String = row.string("id")
+    @JvmField val kind: Kind = row.string("kind").let { text ->
+        Kind.entries.firstOrNull { it.name == text }
+            ?: throw IllegalArgumentException("`kind` must be one of ${Kind.entries.joinToString()}, got $text")
+    }
+    /** Creation time of the transaction, Unix milliseconds. */
+    @JvmField val timestampMs: Long = row.unsignedLong("timestamp_ms")
+    /** Null only for [Kind.MINT]. */
+    @JvmField val fromAccountId: String? = account("from_account_id", Kind.MINT)
+    /** Null only for [Kind.BURN]. */
+    @JvmField val toAccountId: String? = account("to_account_id", Kind.BURN)
+    @JvmField val assetDefinitionId: String = row.string("asset_definition_id")
+    /** Exact canonical decimal text. */
+    @JvmField val amount: String = row.string("amount")
+    @JvmField val txHash: String = row.string("tx_hash")
+    /** Signer of the transaction. */
+    @JvmField val authority: String = row.string("authority")
+    @JvmField val blockHeight: Long = row.unsignedLong("block_height")
+    @JvmField val blockIndex: Long = row.unsignedLong("block_index")
+    /** Position among the transaction's movements. */
+    @JvmField val movementIndex: Long = row.unsignedLong("movement_index")
+    @JvmField val resultOk: Boolean = row.booleanOrNull("result_ok")
+        ?: throw IllegalArgumentException("`result_ok` must be a boolean")
+
+    init {
+        require(CANONICAL_AMOUNT.matches(amount)) { "`amount` must be canonical decimal text, got $amount" }
+        require(TX_HASH.matches(txHash)) { "`tx_hash` must be 64 lowercase hex digits" }
+        require(assetDefinitionId.isNotEmpty() && authority.isNotEmpty()) {
+            "`asset_definition_id` and `authority` must be non-empty"
+        }
+        require(blockHeight >= 1) { "`block_height` must be at least 1" }
+        require(id == "$txHash:$movementIndex") { "`id` must be `<tx_hash>:<movement_index>`" }
+        require(resultOk || !kind.isOffline) { "$kind rows come only from successful transactions" }
+    }
+
+    /** An account member that is present, and null exactly for [absentFor]. */
+    private fun account(name: String, absentFor: Kind): String? {
+        require(json.containsKey(name)) { "`$name` is required" }
+        val account = row.stringOrNull(name)
+        if (kind == absentFor) {
+            require(account == null) { "`$name` must be null for $absentFor" }
+        } else {
+            require(!account.isNullOrEmpty()) { "`$name` may be null only for $absentFor" }
+        }
+        return account
+    }
+}
+
 /** A domain. Only [id] is always present. */
 class DomainRow internal constructor(json: JsonObject) : CollectionRow(json) {
     private val row = RowReader(json)

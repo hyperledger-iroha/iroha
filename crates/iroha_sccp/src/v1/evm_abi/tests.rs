@@ -884,7 +884,7 @@ fn voided_log_roundtrip() {
     };
     let (topics, data) = log.encode();
     assert_eq!(topics[0], keccak256(&[b"SccpVoided(bytes32,uint64)"]));
-    assert!(data.is_empty());
+    assert_eq!(data, []);
     assert_eq!(VoidedLogV1::decode(&topics, &data), Ok(log));
     assert!(!log.is_frozen());
     let frozen = VoidedLogV1 {

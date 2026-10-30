@@ -5,54 +5,6 @@ type CapturedCollectionRequest = (Method, String, Vec<u8>);
 type CapturedCollectionRequests = std::sync::Arc<std::sync::Mutex<Vec<CapturedCollectionRequest>>>;
 
 #[test]
-fn explorer_history_mcp_query_projection_accepts_only_cursor_contract_fields() {
-    let flat = norito::json!({
-        "cursor": "Abc_123-xyz",
-        "limit": 25,
-        "status": "committed",
-        "headers": {},
-        "accept": "application/json"
-    });
-    let projected = append_explorer_history_query_arguments(
-        "/v1/explorer/transactions".to_owned(),
-        flat.as_object().expect("flat arguments"),
-        &["cursor", "limit", "status"],
-        "transaction history",
-    )
-    .expect("flat cursor projection");
-    assert_eq!(
-        projected,
-        "/v1/explorer/transactions?cursor=Abc_123-xyz&limit=25&status=committed"
-    );
-
-    let nested = norito::json!({ "query": { "limit": 2 } });
-    assert_eq!(
-        append_explorer_history_query_arguments(
-            "/v1/explorer/blocks".to_owned(),
-            nested.as_object().expect("nested arguments"),
-            &["cursor", "limit"],
-            "block history",
-        )
-        .expect("nested cursor projection"),
-        "/v1/explorer/blocks?limit=2"
-    );
-    for invalid in [
-        norito::json!({ "page": 1 }),
-        norito::json!({ "offset": 1 }),
-        norito::json!({ "query": { "per_page": 10 } }),
-        norito::json!({ "query": { "limit": 2 }, "limit": 3 }),
-    ] {
-        append_explorer_history_query_arguments(
-            "/v1/explorer/blocks".to_owned(),
-            invalid.as_object().expect("invalid arguments"),
-            &["cursor", "limit"],
-            "block history",
-        )
-        .expect_err("retired, unknown, or ambiguous pagination must fail closed");
-    }
-}
-
-#[test]
 fn tool_registry_skips_ws_and_sse_routes() {
     let cfg = iroha_config::parameters::actual::ToriiMcp::default();
     let tools = build_tool_specs(&cfg);
@@ -235,9 +187,10 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .any(|tool| tool.name == "iroha.runtime.upgrades.propose")
     );
     assert!(
-        tools
+        !tools
             .iter()
-            .any(|tool| tool.name == "iroha.runtime.upgrades.activate")
+            .any(|tool| tool.name == "iroha.runtime.upgrades.activate"),
+        "change sets activate at block start; there is no activation tool"
     );
     assert!(
         tools
@@ -1251,7 +1204,7 @@ async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
 }
 #[tokio::test]
 async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _router_owner = install_api_token_probe_router(&mut app, &[]);
     let result = dispatch_route(
         &app,
@@ -1269,7 +1222,7 @@ async fn dispatch_route_fails_closed_when_required_api_tokens_are_unconfigured()
 }
 #[tokio::test]
 async fn dispatch_route_extra_headers_cannot_inject_an_api_token() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let _router_owner = install_api_token_probe_router(&mut app, &["configured-token"]);
     let extra_headers = norito::json!({
         "x-api-token": "configured-token"
@@ -2610,7 +2563,7 @@ fn openapi_governance_mcp_catalog_requires_inspectable_json_bodies() {
     }
 }
 /// Every collection tool with its query shape and single path parameter.
-const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 40] = [
+const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 46] = [
     ("iroha.accounts.list", CollectionQueryShape::Get, None),
     ("iroha.accounts.query", CollectionQueryShape::Post, None),
     ("iroha.domains.list", CollectionQueryShape::Get, None),
@@ -2769,6 +2722,20 @@ const COLLECTION_TOOL_SHAPES: [(&str, CollectionQueryShape, Option<&str>); 40] =
     (
         "iroha.explorer.instructions.latest.query",
         CollectionQueryShape::HistoryPost,
+        None,
+    ),
+    ("iroha.assets.list", CollectionQueryShape::HistoryGet, None),
+    ("iroha.nfts.list", CollectionQueryShape::HistoryGet, None),
+    ("iroha.rwas.list", CollectionQueryShape::HistoryGet, None),
+    ("iroha.blocks.list", CollectionQueryShape::HistoryGet, None),
+    (
+        "iroha.transactions.list",
+        CollectionQueryShape::HistoryGet,
+        None,
+    ),
+    (
+        "iroha.instructions.list",
+        CollectionQueryShape::HistoryGet,
         None,
     ),
 ];
@@ -3086,6 +3053,172 @@ async fn collection_tools_send_the_parsed_query_to_their_routes() {
             "limit": 5
         })
     );
+}
+/// Explorer feed tools and the exact Explorer route each one reads.
+const EXPLORER_FEED_TOOL_ROUTES: [(&str, &str); 17] = [
+    ("iroha.assets.list", "/v1/explorer/assets"),
+    ("iroha.nfts.list", "/v1/explorer/nfts"),
+    ("iroha.rwas.list", "/v1/explorer/rwas"),
+    ("iroha.blocks.list", "/v1/explorer/blocks"),
+    ("iroha.transactions.list", "/v1/explorer/transactions"),
+    ("iroha.instructions.list", "/v1/explorer/instructions"),
+    (
+        "iroha.explorer.accounts.query",
+        "/v1/explorer/accounts/query",
+    ),
+    ("iroha.explorer.domains.query", "/v1/explorer/domains/query"),
+    (
+        "iroha.explorer.asset_definitions.query",
+        "/v1/explorer/asset-definitions/query",
+    ),
+    ("iroha.explorer.assets.query", "/v1/explorer/assets/query"),
+    ("iroha.explorer.nfts.query", "/v1/explorer/nfts/query"),
+    ("iroha.explorer.rwas.query", "/v1/explorer/rwas/query"),
+    ("iroha.explorer.blocks.query", "/v1/explorer/blocks/query"),
+    (
+        "iroha.explorer.transactions.query",
+        "/v1/explorer/transactions/query",
+    ),
+    (
+        "iroha.explorer.transactions.latest.query",
+        "/v1/explorer/transactions/latest/query",
+    ),
+    (
+        "iroha.explorer.instructions.query",
+        "/v1/explorer/instructions/query",
+    ),
+    (
+        "iroha.explorer.instructions.latest.query",
+        "/v1/explorer/instructions/latest/query",
+    ),
+];
+#[tokio::test]
+async fn explorer_feed_tools_send_the_shared_query_to_their_routes() {
+    use iroha_torii_shared::list_query::{FilterExpr, ListQuery};
+
+    let mut app = mk_app_state_for_tests();
+    {
+        let state = std::sync::Arc::get_mut(&mut app).expect("unique app state");
+        state.mcp_tools = std::sync::Arc::new(build_tool_specs(&state.mcp));
+    }
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _router_owner =
+        install_collection_request_capturing_router(&mut app, std::sync::Arc::clone(&requests));
+
+    // Explorer reads no resource selectors as request parameters, so the
+    // retired flat `kind`/`block` filters and the `query` envelope fail at the
+    // advertised schema instead of reaching the route.
+    for retired in [
+        norito::json!({ "kind": "Transfer" }),
+        norito::json!({ "block": 1200 }),
+        norito::json!({ "query": { "limit": 2 } }),
+    ] {
+        let response = handle_named_tool_call(
+            Some(Value::from("retired")),
+            std::sync::Arc::clone(&app),
+            &HeaderMap::new(),
+            "iroha.instructions.list",
+            retired.as_object().expect("retired arguments"),
+        )
+        .await;
+        assert_eq!(
+            response
+                .pointer("/error/data/error_code")
+                .and_then(Value::as_str),
+            Some("tool_schema_validation_failed"),
+            "{retired:?}: {response:?}"
+        );
+    }
+
+    let filter = "kind = \"Transfer\" and block >= 1200";
+    for (id, (name, _)) in (1_u64..).zip(EXPLORER_FEED_TOOL_ROUTES) {
+        let response = handle_named_tool_call(
+            Some(Value::from(id)),
+            std::sync::Arc::clone(&app),
+            &HeaderMap::new(),
+            name,
+            norito::json!({ "filter": filter, "select": "kind,block", "limit": 2 })
+                .as_object()
+                .expect("feed arguments"),
+        )
+        .await;
+        assert_eq!(
+            response.pointer("/result/isError"),
+            Some(&Value::Bool(false)),
+            "{name} must dispatch: {response:?}"
+        );
+        assert_eq!(
+            response
+                .pointer("/result/structuredContent/status")
+                .and_then(Value::as_u64),
+            Some(200),
+            "{name}: {response:?}"
+        );
+    }
+
+    let expected = ListQuery::new()
+        .filter(FilterExpr::parse(filter).expect("filter"))
+        .select(["kind", "block"])
+        .limit(2);
+    let requests = requests
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        requests.len(),
+        EXPLORER_FEED_TOOL_ROUTES.len(),
+        "only schema-valid calls reach Explorer"
+    );
+    for ((name, route), (method, path_and_query, body)) in
+        EXPLORER_FEED_TOOL_ROUTES.iter().zip(&requests)
+    {
+        let sent = if route.ends_with("/query") {
+            assert_eq!(*method, Method::POST, "{name}");
+            assert_eq!(path_and_query, route, "{name}");
+            ListQuery::from_json_value(json::from_slice::<Value>(body).expect("JSON query body"))
+                .expect("Explorer decodes the body")
+        } else {
+            assert_eq!(*method, Method::GET, "{name}");
+            assert!(body.is_empty(), "{name} sends no body");
+            let (path, raw_query) = path_and_query.split_once('?').expect("query string");
+            assert_eq!(path, *route, "{name}");
+            ListQuery::from_query_pairs(url::form_urlencoded::parse(raw_query.as_bytes()))
+                .expect("Explorer decodes the parameters")
+        };
+        assert_eq!(sent, expected, "{name}");
+    }
+}
+#[tokio::test]
+async fn every_purpose_built_dispatch_contract_has_an_implementation() {
+    use std::task::{Context, Poll, Waker};
+
+    let mut app = mk_app_state_for_tests();
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _router_owner = install_collection_request_capturing_router(&mut app, requests);
+    let headers = HeaderMap::new();
+    let arguments = Map::new();
+    let names = INLINE_PURPOSE_BUILT_DISPATCH_ROUTES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .chain(
+            MANUAL_STATIC_TOOL_DESCRIPTORS
+                .values()
+                .map(|descriptor| descriptor.name.as_str()),
+        );
+    for name in names {
+        // Only the fallback arm is ready with this refusal on its first poll;
+        // a selected handler may still be pending and is dropped unfinished.
+        let mut dispatch = select_purpose_built_tool_dispatch(&app, &headers, name, &arguments);
+        if let Poll::Ready(Err(error)) = dispatch
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            assert!(
+                !error.contains("has no implementation"),
+                "advertised tool `{name}` has no dispatch implementation: {error}"
+            );
+        }
+    }
 }
 #[path = "dispatch_and_argument_tests/canonical_paths_and_status.rs"]
 mod canonical_paths_and_status;

@@ -4,11 +4,14 @@
 //! down to H2 and genesis. A node-local producer instead mints this authority with
 //! one such complete walk, extends it through each newly published durable tip, and
 //! keeps re-reading every retained frame in paced bounded chunks. A request then
-//! reads only its target and parent, and checks its genesis frame against the
-//! retained decision. Corruption of an older local frame is therefore detected within
-//! [`MAX_COVERAGE_AGE`] rather than on the next challenge. A contradiction poisons the
-//! authority until restart; an unminted, lagging or expired authority refuses.
-//! Without an attached producer the complete walk is unchanged.
+//! reads only its target and parent (plus any short lead above the retained tip), and
+//! checks its genesis frame against the retained decision. Corruption of an older
+//! local frame is therefore detected within [`MAX_COVERAGE_AGE`] rather than on the
+//! next challenge. A refused walk withdraws the authority at once; a contradiction then
+//! poisons it until restart. An unminted, lagging, expired or withdrawn authority
+//! refuses as temporarily unavailable. A request keeps the authority it was admitted
+//! under through signing and response release. Without an attached producer the
+//! complete walk is unchanged.
 
 use std::{
     num::NonZeroUsize,
@@ -37,7 +40,8 @@ use crate::{
     sumeragi::certified_chain::CertifiedChain,
 };
 
-/// Heights a request's view may lead the published tip; the producer closes the gap.
+/// Heights a request's view may lead the published tip; the request authenticates
+/// those frames itself and the producer closes the gap.
 const MAX_LEAD: u64 = 16;
 /// Verified heights kept up to the published tip, for views that trail a fresh advance.
 const RECENT: u64 = 64;
@@ -58,6 +62,27 @@ const IDLE: Duration = Duration::from_millis(50);
 /// Producer steps per tick, so shutdown and recovery failure stay responsive.
 const STEPS_PER_TICK: usize = 64;
 
+/// Why an attached retained authority cannot serve a current attestation now. Each is
+/// temporary, because the producer mints, advances or renews the authority, so routes
+/// answer it as unavailable. A contradiction poisons the authority instead, which
+/// stays a conflict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RetainedUnavailable {
+    /// The producer has not minted yet, or withdrew the authority after a refused walk.
+    #[error("retained attestation authority is not minted")]
+    NotMinted,
+    /// No complete re-read started within the coverage age.
+    #[error("retained attestation authority coverage expired")]
+    CoverageExpired,
+    /// The view is neither the retained tip, a recent retained height, nor a short
+    /// lead of it.
+    #[error("retained attestation authority does not cover this view")]
+    NotCovered,
+    /// The authority this request was admitted under was withdrawn, replaced or detached.
+    #[error("retained attestation authority changed after admission")]
+    Changed,
+}
+
 /// Node-local holder in [`Kura`]. Requests keep the complete walk until a producer
 /// attaches; afterwards only a usable published authority admits a request.
 #[derive(Debug, Default)]
@@ -76,17 +101,55 @@ struct Published {
     root_scope: SumeragiRootScope,
     genesis: GenesisDecision,
     tip: AuthenticatedExecutionIdentity,
-    // Ascending verified (height, Iroha hash) pairs ending at `tip`.
-    recent: Arc<[(u64, HashOf<BlockHeader>)]>,
+    // Ascending verified native identities ending at `tip`.
+    recent: Arc<[AuthenticatedExecutionIdentity]>,
     // MAX_COVERAGE_AGE after the start of the last complete re-read; every frame up
     // to `tip` was read at or after that start.
     coverage_expires_at: Instant,
 }
 
-fn refused(reason: &str) -> ProofError {
-    ProofError::NativeExecution(QueryExecutionFail::Conversion(format!(
-        "retained attestation authority {reason}"
-    )))
+/// How one current attestation authenticated the history below its target. It is
+/// taken with the proof and must still hold when the body is signed and when the
+/// response leaves the node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetainedAdmission {
+    /// The request read every frame itself: no producer was attached, the height is
+    /// H1 or H2, or an enclosing caller keeps its full-prefix recipe.
+    CompleteWalk,
+    /// The request read only its target pair under this published generation.
+    Retained { generation: u64 },
+}
+
+/// The release obligation of one signed current attestation. A route that encodes and
+/// sends the statement later passes it to [`retained_attestation_releasable`]
+/// immediately before the response leaves the node.
+#[derive(Clone, Copy, Debug)]
+#[must_use = "a current attestation leaves the node only after its release check"]
+pub struct AttestationRelease {
+    height: u64,
+    admission: RetainedAdmission,
+}
+
+impl AttestationRelease {
+    pub(super) const fn new(height: u64, admission: RetainedAdmission) -> Self {
+        Self { height, admission }
+    }
+
+    pub(super) const fn admission(&self) -> RetainedAdmission {
+        self.admission
+    }
+
+    /// The signed durable-tip height.
+    #[must_use]
+    pub const fn height(&self) -> u64 {
+        self.height
+    }
+}
+
+fn poisoned() -> ProofError {
+    ProofError::NativeExecution(QueryExecutionFail::Conversion(
+        "retained attestation authority is poisoned".to_owned(),
+    ))
 }
 
 // Whether the view's journal holds exactly `hash` at `height`.
@@ -98,60 +161,86 @@ fn journal_has(view: &impl StateReadOnly, height: u64, hash: HashOf<BlockHeader>
         == Some(hash)
 }
 
+// Whether the State still holds `identity`: its own execution tip must equal it in
+// full; below the tip its Iroha hash must stay journaled, and the next advance walk
+// binds the full identity through the lowest new frame's parent.
+fn holds(
+    view: &impl StateReadOnly,
+    tip: NativeExecutionTip,
+    identity: AuthenticatedExecutionIdentity,
+) -> bool {
+    if tip.height() == identity.height() {
+        AuthenticatedExecutionIdentity::tip(tip) == identity
+    } else {
+        tip.height() > identity.height()
+            && journal_has(view, identity.height(), identity.iroha_hash())
+    }
+}
+
 fn nonzero(height: u64) -> Option<NonZeroUsize> {
     usize::try_from(height).ok().and_then(NonZeroUsize::new)
 }
 
 impl RetainedAttestation {
-    /// `Ok(true)` when the published authority covers this view, so the request reads
-    /// only its target and parent; `Ok(false)` without an attached producer, so the
-    /// request keeps the complete walk. A genesis frame that contradicts the retained
-    /// decision poisons the authority.
+    /// How a request at `height` on `view` authenticates its history: the complete walk
+    /// without an attached producer, otherwise only through a published authority that
+    /// covers this exact view. A genesis frame that contradicts the retained decision
+    /// poisons the authority.
     pub(super) fn admit(
         &self,
         view: &impl StateReadOnly,
         height: u64,
         genesis: &GenesisDecision,
-    ) -> Result<bool, ProofError> {
+    ) -> Result<RetainedAdmission, ProofError> {
         if self.poisoned.load(Ordering::Acquire) {
-            return Err(refused("is poisoned"));
+            return Err(poisoned());
         }
         if !self.attached.load(Ordering::Acquire) {
-            return Ok(false);
+            return Ok(RetainedAdmission::CompleteWalk);
         }
-        if self.usable(view, height)?.genesis != *genesis {
-            self.poison("the genesis frame contradicts the retained decision");
-            return Err(refused("is poisoned"));
-        }
-        Ok(true)
-    }
-
-    /// Recheck before signing: the authority must still cover this exact view.
-    pub(super) fn recheck(&self, view: &impl StateReadOnly, height: u64) -> Result<(), ProofError> {
-        if self.poisoned.load(Ordering::Acquire) {
-            return Err(refused("is poisoned"));
-        }
-        if self.attached.load(Ordering::Acquire) {
-            self.usable(view, height)?;
-        }
-        Ok(())
-    }
-
-    fn usable(&self, view: &impl StateReadOnly, height: u64) -> Result<Arc<Published>, ProofError> {
-        let published = self.current().ok_or_else(|| refused("is not minted"))?;
+        let published = self.current().ok_or(RetainedUnavailable::NotMinted)?;
         if Instant::now() >= published.coverage_expires_at {
-            return Err(refused("coverage expired"));
+            return Err(RetainedUnavailable::CoverageExpired.into());
         }
         if published.network != *view.network_id()
             || view
                 .native_execution_tip()
                 .map(NativeExecutionTip::root_scope)
                 != Some(published.root_scope)
-            || !published.covers(view, height)
+            || !published.covers(view, height)?
         {
-            return Err(refused("does not cover this view"));
+            return Err(RetainedUnavailable::NotCovered.into());
         }
-        Ok(published)
+        if published.genesis != *genesis {
+            self.poison("the genesis frame contradicts the retained decision");
+            return Err(poisoned());
+        }
+        Ok(RetainedAdmission::Retained {
+            generation: published.generation,
+        })
+    }
+
+    /// Whether `admission` still holds, before signing and again at release. Poisoned
+    /// history refuses every height. A retained admission also needs its own generation
+    /// still attached, published and within coverage.
+    pub(super) fn check(&self, admission: RetainedAdmission) -> Result<(), ProofError> {
+        if self.poisoned.load(Ordering::Acquire) {
+            return Err(poisoned());
+        }
+        let RetainedAdmission::Retained { generation } = admission else {
+            return Ok(());
+        };
+        if !self.attached.load(Ordering::Acquire) {
+            return Err(RetainedUnavailable::Changed.into());
+        }
+        let published = self
+            .current()
+            .filter(|published| published.generation == generation)
+            .ok_or(RetainedUnavailable::Changed)?;
+        if Instant::now() >= published.coverage_expires_at {
+            return Err(RetainedUnavailable::CoverageExpired.into());
+        }
+        Ok(())
     }
 
     /// The published authority of the current generation, unless poisoned.
@@ -195,7 +284,9 @@ impl RetainedAttestation {
         true
     }
 
-    /// Drop the authority after the State replaced or reverted its retained tip.
+    /// Withdraw the published authority: the State replaced or reverted its retained
+    /// tip, or a refused walk awaits classification. Every admission of an earlier
+    /// generation refuses from here on.
     fn revoke(&self) {
         let mut slot = self.published.write();
         self.generation.fetch_add(1, Ordering::AcqRel);
@@ -215,17 +306,49 @@ impl RetainedAttestation {
 }
 
 impl Published {
-    // The view must contain the retained tip at most MAX_LEAD below its height, or its
-    // height must be one of the recently verified ones with the same Iroha hash.
-    fn covers(&self, view: &impl StateReadOnly, height: u64) -> bool {
-        if self.tip.height() <= height {
-            height - self.tip.height() <= MAX_LEAD
-                && journal_has(view, self.tip.height(), self.tip.iroha_hash())
-        } else {
-            self.recent
-                .iter()
-                .any(|&(at, hash)| at == height && journal_has(view, at, hash))
+    // The view's own execution tip at `height` must be the retained tip or one of the
+    // recently verified identities, in full; or it may lead the retained tip by at most
+    // MAX_LEAD heights whose frames this request authenticates back to the retained tip.
+    fn covers(&self, view: &impl StateReadOnly, height: u64) -> Result<bool, ProofError> {
+        let Some(tip) = view
+            .native_execution_tip()
+            .filter(|tip| tip.height() == height)
+        else {
+            return Ok(false);
+        };
+        let identity = AuthenticatedExecutionIdentity::tip(tip);
+        let retained = self.tip.height();
+        if height == retained {
+            return Ok(identity == self.tip);
         }
+        if height < retained {
+            return Ok(self.recent.contains(&identity));
+        }
+        let (Some(first), Some(last)) = (nonzero(retained + 1), nonzero(height)) else {
+            return Ok(false);
+        };
+        if height - retained > MAX_LEAD {
+            return Ok(false);
+        }
+        // Neither the producer nor the target-pair proof reads these newer frames.
+        let mut parent = None;
+        view.canonical_history()
+            .visit_executed_backwards_until(
+                first,
+                last,
+                |_, _| Ok(()),
+                |receipt| {
+                    if receipt.height() == retained + 1 {
+                        parent = AuthenticatedExecutionIdentity::parent_of(&receipt);
+                    }
+                    Ok(core::ops::ControlFlow::Continue(()))
+                },
+            )
+            .map_err(|error| match error {
+                ExecutionAttemptError::Rejected(error) => ProofError::NativeExecution(error),
+                ExecutionAttemptError::Deferred(local) => ProofError::Deferred(local),
+            })?;
+        Ok(parent == Some(self.tip))
     }
 }
 
@@ -243,9 +366,9 @@ pub struct RetainedAttestationProducer {
     next_scrub: Instant,
     next_scrub_chunk: Instant,
     next_mint: Instant,
-    // A refused walk, judged on the next step's fresh view: revoke if the State
-    // replaced the retained tip meanwhile, otherwise poison.
-    fault: Option<String>,
+    // A refused walk, already withdrawn from requests and judged on the next step's
+    // fresh view: mint again if the State replaced the retained tip, otherwise poison.
+    fault: Option<Fault>,
 }
 
 #[derive(Clone, Copy)]
@@ -255,6 +378,11 @@ struct ScrubPass {
     genesis: GenesisDecision,
     covered: u64,
     next: AuthenticatedExecutionIdentity,
+}
+
+struct Fault {
+    reason: String,
+    tip: AuthenticatedExecutionIdentity,
 }
 
 impl RetainedAttestationProducer {
@@ -283,7 +411,8 @@ impl RetainedAttestationProducer {
     /// Start the supervised producer once startup recovery succeeds.
     ///
     /// The child never returns before shutdown or recovery failure. A refused attach
-    /// or a panicking step leaves requests on the complete walk while it idles.
+    /// or a panicking step leaves requests on the complete walk while it idles. A mint
+    /// is one complete walk (about a millisecond per frame), which shutdown waits for.
     pub fn start(
         state: Arc<State>,
         startup_recovery: StartupRecovery,
@@ -345,8 +474,8 @@ impl RetainedAttestationProducer {
         }
     }
 
-    /// One bounded unit of work: a mint, an advance or one scrub chunk.
-    /// Returns whether more work is immediately pending.
+    /// One bounded unit of work: a classification, a mint, an advance or one scrub
+    /// chunk. Returns whether more work is immediately pending.
     pub fn step(&mut self) -> bool {
         let state = Arc::clone(&self.state);
         let kura = Arc::clone(&self.kura);
@@ -370,24 +499,25 @@ impl RetainedAttestationProducer {
         {
             return false;
         }
+        if let Some(fault) = self.fault.take() {
+            if holds(&view, tip, fault.tip) {
+                holder.poison(&fault.reason);
+                return false;
+            }
+            iroha_logger::info!(
+                height = fault.tip.height(),
+                "retained attestation tip replaced after a refused walk; minting again"
+            );
+            return true;
+        }
         let Some(published) = holder.current() else {
             self.scrub = None;
-            self.fault = None;
             if Instant::now() >= self.next_mint {
                 self.mint(holder, &view, tip);
             }
             return false;
         };
-        let replaced = !journal_has(&view, published.tip.height(), published.tip.iroha_hash());
-        if let Some(reason) = self.fault.take() {
-            if replaced {
-                holder.revoke();
-            } else {
-                holder.poison(&reason);
-            }
-            return replaced;
-        }
-        if replaced {
+        if !holds(&view, tip, published.tip) {
             // The State replaced or reverted the retained tip: mint again from the new one.
             iroha_logger::info!(
                 height = published.tip.height(),
@@ -412,7 +542,7 @@ impl RetainedAttestationProducer {
         }
         // Scrub chunks are paced, never batched: advances and requests keep priority.
         if self.scrub.is_some() && Instant::now() >= self.next_scrub_chunk {
-            self.scrub_chunk(holder, &view);
+            self.scrub_chunk(holder, &view, published.tip);
             self.next_scrub_chunk = Instant::now() + SCRUB_PAUSE;
         }
         false
@@ -443,19 +573,15 @@ impl RetainedAttestationProducer {
                 return;
             }
         };
-        let recent = (height.saturating_sub(RECENT - 1).max(1)..=height)
-            .filter_map(|at| {
-                let index = usize::try_from(at).ok()?.checked_sub(1)?;
-                view.block_hashes().get(index).map(|hash| (at, *hash))
-            })
-            .collect();
+        let identity = AuthenticatedExecutionIdentity::tip(tip);
         let published = Published {
             generation,
             network: *view.network_id(),
             root_scope: tip.root_scope(),
             genesis,
-            tip: AuthenticatedExecutionIdentity::tip(tip),
-            recent,
+            tip: identity,
+            // Heights below the minted tip join `recent` only as later advances read them.
+            recent: Arc::from([identity]),
             coverage_expires_at: started_at + MAX_COVERAGE_AGE,
         };
         if holder.publish(published) {
@@ -493,7 +619,7 @@ impl RetainedAttestationProducer {
             last,
             |_, _| Ok(()),
             |receipt| {
-                fresh.push((receipt.height(), receipt.block_hash()));
+                fresh.push(AuthenticatedExecutionIdentity::of(&receipt));
                 if receipt.height() == from.height() + 1 {
                     parent = AuthenticatedExecutionIdentity::parent_of(&receipt);
                 }
@@ -502,9 +628,19 @@ impl RetainedAttestationProducer {
         );
         match walked {
             Ok(_) if parent == Some(from) => {}
-            Ok(_) => return self.fault("published successors do not extend the retained tip"),
+            Ok(_) => {
+                // The State's authenticated chain names another identity at the retained
+                // height, so it replaced that tip. Mint again from the State's own chain.
+                iroha_logger::info!(
+                    height = from.height(),
+                    "retained attestation tip superseded by its successors; minting again"
+                );
+                holder.revoke();
+                self.scrub = None;
+                return;
+            }
             Err(ExecutionAttemptError::Rejected(error)) => {
-                return self.fault(&format!("advance walk refused: {error}"));
+                return self.fault(holder, from, &format!("advance walk refused: {error}"));
             }
             Err(ExecutionAttemptError::Deferred(_)) => return,
         }
@@ -515,7 +651,7 @@ impl RetainedAttestationProducer {
             .iter()
             .copied()
             .chain(fresh)
-            .filter(|&(at, _)| at >= keep_from)
+            .filter(|identity| identity.height() >= keep_from)
             .collect();
         holder.publish(Published {
             tip: AuthenticatedExecutionIdentity::tip(tip),
@@ -524,7 +660,12 @@ impl RetainedAttestationProducer {
         });
     }
 
-    fn scrub_chunk(&mut self, holder: &RetainedAttestation, view: &impl StateReadOnly) {
+    fn scrub_chunk(
+        &mut self,
+        holder: &RetainedAttestation,
+        view: &impl StateReadOnly,
+        retained: AuthenticatedExecutionIdentity,
+    ) {
         let Some(pass) = self.scrub else {
             return;
         };
@@ -557,15 +698,16 @@ impl RetainedAttestationProducer {
         match walked {
             Ok(()) => {}
             Err(ExecutionAttemptError::Rejected(error)) => {
-                return self.fault(&format!(
-                    "scrub refused at or below {}: {error}",
-                    start.height()
-                ));
+                return self.fault(
+                    holder,
+                    retained,
+                    &format!("scrub refused at or below {}: {error}", start.height()),
+                );
             }
             Err(ExecutionAttemptError::Deferred(_)) => return,
         }
         let Some((own, parent)) = lowest else {
-            return self.fault("scrub chunk returned no receipt");
+            return self.fault(holder, retained, "scrub chunk returned no receipt");
         };
         if first > 1 {
             match parent {
@@ -575,7 +717,11 @@ impl RetainedAttestationProducer {
                         ..pass
                     });
                 }
-                None => self.fault("scrub receipt names no parent above genesis"),
+                None => self.fault(
+                    holder,
+                    retained,
+                    "scrub receipt names no parent above genesis",
+                ),
             }
             return;
         }
@@ -584,7 +730,11 @@ impl RetainedAttestationProducer {
             || own.core_hash() != pass.genesis.core_hash
             || own.result() != pass.genesis.result
         {
-            return self.fault("scrubbed genesis differs from the retained decision");
+            return self.fault(
+                holder,
+                retained,
+                "scrubbed genesis differs from the retained decision",
+            );
         }
         self.scrub = None;
         self.next_scrub = pass.started_at + SCRUB_INTERVAL;
@@ -598,12 +748,22 @@ impl RetainedAttestationProducer {
         }
     }
 
-    // A refused walk over a durable view either raced a replaced tip, which mints
-    // again, or contradicts the retained history, which poisons until restart. The
-    // next step decides on a fresh view; nothing is published meanwhile.
-    fn fault(&mut self, reason: &str) {
+    // A refused walk withdraws the authority at once, so no request admits, signs or
+    // releases under it while it is classified. The next step decides on a fresh durable
+    // view: a replaced tip mints again, a contradiction of the retained history poisons
+    // until restart.
+    fn fault(
+        &mut self,
+        holder: &RetainedAttestation,
+        tip: AuthenticatedExecutionIdentity,
+        reason: &str,
+    ) {
+        holder.revoke();
         self.scrub = None;
-        self.fault = Some(reason.to_owned());
+        self.fault = Some(Fault {
+            reason: reason.to_owned(),
+            tip,
+        });
     }
 }
 
@@ -612,18 +772,22 @@ impl Drop for RetainedAttestationProducer {
         let holder = self.kura.retained_attestation();
         let mut slot = holder.published.write();
         holder.attached.store(false, Ordering::Release);
+        // Admissions taken under this producer never outlive it.
+        holder.generation.fetch_add(1, Ordering::AcqRel);
         *slot = None;
     }
 }
 
-/// Whether a current attestation signed at `height` may still be released: an
-/// attached retained authority must still cover it on a fresh view. Routes call
-/// this after encoding, immediately before the response leaves the node.
-pub fn retained_attestation_releasable(state: &State, height: u64) -> bool {
-    let view = state.view();
-    view.kura()
+/// Whether a signed current attestation may still leave the node. Routes call this
+/// after encoding, immediately before the response is released. Poison refuses every
+/// attestation; a retained admission also needs its own generation still attached,
+/// published and within coverage.
+#[must_use]
+pub fn retained_attestation_releasable(state: &State, release: &AttestationRelease) -> bool {
+    state
+        .kura_handle()
         .retained_attestation()
-        .recheck(&view, height)
+        .check(release.admission())
         .is_ok()
 }
 

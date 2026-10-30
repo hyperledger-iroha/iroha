@@ -437,7 +437,7 @@ mod tests {
             execution_policy_hash: [0xB4; 32],
             nexus_policy_digest: [0xA5; 32],
             native_config_fingerprint: [0xC3; 32],
-            ivm_gas_schedule_hash: [0xE7; 32],
+            host_profiles: crate::HostProfileSet::new([[0xE7; 32]]).expect("one profile"),
         }
     }
     #[tokio::test(flavor = "current_thread")]
@@ -580,15 +580,34 @@ mod tests {
         assert!(reason.starts_with("nexus_policy_digest mismatch"));
     }
     #[test]
-    fn consensus_config_mismatch_rejects_ivm_gas_schedule_drift() {
+    fn a_peer_must_implement_every_active_host_profile_and_may_carry_dormant_ones() {
+        let profile = |byte: u8| [byte; 32];
+        let set = |bytes: &[u8]| {
+            crate::HostProfileSet::new(bytes.iter().map(|byte| profile(*byte))).expect("set")
+        };
+        let required = set(&[0x10, 0x20]);
+        assert_eq!(host_profile_mismatch(&required, &set(&[0x10, 0x20])), None);
+        assert_eq!(
+            host_profile_mismatch(&required, &set(&[0x05, 0x10, 0x20, 0x30])),
+            None,
+            "dormant extra profiles never block a connection"
+        );
+        let reason = host_profile_mismatch(&required, &set(&[0x10]))
+            .expect("a peer without an active host profile is refused");
+        assert!(reason.contains(&hex_bytes(&profile(0x20))), "{reason}");
+        assert_eq!(
+            host_profile_mismatch(&crate::HostProfileSet::default(), &set(&[0x10])),
+            None,
+            "a node that requires nothing admits any canonical set"
+        );
         let expected = sample_consensus_config_caps();
         let mut got = expected;
-        got.ivm_gas_schedule_hash[0] ^= 1;
-        let reason = consensus_config_mismatch(&expected, &got)
-            .expect("one-bit IVM gas-schedule drift must fail the handshake");
-        assert!(reason.starts_with("ivm_gas_schedule_hash mismatch"));
-        assert!(reason.contains(&hex_bytes(&expected.ivm_gas_schedule_hash)));
-        assert!(reason.contains(&hex_bytes(&got.ivm_gas_schedule_hash)));
+        got.host_profiles = set(&[0x77]);
+        assert_eq!(
+            consensus_config_mismatch(&expected, &got),
+            None,
+            "host profiles are a requirement check, not an equality check"
+        );
     }
     struct TrackingWrite {
         buffer: Vec<u8>,

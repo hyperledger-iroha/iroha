@@ -88,21 +88,17 @@ fn missing_record_values() -> Vec<Value> {
     let mut records = values::values();
     records.extend(super::musubi::generated_identity_values::values());
     records.extend(super::private_settlement::generated_identity_values::values());
-    records.push(capture(
-        super::privacy::RegisterPrivacyExact12QualificationV1::new(
-            crate::privacy::tests::generated_instruction_qualification(),
-        ),
-    ));
+    records.push(capture(super::privacy::current_zk_x509_request_fixture_v1()));
     assert_eq!(
         records.len(),
-        58,
+        57,
         "complete missing record fixture inventory"
     );
     let names: std::collections::BTreeSet<_> = records
         .iter()
         .map(|row| row.get("nominal").and_then(Value::as_str).expect("nominal"))
         .collect();
-    assert_eq!(names.len(), 58, "one populated value per missing record");
+    assert_eq!(names.len(), 57, "one populated value per missing record");
     records.sort_by(|a, b| {
         a.get("nominal")
             .and_then(Value::as_str)
@@ -122,13 +118,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "2e2df5cb97289c4de50bb2abf9c17d63fb490de98a3424a319fbb38a8a6d37e0",
+                "4a18290902212e28dbd50efbc135c62056356d4c420cdec77d238063d6aca7b1",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 356, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 355, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -146,12 +142,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 400, "complete populated record case inventory");
+            assert_eq!(case_count, 399, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 356, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 355, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -260,15 +256,20 @@ fn populated_record_values_preserve_the_original_capture() {
 }
 
 #[test]
-#[ignore = "explicit maintenance command prints the canonical privacy qualification record"]
-fn print_privacy_qualification_record_fixture_row() {
-    let row = capture(super::privacy::RegisterPrivacyExact12QualificationV1::new(
-        crate::privacy::tests::generated_instruction_qualification(),
-    ));
-    println!(
-        "PRIVACY_QUALIFICATION_FIXTURE_ROW={}",
-        json::to_json(&row).expect("privacy qualification record")
-    );
+#[ignore = "explicit maintenance command captures the live-upgrade attestation instruction"]
+fn print_runtime_upgrade_record_fixture_rows() {
+    for value in values::runtime_record_values() {
+        let nominal = value.get("nominal").expect("nominal").clone();
+        let hash = value.get("serialize_hash").expect("hash").clone();
+        let row = json::object([
+            ("nominal", nominal),
+            ("serialize_hash", hash.clone()),
+            ("deserialize_hash", hash),
+            ("cases", Value::Array(vec![frame_fields(&value)])),
+        ])
+        .expect("attestation row");
+        println!("{}", json::to_json(&row).expect("row JSON"));
+    }
 }
 
 #[test]

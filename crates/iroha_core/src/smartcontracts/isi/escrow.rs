@@ -3569,6 +3569,129 @@ mod tests {
         );
     }
     #[test]
+    fn restricted_escrow_definitions_keep_completing_live_escrows() {
+        // `specs/live_runtime_upgrades.md` §7.1, §7.2: a restriction closes new custody but never
+        // strands a live escrow. Dispatch applies the root's selection, so go through it.
+        use crate::smartcontracts::isi::execute_borrowed_instruction as dispatch;
+        use iroha_data_model::{
+            isi::{InstructionBox, error::InstructionExecutionError, wire_id_of},
+            runtime::{
+                definition::{RestrictionEntryV1, RestrictionV1},
+                lifecycle::RuntimeRejectionV1,
+            },
+        };
+        let seller = fixture_account("seller");
+        let buyer = fixture_account("buyer");
+        let court = fixture_account("court");
+        let asset_definition = fixture_asset_definition_id();
+        let state = state_with_parties(
+            &seller,
+            &buyer,
+            &court,
+            &asset_definition,
+            Quantity::from(100_u32),
+        );
+        let mut block = state.block(block_header(&state, 1_000));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA7; Hash::LENGTH]));
+        let open = |label: &str| -> InstructionBox {
+            OpenAssetEscrow {
+                escrow_id: fixture_escrow_id(label),
+                asset_definition: asset_definition.clone(),
+                amount: Quantity::from(10_u32),
+                evidence_hashes: Vec::new(),
+            }
+            .into()
+        };
+        let first = fixture_escrow_id("restricted-first");
+        let second = fixture_escrow_id("restricted-second");
+        dispatch(&open("restricted-first"), &seller, &mut tx).expect("open before restrictions");
+        dispatch(&open("restricted-second"), &seller, &mut tx).expect("open before restrictions");
+        let height = tx._curr_block.height().get();
+        let restrict = |tx: &mut crate::state::StateTransaction<'_, '_>, restriction| {
+            let selection = tx.world.runtime_selection.get_mut();
+            let mut restrictions: Vec<RestrictionEntryV1> = [
+                wire_id_of::<OpenAssetEscrow>(),
+                wire_id_of::<AcceptAssetEscrow>(),
+                wire_id_of::<MarkEscrowPaymentSent>(),
+                wire_id_of::<ReleaseAssetEscrow>(),
+            ]
+            .into_iter()
+            .map(|wire_id| {
+                let definition = selection
+                    .bindings
+                    .iter()
+                    .find(|binding| Some(binding.wire_id.as_str()) == wire_id)
+                    .expect("the baseline binds every escrow instruction")
+                    .interface;
+                RestrictionEntryV1 {
+                    definition,
+                    restriction,
+                }
+            })
+            .collect();
+            restrictions.sort_by_key(|entry| entry.definition);
+            selection.restrictions = restrictions;
+        };
+        let refused = |result: Result<(), InstructionExecutionError>| {
+            matches!(
+                result,
+                Err(InstructionExecutionError::Runtime(
+                    RuntimeRejectionV1::DefinitionRestricted { .. }
+                ))
+            )
+        };
+
+        restrict(&mut tx, RestrictionV1::AdmissionClosed(height));
+        assert!(
+            refused(dispatch(&open("restricted-third"), &seller, &mut tx)),
+            "admission closure stops new custody"
+        );
+        dispatch(
+            &AcceptAssetEscrow { escrow_id: first }.into(),
+            &buyer,
+            &mut tx,
+        )
+        .expect("work already admitted continues");
+
+        restrict(&mut tx, RestrictionV1::CompletionOnly(height));
+        assert!(
+            refused(dispatch(
+                &AcceptAssetEscrow { escrow_id: second }.into(),
+                &buyer,
+                &mut tx
+            )),
+            "completion-only takes on no new exposure"
+        );
+        dispatch(
+            &MarkEscrowPaymentSent { escrow_id: first }.into(),
+            &buyer,
+            &mut tx,
+        )
+        .expect("marking payment protects the buyer");
+        dispatch(
+            &ReleaseAssetEscrow { escrow_id: first }.into(),
+            &seller,
+            &mut tx,
+        )
+        .expect("completion runs");
+        assert_eq!(
+            escrow_record(&tx, &first).status,
+            AssetEscrowStatus::Released
+        );
+        assert_eq!(
+            balance(&tx, &buyer, &asset_definition),
+            Quantity::from(10_u32)
+        );
+        assert!(
+            refused(dispatch(
+                &ReleaseAssetEscrow { escrow_id: first }.into(),
+                &seller,
+                &mut tx
+            )),
+            "a released escrow is no longer a live obligation"
+        );
+    }
+    #[test]
     fn asset_lock_drawdown_respects_release_authority_and_tracks_remaining() {
         let source = fixture_account("lock-source");
         let destination = fixture_account("lock-destination");
@@ -3677,18 +3800,6 @@ mod tests {
             [source_asset],
             [],
         );
-        // Component custody registration owns its policy before the first snapshot.
-        let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
-            .expect("funded component parameter fixture");
-        crate::state::set_parameter_cell_for_testing(
-            &mut parameters,
-            crate::sumeragi::test_chain::crypto_fixture_policy()
-                .into_parameter()
-                .expect("canonical fixture crypto policy"),
-            world.sccp_committee_generations.allocation_budget(),
-        )
-        .expect("install original fixture crypto policy");
-        parameters.commit();
         let alias: iroha_data_model::asset::AssetDefinitionAlias =
             "xor#paynet".parse().expect("asset alias");
         world

@@ -76,7 +76,7 @@ test("only a fresh committed Torii view supplies authoritative privacy readiness
   );
   assert.match(
     state,
-    /privacy_capability_snapshot_v1[\s\S]*committed_height[\s\S]*world\.privacy_consensus_policy\(\)[\s\S]*world\s*\.privacy_activations\(\)/,
+    /privacy_capability_snapshot_v1[\s\S]*committed_height[\s\S]*world\.privacy_consensus_policy\(\)[\s\S]*world\s*\.privacy_protocol_policies\(\)/,
   );
 
   const javascriptParser = source(

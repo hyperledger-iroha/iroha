@@ -14,7 +14,7 @@ fn newer_receipt() -> Vec<u8> {
         .bytes()[92..]
         .to_vec()
 }
-fn preparing() -> (Wallet, [u8; 32], Vec<u8>) {
+pub(super) fn preparing() -> (Wallet, [u8; 32], Vec<u8>) {
     let (mut w, send, _) = payer_projection_wallet(true, Some(true));
     let original = newer_receipt();
     let (companion, request, _) = originals();
@@ -27,7 +27,31 @@ fn preparing() -> (Wallet, [u8; 32], Vec<u8>) {
         archive::encode(&companion.certificates).unwrap(),
     ))
     .unwrap();
+    native_owner::sessions::retain_request_session_fixture(&mut w, [197; 32]);
     (w, send, original)
+}
+
+pub(super) fn completing() -> (Wallet, [u8; 32], Vec<u8>) {
+    let (mut w, send, original) = payer_projection_wallet(false, Some(false));
+    native_owner::sessions::retain_request_session_fixture(&mut w, [197; 32]);
+    (w, send, original)
+}
+
+// Only factory-backed exact-object fault loops require this seeded Request Plan.
+fn reopen_with_session(mut w: Wallet) -> Wallet {
+    let (_, manifest) = w.manifest().unwrap();
+    let before = manifest
+        .sessions
+        .get(&mut w.archive, &[197; 32])
+        .unwrap()
+        .unwrap();
+    let mut w = reopen(w);
+    let (_, manifest) = w.manifest().unwrap();
+    assert_eq!(
+        manifest.sessions.get(&mut w.archive, &[197; 32]).unwrap(),
+        Some(before)
+    );
+    w
 }
 
 #[test]
@@ -293,7 +317,7 @@ fn preparing_and_missing_exact_archive_do_not_dequeue() {
 #[test]
 fn completed_dequeue_uncertain_publication_retries_exact_anchor() {
     for after in [false, true] {
-        let (mut w, send, original) = payer_projection_wallet(false, Some(false));
+        let (mut w, send, original) = completing();
         let receipt = w.retain_deferred_credited(&send, &original).unwrap();
         w.verify_deferred_credited(&receipt).unwrap();
         let entry = w.deferred_archive_summary().unwrap().oldest.unwrap();
@@ -351,8 +375,24 @@ fn intake_metadata_survives_rebased_fold_publication_without_cancelling_work() {
         panic!("fold job");
     };
     let proved = job.prove().unwrap();
+    let session = [197; 32];
+    let plan = w
+        .setup(
+            session,
+            &native_owner::sessions::Action::Request {
+                amount: 7,
+                fee: None,
+            },
+        )
+        .unwrap();
+    let selected_plan = archive::encode(&plan).unwrap();
     let receipt = w.retain_deferred_credited(&send, &original).unwrap();
-    let before = archive::encode(&w.manifest().unwrap().1.deferred_archive).unwrap();
+    let (_, manifest) = w.manifest().unwrap();
+    let before = archive::encode(&w.deferred_archive_index(&manifest).unwrap()).unwrap();
+    assert_eq!(
+        manifest.sessions.get(&mut w.archive, &session).unwrap(),
+        Some(selected_plan.clone())
+    );
     assert_eq!(
         w.fold_publish(proved).unwrap().status,
         FoldStatus::Checkpoint {
@@ -360,8 +400,13 @@ fn intake_metadata_survives_rebased_fold_publication_without_cancelling_work() {
             ordinal: 0
         }
     );
-    let after = archive::encode(&w.manifest().unwrap().1.deferred_archive).unwrap();
+    let (_, manifest) = w.manifest().unwrap();
+    let after = archive::encode(&w.deferred_archive_index(&manifest).unwrap()).unwrap();
     assert_eq!(before, after);
+    assert_eq!(
+        manifest.sessions.get(&mut w.archive, &session).unwrap(),
+        Some(selected_plan)
+    );
     assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt));
 }
 
@@ -473,7 +518,7 @@ fn open_request_identity_survives_exact_completed_anchor_and_collected_send_retr
 #[test]
 fn archived_or_lost_exact_archive_output_never_counts_as_complete() {
     for archived in [false, true] {
-        let (mut w, send, original) = payer_projection_wallet(false, Some(false));
+        let (mut w, send, original) = completing();
         let receipt = w.retain_deferred_credited(&send, &original).unwrap();
         w.verify_deferred_credited(&receipt).unwrap();
         let entry = w.deferred_archive_summary().unwrap().oldest.unwrap();
@@ -738,13 +783,13 @@ fn each_intake_object_write_cut_leaves_no_selected_receipt_and_retries_after_reo
             assert_eq!(w.archive.records.lock().unwrap().contains_key(&key), after);
             assert_eq!(w.custody.checkpoint, selected);
             assert_eq!(w.custody.publication_calls, publications);
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             assert!(w.next_deferred_credited().unwrap().is_none());
             assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
             let receipt = w
                 .retain_deferred_credited_with_clock(&send, &original, || None)
                 .unwrap();
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt.clone()));
             w.verify_deferred_credited(&receipt).unwrap();
             let summary = w.deferred_archive_summary().unwrap();
@@ -797,7 +842,7 @@ fn each_rejection_index_write_cut_keeps_oldest_discoverable_until_selected_retry
             assert_eq!(w.archive.records.lock().unwrap().contains_key(&key), after);
             assert_eq!(w.custody.checkpoint, selected);
             assert_eq!(w.custody.publication_calls, publications);
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             assert_eq!(w.next_deferred_credited().unwrap(), Some(bad.clone()));
             assert_eq!(
                 w.retain_deferred_credited_with_clock(&send, FAULT_TEST_MALFORMED_CREDITED, || {
@@ -811,7 +856,7 @@ fn each_rejection_index_write_cut_keeps_oldest_discoverable_until_selected_retry
                 w.verify_deferred_credited(&bad),
                 Err(Error::ReceiptRejected(_))
             ));
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             assert_eq!(w.next_deferred_credited().unwrap(), Some(good.clone()));
             w.verify_deferred_credited(&good).unwrap();
             let summary = w.deferred_archive_summary().unwrap();
@@ -867,7 +912,7 @@ fn each_verified_membership_write_cut_retains_unverified_intake_for_exact_retry(
             assert_eq!(w.archive.records.lock().unwrap().contains_key(&key), after);
             assert_eq!(w.custody.checkpoint, selected);
             assert_eq!(w.custody.publication_calls, publications);
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt.clone()));
             assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
             assert_eq!(
@@ -892,7 +937,7 @@ fn each_verified_membership_write_cut_retains_unverified_intake_for_exact_retry(
 
 #[test]
 fn each_completed_dequeue_write_cut_keeps_exact_anchor_until_capacity_free_retry() {
-    let (mut pilot, send, original) = payer_projection_wallet(false, Some(false));
+    let (mut pilot, send, original) = completing();
     let receipt = pilot
         .retain_deferred_credited_with_clock(&send, &original, || None)
         .unwrap();
@@ -919,7 +964,7 @@ fn each_completed_dequeue_write_cut_keeps_exact_anchor_until_capacity_free_retry
     assert!(keys.iter().all(|key| matches!(key, ArchiveKey::Object(_))));
     for key in keys {
         for after in [false, true] {
-            let (mut w, send, original) = payer_projection_wallet(false, Some(false));
+            let (mut w, send, original) = completing();
             let receipt = w
                 .retain_deferred_credited_with_clock(&send, &original, || None)
                 .unwrap();
@@ -939,7 +984,7 @@ fn each_completed_dequeue_write_cut_keeps_exact_anchor_until_capacity_free_retry
             assert_eq!(w.archive.records.lock().unwrap().contains_key(&key), after);
             assert_eq!(w.custody.checkpoint, selected);
             assert_eq!(w.custody.publication_calls, publications);
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             let summary = w.deferred_archive_summary().unwrap();
             assert_eq!(summary.count, 1);
             assert_eq!(summary.oldest, Some(entry.clone()));
@@ -950,7 +995,7 @@ fn each_completed_dequeue_write_cut_keeps_exact_anchor_until_capacity_free_retry
             ));
             assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
             let selected = w.custody.checkpoint.clone();
-            let mut w = reopen(w);
+            let mut w = reopen_with_session(w);
             assert!(matches!(
                 w.reconcile_deferred_archive(&entry).unwrap(),
                 RequestStatusV1::Outcome(Completion::Complete(_))

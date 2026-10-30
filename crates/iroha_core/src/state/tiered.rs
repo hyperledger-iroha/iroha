@@ -1727,14 +1727,14 @@ impl TieredStateBackend {
             world.verifying_keys
         );
         collect_map!(
-            TieredSegment::RuntimeUpgrades,
-            RuntimeUpgrade,
-            world.runtime_upgrades
+            TieredSegment::RuntimeChangeSets,
+            RuntimeChangeSet,
+            world.runtime_change_sets
         );
         collect_map!(
-            TieredSegment::PrivacyActivations,
-            PrivacyActivation,
-            world.privacy_activations
+            TieredSegment::PrivacyProtocolPolicies,
+            PrivacyProtocolPolicy,
+            world.privacy_protocol_policies
         );
         collect_map!(
             TieredSegment::PrivacyPgcAccounts,
@@ -2519,16 +2519,13 @@ mod measured_bytes_impls {
         },
         nft::NftData,
         permission::Permission,
-        privacy::PrivacyProtocolActivationRecordV1,
+        privacy::PrivacyProtocolPolicyV1,
         proof::{
             ProofAttachment, ProofAttachmentList, ProofBox, ProofId, ProofRecord, ProofStatus,
             VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
         },
         role::{Role, RoleId},
-        runtime::{
-            RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord,
-            RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
-        },
+        runtime::lifecycle::{ChangeSetId, ChangeSetRecordV1},
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
@@ -2614,11 +2611,10 @@ mod measured_bytes_impls {
         ParliamentBody,
         ProofStatus,
         Repeats,
-        RuntimeUpgradeId,
-        RuntimeUpgradeStatus,
+        ChangeSetId,
         TleKeySessionId,
         TleKeySessionLifecycleV1,
-        PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolPolicyV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
         PrivacyPgcPoolInvariantV1,
@@ -3440,39 +3436,11 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for RuntimeUpgradeSbomDigest {
+    impl MeasuredBytes for ChangeSetRecordV1 {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeSbomDigest>();
-            total = total.saturating_add(self.algorithm.measured_bytes_extra());
-            total = total.saturating_add(self.digest.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for RuntimeUpgradeManifest {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeManifest>();
-            total = total.saturating_add(self.name.measured_bytes_extra());
-            total = total.saturating_add(self.description.measured_bytes_extra());
-            total = total.saturating_add(self.abi_version.measured_bytes_extra());
-            total = total.saturating_add(self.abi_hash.measured_bytes_extra());
-            total = total.saturating_add(self.added_syscalls.measured_bytes_extra());
-            total = total.saturating_add(self.added_pointer_types.measured_bytes_extra());
-            total = total.saturating_add(self.start_height.measured_bytes_extra());
-            total = total.saturating_add(self.end_height.measured_bytes_extra());
-            total = total.saturating_add(self.sbom_digests.measured_bytes_extra());
-            total = total.saturating_add(self.slsa_attestation.measured_bytes_extra());
-            total = total.saturating_add(self.provenance.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for RuntimeUpgradeRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<RuntimeUpgradeRecord>();
-            total = total.saturating_add(self.manifest.measured_bytes_extra());
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.proposer.measured_bytes_extra());
-            total = total.saturating_add(self.created_height.measured_bytes_extra());
-            total
+            // A change-set record nests published descriptors and signed attestations; their
+            // canonical encoding bounds the retained heap.
+            size_of::<ChangeSetRecordV1>().saturating_add(norito::codec::Encode::encode(self).len())
         }
     }
     impl MeasuredBytes for AccessSetHints {
@@ -3703,7 +3671,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
             total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
-            total = total.saturating_add(self.manifest.measured_bytes_extra());
+            total = total.saturating_add(norito::codec::Encode::encode(&self.action).len());
             total
         }
     }
@@ -4086,8 +4054,8 @@ enum TieredSegment {
     AccountRoles,
     TxSequences,
     VerifyingKeys,
-    RuntimeUpgrades,
-    PrivacyActivations,
+    RuntimeChangeSets,
+    PrivacyProtocolPolicies,
     PrivacyPgcAccounts,
     PrivacyPgcPoolInvariants,
     PrivacyNullifiers,
@@ -4164,8 +4132,8 @@ macro_rules! tiered_segment_table {
             AccountRoles, AccountRole, "account_roles", account_roles;
             TxSequences, TxSequence, "tx_sequences", tx_sequences;
             VerifyingKeys, VerifyingKey, "verifying_keys", verifying_keys;
-            RuntimeUpgrades, RuntimeUpgrade, "runtime_upgrades", runtime_upgrades;
-            PrivacyActivations, PrivacyActivation, "privacy_activations", privacy_activations;
+            RuntimeChangeSets, RuntimeChangeSet, "runtime_change_sets", runtime_change_sets;
+            PrivacyProtocolPolicies, PrivacyProtocolPolicy, "privacy_protocol_policies", privacy_protocol_policies;
             PrivacyPgcAccounts, PrivacyPgcAccount, "privacy_pgc_accounts", privacy_pgc_accounts;
             PrivacyPgcPoolInvariants, PrivacyPgcPoolInvariant, "privacy_pgc_pool_invariants", privacy_pgc_pool_invariants;
             PrivacyNullifiers, PrivacyNullifier, "privacy_nullifiers", privacy_nullifiers;
@@ -4415,8 +4383,8 @@ pub enum TieredKeyHandle {
     AccountRole(crate::role::RoleIdWithOwner),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
-    RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
-    PrivacyActivation(crate::privacy_state::PrivacyActivationKeyV1),
+    RuntimeChangeSet(iroha_data_model::runtime::lifecycle::ChangeSetId),
+    PrivacyProtocolPolicy(crate::privacy_state::PrivacyProtocolPolicyKeyV1),
     PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
     PrivacyPgcPoolInvariant(crate::privacy_state::PrivacyPgcPoolInvariantKeyV1),
     PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),
@@ -4508,8 +4476,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::AccountRole(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::VerifyingKey(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::RuntimeUpgrade(key) => norito::codec::Encode::encode(key),
-            TieredKeyHandle::PrivacyActivation(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::RuntimeChangeSet(key) => norito::codec::Encode::encode(key),
+            TieredKeyHandle::PrivacyProtocolPolicy(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyPgcAccount(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyPgcPoolInvariant(key) => norito::codec::Encode::encode(key),
             TieredKeyHandle::PrivacyNullifier(key) => norito::codec::Encode::encode(key),
@@ -4668,9 +4636,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
-            TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
-            TieredKeyHandle::PrivacyActivation(id) => {
-                write!(f, "privacy_activation:{id:?}")
+            TieredKeyHandle::RuntimeChangeSet(id) => write!(f, "runtime_change_set:{id:?}"),
+            TieredKeyHandle::PrivacyProtocolPolicy(id) => {
+                write!(f, "privacy_protocol_policy:{id:?}")
             }
             TieredKeyHandle::PrivacyPgcAccount(id) => {
                 write!(f, "privacy_pgc_account:{id:?}")
@@ -4983,7 +4951,7 @@ mod tests {
             }),
         );
         let mut previous = None;
-        for (epoch, byte) in [(1, 81), (2, 83)] {
+        for (index, (epoch, byte)) in [(1, 81), (2, 83)].into_iter().enumerate() {
             let root = PrivacyRootV1::new([byte; 32]);
             let anchor = PrivacyZkX509TrustAnchorRecordV1::new(
                 issuer,
@@ -5023,7 +4991,14 @@ mod tests {
             );
             world.privacy_root_heads.insert(
                 PrivacyRootHeadKeyV1::new(namespace, publication.role).expect("head key"),
-                PrivacyRootHeadRecordV1::new(epoch, root, provenance, None).expect("head"),
+                PrivacyRootHeadRecordV1::new(
+                    epoch,
+                    root,
+                    provenance,
+                    None,
+                    u32::try_from(index + 1).expect("inserted root count fits u32"),
+                )
+                .expect("head"),
             );
         }
         world
@@ -5034,7 +5009,7 @@ mod tests {
     ) -> Result<(), crate::privacy_state::PrivacyStateValidationErrorV1> {
         crate::privacy_state::validate_privacy_persisted_state_v1(
             &iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default(),
-            &world.privacy_activations.view(),
+            &world.privacy_protocol_policies.view(),
             crate::privacy_state::PrivacyPgcStateReadV1 {
                 accounts: &world.privacy_pgc_accounts.view(),
                 pool_invariants: &world.privacy_pgc_pool_invariants.view(),
@@ -5090,7 +5065,7 @@ mod tests {
             MeasuredBytes::measured_bytes(&fixed),
             std::mem::size_of::<PrivacyRootProvenanceV1>()
         );
-        let head = PrivacyRootHeadRecordV1::new(1, PrivacyRootV1::new([92; 32]), fixed, None)
+        let head = PrivacyRootHeadRecordV1::new(1, PrivacyRootV1::new([92; 32]), fixed, None, 1)
             .expect("fixed head");
         assert_eq!(
             MeasuredBytes::measured_bytes(&head),
@@ -5216,8 +5191,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            expected.root().expect("prior root"),
-            changed_root.root().expect("changed root")
+            expected.baseline_root().expect("prior root"),
+            changed_root.baseline_root().expect("changed root")
         );
         drop(block);
         let missing_history = tiered_x509_root_world();
@@ -5397,8 +5372,8 @@ mod tests {
                 cold
             );
             assert_ne!(
-                predecessor.root().expect("prior root"),
-                cold.root().expect("pool root")
+                predecessor.baseline_root().expect("prior root"),
+                cold.baseline_root().expect("pool root")
             );
             block.commit();
             cold
@@ -5463,8 +5438,8 @@ mod tests {
             changed_root
         );
         assert_ne!(
-            changed_root.root().expect("changed root"),
-            expected.root().expect("original root")
+            changed_root.baseline_root().expect("changed root"),
+            expected.baseline_root().expect("original root")
         );
     }
 

@@ -641,6 +641,8 @@ fn missing_governed_and_private_physical_manifests_cannot_use_native_number_coll
 #[test]
 fn allocation_refusal_precedes_normal_and_replacement_pristine_callbacks() {
     for replacement in [false, true] {
+        // Keep unrelated fixture retirements from reopening the measured pool.
+        let _fixture_retirement = crossbeam_epoch::pin();
         let state = state();
         let source = carrier(vec![input(&state, "prepaid refusal")]);
         let budget = state.ivm_execution_budget();

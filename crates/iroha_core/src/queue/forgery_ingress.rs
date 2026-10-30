@@ -1,8 +1,24 @@
-//! One original Queue's native SCCP ingress: cheap source checks, state dedup,
+//! One original Queue's native SCCP ingress: cheap source checks, state and queue dedup,
 //! charged LRU4096, 8/s burst32, then exactly one native pairing (§4.9).
 //!
 //! Cache membership is local denial-of-service state, never recorded evidence or
-//! execution authority. Failed pairing and post-insertion local refusals stay seen.
+//! execution authority. The cache key binds the aggregate signature, so a submission
+//! with a refused signature never shadows the genuine certificate of the same
+//! `(g, m, signers)`. A key is remembered only once a pairing token is taken, and
+//! forgotten again after a local refusal: neither a rate refusal nor local resource
+//! exhaustion is a verdict on the evidence, so neither may deny a later genuine retry.
+//!
+//! A key is also forgotten once its signature verifies, so the cache keeps only pairings
+//! in flight and refused signatures. Genuine evidence is then dropped by state that lives
+//! exactly as long as its reason: the pending claim of a queued transaction carrying it
+//! (§4.19) while that transaction stays queued, and step 7 once it commits. A transaction
+//! that expires, is evicted or is refused after the pairing leaves nothing behind, so no
+//! number of repeats can keep a later genuine submission from the pairing.
+//!
+//! The cache and the bucket throttle remote submissions only. A distributed flood of
+//! fabricated evidence passes the cheap checks and could keep the shared bucket empty;
+//! the node's own keeper, which verifies each certificate before it submits, therefore
+//! skips both and still pays the full pairing ([`SubmissionOrigin::LocalKeeper`]).
 
 use std::time::Instant;
 
@@ -49,11 +65,13 @@ pub enum ForgeryIngressError {
     /// A Queue cannot inherit a second State's finite allocation pool.
     #[error("SCCP ingress cache belongs to a different original State pool")]
     PoolMismatch,
-    /// Every slashable selected G6 member already has a permanent offence.
+    /// No selected slashable G6 member is new and recorded evidence names the generation.
     #[error("SCCP evidence duplicate")]
     Duplicate,
-    /// The exact (generation, message, signer bitmap) was already seen.
-    #[error("SCCP forgery triple already seen")]
+    /// The exact (generation, message, signer bitmap, signature) is being paired or its
+    /// signature was refused, or a queued transaction already carries this
+    /// (generation, message, signer bitmap).
+    #[error("SCCP forgery submission already seen")]
     Seen,
     /// The node-wide pairing token bucket has no token.
     #[error("SCCP forgery pairing rate limit")]
@@ -103,17 +121,39 @@ impl ForgeryIngressError {
     }
 }
 
+/// Who submits a transaction to this node's queue. Only the forgery ingress reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Triple {
+pub(super) enum SubmissionOrigin {
+    /// Torii, P2P gossip and every other source outside this node: the repeat cache
+    /// and the node-wide pairing bucket apply.
+    Remote,
+    /// This node's own SCCP keeper (`Queue::push_local_keeper_with_state`). Its bounded
+    /// watch paces it and it verifies each certificate first, so its evidence skips the
+    /// cache and bucket that remote floods share. Every other check and the pairing stay.
+    LocalKeeper,
+}
+
+/// The LRU key of one submission: the `(g, m, signers)` triple of spec §4.9 and the
+/// SHA-256 of its aggregate signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IngressKey {
     generation: u64,
     message: [u8; 32],
     signers: u32,
+    signature: [u8; 32],
+}
+
+impl IngressKey {
+    /// The `(g, m, signers)` parts of the admission keys, and thus of the pending claim.
+    const fn triple(&self) -> (u64, [u8; 32], u32) {
+        (self.generation, self.message, self.signers)
+    }
 }
 
 /// The inline Queue mutex owns this exact charged fixed backing until Queue drop.
 /// No route, peer, `StateView`, queue clear or tip change resets it.
 pub(super) struct ForgeryIngressState {
-    seen: ChargedBuffer<Triple>,
+    seen: ChargedBuffer<IngressKey>,
     last_refill: Instant,
     credit_ns: u64,
 }
@@ -133,19 +173,14 @@ impl ForgeryIngressState {
         })
     }
 
-    fn observe(&mut self, triple: Triple, now: Instant) -> Result<(), ForgeryIngressError> {
-        if let Some(index) = self.seen.as_slice().iter().position(|seen| *seen == triple) {
+    fn observe(&mut self, key: IngressKey, now: Instant) -> Result<(), ForgeryIngressError> {
+        if let Some(index) = self.position(&key) {
             // Touching a repeat is an LRU access, but never consumes a pairing token.
             self.seen.as_mut_slice()[index..].rotate_left(1);
             return Err(ForgeryIngressError::Seen);
         }
-        if self.seen.as_slice().len() == CACHE_CAPACITY {
-            self.seen.as_mut_slice().rotate_left(1);
-            self.seen.as_mut_slice()[CACHE_CAPACITY - 1] = triple;
-        } else {
-            self.seen.push_reserved(triple);
-        }
-        // Insert BEFORE rate refusal/pairing. Refused submissions remain seen.
+        // Take the token BEFORE remembering the key: a rate refusal is no verdict on the
+        // evidence, so it stays unseen and a later retry reaches the pairing.
         // Monotonic time prevents wall-clock rollback from minting tokens.
         let elapsed = now.saturating_duration_since(self.last_refill);
         if now >= self.last_refill {
@@ -159,14 +194,35 @@ impl ForgeryIngressState {
             return Err(ForgeryIngressError::RateLimited);
         }
         self.credit_ns -= TOKEN_NS;
+        // Remember the key before the pairing, so concurrent exact repeats share this one
+        // pairing while it runs. A refused signature stays seen under its own digest only.
+        if self.seen.as_slice().len() == CACHE_CAPACITY {
+            self.seen.as_mut_slice().rotate_left(1);
+            self.seen.as_mut_slice()[CACHE_CAPACITY - 1] = key;
+        } else {
+            self.seen.push_reserved(key);
+        }
         Ok(())
+    }
+
+    /// Forget `key` after a local refusal that was no verdict on the evidence, or once its
+    /// signature verified.
+    fn forget(&mut self, key: &IngressKey) {
+        if let Some(index) = self.position(key) {
+            self.seen.as_mut_slice()[index..].rotate_left(1);
+            self.seen.pop();
+        }
+    }
+
+    fn position(&self, key: &IngressKey) -> Option<usize> {
+        self.seen.as_slice().iter().position(|seen| seen == key)
     }
 }
 
 impl Queue {
     fn observe_forgery(
         &self,
-        triple: Triple,
+        key: IngressKey,
         budget: &AllocationBudget,
         now: Instant,
     ) -> Result<(), ForgeryIngressError> {
@@ -183,16 +239,32 @@ impl Queue {
             if !state.seen.belongs_to(budget) {
                 return Err(ForgeryIngressError::PoolMismatch);
             }
-            state.observe(triple, now)
+            state.observe(key, now)
         })
+    }
+
+    /// Forget `key` after its pairing met a local refusal or verified it (§4.9 ingress).
+    fn forget_forgery(&self, key: &IngressKey) {
+        if let Some(state) = self.forgery_ingress.lock().as_mut() {
+            state.forget(key);
+        }
+    }
+
+    /// Whether a queued transaction holds the pending claim of `key`'s `(g, m, signers)`.
+    fn forgery_queued(&self, key: &IngressKey) -> bool {
+        self.pending_sccp_exempt
+            .lock()
+            .exclusive_holder(SccpExemptClassV1::ForgeryEvidence, &key.triple())
+            .is_some()
     }
 
     pub(super) fn admit_forgery(
         &self,
         view: &StateView<'_>,
         transaction: &SignedTransaction,
+        origin: SubmissionOrigin,
     ) -> Result<SccpAdmissionKeysV1, Error> {
-        self.admit_forgery_inner(view, transaction)
+        self.admit_forgery_inner(view, transaction, origin)
             .map_err(ForgeryIngressError::into_queue)
     }
 
@@ -200,6 +272,7 @@ impl Queue {
         &self,
         view: &StateView<'_>,
         transaction: &SignedTransaction,
+        origin: SubmissionOrigin,
     ) -> Result<SccpAdmissionKeysV1, ForgeryIngressError> {
         let payload = transaction.payload();
         let evidence = match &payload.instructions {
@@ -214,27 +287,52 @@ impl Queue {
         // claim, original Global source, generation/root, E0 and mismatch, in that order.
         let precheck = forgery::prepare_committed(view, evidence, payload.creation_time_ms)?;
         let budget = view.execution_budget();
-        // Query exact original G6 tuples through the shared permanent-state reader.
-        // It funds every nested AccountId query copy before construction; no writes.
-        if forgery::new_signers(
+        // Query exact original G6 tuples through the shared permanent-state reader and the
+        // shared step-7 predicate. It funds every nested AccountId query copy; no writes.
+        if forgery::new_offenders(
             view.world(),
             precheck.generation(),
             precheck.qc().signers,
             &budget,
-        )? == 0
+        )?
+        .is_none()
         {
             return Err(ForgeryIngressError::Duplicate);
         }
-        let triple = Triple {
+        let key = IngressKey {
             generation: precheck.generation().generation,
             message: *precheck.message(),
             signers: precheck.qc().signers,
+            signature: iroha_crypto::sha256(evidence.aggregate_signature),
         };
-        self.observe_forgery(triple, &budget, Instant::now())?;
+        // A queued transaction carrying this triple holds its pending claim (§4.19), so this
+        // submission could add nothing, whatever its signature: refuse it before any token
+        // or pairing. Like step 7 this deduplicates every origin, the keeper included.
+        if self.forgery_queued(&key) {
+            return Err(ForgeryIngressError::Seen);
+        }
+        // Forgers can flood remote ingress to keep the shared bucket empty; the node's own
+        // keeper must not queue behind them, so only remote submissions are throttled.
+        let throttled = origin == SubmissionOrigin::Remote;
+        if throttled {
+            self.observe_forgery(key, &budget, Instant::now())?;
+        }
         // No cache mutex spans cryptography; all observers share its preceding atomic
         // LRU/token decision. No invented read-worker deadline or replacement pool.
-        let _verified = forgery::verify_prechecked(&precheck, &budget)?;
-        let parts = (triple.generation, triple.message, triple.signers);
+        if let Err(error) = forgery::verify_prechecked(&precheck, &budget) {
+            let error = ForgeryIngressError::from(error);
+            if throttled && error.is_local() {
+                self.forget_forgery(&key);
+            }
+            return Err(error);
+        }
+        // Verified evidence leaves the cache, so it never outlives the transaction carrying
+        // it: the pending claim drops repeats while that transaction stays queued, and
+        // step 7 once it commits. Nothing it left could shadow a later genuine submission.
+        if throttled {
+            self.forget_forgery(&key);
+        }
+        let parts = key.triple();
         Ok(SccpAdmissionKeysV1::new(SccpExemptClassV1::ForgeryEvidence)
             .with_exclusive(&parts)
             .with_content(&parts))

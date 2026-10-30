@@ -84,6 +84,57 @@ fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
         .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
 }
+/// Deterministic BLS-normal node identity explicitly authored for Torii test fixtures.
+///
+/// This public fixture key is not production custody. It is separate from the
+/// default minimal configuration and receipt-signing identities; callers must
+/// explicitly choose it when constructing a private-settlement test runtime.
+///
+/// # Panics
+/// Panics if the native BLS implementation cannot derive the fixed fixture key.
+#[must_use]
+pub fn private_settlement_test_node_key() -> KeyPair {
+    KeyPair::try_from_seed(
+        b"iroha:torii:test-fixture:private-settlement-node:v1".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .expect("derive explicit private-settlement BLS-normal test node key")
+}
+
+/// Attach private-settlement test capabilities from exactly the supplied node key.
+///
+/// This fixture utility never selects or generates a fallback key and must not
+/// be called by production startup. Other runtime dependencies are preserved. Without
+/// `app_api`, the private-settlement component and its capability fields are absent,
+/// so this returns `deps` unchanged and does not inspect the unused node key.
+///
+/// # Panics
+/// With `app_api`, panics if the supplied key is not BLS-normal.
+#[must_use]
+pub fn with_private_settlement_test_signers(
+    deps: crate::ToriiRuntimeDeps,
+    node_key: &KeyPair,
+) -> crate::ToriiRuntimeDeps {
+    #[cfg(feature = "app_api")]
+    {
+        let availability =
+            iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1::new(
+                node_key.clone(),
+            )
+            .expect("private-settlement test node key must be BLS-normal");
+        let phase =
+            iroha_core::private_settlement::PrivateSettlementPhaseSignerV1::new(node_key.clone())
+                .expect("private-settlement test node key must be BLS-normal");
+        deps.with_private_settlement_availability_signer(Arc::new(availability))
+            .with_private_settlement_phase_signer(Arc::new(phase))
+    }
+    #[cfg(not(feature = "app_api"))]
+    {
+        let _ = node_key;
+        deps
+    }
+}
+
 /// Parameters for invoking a contract within Torii integration tests.
 #[derive(Clone, Copy)]
 pub struct ContractCallOptions<'a> {
@@ -1071,6 +1122,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
             verification_public_key: None,
             signing_private_key: None,
+            upgrade_checkpoint: Default::default(),
         },
         telemetry_profile: A::TelemetryProfile::Disabled,
         telemetry: None,
@@ -1352,7 +1404,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-            runtime_upgrade_provenance: A::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: A::SorafsPenaltyPolicy::default(),
             sorafs_telemetry: A::SorafsTelemetryPolicy::default(),
@@ -1452,7 +1503,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             codec: A::StreamingCodec {
                 cabac_mode: A::CabacMode::Disabled,
                 trellis_block_sizes: defaults::streaming::codec::trellis_blocks(),
-                rans_tables_path: defaults::streaming::codec::rans_tables_path(),
+                rans_tables_path: None,
                 entropy_mode: norito::streaming::EntropyMode::RansBundled,
                 bundle_width: defaults::streaming::codec::bundle_width(),
                 bundle_accel: A::BundleAcceleration::None,
@@ -1483,6 +1534,92 @@ mod tests {
     use iroha_model_base::chain::ChainId;
 
     use std::{borrow::Cow, sync::Arc};
+    #[test]
+    fn private_settlement_test_node_key_is_explicit_deterministic_bls() {
+        let first = super::private_settlement_test_node_key();
+        let second = super::private_settlement_test_node_key();
+        assert_eq!(first.algorithm(), iroha_crypto::Algorithm::BlsNormal);
+        assert_eq!(first.public_key(), second.public_key());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn private_settlement_test_signers_retain_the_exact_supplied_node_identity() {
+        let node_key = iroha_crypto::KeyPair::try_from_seed(
+            b"iroha:torii:test-fixture:alternate-private-settlement-node:v1".to_vec(),
+            iroha_crypto::Algorithm::BlsNormal,
+        )
+        .expect("alternate original BLS node identity");
+        assert_ne!(
+            node_key.public_key(),
+            super::private_settlement_test_node_key().public_key()
+        );
+        let unrelated_signer = checked_random_keypair("unrelated retained runtime role");
+        let deps = crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            crate::routing::MaybeTelemetry::disabled(),
+        )
+        .with_torii_proxy_bridge_signer(unrelated_signer.clone());
+        let deps = super::with_private_settlement_test_signers(deps, &node_key);
+        let expected = iroha_model_base::peer::PeerId::new(node_key.public_key().clone());
+        assert_eq!(
+            deps.private_settlement_availability_signer
+                .as_ref()
+                .unwrap()
+                .peer_id(),
+            &expected
+        );
+        assert_eq!(
+            deps.private_settlement_phase_signer
+                .as_ref()
+                .unwrap()
+                .peer_id(),
+            &expected
+        );
+        assert_eq!(
+            deps.torii_proxy_bridge_signer
+                .as_ref()
+                .unwrap()
+                .public_key(),
+            unrelated_signer.public_key()
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    #[should_panic(expected = "private-settlement test node key must be BLS-normal")]
+    fn private_settlement_test_signers_refuse_non_bls_node_identity() {
+        let node_key = iroha_crypto::KeyPair::try_from_seed(
+            b"iroha:torii:test-fixture:not-a-private-settlement-node:v1".to_vec(),
+            iroha_crypto::Algorithm::Ed25519,
+        )
+        .expect("explicit non-BLS fixture");
+        let deps = crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+        let _ = super::with_private_settlement_test_signers(deps, &node_key);
+    }
+
+    #[cfg(not(feature = "app_api"))]
+    #[test]
+    fn absent_private_settlement_component_preserves_other_runtime_capabilities() {
+        let node_key = checked_random_keypair("unused key for absent private-settlement component");
+        let deps = crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            crate::routing::MaybeTelemetry::disabled(),
+        )
+        .with_torii_proxy_bridge_signer(node_key.clone());
+        let deps = super::with_private_settlement_test_signers(deps, &node_key);
+        assert_eq!(
+            deps.torii_proxy_bridge_signer
+                .as_ref()
+                .unwrap()
+                .public_key(),
+            node_key.public_key()
+        );
+    }
+
     #[test]
     fn minimal_root_cfg_keeps_durable_torii_paths_in_the_test_data_dir() {
         let data_dir = TestDataDirGuard::new();

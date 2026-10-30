@@ -433,7 +433,7 @@ impl Root {
         let api_token = listener_credential()?;
         let selected_chain = chain.clone();
         let selected_key = genesis_key(index);
-        let selected_staking = iroha_test_network::genesis_support::staking_policy(
+        let selected_staking = iroha_genesis::default_staking_policy(
             fee_asset(),
             account(&selected_key),
             account(&selected_key),

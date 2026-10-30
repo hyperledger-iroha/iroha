@@ -598,7 +598,7 @@ async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
 }
 #[tokio::test]
 async fn pipeline_status_handler_cache_hit_ignores_tx_rate_limiter_pressure() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x72; Hash::LENGTH]));
     {
@@ -2343,7 +2343,7 @@ fn assert_native_pending_for_test(app: &SharedAppState, transaction: &SignedTran
 }
 
 fn executed_history_test_fixture(
-    config: iroha_core::sumeragi::test_chain::TestChainConfig,
+    mut config: iroha_core::sumeragi::test_chain::TestChainConfig,
     key: &KeyPair,
     instructions: Vec<iroha_data_model::isi::InstructionBox>,
     expected_applied: bool,
@@ -2355,6 +2355,17 @@ fn executed_history_test_fixture(
     use iroha_core::sumeragi::test_chain::CertifiedTestChain;
     let creation_time = config.genesis_time_ms.checked_add(1).unwrap();
     let nexus = config.nexus.clone();
+    if let Some(nexus) = &nexus {
+        config
+            .genesis_parameters
+            .push(iroha_data_model::parameter::Parameter::Custom(
+                nexus
+                    .fees
+                    .clone()
+                    .into_custom_parameter()
+                    .expect("author the fixture's exact monetary policy before signing genesis"),
+            ));
+    }
     let mut chain = CertifiedTestChain::start(config).unwrap();
     let mut builder = TransactionBuilder::new(
         chain.network_id(),
@@ -3975,7 +3986,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
 }
 #[tokio::test]
 async fn public_pipeline_status_does_not_expose_rejection_details() {
-    let app = mk_app_state_for_tests();
+    let app = mk_native_app_state_for_tests();
     let (block, _) = make_signed_block(1, None);
     let tx_hash = block.external_transactions().next().expect("tx").hash();
     let reason = TransactionRejectionReason::Validation(ValidationFail::TooComplex);

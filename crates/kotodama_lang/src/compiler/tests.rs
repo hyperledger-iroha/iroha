@@ -14,15 +14,15 @@ mod state_operands;
 use super::{
     ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
     COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
-    DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET,
-    HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE, HINT_SKIP_DYNAMIC_STATE_PATH,
-    HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
-    NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
-    classify_ir_access, collect_dynamic_access_hints, decoded_control_target, emit_addi,
-    emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
-    emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
-    patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
-    record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
+    DOMAIN_WILDCARD_KEY, DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY,
+    HINT_SKIP_CONTRACT_CALL_TARGET, HINT_SKIP_DYNAMIC_INSTRUCTION_BRIDGE,
+    HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
+    IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES,
+    TransferKind, WIDE_IMM_MAX, classify_ir_access, collect_dynamic_access_hints,
+    decoded_control_target, emit_addi, emit_get_private_input_arguments, emit_load64,
+    emit_parallel_register_moves, emit_private_numeric_valcom_arguments, emit_store64, encode_addi,
+    encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind,
+    push_word, record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
     stack_slot_offset_bytes,
 };
 use crate::{
@@ -1930,6 +1930,8 @@ mod fi_link_revision_tests;
 mod same_uid_tests;
 #[path = "uid_holding_quote_tests.rs"]
 mod uid_holding_quote_tests;
+#[path = "x509_pending_action_tests.rs"]
+mod x509_pending_action_tests;
 
 #[test]
 fn native_escrow_builtins_emit_escrow_syscalls() {
@@ -6778,12 +6780,43 @@ fn production_accepts_dynamic_state_path_access_fallback() {
 #[test]
 fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
     let src = include_str!("fixtures/v1/c165.ko");
-    let compiler = Compiler::new();
-    let err = compiler
-        .compile_source_with_manifest(src)
+    let session = crate::session::CompilerSession::default();
+    let request = crate::session::CompileRequest {
+        source: src,
+        source_name: Some("invalid_trigger.ko"),
+    };
+    let built = session
+        .build(request)
         .expect_err("production should reject undecodable literal trigger specs");
-    assert!(err.contains("E_ACCESS_INCOMPLETE"));
-    assert!(err.contains(HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE));
+    let checked = session.check(request);
+    assert!(
+        checked.is_err(),
+        "check accepted a source rejected by build: {built:?}"
+    );
+    assert_eq!(checked.unwrap_err(), built);
+    assert_eq!(built.diagnostics.len(), 1);
+    let diagnostic = &built.diagnostics[0];
+    assert_eq!(diagnostic.code, "E_ACCESS_INCOMPLETE");
+    assert_eq!(
+        diagnostic.phase,
+        crate::diagnostic::DiagnosticPhase::Semantic
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains(HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE)
+    );
+    assert!(diagnostic.help.is_some());
+    let span = diagnostic
+        .primary_span
+        .as_ref()
+        .expect("trigger argument span");
+    assert_eq!(span.source.as_deref(), Some("invalid_trigger.ko"));
+    let range = span.byte_range.expect("exact argument range");
+    assert_eq!(
+        &src[range.start as usize..range.end as usize],
+        r#"Json::parse("{\"name\":\"t1\"}")"#
+    );
 }
 #[test]
 fn production_rejects_raw_call_contract_surface() {

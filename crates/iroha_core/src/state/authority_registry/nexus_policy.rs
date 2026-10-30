@@ -264,12 +264,6 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 nexus.axt.replay_retention_slots.get()
             ),
             record!(
-                nexus.atomic_private_settlement.enabled,
-                nexus.atomic_private_settlement.activation_height,
-                nexus
-                    .atomic_private_settlement
-                    .minimum_activation_notice_blocks
-                    .get(),
                 nexus.atomic_private_settlement.proof_profile_version.get(),
                 nexus.atomic_private_settlement.max_participants.get(),
                 nexus.atomic_private_settlement.max_expiry_blocks.get(),
@@ -620,7 +614,7 @@ mod tests {
         changed.routing_policy.default_lane = LaneId::new(1);
         assert_ne!(authority(&changed), original, "routing policy");
         let mut changed = baseline.clone();
-        changed.atomic_private_settlement.activation_height = Some(10);
+        changed.atomic_private_settlement.max_expiry_blocks = core::num::NonZeroU64::new(10).unwrap();
         assert_ne!(authority(&changed), original, "atomic settlement policy");
         let changed = NexusStaticAuthorityV1::from_actual(
             &baseline,

@@ -1,7 +1,7 @@
 // Single-dispatch tests of the Exact12 roles. Included in `privacy_verifier::tests`.
 //
 // The role samples are structurally valid envelopes with placeholder proofs. They pass envelope
-// and activation validation and are never accepted by a native verifier, so they show which
+// and profile validation and are never accepted by a native verifier, so they show which
 // verifier arm, or which typed refusal, each role reaches without running a prover.
 
 /// Dispatch context of one role sample: its own network, height 2, no trusted state.
@@ -10,7 +10,8 @@ fn role_sample_context(
 ) -> PrivacyVerificationContextV1<'_> {
     let statement_context = sample.envelope.statement.context();
     PrivacyVerificationContextV1 {
-        activation: &sample.activation,
+        profile: &sample.profile,
+        protocol_limits: &sample.profile.protocol_limits,
         consensus_limits: &TEST_CONSENSUS_LIMITS,
         network_id: &statement_context.network_id,
         genesis_hash: *statement_context.network_id.as_bytes(),
@@ -62,8 +63,9 @@ fn verifier_arm_of(error: &PrivacyVerificationErrorV1) -> Option<PrivacyProtocol
             Protocol::IrohaBootleLanternAnoncredV1
         }
         Error::Context(_)
-        | Error::CompiledActivation(_)
+        | Error::CompiledProfile(_)
         | Error::Envelope(_)
+        | Error::AttachedZkX509(_)
         | Error::UnsupportedOperation(_)
         | Error::EffectRoleMismatch(_)
         | Error::CanonicalEncoding(_) => return None,
@@ -106,7 +108,7 @@ fn every_role_reaches_its_own_native_verifier_or_its_typed_refusal() {
         PrivacyActionRoleV1::ALL
     );
     for sample in &samples {
-        let result = verify_privacy_envelope_after_compiled_activation_v1(
+        let result = verify_privacy_envelope_after_compiled_profile_v1(
             &sample.envelope,
             &role_sample_context(sample),
         );
@@ -136,7 +138,7 @@ fn every_role_reaches_its_own_native_verifier_or_its_typed_refusal() {
     }
 }
 
-/// The typed refusal is the fifth check: compiled activation, envelope, trusted
+/// The typed refusal is the fifth check: compiled profile, envelope, trusted
 /// context and canonical byte charging all precede it, and it precedes every
 /// native verifier.
 #[test]
@@ -144,18 +146,18 @@ fn unsupported_refusal_keeps_its_place_in_the_failure_precedence() {
     let refused = role_sample(PrivacyActionRoleV1::ZkAceAuthorization);
     let other = role_sample(PrivacyActionRoleV1::VeRangeRange);
 
-    // Through the public entry the compiled-activation check comes first: the
-    // sample activation is not the compiled profile of this binary.
+    // Through the public entry the compiled-profile check comes first: the
+    // sample profile is not the compiled profile of this binary.
     assert!(matches!(
         verify_privacy_envelope_v1(&refused.envelope, &role_sample_context(&refused)),
-        Err(PrivacyVerificationErrorV1::CompiledActivation(_))
+        Err(PrivacyVerificationErrorV1::CompiledProfile(_))
     ));
 
     // Envelope validity precedes the registry.
     let mut foreign_proof = refused.envelope.clone();
     foreign_proof.proof = other.envelope.proof.clone();
     assert!(matches!(
-        verify_privacy_envelope_after_compiled_activation_v1(
+        verify_privacy_envelope_after_compiled_profile_v1(
             &foreign_proof,
             &role_sample_context(&refused)
         ),
@@ -166,21 +168,21 @@ fn unsupported_refusal_keeps_its_place_in_the_failure_precedence() {
     let mut wrong_index = role_sample_context(&refused);
     wrong_index.expected_action_index = 1;
     assert!(matches!(
-        verify_privacy_envelope_after_compiled_activation_v1(&refused.envelope, &wrong_index),
+        verify_privacy_envelope_after_compiled_profile_v1(&refused.envelope, &wrong_index),
         Err(PrivacyVerificationErrorV1::Context(detail))
             if detail.code == PrivacyVerificationContextFailureCodeV1::ActionIndexMismatch
     ));
     let mut zero_genesis = role_sample_context(&refused);
     zero_genesis.genesis_hash = [0; 32];
     assert!(matches!(
-        verify_privacy_envelope_after_compiled_activation_v1(&refused.envelope, &zero_genesis),
+        verify_privacy_envelope_after_compiled_profile_v1(&refused.envelope, &zero_genesis),
         Err(PrivacyVerificationErrorV1::Context(detail))
             if detail.code == PrivacyVerificationContextFailureCodeV1::ZeroGenesisHash
     ));
 
     // With everything else valid the registry refuses before the native verifier.
     assert!(matches!(
-        verify_privacy_envelope_after_compiled_activation_v1(
+        verify_privacy_envelope_after_compiled_profile_v1(
             &refused.envelope,
             &role_sample_context(&refused)
         ),
@@ -219,11 +221,11 @@ fn dispatch_rejects_substitution_between_every_pair_of_roles_before_any_verifier
                     own.role,
                     other.role
                 );
-                for activation in [&own.activation, &other.activation] {
+                for profile in [&own.profile, &other.profile] {
                     let mut context = role_sample_context(own);
-                    context.activation = activation;
+                    context.profile = profile;
                     let error =
-                        verify_privacy_envelope_after_compiled_activation_v1(&envelope, &context)
+                        verify_privacy_envelope_after_compiled_profile_v1(&envelope, &context)
                             .expect_err("a substituted envelope is never verified");
                     assert!(
                         matches!(error, PrivacyVerificationErrorV1::Envelope(_)),

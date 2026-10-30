@@ -1,4 +1,4 @@
-//! Restricted dissemination uses the native incarnation and exact live participant keys.
+//! Restricted dissemination uses exact independent-root or native-lane authority.
 
 use super::*;
 use crate::{
@@ -95,7 +95,9 @@ fn peers(members: &[SumeragiLaneMember]) -> BTreeSet<PeerId> {
 
 #[test]
 fn disjoint_global_and_native_committees_deliver_only_to_native_members() {
-    let world = World::new();
+    let world = crate::sumeragi::lanes::routing::test_support::world(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    );
     let global = install_members(&world, 1, false);
     let native = install_members(&world, 11, true);
     install_lane(&world, 2, native.clone());
@@ -115,7 +117,9 @@ fn disjoint_global_and_native_committees_deliver_only_to_native_members() {
 
 #[test]
 fn fanout_caps_and_connectivity_only_narrow_the_native_committee() {
-    let world = World::new();
+    let world = crate::sumeragi::lanes::routing::test_support::world(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    );
     let members = install_members(&world, 11, true);
     install_lane(&world, 2, members.clone());
     let online: BTreeSet<_> = members
@@ -150,7 +154,9 @@ fn fanout_caps_and_connectivity_only_narrow_the_native_committee() {
 
 #[test]
 fn missing_inactive_closing_or_mismatched_lane_fails_closed() {
-    let world = World::new();
+    let world = crate::sumeragi::lanes::routing::test_support::world(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    );
     let members = install_members(&world, 11, true);
     let online = peers(&members);
     assert_eq!(
@@ -185,7 +191,9 @@ fn missing_inactive_closing_or_mismatched_lane_fails_closed() {
 
 #[test]
 fn current_incarnation_replaces_old_committee_without_sibling_union() {
-    let world = World::new();
+    let world = crate::sumeragi::lanes::routing::test_support::world(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    );
     let original = install_members(&world, 11, true);
     let replacement = install_members(&world, 21, true);
     install_lane(&world, 2, original.clone());
@@ -221,7 +229,9 @@ fn current_incarnation_replaces_old_committee_without_sibling_union() {
 
 #[test]
 fn nonlive_wrong_role_or_different_pop_keys_cannot_receive_restricted_bodies() {
-    let world = World::new();
+    let world = crate::sumeragi::lanes::routing::test_support::world(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    );
     let members = install_members(&world, 11, true);
     install_lane(&world, 2, members.clone());
     let mut block = world.block();
@@ -275,7 +285,9 @@ fn nonlive_wrong_role_or_different_pop_keys_cannot_receive_restricted_bodies() {
 
 #[test]
 fn invalid_committee_cannot_define_restricted_recipients() {
-    let world = World::new();
+    let world = crate::sumeragi::lanes::routing::test_support::world(
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    );
     let mut members = install_members(&world, 11, true);
     members[3] = members[0].clone();
     install_lane(&world, 2, members.clone());
@@ -340,5 +352,173 @@ fn restricted_receiver_must_be_a_live_member_of_the_current_incarnation() {
     assert_eq!(
         gossiper.validate_restricted_recipient(route(2)),
         Err("not_native_lane_member")
+    );
+}
+
+fn private_chain() -> crate::sumeragi::test_chain::CertifiedTestChain {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_data_model::{
+        NetworkId,
+        asset::{AssetBalancePolicy, AssetDefinition},
+        block::consensus::RootFeePolicy,
+        domain::Domain,
+        isi::Register,
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
+        parameter::Parameter,
+    };
+
+    let mut config = TestChainConfig::new(World::new(), 1_000);
+    config.root_scope = SumeragiRootScope::Dataspace {
+        parent_network_id: NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"restricted-gossip-parent",
+            )),
+        ),
+        dataspace_id: DataSpaceId::new(9),
+    };
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.lane_catalog = LaneCatalog::new(
+        1_u32.try_into().unwrap(),
+        vec![LaneConfig {
+            dataspace_id: DataSpaceId::new(9),
+            alias: "private-gossip".into(),
+            visibility: LaneVisibility::Restricted,
+            ..LaneConfig::default()
+        }],
+    )
+    .unwrap();
+    nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        id: DataSpaceId::new(9),
+        alias: "private-gossip".into(),
+        description: None,
+        fault_tolerance: 1,
+    }])
+    .unwrap();
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    nexus.routing_policy.default_dataspace = DataSpaceId::new(9);
+    config.nexus = Some(nexus);
+    let fee_domain = iroha_model_base::domain::DomainId::try_new("fees", "private-gossip").unwrap();
+    let fees = RootFeePolicy {
+        base_fee: 1_u32.into(),
+        per_gas_unit_fee: 1_u32.into(),
+        ..iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    };
+    config.genesis_instructions.extend([
+        Register::domain(Domain::new(fee_domain.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            fees.fee_asset_id.clone(),
+            "Private gossip fee",
+            AssetBalancePolicy::DataspaceRestricted,
+            Some(fee_domain),
+        ))
+        .into(),
+    ]);
+    config
+        .genesis_parameters
+        .push(Parameter::Custom(fees.into_custom_parameter().unwrap()));
+    CertifiedTestChain::start(config).expect("genuine independently signed private root")
+}
+
+#[test]
+fn private_root_gossip_uses_only_its_authenticated_next_height_committee() {
+    let chain = private_chain();
+    let state = chain.state();
+    let outsiders = install_members(&state.world, 31, false);
+    let participants = install_members(&state.world, 41, true);
+    install_lane(&state.world, 2, participants.clone());
+    let view = state.view();
+    assert!(view.world.sumeragi_lanes().lane(LaneId::SINGLE).is_none());
+    let expected: BTreeSet<_> = scheduled_committee(&view.world, 2)
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(expected.len(), 4);
+    let unrelated: BTreeSet<_> = peers(&outsiders)
+        .union(&peers(&participants))
+        .cloned()
+        .collect();
+    assert!(expected.is_disjoint(&unrelated));
+    let online = expected.union(&unrelated).cloned().collect();
+    assert_eq!(
+        targets(&view.world, 1, route(0), &online, None, 42)
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        expected,
+    );
+    assert_eq!(
+        targets(&view.world, 1, route(0), &unrelated, None, 42),
+        Err(DROP_REASON_NO_RESTRICTED_TARGETS),
+    );
+    assert_eq!(
+        targets(&view.world, 1, route(0), &online, NonZeroUsize::new(2), 42)
+            .unwrap()
+            .len(),
+        2,
+    );
+    drop(view);
+
+    let mut gossiper = super::super::tests::closed_test_gossiper(1.try_into().unwrap());
+    gossiper.state = std::sync::Arc::clone(state);
+    for member in expected {
+        gossiper.self_peer_id = member;
+        assert_eq!(gossiper.validate_restricted_recipient(route(0)), Ok(()));
+    }
+    for outsider in unrelated {
+        gossiper.self_peer_id = outsider;
+        assert_eq!(
+            gossiper.validate_restricted_recipient(route(0)),
+            Err("not_native_lane_member"),
+        );
+    }
+}
+
+#[test]
+fn private_root_gossip_rejects_foreign_routes_and_unavailable_authority() {
+    let chain = private_chain();
+    let view = chain.state().view();
+    for wrong in [
+        route(2),
+        GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        },
+        GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::new(10),
+        },
+    ] {
+        assert_eq!(
+            committee(&view.world, 1, wrong),
+            Err("private_root_route_mismatch"),
+        );
+    }
+    assert_eq!(
+        committee(&view.world, u64::MAX, route(0)),
+        Err("private_root_height_overflow"),
+    );
+    assert_eq!(
+        committee(&view.world, 1_000, route(0)),
+        Err("unavailable_private_root_committee"),
+    );
+    let unsigned = crate::sumeragi::lanes::routing::test_support::world(chain.root_scope());
+    assert_eq!(
+        committee(&unsigned.view(), 1, route(0)),
+        Err("unavailable_private_root_committee"),
+        "root metadata alone cannot manufacture a voting committee",
+    );
+    let pristine = World::new();
+    assert_eq!(
+        committee(&pristine.view(), 1, route(0)),
+        Err("missing_root_scope"),
+    );
+    let global = crate::sumeragi::lanes::routing::test_support::world(SumeragiRootScope::Global);
+    assert_eq!(
+        committee(&global.view(), 1, route(0)),
+        Err("missing_native_lane"),
+        "global lane zero never acquires private-root dissemination authority",
     );
 }

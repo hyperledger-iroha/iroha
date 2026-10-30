@@ -206,15 +206,13 @@ fn config_compatibility_without_genesis_is_pending() {
         compatibility.wire_schema_hash,
         hex::encode(iroha_core::release_identity::wire_schema_hash())
     );
-    assert_eq!(
-        compatibility.gas_schedule_hash,
-        hex::encode(<[u8; 32]>::from(ivm::gas::schedule_hash()))
-    );
     for hash in [
         &compatibility.wire_schema_hash,
         &compatibility.nexus_policy_digest,
-        &compatibility.gas_schedule_hash,
-    ] {
+    ]
+    .into_iter()
+    .chain(&compatibility.host_profiles)
+    {
         assert_eq!(hash.len(), 64);
         assert!(hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
@@ -255,7 +253,7 @@ fn probe_reports_roundtrip_through_norito_json() {
         protocol_version: PROTOCOL_VERSION,
         wire_schema_hash: "22".repeat(32),
         nexus_policy_digest: "33".repeat(32),
-        gas_schedule_hash: "44".repeat(32),
+        host_profiles: vec!["44".repeat(32)],
         execution_policy_hash: Some("55".repeat(32)),
         nexus_amx_context_hash: None,
     };

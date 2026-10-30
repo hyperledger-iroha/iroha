@@ -504,7 +504,7 @@ const ROOTS: &[Root] = &[
         class: RootClass::CertifiedStateRoot,
         carrier: "ExecutionCommitment.parent_world_state_root, ExecutionCommitment.world_state_root",
         keyed: false,
-        scope: "every canonical World table and cell, trigger stores included",
+        scope: "every canonical World table and cell the root's selection installs, trigger stores included",
         construction: "LtHash16 multiset hash over field, key and value hashes",
         witnesses: "none: a multiset hash has no inclusion, absence or range witness",
         owner: "G.3",
@@ -515,9 +515,11 @@ const ROOTS: &[Root] = &[
             r"iroha.sumeragi.world-state-snapshot.v1",
             r"iroha:world-net-delta:value:bare-v1\0",
             r"iroha:world-state:path:v1\0",
+            r"iroha:world-state:profile:lthash16:v1\0",
             r"iroha:world-state:root:v1\0",
             r"iroha:world-state:schema:field:v1\0",
             r"iroha:world-state:schema:no-key:v1\0",
+            r"iroha:world-state:schema:selection:v1\0",
             r"iroha:world-state:schema:start:v1\0",
             r"iroha:world-state:schema:value:v1\0",
         ],
@@ -701,7 +703,7 @@ const ROOTS: &[Root] = &[
             ),
             (
                 "crates/iroha_core/src/block/native_genesis_policy.rs",
-                "let actual_nexus = crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);",
+                "crate::sumeragi::staged_genesis_nexus_amx_context_preimage(state),",
             ),
         ],
     },
@@ -1840,11 +1842,6 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Accumulator("confidential_note_tree"),
     },
     ConstructionUse {
-        path: "crates/iroha_core/src/smartcontracts/ivm/host.rs",
-        uses: &[("ConfidentialTree", 2)],
-        owner: UseOwner::Accumulator("confidential_note_tree"),
-    },
-    ConstructionUse {
         path: "crates/iroha_core/src/snapshot.rs",
         uses: &[("MerkleTree", 7)],
         owner: UseOwner::Roots(&["state_snapshot_chunk_root"]),
@@ -1866,6 +1863,11 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
             Use::BlockContent,
             "Recomputes a committed block's Network input and output Merkle roots from authenticated frame windows and checks them against the header and certified result: block content, not a State-content root",
         ),
+    },
+    ConstructionUse {
+        path: "crates/iroha_core/src/state/ivm_zk_roots.rs",
+        uses: &[("ConfidentialTree", 1)],
+        owner: UseOwner::Accumulator("confidential_note_tree"),
     },
     ConstructionUse {
         path: "crates/iroha_core/src/state/output_capacity.rs",
@@ -4579,6 +4581,49 @@ const CARRIERS: &[Carrier] = &[
             (OUTPUT_MODEL, "pub struct NetworkExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct PipelineExecutionOutputV1 {"),
             (OUTPUT_MODEL, "pub struct TimeExecutionOutputV1 {"),
+            (OUTPUT_MODEL, "pub struct NetworkExecutionOutputV2 {"),
+            (OUTPUT_MODEL, "pub struct PipelineExecutionOutputV2 {"),
+            (OUTPUT_MODEL, "pub struct TimeExecutionOutputV2 {"),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleStateKindV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleActionCodecV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleActionFrameV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleRetryStateV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleStateV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecyclePolicyV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleOriginV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleChangeV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub struct TriggerLifecycleEffectV1 {",
+            ),
+            (
+                "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+                "pub enum TriggerLifecycleEffectsV1 {",
+            ),
             // The name ends in `Root`: the root cause of a trigger failure, not a hash.
             (OUTPUT_MODEL, "pub enum TriggerFailureRootV1 {"),
         ],
@@ -4587,6 +4632,12 @@ const CARRIERS: &[Carrier] = &[
                 "BlockResult.output_merkle",
                 HashUse::Block(
                     "checked Merkle tree over the hashes of the block's typed outputs; its root and count are transaction_output_commitment of R",
+                ),
+            ),
+            (
+                "TriggerLifecycleStateV1.action_hash",
+                HashUse::Block(
+                    "canonical content hash of one persistent trigger Action retained in this lifecycle effect, checked against its complete action frame; no aggregate State root",
                 ),
             ),
             (
@@ -4834,6 +4885,10 @@ const CARRIERS: &[Carrier] = &[
             (
                 "TransactionResult",
                 "result of one executed input or invocation: its data trigger sequence or its rejection reason",
+            ),
+            (
+                "TriggerId",
+                "identifier of the trigger whose lifecycle effect is recorded",
             ),
             (
                 "InvocationCompletionV1",
@@ -5573,6 +5628,7 @@ const CARRIERS: &[Carrier] = &[
         types: &[
             (HANDSHAKE_CAPS, "pub struct ConsensusHandshakeCaps {"),
             (HANDSHAKE_CAPS, "pub struct ConsensusConfigCaps {"),
+            (HANDSHAKE_CAPS, "pub struct HostProfileSet {"),
             (HANDSHAKE_CAPS, "pub struct ConfidentialHandshakeCaps {"),
             (HANDSHAKE_CAPS, "pub struct CryptoHandshakeCaps {"),
             (HANDSHAKE_WIRE, "pub(super) struct HandshakeHello {"),
@@ -5607,8 +5663,10 @@ const CARRIERS: &[Carrier] = &[
                 HashUse::Block("fingerprint of the signed genesis native consensus configuration"),
             ),
             (
-                "ConsensusConfigCaps.ivm_gas_schedule_hash",
-                HashUse::Block("digest of the IVM gas schedule compiled into the binary"),
+                "HostProfileSet.ids",
+                HashUse::Block(
+                    "identities of the host-profile definitions a release implements or a committed selection activates",
+                ),
             ),
             (
                 "ConfidentialHandshakeCaps.features",
@@ -5666,6 +5724,15 @@ const CARRIERS: &[Carrier] = &[
                 "ConsensusHandshakeCaps.config",
                 "the shared configuration capabilities: walked as ConsensusConfigCaps",
             ),
+            (
+                "ConsensusHandshakeCaps.required_host_profiles",
+                "the host profiles the local committed selection activates: a process-local requirement read at handshake time, never sent",
+            ),
+            (
+                "ConsensusConfigCaps.host_profiles",
+                "the host profiles the release implements: walked as HostProfileSet",
+            ),
+            ("HostProfileSet.len", "number of identities in the set"),
             (
                 "ConfidentialHandshakeCaps.enabled",
                 "whether the node enforces confidential verification: node configuration",
@@ -5799,6 +5866,7 @@ const CARRIERS: &[Carrier] = &[
         exhaustive: &[
             "ConsensusHandshakeCaps",
             "ConsensusConfigCaps",
+            "HostProfileSet",
             "ConfidentialHandshakeCaps",
             "CryptoHandshakeCaps",
             "HandshakeHello",
@@ -5814,6 +5882,10 @@ const CARRIERS: &[Carrier] = &[
             ("NetworkId", "network identity fixed at genesis"),
             ("SocketAddr", "network address of a peer"),
             ("RelayRole", "enumeration without a hash payload"),
+            (
+                "RequiredHostProfiles",
+                "process-local cell holding the host profiles the committed selection activates; read at handshake time and never sent",
+            ),
         ],
     },
     Carrier {
@@ -6393,11 +6465,11 @@ const PREMISES: &[Premise] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "parent_world_state_root: parent.root()?,",
+                ".root(self.world.runtime_selection.get_before_block())?,",
             ),
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "world_state_root: post.root()?,",
+                "world_state_root: post.root(self.world.runtime_selection.get())?,",
             ),
             (
                 "crates/iroha_core/src/sumeragi/commitment.rs",
@@ -7635,6 +7707,7 @@ fn builder(
         accumulator,
         direction,
         visited: vec![false; index.canonical],
+        installation: vec![Installation::Installed; index.canonical],
         snapshot: None,
         snapshot_field: None,
     }
@@ -7658,9 +7731,9 @@ fn table_slot(
     let mut cold = builder(index, WorldStateAccumulator::empty(), Direction::Capture);
     cold.append_storage_with(name, &block, hash_value)?;
     Ok([
-        base.root()?,
-        incremental.accumulator.root()?,
-        cold.accumulator.root()?,
+        base.baseline_root()?,
+        incremental.accumulator.baseline_root()?,
+        cold.accumulator.baseline_root()?,
     ])
 }
 
@@ -7678,9 +7751,9 @@ fn cell_slot(name: &'static str) -> Result<[Hash; 3], crate::state::WorldStateSn
     let mut cold = builder(index, WorldStateAccumulator::empty(), Direction::Capture);
     cold.append_cell_with(name, &block, hash_value)?;
     Ok([
-        base.root()?,
-        incremental.accumulator.root()?,
-        cold.accumulator.root()?,
+        base.baseline_root()?,
+        incremental.accumulator.baseline_root()?,
+        cold.accumulator.baseline_root()?,
     ])
 }
 
@@ -7690,7 +7763,7 @@ fn cell_slot(name: &'static str) -> Result<[Hash; 3], crate::state::WorldStateSn
 #[test]
 fn every_inventoried_field_mutation_reaches_exactly_its_declared_root() {
     let index = field_index().as_ref().unwrap();
-    let empty = WorldStateAccumulator::empty().root().unwrap();
+    let empty = WorldStateAccumulator::empty().baseline_root().unwrap();
     let mut certified_inserts = BTreeSet::new();
     let mut checked = BTreeMap::new();
     for row in rows() {
@@ -7892,14 +7965,16 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             put_typed!(block, $field, $key, $value);
             let inserted = parent.apply_block(&block).unwrap();
             assert_ne!(
-                inserted.root(),
-                parent.root(),
+                inserted.baseline_root(),
+                parent.baseline_root(),
                 "{}: insert",
                 stringify!($field)
             );
             assert_eq!(
-                inserted.root(),
-                WorldStateAccumulator::capture(&block).unwrap().root(),
+                inserted.baseline_root(),
+                WorldStateAccumulator::capture(&block)
+                    .unwrap()
+                    .baseline_root(),
                 "{}: incremental == cold",
                 stringify!($field)
             );
@@ -7907,21 +7982,21 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             put_typed!(block, $field, $key, $changed);
             let replaced = parent.apply_block(&block).unwrap();
             assert_ne!(
-                replaced.root(),
-                inserted.root(),
+                replaced.baseline_root(),
+                inserted.baseline_root(),
                 "{}: replace",
                 stringify!($field)
             );
             assert_ne!(
-                replaced.root(),
-                parent.root(),
+                replaced.baseline_root(),
+                parent.baseline_root(),
                 "{}: replace",
                 stringify!($field)
             );
             remove_typed!(block, $field, $key);
             assert_eq!(
-                parent.apply_block(&block).unwrap().root(),
-                parent.root(),
+                parent.apply_block(&block).unwrap().baseline_root(),
+                parent.baseline_root(),
                 "{}: remove",
                 stringify!($field)
             );
@@ -7968,22 +8043,30 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             .try_insert_admitted(key.clone(), [1; 32])
             .unwrap();
         let inserted = parent.apply_block(&block).unwrap();
-        assert_ne!(inserted.root(), parent.root());
+        assert_ne!(inserted.baseline_root(), parent.baseline_root());
         assert_eq!(inserted.entries(), parent.entries() + 1);
         assert_eq!(
-            inserted.root(),
-            WorldStateAccumulator::capture(&block).unwrap().root()
+            inserted.baseline_root(),
+            WorldStateAccumulator::capture(&block)
+                .unwrap()
+                .baseline_root()
         );
         block
             .sccp_forgery_offences
             .try_insert_admitted(key.clone(), [2; 32])
             .unwrap();
-        assert_ne!(parent.apply_block(&block).unwrap().root(), inserted.root());
+        assert_ne!(
+            parent.apply_block(&block).unwrap().baseline_root(),
+            inserted.baseline_root()
+        );
         block
             .sccp_forgery_offences
             .try_remove_admitted(key)
             .unwrap();
-        assert_eq!(parent.apply_block(&block).unwrap().root(), parent.root());
+        assert_eq!(
+            parent.apply_block(&block).unwrap().baseline_root(),
+            parent.baseline_root()
+        );
         covered.push(("world.sccp_forgery_offences", Commitment::Certified));
     }
 
@@ -8024,10 +8107,17 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             let parent = WorldStateAccumulator::capture(&block).unwrap();
             *block.$field.get_mut() = $value;
             let changed = parent.apply_block(&block).unwrap();
-            assert_ne!(changed.root(), parent.root(), "{}", stringify!($field));
+            assert_ne!(
+                changed.baseline_root(),
+                parent.baseline_root(),
+                "{}",
+                stringify!($field)
+            );
             assert_eq!(
-                changed.root(),
-                WorldStateAccumulator::capture(&block).unwrap().root(),
+                changed.baseline_root(),
+                WorldStateAccumulator::capture(&block)
+                    .unwrap()
+                    .baseline_root(),
                 "{}: incremental == cold",
                 stringify!($field)
             );
@@ -8113,14 +8203,16 @@ fn typed_world_table_mutations_change_the_certified_world_state_root() {
             let parent = WorldStateAccumulator::capture(&block).unwrap();
             put_typed!(block, $field, $key, $value);
             assert_eq!(
-                parent.apply_block(&block).unwrap().root(),
-                parent.root(),
+                parent.apply_block(&block).unwrap().baseline_root(),
+                parent.baseline_root(),
                 "{}: a derived index is not independent authority",
                 stringify!($field)
             );
             assert_eq!(
-                WorldStateAccumulator::capture(&block).unwrap().root(),
-                parent.root(),
+                WorldStateAccumulator::capture(&block)
+                    .unwrap()
+                    .baseline_root(),
+                parent.baseline_root(),
                 "{}",
                 stringify!($field)
             );
@@ -8230,7 +8322,7 @@ fn state_level_canonical_fields_have_no_accumulator_slot_and_no_witness_family()
     let root = |state: &State| {
         WorldStateAccumulator::capture(&state.world.block())
             .unwrap()
-            .root()
+            .baseline_root()
             .unwrap()
     };
     let before = root(&state);
@@ -8817,6 +8909,7 @@ fn state_hash_function_scan_lists_every_state_reader_that_returns_a_hash() {
             "HandshakeHello",
             "HandshakeIdentityBindingV1",
             "HandshakeTrustMeta",
+            "HostProfileSet",
             "LaneBatch",
             "LaneResult",
         ]
@@ -9318,6 +9411,136 @@ fn state_inventory_native_abc_result_tag_is_a_schema_name() {
         Some(DomainOwner::Other(Use::Name))
     ));
     assert!(!scan.unlisted_domains.contains(&format!("{tag} in {path}")));
+}
+
+/// Privacy wire names and proof-free action input digests retain their distinct roles.
+#[test]
+fn privacy_request_inventory_pins_exact_domains_and_source_uses() {
+    let paths = [
+        "crates/iroha_data_model/src/isi/privacy.rs",
+        "crates/iroha_data_model/src/isi/privacy_x509_request.rs",
+        "crates/iroha_data_model/src/isi/registry/wire_ids.rs",
+    ];
+    let texts = paths.map(source);
+    let scan = scan_sources(
+        paths
+            .iter()
+            .zip(texts.iter())
+            .map(|(path, text)| (*path, text.as_str())),
+    );
+    let owners = domain_owners();
+    for (literal, declaration) in [
+        (
+            "iroha.privacy.schedule_consensus_policy_update.v1",
+            paths[0],
+        ),
+        ("iroha.privacy.schedule_protocol_limits_update.v1", paths[0]),
+        ("iroha.privacy.submit_zk_x509_certificate.v1", paths[1]),
+    ] {
+        assert_eq!(owners.get(literal), Some(&DomainOwner::Other(Use::Name)));
+        assert_eq!(
+            scan.literal_uses.get(literal),
+            Some(&BTreeMap::from([
+                (declaration.to_owned(), 1_usize),
+                (paths[2].to_owned(), 1_usize),
+            ])),
+            "the wire name must remain visible at its declaration and dispatch registry"
+        );
+    }
+    let digest_domain = "iroha.privacy.zk-x509-request-public-inputs.v1";
+    assert_eq!(
+        owners.get(digest_domain),
+        Some(&DomainOwner::Other(Use::BlockContent))
+    );
+    assert_eq!(
+        scan.literal_uses.get(digest_domain),
+        Some(&BTreeMap::from([(paths[1].to_owned(), 1_usize)]))
+    );
+    // A new version of either role must not inherit its neighbour's classification.
+    for literal in [
+        "iroha.privacy.schedule_consensus_policy_update.v2",
+        "iroha.privacy.schedule_protocol_limits_update.v2",
+        "iroha.privacy.submit_zk_x509_certificate.v2",
+        "iroha.privacy.zk-x509-request-public-inputs.v2",
+    ] {
+        let probe = format!("const DOMAIN: &str = \"{literal}\";");
+        let probe = scan_sources([(paths[1], probe.as_str())]);
+        assert_eq!(
+            probe.unlisted_domains,
+            BTreeSet::from([format!("{literal} in {}", paths[1])])
+        );
+        assert!(std::panic::catch_unwind(|| probe.require_complete()).is_err());
+    }
+}
+
+/// The immutable root projection remains owned by the confidential-note accumulator.
+#[test]
+fn ivm_zk_roots_inventory_tracks_current_owner_and_refuses_extra_constructions() {
+    let current = "crates/iroha_core/src/state/ivm_zk_roots.rs";
+    let former = "crates/iroha_core/src/smartcontracts/ivm/host.rs";
+    let listed = CONSTRUCTION_USES
+        .iter()
+        .find(|listed| listed.path == current)
+        .expect("the current confidential-root projection is listed");
+    assert_eq!(listed.uses, &[("ConfidentialTree", 1)]);
+    assert!(matches!(
+        listed.owner,
+        UseOwner::Accumulator("confidential_note_tree")
+    ));
+    assert!(CONSTRUCTION_USES.iter().all(|listed| listed.path != former));
+    let text = source(current);
+    let old_text = source(former);
+    let scan = scan_sources([(current, text.as_str()), (former, old_text.as_str())]);
+    assert!(scan.unlisted_uses.is_empty(), "{:?}", scan.unlisted_uses);
+    assert!(!scan.stale_uses.contains(current));
+    for (path, original) in [(current, text.as_str()), (former, old_text.as_str())] {
+        let changed = format!("{original}\nuse crate::zk::ConfidentialTree;\n");
+        let probe = scan_sources([(path, changed.as_str())]);
+        assert_eq!(probe.unlisted_uses.len(), 1);
+        assert!(
+            probe
+                .unlisted_uses
+                .iter()
+                .next()
+                .is_some_and(|item| item.starts_with(path)),
+            "{:?}",
+            probe.unlisted_uses
+        );
+        assert!(std::panic::catch_unwind(|| probe.require_complete()).is_err());
+    }
+}
+
+/// Restored World verification serves the same root as the State startup verifier.
+#[test]
+fn restored_world_accumulator_inventory_tracks_current_verifiers() {
+    let path = "crates/iroha_core/src/state/world_state_accumulator.rs";
+    let text = source(path);
+    let scan = scan_sources([(path, text.as_str())]);
+    assert!(
+        scan.unlisted_functions.is_empty(),
+        "{:?}",
+        scan.unlisted_functions
+    );
+    for name in [
+        "verify_captured_accumulator",
+        "verify_state_accumulator",
+        "verify_world_state_accumulator",
+    ] {
+        assert_eq!(
+            scan.state_hash_functions
+                .get(&(path.to_owned(), name.to_owned())),
+            Some(&1),
+            "{name}"
+        );
+        let listed = STATE_HASH_FUNCTIONS
+            .iter()
+            .find(|listed| listed.path == path && listed.name == name)
+            .expect("every restored and startup verifier is listed");
+        assert!(matches!(
+            listed.owner,
+            UseOwner::Roots(["world_state_root"])
+        ));
+    }
 }
 
 /// A test-only argument cannot hide the next original AMX State-reader method.
@@ -11610,6 +11833,7 @@ fn protocol_carriers_classify_every_hash_bearing_field() {
             &[
                 "ConsensusHandshakeCaps",
                 "ConsensusConfigCaps",
+                "HostProfileSet",
                 "ConfidentialHandshakeCaps",
                 "CryptoHandshakeCaps",
                 "HandshakeHello",
@@ -12293,6 +12517,7 @@ fn contract_section_states_every_publication_and_binding_rule_once() {
                 &[
                     "ConsensusHandshakeCaps",
                     "ConsensusConfigCaps",
+                    "HostProfileSet",
                     "ConfidentialHandshakeCaps",
                     "CryptoHandshakeCaps",
                     "HandshakeHello",

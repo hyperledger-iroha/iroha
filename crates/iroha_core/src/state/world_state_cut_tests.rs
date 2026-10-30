@@ -396,7 +396,7 @@ fn frozen_tail_reconstructs_original_cut_with_absent_and_noop_touches() {
     *block.soradns_last_publish_ms.get_mut() = Some(11);
     let original = WorldStateAccumulator::capture(&block).unwrap();
     let capture = JournalCapture::capture(&block, false, &budget).unwrap();
-    assert_eq!(capture.root, original.root().unwrap());
+    assert_eq!(capture.root, original.baseline_root().unwrap());
     assert_eq!(capture.entries, original.entries());
     assert!(capture.rows.as_slice().iter().any(|row| {
         row.key == Some(hash_value(&key("cut/absent")).unwrap())
@@ -432,7 +432,7 @@ fn frozen_tail_reconstructs_original_cut_with_absent_and_noop_touches() {
     let original_storage_value =
         std::ptr::from_ref(block.smart_contract_state.get(&key("cut/update")).unwrap());
     let original_cell_value = std::ptr::from_ref(block.soradns_last_publish_ms.get());
-    assert_ne!(original.root(), applied.root());
+    assert_ne!(original.baseline_root(), applied.baseline_root());
     block.begin_freeze();
     block.finish_freeze();
     // Both visitors and cold capture read the same original payloads after
@@ -452,9 +452,9 @@ fn frozen_tail_reconstructs_original_cut_with_absent_and_noop_touches() {
     let capsule = capture.prepare(&block, tip, 8, &budget).unwrap();
     assert_eq!(capsule.tip, tip);
     assert_eq!(capsule.generation, 8);
-    assert_eq!(capsule.root, original.root().unwrap());
+    assert_eq!(capsule.root, original.baseline_root().unwrap());
     assert_eq!(capsule.entries, original.entries());
-    assert_eq!(capsule.applied_root, applied.root().unwrap());
+    assert_eq!(capsule.applied_root, applied.baseline_root().unwrap());
     assert_eq!(capsule.applied_entries, applied.entries());
     assert_eq!(capsule.rows.as_slice().len(), 5);
     let changes: Vec<_> = capsule.changes().collect();

@@ -25,9 +25,9 @@ fn abi_hash_has_valid_iroha_hash_marker() {
     );
 }
 #[test]
-fn abi_v1_execute_instruction_advertises_only_the_submit_ballot_tag() {
-    // specs/sccp.md §4.4: contracts record no SCCP messages, so the hashed 0xA0 surface names
-    // the single operation tag `1=SubmitBallot` and nothing about `RecordSccpMessage`.
+fn abi_v1_execute_instruction_binds_typed_x509_queue_semantics() {
+    // Both typed operations are hash-bound; neither tag exposes SCCP records or
+    // an arbitrary instruction escape. X509 returns queue identity only.
     let table = ivm::syscalls::render_syscalls_markdown_table();
     let rows: Vec<&str> = table
         .lines()
@@ -35,10 +35,16 @@ fn abi_v1_execute_instruction_advertises_only_the_submit_ballot_tag() {
         .collect();
     assert_eq!(rows.len(), 1, "exactly one 0xA0 row: {rows:?}");
     assert!(
-        rows[0].contains("r11=operation_tag(1=SubmitBallot) |"),
+        rows[0].contains("r11=operation_tag(1=SubmitBallot;2=SubmitPrivacyZkX509CertificateV1) |"),
         "{}",
         rows[0]
     );
+    assert!(rows[0].contains("tag1:u64=0;tag2:r10=PendingAction(original signed action ordinal;queued only;no proof/effect authority)"));
+    assert_eq!(
+        ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
+        1
+    );
+    assert_eq!(ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509, 2);
     assert!(!table.contains("RecordSccpMessage"));
 }
 
@@ -54,7 +60,12 @@ fn abi_v1_register_asset_requires_owning_domain() {
         .collect();
     assert_eq!(rows.len(), 1, "exactly one REGISTER_ASSET row: {rows:?}");
     let columns: Vec<&str> = rows[0].split('|').map(str::trim).collect();
-    assert_eq!(columns.len(), 7, "canonical syscall table shape: {}", rows[0]);
+    assert_eq!(
+        columns.len(),
+        7,
+        "canonical syscall table shape: {}",
+        rows[0]
+    );
     assert_eq!(columns[2], "REGISTER_ASSET");
     assert_eq!(
         columns[3],

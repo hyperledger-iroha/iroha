@@ -18,8 +18,14 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
         .canonical_resultless_proposal()
         .expect("valid fixture proposal projection");
     let payload = proposal.encode_wire().unwrap();
-    let source =
-        ValidBlock::native_header_source(&proposal, predecessor.state(), header, &payload).unwrap();
+    let source = ValidBlock::native_header_source(
+        &proposal,
+        predecessor.state(),
+        header,
+        &payload,
+        &mut Default::default(),
+    )
+    .unwrap();
     assert_eq!(source.header(), proposal.header());
     assert!(std::ptr::eq(source.state(), predecessor.state().as_ref()));
     assert_eq!(
@@ -45,7 +51,14 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
     );
     source.validate_body(&proposal).unwrap();
     assert!(
-        ValidBlock::native_header_source(&proposal, chain.state(), header, &payload).is_err(),
+        ValidBlock::native_header_source(
+            &proposal,
+            chain.state(),
+            header,
+            &payload,
+            &mut Default::default()
+        )
+        .is_err(),
         "a committed successor cannot be attributed to a stale predecessor context"
     );
     assert!(
@@ -56,15 +69,27 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
         let mut changed = payload.clone();
         changed[offset] ^= 1;
         assert!(
-            ValidBlock::native_header_source(&proposal, predecessor.state(), header, &changed)
-                .is_err()
+            ValidBlock::native_header_source(
+                &proposal,
+                predecessor.state(),
+                header,
+                &changed,
+                &mut Default::default()
+            )
+            .is_err()
         );
     }
     let mut trailing = payload.clone();
     trailing.push(0);
     assert!(
-        ValidBlock::native_header_source(&proposal, predecessor.state(), header, &trailing)
-            .is_err()
+        ValidBlock::native_header_source(
+            &proposal,
+            predecessor.state(),
+            header,
+            &trailing,
+            &mut Default::default()
+        )
+        .is_err()
     );
     for changed in 0..5 {
         let mut header = header.clone();
@@ -80,8 +105,14 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
             _ => unreachable!(),
         }
         assert!(
-            ValidBlock::native_header_source(&proposal, predecessor.state(), &header, &payload)
-                .is_err()
+            ValidBlock::native_header_source(
+                &proposal,
+                predecessor.state(),
+                &header,
+                &payload,
+                &mut Default::default()
+            )
+            .is_err()
         );
     }
 }
@@ -101,9 +132,14 @@ fn native_rejection_after_original_source_publication_is_a_local_refusal() {
     let mut receiver =
         CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
     let state = Arc::clone(receiver.state());
-    let source =
-        ValidBlock::native_header_source(&proposal, &state, committed.header().unwrap(), &payload)
-            .unwrap();
+    let source = ValidBlock::native_header_source(
+        &proposal,
+        &state,
+        committed.header().unwrap(),
+        &payload,
+        &mut Default::default(),
+    )
+    .unwrap();
     receiver.commit_at(2_000, Vec::new());
     assert_ne!(source.generation(), state.state_view_generation());
 
@@ -150,9 +186,14 @@ fn native_local_refusal_after_source_publication_retains_original_capacity() {
     let mut receiver =
         CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
     let state = Arc::clone(receiver.state());
-    let source =
-        ValidBlock::native_header_source(&proposal, &state, committed.header().unwrap(), &payload)
-            .unwrap();
+    let source = ValidBlock::native_header_source(
+        &proposal,
+        &state,
+        committed.header().unwrap(),
+        &payload,
+        &mut Default::default(),
+    )
+    .unwrap();
     receiver.commit_at(2_000, Vec::new());
     assert_ne!(source.generation(), state.state_view_generation());
 
@@ -204,9 +245,14 @@ fn native_terminal_failure_after_source_publication_keeps_original_custody() {
     let mut receiver =
         CertifiedTestChain::start(TestChainConfig::new(crate::state::World::new(), 1_000)).unwrap();
     let state = Arc::clone(receiver.state());
-    let source =
-        ValidBlock::native_header_source(&proposal, &state, committed.header().unwrap(), &payload)
-            .unwrap();
+    let source = ValidBlock::native_header_source(
+        &proposal,
+        &state,
+        committed.header().unwrap(),
+        &payload,
+        &mut Default::default(),
+    )
+    .unwrap();
     receiver.commit_at(2_000, Vec::new());
     assert_ne!(source.generation(), state.state_view_generation());
     for original in [

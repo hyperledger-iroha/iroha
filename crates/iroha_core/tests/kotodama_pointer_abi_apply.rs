@@ -121,7 +121,9 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     select_kotodama_entrypoint(&mut vm, &program, "execute");
     vm.run_with_host(&mut host).expect("run VM");
     // Drain queued ISIs
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert!(!queued.is_empty());
     eprintln!("queued {} instructions", queued.len());
     for (i, instr) in queued.iter().enumerate() {
@@ -283,7 +285,9 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     executor
         .execute_instruction(&mut tx, &authority, InstructionBox::from(mint))
         .expect("setup mint should succeed");
-    let queued = host.drain_instructions();
+    let queued = host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1, "expected one queued transfer");
     let transfer = queued[0]
         .as_any()
@@ -380,7 +384,9 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_vm
         .run_with_host(&mut read_host)
         .expect("name-keyed state-loaded pointers should survive cross-call");
-    let queued = read_host.drain_instructions();
+    let queued = read_host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
 #[test]
@@ -459,7 +465,9 @@ fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     read_vm
         .run_with_host(&mut read_host)
         .expect("mixed state-loaded pointers should survive cross-call");
-    let queued = read_host.drain_instructions();
+    let queued = read_host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
 #[test]
@@ -540,7 +548,9 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
     read_vm
         .run_with_host(&mut read_host)
         .expect("event-fed state-loaded transfer_asset should survive cross-call");
-    let queued = read_host.drain_instructions();
+    let queued = read_host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 1, "expected one queued transfer");
 }
 #[test]
@@ -682,6 +692,8 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         .precharge_vm(&mut seed_vm)
         .expect("precharge seed_bin arguments");
     seed_vm.run_with_host(&mut seed_host).expect("seed_bin run");
-    let queued = seed_host.drain_instructions();
+    let queued = seed_host
+        .drain_instructions()
+        .expect("ordinary instruction inspection retains no attachment owner");
     assert_eq!(queued.len(), 2, "expected two queued transfer instructions");
 }

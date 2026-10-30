@@ -5,9 +5,9 @@ use super::{
     PrivacyCompiledProfileResultV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
     PrivacyExact12CatalogCommitmentV1, PrivacyExact12DeploymentQualificationDigestV1,
     PrivacyExact12ReleaseManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-    PrivacyProofSystemIdV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-    PrivacyReleaseArtifactDigestV1, PrivacySecurityClaimDigestV1, PrivacySecurityClaimV1,
-    PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+    PrivacyProofSystemIdV1, PrivacyProtocolIdV1, PrivacyReleaseArtifactDigestV1,
+    PrivacySecurityClaimDigestV1, PrivacySecurityClaimV1, PrivacyStatementSchemaDigestV1,
+    PrivacyVerifierDigestV1,
 };
 use crate::NetworkId;
 use iroha_model_base::chain::ChainId;
@@ -761,31 +761,6 @@ pub struct PrivacyExact12ReleaseManifestV1 {
     pub manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
 }
 
-/// One protocol activation height bound to the deployment transaction.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Decode,
-    Encode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1"
-)]
-pub struct PrivacyDeploymentActivationV1 {
-    /// Protocol in canonical catalog order.
-    pub protocol_id: PrivacyProtocolIdV1,
-    /// Finalized activation height.
-    pub activation_height: u64,
-}
-
 /// One validator's restart and adversarial-canary evidence.
 #[derive(
     Clone,
@@ -880,10 +855,6 @@ pub struct PrivacyExact12DeploymentQualificationV1 {
     pub genesis_hash: [u8; 32],
     /// Portable release deployed to the target network.
     pub release_manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
-    /// Exact activation transaction wire digest.
-    pub activation_transaction_digest: PrivacyReleaseArtifactDigestV1,
-    /// Exactly twelve activation heights in catalog order.
-    pub activations: Vec<PrivacyDeploymentActivationV1>,
     /// Exact four-validator roster digest.
     pub validator_roster_digest: PrivacyReleaseArtifactDigestV1,
     /// Exact endpoint version required from every validator.
@@ -900,13 +871,10 @@ pub struct PrivacyExact12DeploymentQualificationV1 {
     pub qualification_digest: PrivacyExact12DeploymentQualificationDigestV1,
 }
 
-/// Complete immutable evidence registered before any Exact12 protocol is usable.
+/// Portable release and network execution evidence for external diagnostics.
 ///
-/// Keeping the portable release and network deployment manifests together
-/// prevents a caller from attaching isolated claim digests to an activation.
-/// The record is a singleton in world state and is accepted only after Core
-/// validates it against the running chain, genesis, validator roster, ABI, and
-/// all twelve committed activations.
+/// This evidence can be compared with canonical profile discovery and observed committed
+/// state. It is not stored as protocol activation authority or required for protocol use.
 #[derive(
     Clone,
     Debug,
@@ -1549,7 +1517,7 @@ impl PrivacyExact12DeploymentQualificationV1 {
             .map(PrivacyExact12DeploymentQualificationDigestV1::new)
     }
 
-    /// Validate the exact network, activation, restart, convergence, endpoint, and quorum bindings.
+    /// Validate the exact network, restart, convergence, endpoint, and quorum bindings.
     ///
     /// # Errors
     ///
@@ -1562,7 +1530,6 @@ impl PrivacyExact12DeploymentQualificationV1 {
             return Err(PrivacyExact12DeploymentQualificationValidationErrorV1::NetworkGenesis);
         }
         if self.release_manifest_digest.is_zero()
-            || self.activation_transaction_digest.is_zero()
             || self.validator_roster_digest.is_zero()
             || self.converged_state_digest.is_zero()
             || !valid_release_text(&self.endpoint_version)
@@ -1570,24 +1537,11 @@ impl PrivacyExact12DeploymentQualificationV1 {
         {
             return Err(PrivacyExact12DeploymentQualificationValidationErrorV1::DeploymentBinding);
         }
-        if self.activations.len() != PrivacyProtocolIdV1::COUNT {
-            return Err(PrivacyExact12DeploymentQualificationValidationErrorV1::ActivationCount);
-        }
-        let mut latest_activation_height = 0_u64;
-        for (activation, expected) in self.activations.iter().zip(PrivacyProtocolIdV1::ALL) {
-            if activation.protocol_id != expected
-                || activation.activation_height == 0
-                || activation.activation_height >= self.convergence_height
-            {
-                return Err(PrivacyExact12DeploymentQualificationValidationErrorV1::Activation);
-            }
-            latest_activation_height = latest_activation_height.max(activation.activation_height);
-        }
         if self.validator_canaries.len() != PRIVACY_EXACT12_DEPLOYMENT_VALIDATORS_V1 {
             return Err(PrivacyExact12DeploymentQualificationValidationErrorV1::CanaryCount);
         }
         let mut validators = BTreeSet::new();
-        let mut prior_wave_height = latest_activation_height;
+        let mut prior_wave_height = 0_u64;
         for (index, canary) in self.validator_canaries.iter().enumerate() {
             let expected_index = u16::try_from(index).expect("four validators fit u16");
             let expected_wave = u8::try_from(index + 1).expect("four rollout waves fit u8");
@@ -1646,9 +1600,8 @@ impl PrivacyExact12DeploymentQualificationV1 {
 impl PrivacyExact12QualificationRecordV1 {
     /// Validate both manifests and their immutable cross-manifest link.
     ///
-    /// Core performs the additional state-dependent checks against the target
-    /// chain, compiled ABI/profile catalog, validator topology, and activation
-    /// heights before storing this record.
+    /// Diagnostic tooling additionally compares the target chain, canonical ABI/profile
+    /// catalog and validator topology with independently observed execution evidence.
     ///
     /// # Errors
     ///
@@ -1673,9 +1626,8 @@ impl PrivacyExact12QualificationRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects evidence that predates convergence, omits an active Exact12
-    /// activation, or differs from any compiled/governed protocol tuple or
-    /// finalized activation height.
+    /// Rejects evidence that predates convergence, omits an available Exact12
+    /// profile, or differs from any canonical compiled protocol tuple.
     pub fn validate_against_snapshot(
         &self,
         committed_height: u64,
@@ -1702,7 +1654,7 @@ impl PrivacyExact12QualificationRecordV1 {
     /// # Errors
     ///
     /// Rejects invalid global evidence, pre-convergence state, or a protocol
-    /// binding that differs from the exact compiled profile, activation, or
+    /// binding that differs from the exact compiled profile or
     /// deployment height.
     pub fn validate_protocol_at_snapshot(
         &self,
@@ -1729,34 +1681,18 @@ impl PrivacyExact12QualificationRecordV1 {
         row: &PrivacyCapabilityRowV1,
     ) -> Result<(), PrivacyExact12QualificationRecordValidationErrorV1> {
         let release = &self.release_manifest.protocols[index];
-        let deployment = &self.deployment_qualification.activations[index];
         let PrivacyCompiledProfileResultV1::Available(profile) = row.compiled_profile else {
             return Err(PrivacyExact12QualificationRecordValidationErrorV1::CompiledProfile);
         };
-        let Some(activation) = row.activation else {
-            return Err(PrivacyExact12QualificationRecordValidationErrorV1::Activation);
-        };
-        let PrivacyProtocolLifecycleV1::Active(lifecycle) = activation.lifecycle else {
-            return Err(PrivacyExact12QualificationRecordValidationErrorV1::Activation);
-        };
         if row.protocol_id != protocol_id
             || release.protocol_id != protocol_id
-            || deployment.protocol_id != protocol_id
-            || release.proof_system_id != activation.proof_system_id
             || release.proof_system_id != profile.proof_system_id
-            || release.engine_id != activation.engine_id
             || release.engine_id != profile.engine_id
-            || release.parameter_id != activation.parameter_id
             || release.parameter_id != profile.parameter_id
-            || release.parameter_digest != activation.parameter_digest
             || release.parameter_digest != profile.parameter_digest
-            || release.verifier_digest != activation.verifier_digest
             || release.verifier_digest != profile.verifier_digest
-            || release.statement_schema_digest != activation.statement_schema_digest
             || release.statement_schema_digest != profile.statement_schema_digest
-            || release.engine_manifest_digest != activation.engine_manifest_digest
             || release.engine_manifest_digest != profile.engine_manifest_digest
-            || deployment.activation_height != lifecycle.activated_at_height
         {
             return Err(PrivacyExact12QualificationRecordValidationErrorV1::ProtocolBinding);
         }
@@ -1867,15 +1803,9 @@ pub enum PrivacyExact12DeploymentQualificationValidationErrorV1 {
     /// Network identity and genesis hash differ.
     #[error("privacy Exact12 deployment network/genesis binding is invalid")]
     NetworkGenesis,
-    /// Release, activation, endpoint, convergence, or roster binding is absent.
+    /// Release, endpoint, convergence, or roster binding is absent.
     #[error("privacy Exact12 deployment binding is invalid")]
     DeploymentBinding,
-    /// Activation count is not exactly twelve.
-    #[error("privacy Exact12 deployment must bind exactly twelve activations")]
-    ActivationCount,
-    /// Activation order or height is invalid.
-    #[error("privacy Exact12 deployment activation binding is invalid")]
-    Activation,
     /// Canary count is not exactly four.
     #[error("privacy Exact12 deployment must contain exactly four validator canaries")]
     CanaryCount,
@@ -1920,10 +1850,7 @@ pub enum PrivacyExact12QualificationRecordValidationErrorV1 {
     /// At least one locally compiled profile is unavailable.
     #[error("privacy Exact12 qualification requires every compiled profile")]
     CompiledProfile,
-    /// At least one Exact12 activation is absent or not active.
-    #[error("privacy Exact12 qualification requires every activation to be active")]
-    Activation,
-    /// A release, compiled-profile, activation, or deployment tuple differs.
+    /// A release, compiled-profile or deployment tuple differs.
     #[error("privacy Exact12 qualification protocol binding is invalid")]
     ProtocolBinding,
 }

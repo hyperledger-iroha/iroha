@@ -30,11 +30,9 @@ public struct ToriiParliamentNoResultKindLayoutV1: Sendable, Equatable {
 ///
 /// The wire value is private and can only be created after the shared typed governance
 /// decoder has validated the nested payload, so callers cannot submit an arbitrary object
-/// under a recognized outer tag. Every kind is decoded field by field except
-/// `SccpRouteGovernance`: its closed `SccpGovernanceProposalV1` envelope (network, base
-/// revisions, subjects and action tags) is checked, while each action payload is only
-/// required to be a JSON object until typed SCCP action decoding lands (see the TODO on
-/// `ToriiGovernanceSccpRouteProposal`).
+/// under a recognized outer tag. SCCP action bodies include static validation of
+/// bounds, deployment data and the exact ordered subject-revision set. Live network
+/// identity, authorization and committed state remain node checks.
 public struct ToriiParliamentProposalV1: Sendable, Equatable, Encodable {
     /// Typed proposal projection produced by the same strict decoder used for reads.
     public let kind: ToriiGovernanceProposalKind

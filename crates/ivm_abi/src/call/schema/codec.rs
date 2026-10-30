@@ -77,6 +77,7 @@ impl SerializePayload for CallSchemaV1 {
                 Node::Pointer(_) => 10,
                 Node::SecretNumeric(_) => 11,
                 Node::Enum(_) => 12,
+                Node::PendingAction => 13,
             };
             tag.serialize(writer)?;
             match node {
@@ -91,7 +92,11 @@ impl SerializePayload for CallSchemaV1 {
                 Node::Error(error) => norito::core::write_len_prefixed(writer, error)?,
                 Node::Enum(enumeration) => norito::core::write_len_prefixed(writer, enumeration)?,
                 Node::Pointer(id) | Node::SecretNumeric(id) => id.serialize(writer)?,
-                Node::Option | Node::Result | Node::Unit | Node::StateRoot => {}
+                Node::Option
+                | Node::Result
+                | Node::Unit
+                | Node::StateRoot
+                | Node::PendingAction => {}
             }
         }
         Ok(())
@@ -185,6 +190,7 @@ fn decode(bytes: &[u8]) -> Result<(CallSchemaV1, usize), Error> {
             9 => Node::StateRoot,
             10 => Node::Pointer(field(bytes, &mut offset)?),
             11 => Node::SecretNumeric(field(bytes, &mut offset)?),
+            13 => Node::PendingAction,
             tag => {
                 return Err(Error::InvalidTag {
                     context: "CS1 callable node",

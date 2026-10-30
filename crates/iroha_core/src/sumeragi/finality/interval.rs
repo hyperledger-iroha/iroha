@@ -113,9 +113,26 @@ pub struct NativeFinalityProofIntervalLimits {
     deadline: Instant,
 }
 impl NativeFinalityProofIntervalLimits {
+    /// First requested height; the State ladder climbs to within one step below it.
+    pub(crate) fn first_height(&self) -> u64 {
+        self.from
+    }
     /// Exact final historical membership checked by the State wrapper.
     pub(crate) fn final_height(&self) -> u64 {
         self.to
+    }
+    /// Original absolute deadline; no wait inside this request extends it.
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+    /// One earlier height under these same wire, response and deadline bounds.
+    /// A ladder step's proof is discarded; only its retained prefix remains.
+    pub(crate) fn step_to(&self, height: NonZeroU64) -> Self {
+        Self {
+            from: height.get(),
+            to: height.get(),
+            ..*self
+        }
     }
     /// Check the original stop policy without entering State or native I/O.
     pub(crate) fn check(

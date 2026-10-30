@@ -26,6 +26,8 @@ type SyscallOutcome = (Result<u64, ivm::VMError>, IVM, DurableStateOverlay);
 type ContractCallOutcome = (Result<(), ivm::VMError>, IVM, DurableStateOverlay, u64);
 
 mod attachment_lifecycle;
+mod x509_attachment;
+pub use x509_attachment::ExecutedHostInstructions;
 mod contract_calls;
 pub(crate) mod contract_event;
 mod controlled_asset_locks;
@@ -859,7 +861,9 @@ impl HostExecutionClass {
 /// overlay when access logging is enabled for prepass execution.
 /// Signed deployed invocations additionally borrow the executor's original
 /// attachment owner for the whole run. Its fixed scope and consumption state
-/// survive business rollback; no proof bytes enter a guest or a host-owned copy.
+/// survive business rollback. Direct native verification borrows original proof bytes;
+/// X.509 contract queues retain a charged original-proof copy until ordered application.
+/// Proof bytes never enter guest memory through the attachment API.
 pub struct CoreHostImpl<'run, 'tx, QS> {
     authority: AccountId,
     attachment_custody: Option<crate::executor::attachment_custody::ContractCustody<'run, 'tx>>,
@@ -883,6 +887,8 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     pipa_r_config: iroha_config::parameters::actual::PipaR,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedEffect>,
+    // The Vec is destroyed before its original-pool backing allowance.
+    x509_queue_backing: Option<x509_attachment::X509QueueBacking>,
     instruction_queue_limits: HostOutputLimits,
     instruction_queue_count: u64,
     instruction_queue_encoded_bytes: u64,
@@ -1661,6 +1667,10 @@ pub struct SubscriptionContext {
 }
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Return the committed current privacy bounds for original attachment materialization.
+    fn privacy_consensus_limits(&self) -> iroha_data_model::privacy::PrivacyConsensusLimitsV1;
+    /// Committed complete source ceiling used before original-intent scratch allocation.
+    fn transaction_source_byte_limit(&self) -> u64;
     /// Return the governed smart-contract heap ceiling in bytes.
     fn smart_contract_heap_limit(&self) -> u64;
     /// Scan finalized epoch-boundary pulses into a `VRF_EPOCH_SEED` projection.
@@ -2371,6 +2381,42 @@ fn visit_storage_positions(
     Ok(std::ops::ControlFlow::Continue(()))
 }
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn transaction_source_byte_limit(&self) -> u64 {
+        match *self {
+            Self::View(state) => state
+                .world()
+                .parameters()
+                .transaction()
+                .max_tx_bytes()
+                .get(),
+            Self::QueryView(state) => state
+                .world()
+                .parameters()
+                .transaction()
+                .max_tx_bytes()
+                .get(),
+            Self::Block(state) => state
+                .world()
+                .parameters()
+                .transaction()
+                .max_tx_bytes()
+                .get(),
+            Self::Transaction(state) => state
+                .world()
+                .parameters()
+                .transaction()
+                .max_tx_bytes()
+                .get(),
+        }
+    }
+    fn privacy_consensus_limits(&self) -> iroha_data_model::privacy::PrivacyConsensusLimitsV1 {
+        match *self {
+            Self::View(state) => state.world().privacy_consensus_policy().current_limits,
+            Self::QueryView(state) => state.world().privacy_consensus_policy().current_limits,
+            Self::Block(state) => state.world().privacy_consensus_policy().current_limits,
+            Self::Transaction(state) => state.world().privacy_consensus_policy().current_limits,
+        }
+    }
     fn vrf_epoch_seed_projection(&self, epoch_length: NonZeroU64) -> VrfEpochSeedProjection {
         match *self {
             QueryStateRef::View(view) => VrfEpochSeedProjection::scan(view, epoch_length),
@@ -2937,6 +2983,8 @@ impl AmxBudgetViolation {
 /// Execution artifacts extracted from a host run that can be applied to state later.
 pub(crate) struct HostExecutionArtifacts {
     queued: Vec<QueuedEffect>,
+    // The Vec is destroyed before its original-pool backing allowance.
+    x509_queue_backing: Option<x509_attachment::X509QueueBacking>,
     entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     confidential_gas_delta: u64,
     completed_axt: Vec<axt::HostAxtState>,
@@ -2960,6 +3008,7 @@ pub(crate) struct QueuedEffect {
 )]
 pub(crate) enum QueuedEffectPayload {
     Instruction(InstructionBox),
+    AttachedX509(x509_attachment::OwnedX509Action),
     Emission(contract_event::OwnedContractEmission),
 }
 impl QueuedEffect {
@@ -2991,12 +3040,7 @@ impl QueuedEffect {
     pub(crate) fn instruction(&self) -> Option<&InstructionBox> {
         match &self.payload {
             QueuedEffectPayload::Instruction(instruction) => Some(instruction),
-            QueuedEffectPayload::Emission(_) => None,
-        }
-    }
-    fn into_instruction(self) -> Option<InstructionBox> {
-        match self.payload {
-            QueuedEffectPayload::Instruction(instruction) => Some(instruction),
+            QueuedEffectPayload::AttachedX509(action) => Some(action.instruction()),
             QueuedEffectPayload::Emission(_) => None,
         }
     }
@@ -3182,6 +3226,7 @@ impl HostExecutionArtifacts {
             .filter_map(|queued| queued.instruction().cloned())
             .collect()
     }
+    #[cfg(test)]
     pub(crate) fn queued_instructions_by_authority(
         &self,
     ) -> BTreeMap<AccountId, Vec<InstructionBox>> {
@@ -3198,6 +3243,7 @@ impl HostExecutionArtifacts {
     }
     /// Preserve the global queue order together with the authority snapshot for
     /// validation rules whose effect plan spans multiple source accounts.
+    #[cfg(test)]
     pub(crate) fn queued_instructions_with_authority(&self) -> Vec<(AccountId, InstructionBox)> {
         self.queued
             .iter()
@@ -3207,6 +3253,33 @@ impl HostExecutionArtifacts {
                     .map(|instruction| (queued.authority.clone(), instruction.clone()))
             })
             .collect()
+    }
+    /// Borrow each original request and its authority in execution order.
+    pub(crate) fn queued_instruction_views(
+        &self,
+    ) -> impl Iterator<Item = (&AccountId, &InstructionBox)> + Clone {
+        self.queued.iter().filter_map(|queued| {
+            queued
+                .instruction()
+                .map(|instruction| (&queued.authority, instruction))
+        })
+    }
+    /// Count authority groups up to three: payout accepts exactly two.
+    /// The fixed stack makes this linear even for the maximum ordinary queue.
+    pub(crate) fn queued_instruction_authority_count(&self) -> usize {
+        let mut distinct: [Option<&AccountId>; 3] = [None; 3];
+        let mut count = 0;
+        for (authority, _) in self.queued_instruction_views() {
+            if distinct[..count].contains(&Some(authority)) {
+                continue;
+            }
+            distinct[count] = Some(authority);
+            count += 1;
+            if count == distinct.len() {
+                break;
+            }
+        }
+        count
     }
     fn seed_queued_call_hash_if_missing(
         tx: &mut StateTransaction<'_, '_>,
@@ -3277,7 +3350,7 @@ impl HostExecutionArtifacts {
         self,
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+    ) -> Result<ExecutedHostInstructions, ValidationFail> {
         self.apply_to_transaction_with_lifecycle(tx, authority, None)
     }
     pub(crate) fn apply_to_transaction_with_lifecycle(
@@ -3288,7 +3361,7 @@ impl HostExecutionArtifacts {
             &ContractAddress,
             crate::smartcontracts::code::PendingContractLifecycle,
         )>,
-    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+    ) -> Result<ExecutedHostInstructions, ValidationFail> {
         let has_contract_effect = lifecycle_completion.is_some()
             || self.queued.iter().any(|queued| {
                 queued.contract_runtime_context.is_some()
@@ -3358,13 +3431,23 @@ impl HostExecutionArtifacts {
             )
             .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
         }
+        let mut executed = if self.x509_queue_backing.is_some() {
+            ExecutedHostInstructions::try_with_capacity(self.queued.len(), &tx.execution_budget())
+                .map_err(|error| {
+                tx.attempt_error_to_validation_fail(crate::execution_attempt::vm_attempt_error(
+                    error,
+                    |error| ValidationFail::InternalError(error.to_string()),
+                ))
+            })?
+        } else {
+            ExecutedHostInstructions::default()
+        };
         tx.admit_host_execution_effects(QueuedEffect::instructions(&self.queued))?;
         Self::seed_queued_call_hash_if_missing(tx, &self.queued)?;
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
         }
         let executor = tx.world.executor.clone();
-        let mut executed = Vec::new();
         for queued in self.queued {
             let QueuedEffect {
                 payload,
@@ -3386,13 +3469,22 @@ impl HostExecutionArtifacts {
             .map_err(|error| tx.attempt_error_to_validation_fail(error))?;
             match payload {
                 QueuedEffectPayload::Instruction(instruction) => {
-                    executor.execute_instruction_with_contract_runtime_context(
+                    executor.execute_borrowed_overlay_instruction(
                         tx,
                         &effect_authority,
-                        instruction.clone(),
+                        &instruction,
                         contract_runtime_context.as_ref(),
                     )?;
                     executed.push(instruction);
+                }
+                QueuedEffectPayload::AttachedX509(action) => {
+                    action.execute(
+                        &executor,
+                        tx,
+                        &effect_authority,
+                        contract_runtime_context.as_ref(),
+                    )?;
+                    executed.push_attached(action);
                 }
                 QueuedEffectPayload::Emission(emission) => {
                     Self::validate_emission_provenance(
@@ -3589,6 +3681,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
+            x509_queue_backing: None,
             instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
@@ -3718,6 +3811,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
+            x509_queue_backing: None,
             instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
@@ -3801,6 +3895,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             pipa_r_config: iroha_config::parameters::actual::PipaR::default(),
             crypto,
             queued: Vec::new(),
+            x509_queue_backing: None,
             instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
@@ -5427,12 +5522,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub fn set_zk_tree_roots_history_len(&mut self, len: NonZeroUsize) {
         self.zk_tree_roots_history_len = len;
     }
-    /// Drain queued ISIs collected during the last VM run.
-    pub fn drain_instructions(&mut self) -> Vec<InstructionBox> {
-        self.drain_queued_effects()
+    /// Drain ordinary queued ISIs for inspection/replay paths without attachment custody.
+    ///
+    /// # Errors
+    /// Refuses the entire group if extracting it would discard an original proof owner.
+    pub fn drain_instructions(&mut self) -> Result<Vec<InstructionBox>, ivm::VMError> {
+        if self.x509_queue_backing.is_some() {
+            self.abort_attachment_attempt();
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(self
+            .drain_queued_effects()
             .into_iter()
-            .filter_map(QueuedEffect::into_instruction)
-            .collect()
+            .filter_map(|effect| match effect.payload {
+                QueuedEffectPayload::Instruction(instruction) => Some(instruction),
+                QueuedEffectPayload::Emission(_) | QueuedEffectPayload::AttachedX509(_) => None,
+            })
+            .collect())
     }
     /// Configure the aggregate output budget from consensus parameters.
     ///
@@ -5577,28 +5683,32 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> Vec<QueuedEffect> {
         let fallback = fallback.or_else(|| self.current_contract_runtime_context.clone());
         let authorization_fallback = self.current_entrypoint_authorization.clone();
-        self.drain_queued_effects()
-            .into_iter()
-            .map(|mut queued| {
-                if queued.contract_runtime_context.is_none() {
-                    queued.contract_runtime_context.clone_from(&fallback);
-                }
-                if queued.entrypoint_authorization.is_none() {
-                    queued
-                        .entrypoint_authorization
-                        .clone_from(&authorization_fallback);
-                }
-                queued
-            })
-            .collect()
+        let mut queued = self.drain_queued_effects();
+        // Mutate context in place: moving an iterator through collect is not an
+        // ownership contract for retaining the prepaid original Vec allocation.
+        for effect in &mut queued {
+            if effect.contract_runtime_context.is_none() {
+                effect.contract_runtime_context.clone_from(&fallback);
+            }
+            if effect.entrypoint_authorization.is_none() {
+                effect
+                    .entrypoint_authorization
+                    .clone_from(&authorization_fallback);
+            }
+        }
+        queued
     }
     /// Extract queued effects for the test overlay builders, retaining their context.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn drain_queued_effects_with_contract_runtime_context(
         &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
-    ) -> Vec<QueuedEffect> {
-        self.drain_queued_effects_with_fallback(contract_runtime_context)
+    ) -> Result<Vec<QueuedEffect>, ivm::VMError> {
+        if self.x509_queue_backing.is_some() {
+            self.abort_attachment_attempt();
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(self.drain_queued_effects_with_fallback(contract_runtime_context))
     }
     /// Drain durable contract-state writes collected during the last VM run.
     pub fn drain_durable_state_overlay(&mut self) -> DurableStateOverlay {
@@ -5632,7 +5742,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub fn __test_set_last_env_hash_tally(&mut self, h: [u8; 32]) {
         *Arc::make_mut(&mut self.zk_last_env_hash_tally) = VecDeque::from([h]);
     }
-    fn validate_queued_for_zk(&mut self, queued: &[InstructionBox]) -> Result<(), ValidationFail> {
+    fn validate_queued_for_zk<'a>(
+        &mut self,
+        queued: impl IntoIterator<Item = &'a InstructionBox>,
+    ) -> Result<(), ValidationFail> {
         for instr in queued {
             let any: &dyn iroha_data_model::isi::Instruction = &**instr;
             let any_ref = any.as_any();
@@ -5820,18 +5933,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         // batch intact until every fallible quote over the existing queue has completed.
         self.flush_pending_fastpq_batch();
         let queued = self.drain_queued_effects_with_fallback(contract_runtime_context);
-        self.validate_queued_for_zk(
-            &queued
-                .iter()
-                .filter_map(|queued| queued.instruction().cloned())
-                .collect::<Vec<_>>(),
-        )?;
+        self.validate_queued_for_zk(queued.iter().filter_map(QueuedEffect::instruction))?;
         let completed_axt = mem::take(&mut self.completed_axt);
         let durable_state_overlay = mem::take(&mut self.durable_state_overlay);
         let durable_state_authorizations = mem::take(&mut self.durable_state_authorizations);
         self.finish_attachment_root()?;
         Ok(HostExecutionArtifacts {
             queued,
+            x509_queue_backing: self.x509_queue_backing.take(),
             entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             confidential_gas_delta,
             completed_axt,
@@ -5848,7 +5957,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+    ) -> Result<ExecutedHostInstructions, ValidationFail> {
         self.apply_queued_with_contract_runtime_context(tx, authority, None)
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -5859,7 +5968,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-    ) -> Result<Vec<InstructionBox>, ValidationFail> {
+    ) -> Result<ExecutedHostInstructions, ValidationFail> {
         self.confidential_gas = tx.zk.gas;
         self.take_execution_artifacts(contract_runtime_context.cloned())
             .map_err(|error| tx.attempt_error_to_validation_fail(error))?
@@ -10794,6 +10903,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                 // Accept one of the operation-tagged instruction bridges used by Kotodama.
                 ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
                     let operation_tag = vm.register(11);
+                    if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509 {
+                        return self.queue_x509_attachment(vm);
+                    }
                     let ib = Self::decode_opaque_instruction(vm)?;
                     self.ensure_instruction_queue_allowed(&ib)?;
                     let any_ref = ib.as_any();
@@ -10829,7 +10941,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                             self.enqueue_priced_instruction(instruction);
                             Ok(gas)
                         }
-                        // ABI v1 defines only `1=SubmitBallot`. Contracts record no SCCP
+                        // ABI v1 also handles `2=PresentX509` above. Contracts record no SCCP
                         // messages (specs/sccp.md §4.4): an encoded `RecordSccpMessage` fails
                         // under every tag, like every other instruction type.
                         _ => Err(ivm::VMError::PermissionDenied),

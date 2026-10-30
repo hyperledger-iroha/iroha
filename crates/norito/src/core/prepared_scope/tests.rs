@@ -193,6 +193,7 @@ struct ArchiveOracle {
 
 #[derive(Default)]
 struct ArchiveDestination {
+    resets: usize,
     first: Option<u64>,
     fixed: Option<[u8; 4]>,
     first_schema: Option<[u8; 16]>,
@@ -242,6 +243,7 @@ impl SerializePayload for ArchiveDestination {
 }
 impl PreparedRecordDestination<ArchiveRecord> for ArchiveDestination {
     fn reset(&mut self) {
+        self.resets += 1;
         self.first = None;
         self.fixed = None;
         self.first_schema = None;
@@ -540,5 +542,210 @@ fn retained_workspace_construction_preserves_foreign_and_wrong_layout_charges() 
     drop(pending);
     assert_eq!(pool.reserved_bytes(), layouts[0].size());
     drop(first);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn owned_prepared_entry_preserves_header_precedence_original_admission_and_parity() {
+    let value = ArchiveRecord {
+        first: 7,
+        fixed: [9; 4],
+    };
+    let frame = crate::encode_canonical(&value).unwrap();
+    let limits = crate::canonical_decode_limits(frame.len());
+    let mut destination = ArchiveDestination::default();
+    let pool = AllocationBudget::new(demand());
+    let held = pool.try_reserve_bytes(demand()).unwrap();
+    let mut invalid = frame.clone();
+    invalid[0] = 0;
+    assert!(matches!(owned_record(
+        &invalid, limits, &pool, &mut destination,
+    ), Err(OwnedPreparedDecodeError::Decode(PreparedDecodeError::Codec(error))) if matches!(error.error(), Error::InvalidMagic)));
+    let expected = pool.try_reserve_bytes(demand()).unwrap_err();
+    assert!(matches!(owned_record(
+        &frame, limits, &pool, &mut destination,
+    ), Err(OwnedPreparedDecodeError::Admission(original)) if original == expected));
+    drop(held);
+    owned_record(&frame, limits, &pool, &mut destination).unwrap();
+    assert_eq!(destination.first, Some(value.first));
+    assert_eq!(destination.fixed, Some(value.fixed));
+    assert_eq!(pool.peak_reserved_bytes(), demand());
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert_eq!(
+        crate::decode_canonical::<ArchiveRecord>(&frame).unwrap(),
+        value
+    );
+    let error = with_decode_limits_scope(DecodeLimits::new(0, 0, 0, 0, 0), || {
+        owned_record(&frame, limits, &pool, &mut destination)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, OwnedPreparedDecodeError::Decode(PreparedDecodeError::Codec(error)) if error.kind() == DecodeAttemptErrorKind::EnclosingLimit)
+    );
+    assert_eq!(destination.first, None);
+    assert_eq!(destination.fixed, None);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
+fn owned_prepared_entry_resets_once_before_success_and_again_after_each_failure() {
+    let frame = crate::encode_canonical(&ArchiveRecord {
+        first: 7,
+        fixed: [9; 4],
+    })
+    .unwrap();
+    let limits = crate::canonical_decode_limits(frame.len());
+    let pool = AllocationBudget::new(demand());
+    let mut destination = ArchiveDestination::default();
+    owned_record(&frame, limits, &pool, &mut destination).unwrap();
+    assert_eq!(destination.resets, 1);
+    let before = destination.resets;
+    let mut invalid = frame.clone();
+    invalid[0] = 0;
+    assert!(owned_record(&invalid, limits, &pool, &mut destination).is_err());
+    assert_eq!(destination.resets, before + 2);
+    let before = destination.resets;
+    let occupied = pool.try_reserve_bytes(demand()).unwrap();
+    assert!(owned_record(&frame, limits, &pool, &mut destination).is_err());
+    assert_eq!(destination.resets, before + 2);
+    drop(occupied);
+    let before = destination.resets;
+    *invalid.last_mut().unwrap() ^= 1;
+    invalid[0] = frame[0];
+    assert!(owned_record(&invalid, limits, &pool, &mut destination).is_err());
+    assert_eq!(destination.resets, before + 2);
+}
+
+#[test]
+fn owned_prepared_entry_keeps_original_attempt_scope_and_intrinsic_limit_provenance() {
+    let frame = crate::encode_canonical(&ArchiveRecord {
+        first: 7,
+        fixed: [9; 4],
+    })
+    .unwrap();
+    let limits = crate::canonical_decode_limits(frame.len());
+    // Each refusal retains the original attempt family, backed by its derived
+    // control. Leave room for a second independent attempt while it stays live.
+    let pool = AllocationBudget::new(2 * demand());
+    let retained_control = PreparedDecodeWorkspace::allocation_layouts()[0].size();
+    let physical_limits = DecodeLimits::new(1000, 0, 1000, 1000, 100);
+    let outer_pool = AllocationBudget::new(DecodeBudgetContext::allocation_layout().size());
+    let outer = DecodeBudgetContext::try_new_owned(physical_limits, &outer_pool).unwrap();
+    let mut destination = ArchiveDestination::default();
+    let error = outer
+        .with(|| owned_record(&frame, limits, &pool, &mut destination))
+        .unwrap_err();
+    let OwnedPreparedDecodeError::Decode(PreparedDecodeError::Codec(error)) = error else {
+        panic!("original enclosing cause")
+    };
+    assert_eq!(error.kind(), DecodeAttemptErrorKind::EnclosingLimit);
+    let retained = error.into_local_refusal().unwrap();
+    // The diagnostic owns its attempt family and records the refusing layer;
+    // it does not keep the caller's retired context allocated.
+    drop(outer);
+    assert_eq!(pool.reserved_bytes(), retained_control);
+    assert_eq!(outer_pool.reserved_bytes(), 0);
+    let foreign_pool = AllocationBudget::new(DecodeBudgetContext::allocation_layout().size());
+    let foreign = DecodeBudgetContext::try_new_owned(physical_limits, &foreign_pool).unwrap();
+    let error = foreign
+        .with(|| owned_record(&frame, limits, &pool, &mut destination))
+        .unwrap_err();
+    let OwnedPreparedDecodeError::Decode(PreparedDecodeError::Codec(error)) = error else {
+        panic!("distinct foreign cause")
+    };
+    let foreign_refusal = error.into_local_refusal().unwrap();
+    assert_eq!(retained.resource_error(), foreign_refusal.resource_error());
+    assert_ne!(retained, foreign_refusal);
+    assert_eq!(pool.reserved_bytes(), 2 * retained_control);
+    drop((foreign_refusal, foreign));
+    assert_eq!(foreign_pool.reserved_bytes(), 0);
+    assert_eq!(pool.reserved_bytes(), retained_control);
+    assert_eq!(outer_pool.reserved_bytes(), 0);
+    drop(retained);
+    assert_eq!(outer_pool.reserved_bytes(), 0);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let error = owned_record(&frame, physical_limits, &pool, &mut destination).unwrap_err();
+    let OwnedPreparedDecodeError::Decode(PreparedDecodeError::Codec(error)) = error else {
+        panic!("intrinsic schema limit")
+    };
+    assert_eq!(error.kind(), DecodeAttemptErrorKind::Invalid);
+    assert!(error.local_refusal().is_none());
+    let ordinary =
+        crate::decode_canonical_with_limits::<ArchiveRecord>(&frame, physical_limits).unwrap_err();
+    assert_eq!(error.error().to_string(), ordinary.to_string());
+    drop(error);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+fn owned_record(
+    bytes: &[u8],
+    limits: DecodeLimits,
+    pool: &AllocationBudget,
+    destination: &mut ArchiveDestination,
+) -> Result<(), OwnedPreparedDecodeError<std::convert::Infallible>> {
+    let mut workspace = None;
+    PreparedDecodeWorkspace::decode_canonical_into_with_owned_controls::<ArchiveRecord, _>(
+        bytes,
+        limits,
+        pool,
+        &mut workspace,
+        destination,
+    )
+}
+
+#[test]
+fn owned_prepared_entry_reuses_original_controls_and_rejects_pool_substitution() {
+    let frame = crate::encode_canonical(&ArchiveRecord {
+        first: 7,
+        fixed: [9; 4],
+    })
+    .unwrap();
+    let limits = crate::canonical_decode_limits(frame.len());
+    let pool = AllocationBudget::new(demand());
+    let foreign = AllocationBudget::new(demand());
+    let mut workspace = None;
+    let mut destination = ArchiveDestination::default();
+    PreparedDecodeWorkspace::decode_canonical_into_with_owned_controls::<ArchiveRecord, _>(
+        &frame,
+        limits,
+        &pool,
+        &mut workspace,
+        &mut destination,
+    )
+    .unwrap();
+    assert!(workspace.as_ref().unwrap().belongs_to(&pool));
+    assert_eq!(pool.reserved_bytes(), demand());
+    let resets = destination.resets;
+    assert!(matches!(
+        PreparedDecodeWorkspace::decode_canonical_into_with_owned_controls::<ArchiveRecord, _>(
+            &frame,
+            limits,
+            &foreign,
+            &mut workspace,
+            &mut destination,
+        ),
+        Err(OwnedPreparedDecodeError::Decode(
+            PreparedDecodeError::Scope(PreparedDecodeScopeError::ForeignPool)
+        ))
+    ));
+    assert_eq!(destination.resets, resets + 2);
+    assert!(workspace.as_ref().unwrap().belongs_to(&pool));
+    assert_eq!(pool.reserved_bytes(), demand());
+    assert_eq!(foreign.reserved_bytes(), 0);
+    pool.set_limit_bytes(0);
+    PreparedDecodeWorkspace::decode_canonical_into_with_owned_controls::<ArchiveRecord, _>(
+        &frame,
+        limits,
+        &pool,
+        &mut workspace,
+        &mut destination,
+    )
+    .unwrap();
+    assert_eq!(
+        pool.reserved_bytes(),
+        demand(),
+        "retry consumes existing controls without reacquiring credit"
+    );
+    drop(workspace);
     assert_eq!(pool.reserved_bytes(), 0);
 }

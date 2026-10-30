@@ -12,6 +12,8 @@ pub mod authenticated_genesis;
 pub mod beacon_bootstrap;
 /// Read-only `--check-config --json` and `--check-storage` compatibility probes.
 mod compatibility_probe;
+/// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
+mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Deployment-injected factory for the supervised private Musubi publication service.
@@ -232,6 +234,26 @@ fn torii_receipt_signer_or_derived(
         "torii receipt signer not configured; derived a stable domain-separated key from the node identity"
     );
     Ok(key)
+}
+/// Retain both private-settlement signing capabilities from the original node key.
+/// Torii owns Emergency Fast refusal and durable-store admission; key custody is always validated.
+fn private_settlement_signers_from_node_key(
+    node_key_pair: &KeyPair,
+) -> ReportResult<
+    (
+        Arc<iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1>,
+        Arc<iroha_core::private_settlement::PrivateSettlementPhaseSignerV1>,
+    ),
+    StartError,
+> {
+    let availability = iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1::new(
+        node_key_pair.clone(),
+    )
+    .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+    let phase =
+        iroha_core::private_settlement::PrivateSettlementPhaseSignerV1::new(node_key_pair.clone())
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+    Ok((Arc::new(availability), Arc::new(phase)))
 }
 type ConsensusHandshakeMeta = ConsensusHandshakeMetadata;
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
@@ -894,6 +916,12 @@ pub struct StartupArgs {
     /// after a data loss.
     #[arg(long)]
     pub sumeragi_assert_fresh_key: bool,
+    /// Private managed-worker endpoint supplying the already-bound runtime listeners.
+    #[arg(long, hide = true, requires = "managed_listener_deadline_ns", conflicts_with_all = ["check_config", "check_storage"])]
+    pub managed_listeners: Option<PathBuf>,
+    /// Original managed startup deadline for the listener handoff.
+    #[arg(long, hide = true, requires = "managed_listeners")]
+    pub managed_listener_deadline_ns: Option<u128>,
 }
 
 #[cfg(feature = "test-network-parliament-signers")]
@@ -2304,7 +2332,15 @@ impl Iroha {
         ),
         StartError,
     > {
-        let PreparedStartup { native, lifetime } = prepared;
+        let PreparedStartup {
+            native,
+            lifetime,
+            listeners,
+        } = prepared;
+        let (p2p_listener, torii_listener) = match listeners {
+            Some(listeners) => (Some(listeners.p2p), Some(listeners.torii)),
+            None => (None, None),
+        };
         let PreparedNative {
             mut config,
             mut supervisor,
@@ -2820,11 +2856,19 @@ impl Iroha {
             .map_err(|error| Report::new(StartError::InitKura).attach(error))?
             .into(),
         };
+        // The handshake requires what the committed selection activates; the listener below
+        // replaces the requirement whenever a change set activates.
+        let required_host_profiles = iroha_p2p::RequiredHostProfiles::leak(
+            committed_host_profiles(&state).map_err(|error| {
+                Report::new(StartError::StartP2p).attach(error.to_string())
+            })?,
+        );
         let consensus_caps = iroha_p2p::ConsensusHandshakeCaps {
             mode: signed_consensus_mode,
             proto_version: u32::from(iroha_core::sumeragi::node::PROTOCOL_VERSION),
             consensus_fingerprint: consensus_fingerprint.0,
             config: config_caps,
+            required_host_profiles: Some(required_host_profiles),
         };
         // The handshake identifies the release, not the chain's committed ZK
         // policy: a policy an authorized `SetParameter` commits is State, and
@@ -2895,6 +2939,7 @@ impl Iroha {
             iroha_p2p::network::HandshakeCapabilities { consensus: Some(consensus_caps), confidential: Some(confidential_caps), crypto: Some(crypto_caps) },
             initial_trusted_sources,
             configured_validator_dial_roster.iter().cloned().collect(),
+            p2p_listener,
             supervisor.shutdown_signal(),
         )
         .await
@@ -3133,6 +3178,11 @@ impl Iroha {
             start_telemetry(&logger, &config, &telemetry, &mut supervisor).await;
             log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
         }
+        supervisor.monitor(tokio::spawn(run_required_host_profiles_listener(
+            Arc::clone(&state),
+            required_host_profiles,
+            events_sender.subscribe(),
+        )));
         let peers_gossiper_topology_events = events_sender.subscribe();
         let (peers_gossiper, child) = PeersGossiper::start(
             config.common.peer.id.clone(),
@@ -4492,47 +4542,19 @@ impl Iroha {
                 emergency_fast,
             )
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
-        let private_settlement_availability_signer = state
-            .nexus_snapshot()
-            .atomic_private_settlement
-            .enabled
-            .then(|| {
-                iroha_core::private_settlement::PrivateSettlementAvailabilitySignerV1::new(
-                    config.common.key_pair.clone(),
-                )
-            })
-            .transpose()
-            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
-            .map(Arc::new);
-        let private_settlement_phase_signer = state
-            .nexus_snapshot()
-            .atomic_private_settlement
-            .enabled
-            .then(|| {
-                iroha_core::private_settlement::PrivateSettlementPhaseSignerV1::new(
-                    config.common.key_pair.clone(),
-                )
-            })
-            .transpose()
-            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
-            .map(Arc::new);
+        let (private_settlement_availability_signer, private_settlement_phase_signer) =
+            private_settlement_signers_from_node_key(&config.common.key_pair)?;
         // Keep the late by-value builder scratch in a separate synchronous call frame
         // instead of the activation poll; no State observation or startup stage moves.
         #[allow(clippy::redundant_closure_call)]
         let runtime_deps = (|| {
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
+            .with_runtime_attestation_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
-        let runtime_deps = if let Some(signer) = private_settlement_availability_signer {
-            runtime_deps.with_private_settlement_availability_signer(signer)
-        } else {
-            runtime_deps
-        };
-        let runtime_deps = if let Some(signer) = private_settlement_phase_signer {
-            runtime_deps.with_private_settlement_phase_signer(signer)
-        } else {
-            runtime_deps
-        };
+        let runtime_deps = runtime_deps
+            .with_private_settlement_availability_signer(private_settlement_availability_signer)
+            .with_private_settlement_phase_signer(private_settlement_phase_signer);
         let runtime_deps = if let Some(inventory) = native_provider_attestation_inventory.as_ref() {
             runtime_deps.with_sorafs_provider_attestation_inventory(Arc::clone(inventory))
         } else {
@@ -4767,7 +4789,7 @@ impl Iroha {
             torii.with_p2p(network.clone())
         };
         let torii = torii.with_local_peer_id(config.common.peer.id.clone());
-        let torii_run = torii.start(supervisor.shutdown_signal());
+        let torii_run = torii.start(supervisor.shutdown_signal(), torii_listener);
         let shutdown_on_failure = supervisor.shutdown_signal();
         supervisor.monitor(Child::new(
             tokio::spawn(async move {
@@ -6202,6 +6224,11 @@ fn derive_runtime_nexus_storage_budget(
             .and_then(|value| value.checked_add(bps_total.saturating_sub(1)))
             .map(|value| value / bps_total)
             .and_then(|value| u64::try_from(value).ok())
+            .map(|value| {
+                value.min(
+                    iroha_config::parameters::defaults::nexus::storage::AUTO_STORAGE_HEADROOM_MAX_BYTES,
+                )
+            })
             .ok_or_else(|| {
                 Report::new(ConfigError::ParseConfig).attach(format!(
                     "failed to derive Nexus storage headroom for filesystem `{}`",
@@ -8277,6 +8304,17 @@ fn run_main_with_config_guard(
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
+    // A genesis signed before genesis authored its policies keeps the crypto and staking
+    // policy its configuration committed; install it before genesis or State reads it.
+    if let Some(legacy) = config.nexus.legacy_genesis.as_ref() {
+        iroha_core::state::install_legacy_genesis_policies(
+            iroha_core::state::LegacyGenesisPolicies {
+                crypto: legacy.crypto.policy.clone(),
+                staking: legacy.staking.policy.clone(),
+            },
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let emergency_fast = config.kura.init_mode == InitMode::Fast;
     if let Some(guard) = launcher_config_guard {
         guard(&config).map_err(|error| {
@@ -8344,6 +8382,9 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach("failed to project deployment runtime-provider bindings")?;
     }
+    // Keep the original sockets bound through native preparation and provider admission.
+    // Ordinary daemon launches continue to bind their configured addresses at activation.
+    let managed_listeners = adopt_managed_listeners(&args.startup, &config)?;
     let musubi_publication_factory = if emergency_fast {
         None
     } else {
@@ -8478,17 +8519,55 @@ fn run_main_with_config_guard(
         };
         Ok(runtime_deps.with_sumeragi_fresh_key_assertion(args.startup.sumeragi_assert_fresh_key))
     }) {
-        Ok((prepared, runtime_deps)) => rt.block_on(run_node(
-            build,
-            prepared,
-            logger,
-            runtime_deps,
-            musubi_publication_factory,
-        )),
+        Ok((mut prepared, runtime_deps)) => {
+            prepared.listeners = managed_listeners;
+            rt.block_on(run_node(
+                build,
+                prepared,
+                logger,
+                runtime_deps,
+                musubi_publication_factory,
+            ))
+        }
         Err(error) => Err(error),
     };
     rt.shutdown_timeout(NODE_RUNTIME_SHUTDOWN_TIMEOUT);
     result
+}
+
+/// Adopt only the exact configured numeric endpoints from the managed worker.
+fn adopt_managed_listeners(
+    startup: &StartupArgs,
+    config: &Config,
+) -> ReportResult<Option<iroha_deploy::managed::RuntimeListeners>, MainError> {
+    match (
+        &startup.managed_listeners,
+        startup.managed_listener_deadline_ns,
+    ) {
+        (None, None) => Ok(None),
+        (Some(directory), Some(deadline)) => {
+            let numeric = |address: &iroha_primitives::addr::SocketAddr| match address {
+                iroha_primitives::addr::SocketAddr::Ipv4(address) => {
+                    Ok(std::net::SocketAddr::V4((*address).into()))
+                }
+                iroha_primitives::addr::SocketAddr::Ipv6(address) => {
+                    Ok(std::net::SocketAddr::V6((*address).into()))
+                }
+                iroha_primitives::addr::SocketAddr::Host(_) => Err(Report::new(MainError::Config)
+                    .attach("managed listeners require exact numeric socket addresses")),
+            };
+            iroha_deploy::managed::adopt_runtime_listeners(
+                directory,
+                numeric(config.network.address.value())?,
+                numeric(config.torii.address.value())?,
+                deadline,
+            )
+            .map(Some)
+            .map_err(|error| Report::new(MainError::Config).attach(error.to_string()))
+        }
+        _ => Err(Report::new(MainError::Config)
+            .attach("managed listener endpoint and deadline must be supplied together")),
+    }
 }
 
 /// Spawn the logger on the node's runtime without entering the later provider boundary.
@@ -8820,9 +8899,14 @@ fn validate_genesis_execution_offline(
         None,
     )
     .map_err(|error| {
-        Report::new(error)
+        let explanation = genesis_policy_diagnostics::explain_genesis_startup_error(config, &error);
+        let report = Report::new(error)
             .change_context(MainError::Config)
-            .attach("native genesis execution failed")
+            .attach("native genesis execution failed");
+        match explanation {
+            Some(explanation) => report.attach(explanation),
+            None => report,
+        }
     })?;
     let executed = state.world_view();
     let initial_configs = executed
@@ -8919,8 +9003,63 @@ fn build_consensus_config_caps(
         native_config_fingerprint: [0; 32],
         execution_policy_hash: [0; 32],
         nexus_policy_digest,
-        ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
+        host_profiles: release_host_profiles()?,
     })
+}
+/// The host profiles this release implements, advertised in the handshake.
+fn release_host_profiles() -> ReportResult<iroha_p2p::HostProfileSet, StartError> {
+    let catalog = iroha_core::runtime::release_catalog().map_err(|error| {
+        Report::new(StartError::StartP2p).attach(format!("release catalog: {error}"))
+    })?;
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::release_host_profiles(catalog)
+            .into_iter()
+            .map(|id| id.0),
+    )
+    .map_err(|error| Report::new(StartError::StartP2p).attach(error.to_string()))
+}
+/// The host profiles the committed selection of `state` activates.
+fn committed_host_profiles(
+    state: &State,
+) -> Result<iroha_p2p::HostProfileSet, iroha_p2p::HostProfileSetOverflow> {
+    iroha_p2p::HostProfileSet::new(
+        iroha_core::runtime::attestation::committed_host_profiles(&state.world_view())
+            .into_iter()
+            .map(|id| id.0),
+    )
+}
+/// Keep the handshake's required host profiles equal to those the committed selection activates
+/// (`specs/live_runtime_upgrades.md` §6, "Handshake"): they change only when a change set
+/// activates, so the listener recomputes them on each activation and after a lag.
+async fn run_required_host_profiles_listener(
+    state: Arc<State>,
+    required: &'static iroha_p2p::RequiredHostProfiles,
+    mut events: tokio::sync::broadcast::Receiver<iroha_data_model::events::EventBox>,
+) {
+    use iroha_data_model::events::{
+        EventBox,
+        data::{DataEvent, runtime_upgrade::RuntimeUpgradeEvent},
+    };
+    loop {
+        let refresh = match events.recv().await {
+            Ok(EventBox::Data(event)) => matches!(
+                event.as_ref(),
+                DataEvent::RuntimeUpgrade(RuntimeUpgradeEvent::Activated(_))
+            ),
+            Ok(_) => false,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => true,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        if refresh {
+            match committed_host_profiles(&state) {
+                Ok(profiles) => required.set(profiles),
+                Err(error) => iroha_logger::error!(
+                    %error,
+                    "the committed selection activates more host profiles than a handshake carries"
+                ),
+            }
+        }
+    }
 }
 /// Bind handshake monetary identity to the authenticated original signed genesis.
 ///
@@ -9035,6 +9174,7 @@ fn consensus_caps_from_genesis(
             proto_version: iroha_core::sumeragi::consensus::PROTO_VERSION,
             consensus_fingerprint: computed_fingerprint,
             config: config_caps,
+            required_host_profiles: None,
         },
         consensus_params.block_cadence_ms.get(),
         maximum_validator_roster_len,
@@ -10964,6 +11104,36 @@ mod tests {
             assert!(!fastpq_poseidon_word_preflight_enabled(&cfg));
         }
     }
+    mod private_settlement_signer_selection {
+        use super::*;
+
+        #[test]
+        fn both_signers_retain_each_original_node_identity() {
+            for seed in [0xA1, 0xA2] {
+                let node = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS node key");
+                let (availability, phase) = private_settlement_signers_from_node_key(&node)
+                    .expect("both node-owned signing capabilities");
+                assert_eq!(availability.peer_id().public_key(), node.public_key());
+                assert_eq!(phase.peer_id().public_key(), node.public_key());
+            }
+        }
+
+        #[test]
+        fn invalid_node_algorithm_preserves_startup_failure_and_signer_error() {
+            let node = KeyPair::try_from_seed(vec![0xA3; 32], Algorithm::Ed25519)
+                .expect("deterministic non-BLS node key");
+            let error = private_settlement_signers_from_node_key(&node)
+                .expect_err("invalid custody must fail daemon startup");
+            assert!(matches!(error.current_context(), StartError::StartTorii));
+            assert!(error.frames().any(|frame| matches!(
+                frame.downcast_ref::<
+                    iroha_core::private_settlement::PrivateSettlementAvailabilityErrorV1,
+                >(),
+                Some(iroha_core::private_settlement::PrivateSettlementAvailabilityErrorV1::InvalidSigner)
+            )));
+        }
+    }
     mod torii_receipt_signer_selection {
         use super::*;
         #[test]
@@ -11035,6 +11205,59 @@ mod tests {
     mod cli_args {
         #[allow(unused_imports)]
         use super::*;
+        #[test]
+        fn managed_listener_arguments_require_the_original_pair() {
+            for args in [
+                vec!["iroha3d", "--managed-listeners", "/private/listeners"],
+                vec!["iroha3d", "--managed-listener-deadline-ns", "42"],
+            ] {
+                assert_eq!(
+                    Args::try_parse_from(args).unwrap_err().kind(),
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                );
+            }
+            let args = Args::try_parse_from([
+                "iroha3d",
+                "--managed-listeners",
+                "/private/listeners",
+                "--managed-listener-deadline-ns",
+                "42",
+            ])
+            .unwrap();
+            assert_eq!(
+                args.startup.managed_listeners,
+                Some(PathBuf::from("/private/listeners"))
+            );
+            assert_eq!(args.startup.managed_listener_deadline_ns, Some(42));
+            assert!(
+                Args::try_parse_from([
+                    "iroha3d",
+                    "--managed-listeners",
+                    "/private/listeners",
+                    "--managed-listener-deadline-ns",
+                    "42",
+                    "--check-config",
+                ])
+                .is_err()
+            );
+        }
+
+        #[test]
+        fn managed_listener_adoption_preserves_manual_launch_and_rejects_unpaired_inputs() {
+            let config = Config::from_toml_source(TomlSource::inline(
+                crate::config_tests::minimal_config_table(),
+            ))
+            .unwrap();
+            let mut args = Args::try_parse_from(["iroha3d"]).unwrap();
+            assert!(
+                adopt_managed_listeners(&args.startup, &config)
+                    .unwrap()
+                    .is_none()
+            );
+            args.startup.managed_listeners = Some(PathBuf::from("/private/listeners"));
+            assert!(adopt_managed_listeners(&args.startup, &config).is_err());
+        }
+
         #[test]
         fn inrou_deployment_authority_requires_offline_check_config() {
             let flag = "--require-genesis-inrou-deployment-authority";
@@ -11253,11 +11476,11 @@ mod tests {
                 )
                 .expect("sign genesis fixture with configured DA and confidential policies")
         }
-        fn staged_context_hashes_for_test(
+        fn staged_context_for_test(
             raw: &RawGenesisTransaction,
             signer: &KeyPair,
             config: &Config,
-        ) -> (Hash, Hash) {
+        ) -> (iroha_data_model::nexus::NexusAmxContextPreimageV1, Hash) {
             // Derive only an unpublished signing draft's policy commitments.
             // The final signed block must pass the unchanged native validator.
             let provisional = sign_configured_genesis_for_test(raw.clone(), signer, config);
@@ -11319,16 +11542,18 @@ mod tests {
             .unpack(|_| {})
             {
                 Ok((_, staged)) => (
-                    iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged),
+                    iroha_data_model::nexus::NexusAmxContextPreimageV1::new(
+                        iroha_core::sumeragi::staged_genesis_nexus_amx_context_preimage(&staged),
+                    ),
                     iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
                         .expect("executed genesis policy"),
                 ),
                 Err((_, error)) => match *error {
                     iroha_core::block::BlockValidationError::GenesisPolicyMismatch {
-                        actual_nexus,
+                        actual_nexus_preimage,
                         actual_execution,
                         ..
-                    } => (actual_nexus, actual_execution),
+                    } => (actual_nexus_preimage, actual_execution),
                     error => panic!("genesis signing draft failed native validation: {error}"),
                 },
             }
@@ -11379,6 +11604,8 @@ mod tests {
             mode: iroha_data_model::block::consensus::ConsensusMode,
             parameters: iroha_data_model::block::consensus::SumeragiGenesisContextParameters,
             cadence_ms: u64,
+            /// The Nexus/AMX context preimage the genesis commits, as Kagami publishes it.
+            signed_nexus_context: iroha_data_model::nexus::NexusAmxContextPreimageV1,
         }
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
@@ -11422,10 +11649,10 @@ mod tests {
             );
             require_crypto_verification_implementations(base_raw.crypto_admission_policy())
                 .expect("compiled verifiers support the explicitly authored genesis policy");
-            let (context_hash, execution_policy_hash) =
-                staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
+            let (signed_nexus_context, execution_policy_hash) =
+                staged_context_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_context_parameters();
-            parameters.nexus_amx_context_hash = context_hash.into();
+            parameters.nexus_amx_context_hash = signed_nexus_context.hash().into();
             parameters.execution_policy_hash = execution_policy_hash.into();
             let mut builder = base_raw
                 .into_builder()
@@ -11454,6 +11681,7 @@ mod tests {
                 mode,
                 parameters,
                 cadence_ms,
+                signed_nexus_context,
             }
         }
         #[test]
@@ -11472,6 +11700,75 @@ mod tests {
             )
             .expect("valid genesis should execute in the disposable overlay");
             assert_eq!(bootstrap.initial_committee_size, 4);
+        }
+        /// A node file that restates a consensus-bound value differently fails `--check-config`
+        /// with the differing field and both values once the network's published Nexus/AMX
+        /// context sits beside the signed genesis file, and with directions while it is absent.
+        #[test]
+        fn check_config_names_the_nexus_field_a_node_file_restates_differently() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let mut fixture = offline_semantic_genesis_fixture([]);
+            let directory = tempfile::tempdir().expect("temporary genesis directory");
+            fixture.config.genesis.file = Some(WithOrigin::inline(
+                directory.path().join("genesis.signed.nrt"),
+            ));
+            let signed_exit_teu = fixture.config.nexus.fusion.exit_teu;
+            let node_exit_teu = signed_exit_teu.checked_add(1).expect("fixture exit TEU");
+            fixture.config.nexus.fusion.exit_teu = node_exit_teu;
+            let check = |fixture: &LocalSemanticGenesisFixture| {
+                let report = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    None,
+                )
+                .expect_err("a restated consensus-bound value must refuse the signed genesis");
+                format!("{report:?}")
+            };
+            let without = check(&fixture);
+            assert!(
+                without.contains("Signed genesis policy mismatch"),
+                "{without}"
+            );
+            assert!(
+                without.contains(&format!(
+                    "copy the network's `nexus-amx-context.v1.bin` (written by `kagami network create`, \
+                     `kagami localnet` and `kagami genesis sign --nexus-context-output`) to {}",
+                    directory.path().join("nexus-amx-context.v1.bin").display()
+                )),
+                "{without}"
+            );
+            std::fs::write(
+                directory.path().join("nexus-amx-context.v1.bin"),
+                fixture.signed_nexus_context.as_bytes(),
+            )
+            .expect("publish the signed Nexus/AMX context");
+            let with = check(&fixture);
+            // The report renders each line of the explanation under its own tree prefix.
+            for line in [
+                "this node's Nexus/AMX context differs from the signed one".to_owned(),
+                "in 1 field:".to_owned(),
+                format!(
+                    "nexus.fusion.exit_teu: signed genesis {signed_exit_teu}, this node {node_exit_teu}"
+                ),
+            ] {
+                assert!(with.contains(&line), "missing {line:?} in {with}");
+            }
+            fixture.config.nexus.fusion.exit_teu = signed_exit_teu;
+            validate_genesis_execution_offline(
+                &fixture.config,
+                &fixture.genesis,
+                &fixture.authority,
+                fixture.mode,
+                fixture.parameters,
+                fixture.cadence_ms,
+                None,
+            )
+            .expect("copying the signed value accepts the signed genesis");
         }
         /// `--check-config --json` with a local signed genesis reports `ready` and exactly the
         /// genesis-bound values the running network attests: the signed context hashes, the
@@ -11574,7 +11871,7 @@ mod tests {
                 ready.nexus_policy_digest,
                 hex::encode(ready_caps.nexus_policy_digest)
             );
-            assert_eq!(ready.gas_schedule_hash, pending.gas_schedule_hash);
+            assert_eq!(ready.host_profiles, pending.host_profiles);
         }
 
         #[test]
@@ -12057,8 +12354,12 @@ mod tests {
             assert_eq!(caps.native_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
             assert_eq!(
-                caps.ivm_gas_schedule_hash,
-                <[u8; 32]>::from(ivm::gas::schedule_hash())
+                caps.host_profiles,
+                release_host_profiles().expect("release host profiles"),
+            );
+            assert!(
+                !caps.host_profiles.as_slice().is_empty(),
+                "the release implements the baseline host profile"
             );
         }
         #[test]
@@ -12338,6 +12639,8 @@ mod tests {
                     trace_config: false,
                     config_blake3: None,
                     sumeragi_assert_fresh_key: false,
+                    managed_listeners: None,
+                    managed_listener_deadline_ns: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -12405,6 +12708,8 @@ mod tests {
                     trace_config: false,
                     config_blake3: None,
                     sumeragi_assert_fresh_key: false,
+                    managed_listeners: None,
+                    managed_listener_deadline_ns: None,
                 },
                 terminal_colors: false,
                 language: None,
@@ -12681,6 +12986,18 @@ mod tests {
                 derive_runtime_nexus_storage_budget(&[probe]).expect("safe derived budget");
             assert_eq!(budgets.len(), 1);
             assert_eq!(budgets[0].budget_bytes.get(), 100);
+        }
+        #[test]
+        fn runtime_budget_caps_headroom_on_large_filesystems() {
+            const GIB: u64 = 1024 * 1024 * 1024;
+            // A 7.3 TiB volume with 617 GiB free: 20% would reserve about 1.46 TiB and leave
+            // no budget, so the reservation stops at the fixed cap.
+            let probe = storage_budget_probe(7_475 * GIB, 617 * GIB, 0);
+            let budgets = derive_runtime_nexus_storage_budget(&[probe])
+                .expect("a large volume with ample free space has a budget");
+            assert_eq!(budgets[0].budget_bytes.get(), 617 * GIB - 64 * GIB);
+            let full = storage_budget_probe(7_475 * GIB, 60 * GIB, 0);
+            assert!(derive_runtime_nexus_storage_budget(&[full]).is_err());
         }
         #[test]
         fn runtime_budget_is_stable_across_restart_usage_splits() {

@@ -639,33 +639,35 @@ test(
       runtimeMetrics.abiVersion,
       "runtime metrics abiVersion",
     );
-    assert.equal(
-      typeof runtimeMetrics.upgradeEventsTotal.proposed,
-      "number",
-      "runtime metrics upgradeEventsTotal.proposed must be numeric",
+    assert.deepEqual(
+      Object.keys(runtimeMetrics.upgradeEventsTotal),
+      ["scheduled", "activated", "lapsed", "canceled"],
+      "runtime metrics count change sets by lifecycle status",
     );
-    assert.equal(
-      typeof runtimeMetrics.upgradeEventsTotal.activated,
-      "number",
-      "runtime metrics upgradeEventsTotal.activated must be numeric",
-    );
-    assert.equal(
-      typeof runtimeMetrics.upgradeEventsTotal.canceled,
-      "number",
-      "runtime metrics upgradeEventsTotal.canceled must be numeric",
-    );
+    for (const [status, count] of Object.entries(runtimeMetrics.upgradeEventsTotal)) {
+      assertNonNegativeInteger(count, `runtime metrics upgradeEventsTotal.${status}`);
+    }
 
-    const runtimeUpgrades = await client.listRuntimeUpgrades();
-    assert.ok(Array.isArray(runtimeUpgrades), "runtime upgrades list must be an array");
-    if (runtimeUpgrades.length > 0) {
-      const entry = runtimeUpgrades[0];
-      assertHexString(entry.idHex, "runtime upgrade idHex");
+    // The change-set snapshot is an operator route.
+    const runtimeUpgrades = await OPERATOR_CLIENT.listRuntimeUpgrades();
+    assertHexString(runtimeUpgrades.selectionIdHex, "runtime selectionIdHex");
+    assertHexString(runtimeUpgrades.committeeDigestHex, "runtime committeeDigestHex");
+    assert.ok(
+      runtimeUpgrades.committee.length > 0,
+      "runtime upgrades snapshot must name the attesting committee",
+    );
+    assert.ok(Array.isArray(runtimeUpgrades.items), "runtime change sets must be an array");
+    if (runtimeUpgrades.items.length > 0) {
+      const entry = runtimeUpgrades.items[0];
+      assertHexString(entry.idHex, "runtime change-set idHex");
+      assertNonNegativeInteger(entry.effectiveHeight, "runtime change-set effectiveHeight");
       assert.ok(
-        entry.record?.manifest?.name,
-        "runtime upgrade entries must expose manifest metadata",
+        ["Scheduled", "Activated", "Lapsed", "Cancelled"].includes(entry.status.kind),
+        "runtime change sets must expose their lifecycle status",
       );
+      assert.ok(entry.record.change_set, "runtime change sets must keep the full record");
     } else {
-      t.diagnostic("runtime upgrades list is empty on target node");
+      t.diagnostic("no runtime change sets are recorded on the target node");
     }
   },
 );

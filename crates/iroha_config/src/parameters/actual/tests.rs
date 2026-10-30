@@ -772,6 +772,11 @@ mod tests {
             &config.settlement,
             [0x11; 32],
             [0x22; 32],
+            config
+                .nexus
+                .legacy_genesis
+                .as_ref()
+                .map(|legacy| &legacy.crypto),
         )
     }
     #[test]
@@ -881,6 +886,7 @@ mod tests {
                     &fixed.settlement,
                     nexus,
                     zk,
+                    None,
                 ),
                 execution_policy_hash(&fixed),
                 "{label} must change the execution-policy identity"
@@ -1040,8 +1046,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(hash.as_ref()),
-            // TODO: regenerate from the current native owner after the coherent monetary retirement.
-            "580c30ad6b72555fbac82835d086c8fbaea22fdeb8170669c8f00f745183de35",
+            "e7a1a6d899bbd33e460e086999297b34ec8600fd2b812bc6378f314341bce12f",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -1628,8 +1633,7 @@ mod tests {
                     &[],
                     &[],
                 ),
-                // TODO: regenerate from the current native owner after the coherent monetary retirement.
-                "580c30ad6b72555fbac82835d086c8fbaea22fdeb8170669c8f00f745183de35",
+                "e7a1a6d899bbd33e460e086999297b34ec8600fd2b812bc6378f314341bce12f",
             ),
             (
                 "sora",
@@ -1640,7 +1644,7 @@ mod tests {
                     &golden_validators(),
                     &golden_lineage()[..3],
                 ),
-                "5bf597842b80453ea6aa1a63d986d1298f5db9ac35c8440bb85b5a8c7c9cf351",
+                "c73eac6773210f04e0136882903a1d9c8222740b19f6a664b43933920e54c8fd",
             ),
             (
                 "taira",
@@ -1651,7 +1655,7 @@ mod tests {
                     &golden_validators(),
                     &golden_lineage(),
                 ),
-                "f93a860a9606b62422d2b7fc9bd5560cb4ded174b09d083695f6afbb82ed565d",
+                "70968361b56d3429985653e174bc46cbc52638af3539a461a730d07ae360d22d",
             ),
         ];
         let mut failures = Vec::new();
@@ -1754,6 +1758,223 @@ mod tests {
                 .all(|rule| rule.lane() != LaneId::new(5)),
             "the fresh Taira catalog routes bpng by target dataspace only"
         );
+    }
+    /// The field-level view walks every field the writer emits, names each node value by its
+    /// configuration key, and a changed node value differs in exactly that key.
+    #[test]
+    fn sumeragi_nexus_amx_context_fields_name_each_changed_config_key() {
+        use iroha_data_model::nexus::{
+            NexusAmxContextFieldOriginV1::{Genesis, NodeConfig},
+            diff_nexus_amx_context_v1, nexus_amx_context_fields_v1,
+        };
+        let pipeline = Pipeline::default();
+        let preimage = |nexus: &Nexus,
+                        validators: &[GenesisActiveNexusLaneRecord],
+                        lineage: &[SumeragiLaneLifecycleEntry]| {
+            sumeragi_nexus_amx_context_preimage(
+                nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                validators,
+                lineage,
+            )
+        };
+        for (label, nexus, validators, lineage) in [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ] {
+            let fields = nexus_amx_context_fields_v1(&preimage(&nexus, &validators, &lineage))
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let value = |path: &str| {
+                fields
+                    .iter()
+                    .find(|field| field.path == path)
+                    .map(|field| (field.origin, field.value.clone()))
+            };
+            assert_eq!(
+                value("nexus.lane_count"),
+                Some((
+                    NodeConfig,
+                    nexus.lane_catalog.lane_count().get().to_string()
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.fusion.exit_teu"),
+                Some((NodeConfig, nexus.fusion.exit_teu.to_string())),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.autoscale.scale_out_latency_ratio"),
+                Some((
+                    NodeConfig,
+                    format!("{:?}", nexus.autoscale.scale_out_latency_ratio)
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.da.audit.interval_ms"),
+                Some((NodeConfig, nexus.da.audit.interval.as_millis().to_string())),
+                "{label}"
+            );
+            for dataspace in nexus.dataspace_catalog.entries() {
+                assert_eq!(
+                    value(&format!(
+                        "nexus.dataspace_catalog[id={}].alias",
+                        dataspace.id
+                    )),
+                    Some((NodeConfig, format!("{:?}", dataspace.alias))),
+                    "{label}"
+                );
+            }
+            for field in &fields {
+                let genesis = [
+                    "nexus.lane_lifecycle[",
+                    "nexus.autoscale.last_transition_height",
+                    "root.",
+                    "staged.",
+                    "pipeline.",
+                ]
+                .iter()
+                .any(|prefix| field.path.starts_with(prefix))
+                    || (field.path.starts_with("nexus.lane_catalog[")
+                        && (field.path.ends_with(".version") || field.path.ends_with(".metadata")));
+                let origin = if genesis { Genesis } else { NodeConfig };
+                assert_eq!(field.origin, origin, "{label}: {}", field.path);
+            }
+        }
+        let validators = golden_validators();
+        let lineage = golden_lineage();
+        let taira = taira_eight_lane_nexus();
+        let mut node = taira.clone();
+        node.fusion.exit_teu = node.fusion.exit_teu.checked_add(1).unwrap();
+        node.autoscale.cooldown_blocks = node.autoscale.cooldown_blocks.checked_add(1).unwrap();
+        node.da.rotation.latency_decay /= 2.0;
+        let diffs = diff_nexus_amx_context_v1(
+            &preimage(&taira, &validators, &lineage),
+            &preimage(&node, &validators, &lineage),
+        )
+        .expect("both contexts come from the writer");
+        assert_eq!(
+            diffs
+                .iter()
+                .map(|diff| (diff.path.as_str(), diff.origin, diff.actual.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "nexus.fusion.exit_teu",
+                    NodeConfig,
+                    Some(node.fusion.exit_teu.to_string())
+                ),
+                (
+                    "nexus.autoscale.cooldown_blocks",
+                    NodeConfig,
+                    Some(node.autoscale.cooldown_blocks.to_string())
+                ),
+                (
+                    "nexus.da.rotation.latency_decay",
+                    NodeConfig,
+                    Some(format!("{:?}", node.da.rotation.latency_decay))
+                ),
+            ]
+        );
+    }
+    /// Emit the actual default/Sora/Taira test-owner preimages without rewriting golden pins.
+    /// Explicit authored fee recipes here are test inputs, never runtime policy fallbacks.
+    #[test]
+    #[ignore = "explicit native capture of public configuration fixtures; retain stdout"]
+    fn capture_nexus_policy_and_amx_preimages() {
+        let pipeline = Pipeline::default();
+        let cases = [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ];
+        for (label, nexus, validators, lineage) in cases {
+            // Capture the exact three AMX inputs used by the existing golden tests.
+            let encoded = sumeragi_nexus_amx_context_preimage(
+                &nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
+            let expected = sumeragi_nexus_amx_context_hash(
+                &nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                &validators,
+                &lineage,
+            );
+            assert_eq!(Hash::new(&encoded), expected);
+            let record = norito::json!({
+                "schema_version": 1,
+                "kind": "nexus_amx",
+                "case": label,
+                "original_fees": "authored_test_recipe",
+                "domain_hex": "",
+                "encoded_hex": (hex::encode(&encoded)),
+                "preimage_hex": (hex::encode(&encoded)),
+                "digest_hex": (hex::encode(<[u8; 32]>::from(expected))),
+                "recommended_template_hex": (hex::encode(
+                    iroha_data_model::block::consensus::RECOMMENDED_NEXUS_AMX_CONTEXT_HASH
+                )),
+            });
+            println!(
+                "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                norito::json::to_json(&record).unwrap()
+            );
+            // Nexus policy is a separate owner from both compiled-profile and AMX hashes.
+            // Preserve the meaningful distinction between no original fees and an authored policy.
+            for (fee_case, fees) in [("absent", None), ("authored", Some(&nexus.fees))] {
+                let encoded =
+                    nexus_consensus_policy_preimage_with_runtime_policies(&nexus, fees, None, None)
+                        .unwrap();
+                let expected =
+                    nexus_consensus_policy_digest_with_runtime_policies(&nexus, fees, None, None)
+                        .unwrap();
+                let domain = b"iroha:nexus:consensus-policy:v1\0";
+                let preimage = [domain.as_slice(), encoded.as_slice()].concat();
+                assert_eq!(<[u8; 32]>::from(Hash::new(&preimage)), expected);
+                let record = norito::json!({
+                    "schema_version": 1,
+                    "kind": "nexus_policy",
+                    "case": (format!("{label}/{fee_case}")),
+                    "original_fees": fee_case,
+                    "compliance_policy": "absent",
+                    "lane_manifest_policy": "absent",
+                    "domain_hex": (hex::encode(domain)),
+                    "encoded_hex": (hex::encode(&encoded)),
+                    "preimage_hex": (hex::encode(&preimage)),
+                    "digest_hex": (hex::encode(expected)),
+                });
+                println!(
+                    "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                    norito::json::to_json(&record).unwrap()
+                );
+            }
+        }
     }
 }
 #[cfg(test)]

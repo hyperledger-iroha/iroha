@@ -82,8 +82,8 @@ pub mod runtime_provider_broker {
 }
 /// Fixed layout under a node's `data_dir`.
 ///
-/// When `data_dir` is set, every state path listed in [`data_dir::STATE_PATHS`] that the
-/// configuration does not set explicitly defaults to `<data_dir>/state/<relative>`, and every
+/// When `data_dir` is set, unset paths in [`data_dir::STATE_PATHS`] and enabled services in
+/// [`data_dir::ENABLED_SERVICE_STATE_PATHS`] default to `<data_dir>/state/<relative>`, and every
 /// secret file defaults to `<data_dir>/secrets/<name>`. Explicit per-path values still win.
 pub mod data_dir {
     /// Path of the loader-owned configuration source that carries the resolved absolute
@@ -96,12 +96,6 @@ pub mod data_dir {
     /// Subdirectory of `data_dir` holding owner-only secret files.
     pub const SECRETS_DIR: &str = "secrets";
     /// Derived state paths: configuration key and path relative to [`STATE_DIR`].
-    ///
-    /// TODO: the `SoraFS` provider sub-states (`sorafs.storage.pop_credentials.*`,
-    /// moderation, reputation, reserve-transparency, hedging-billing and evidence-viewer
-    /// checkpoints) and `torii.privacy_bootle_lantern_issuer.state_dir` still default to
-    /// `./storage/...`; they are only used when the embedded `SoraFS` provider or the
-    /// Bootle/Lantern issuer is enabled, which no compiled profile does.
     pub const STATE_PATHS: &[(&[&str], &str)] = &[
         (&["kura", "store_dir"], "kura"),
         (&["snapshot", "store_dir"], "snapshot"),
@@ -129,6 +123,54 @@ pub mod data_dir {
         ),
         (&["sorafs", "storage", "data_dir"], "sorafs"),
         (&["sorafs", "por", "state_dir"], "sorafs/por"),
+    ];
+    /// Opt-in service state paths, completed only when the sibling `enabled` key is `true`.
+    ///
+    /// These services are disabled by default. Leaving their paths unset while disabled
+    /// preserves validation that requires inactive service policy to remain at its defaults.
+    pub const ENABLED_SERVICE_STATE_PATHS: &[(&[&str], &str)] = &[
+        (
+            &["sorafs", "storage", "pop_credentials", "issuer_state_dir"],
+            "sorafs/pop/issuer",
+        ),
+        (
+            &["sorafs", "storage", "pop_credentials", "wallet_state_dir"],
+            "sorafs/pop/wallet",
+        ),
+        (
+            &[
+                "sorafs",
+                "storage",
+                "moderation_orchestrator",
+                "checkpoint_path",
+            ],
+            "sorafs/moderation/orchestrator.norito",
+        ),
+        (
+            &["sorafs", "storage", "evidence_viewer", "checkpoint_path"],
+            "sorafs/moderation/evidence-viewer.norito",
+        ),
+        (
+            &["sorafs", "storage", "reputation_runtime", "state_dir"],
+            "sorafs/reputation",
+        ),
+        (
+            &[
+                "sorafs",
+                "storage",
+                "reserve_transparency_runtime",
+                "state_dir",
+            ],
+            "sorafs/reserve-transparency",
+        ),
+        (
+            &["sorafs", "storage", "hedging_billing_runtime", "state_dir"],
+            "sorafs/hedging-billing",
+        ),
+        (
+            &["torii", "privacy_bootle_lantern_issuer", "state_dir"],
+            "privacy_bootle_lantern_issuer",
+        ),
     ];
     /// Validator BLS private key (`private_key_file`).
     pub const VALIDATOR_KEY: &str = "validator.key";
@@ -1275,7 +1317,6 @@ pub mod streaming {
     }
     /// Codec gating defaults.
     pub mod codec {
-        use std::path::PathBuf;
         /// Default CABAC runtime mode (`disabled`).
         pub const CABAC_MODE: &str = "disabled";
         /// Bundled entropy mode advertised by all supported builds (requires `ENABLE_RANS_BUNDLES=1`).
@@ -1288,10 +1329,12 @@ pub mod streaming {
         pub fn trellis_blocks() -> Vec<u16> {
             Vec::new()
         }
-        /// Default deterministic rANS table artefact.
-        pub fn rans_tables_path() -> PathBuf {
-            PathBuf::from("codec/rans/tables/rans_seed0.toml")
-        }
+        /// The canonical `SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml`).
+        ///
+        /// It is compiled into every build, so a node needs no table file on disk unless
+        /// `streaming.codec.rans_tables_path` selects another artefact.
+        pub const CANONICAL_RANS_TABLES_TOML: &str =
+            include_str!("../../../../codec/rans/tables/rans_seed0.toml");
         /// Default entropy mode string (bundled rANS only).
         pub fn entropy_mode() -> String {
             const {
@@ -3398,10 +3441,6 @@ pub mod nexus {
     }
     /// Atomic private cross-dataspace settlement defaults.
     pub mod atomic_private_settlement {
-        /// The production path is governed and disabled until explicitly activated.
-        pub const ENABLED: bool = false;
-        /// Minimum governance notice before an activation height becomes effective.
-        pub const MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 7_200;
         /// Audited fixed-shape private-note proof profile version.
         pub const PROOF_PROFILE_VERSION: u16 = 1;
         /// Maximum dataspace legs admitted in one private atomic bundle.
@@ -3467,6 +3506,11 @@ pub mod nexus {
         use iroha_config_base::util::Bytes;
         /// Filesystem capacity reserved as runtime storage headroom (basis points).
         pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
+        /// Upper bound on that headroom (64 GiB).
+        ///
+        /// The percentage protects small volumes; uncapped, it would reserve terabytes on large
+        /// disks and refuse to start nodes that have ample free space.
+        pub const AUTO_STORAGE_HEADROOM_MAX_BYTES: u64 = 64 * 1024 * 1024 * 1024;
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
@@ -4350,14 +4394,6 @@ pub mod governance {
     pub const MAX_LOCK_OWNERS_PER_REFERENDUM: NonZeroU32 = nonzero!(1_000_u32);
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
-    /// Default runtime-upgrade provenance enforcement mode.
-    pub const RUNTIME_UPGRADE_PROVENANCE_MODE: &str = "optional";
-    /// Require SBOM digests for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM: bool = false;
-    /// Require SLSA attestation bytes for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA: bool = false;
-    /// Default signature threshold for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD: usize = 0;
     /// Default exact TEU balance required for alias admission.
     pub fn alias_teu_minimum() -> Quantity {
         Quantity::zero()

@@ -87,21 +87,39 @@ of at most eight columns in row order, parallelizing independent 1,024-row hash-
 chunks with one clearing 64-byte buffer per active chunk. It preserves the exact
 framed bytes, and failures poison the builder before it can publish a root. This does not claim erasure of every transient
 compiler-generated scalar or stack copy.
-The conservative early reservation leaves 596,974,144 bytes for the borrowed
-assembly. The corrected RFC source alone retains 421,806,624 bytes for the maximum
-structural fixture; a fresh complete assembly measurement is still required.
-Earlier measurements of the smaller RFC layout do not qualify this layout.
+The four original SHA base segments are retained losslessly in 134,217,728 heap
+bytes within the same 6 GiB source allowance. Each 64-byte row stores eleven
+checked u32 columns and two Boolean bitsets; an explicit zero reserved word avoids
+implicit padding. Construction validates every original field once through the
+existing call builder, including dummy calls and physical padding. The immutable
+cache moves through the existing X5B1 transition and supplies base columns during
+commitment, composition, DEEP and query replay without reconstructing calls.
+Actual capacities are charged both before and after binding; all packed words
+and bitsets are cleared on failure, unwind and release. Auxiliary recurrences,
+terminals, masks and fixed schedules retain their original validation and owners.
+The maximum structural fixture's complete borrowed assembly measures 215,244,730
+payload bytes. The admission test derives the exact remaining assembly allowance
+from the current complete phase forecast and checks its one-byte-over boundary.
+After registration-local matrices and caches drop, the SHA-union phase charges
+both retained cuts, original CA coefficients and metadata, outer composition
+chunks, replay work and its 268,444,160-byte private peak inside that same arithmetic
+maximum. Device staging cannot spend those allocations again; the union does not
+require a second copy of its private reservation outside the arithmetic maximum.
 
-Public fixed polynomials use one owned matrix across quotient stripes. A later
-stripe performs an inverse FFT, scales coefficient `k` by the ratio of the new
-and old shifts to power `k`, and applies the forward FFT in place. Fixed
+Public fixed polynomials use one evaluation matrix across quotient stripes.
+After charging actual private-cache capacities, explicitly unspent registration
+cache space retains a prefix of original public fixed coefficients. That prefix
+copies into its existing output columns and needs only the shifted forward FFT.
+The uncached suffix performs an inverse FFT, scales coefficient `k` by the ratio
+of the new and old shifts to power `k`, and applies the forward FFT in place. Fixed
 polynomials have degree below their native domain, which fits every stripe;
 masked witness polynomials still use the original folded evaluation. This saves
 427,819,008 fixed-matrix bytes at the RFC registration. The ledger charges one
 native-column allocation overlap when padding a smaller fixed domain and counts
-6,535 additional public recovery IFFTs (32,549,109,760 butterflies). These real
-operations are included in diagnostic receipts; memory reuse is not a latency
-qualification.
+2,046 public recovery IFFTs for the complete joint profile, down from 7,202 without
+the bounded fixed prefix. The ordinary MAIN-only forecast has 1,896 recoveries.
+These operations are included in diagnostic receipts; the forecast is not a
+latency qualification.
 
 Binary FRI authenticates each ordered `(low, high)` pair in one 64-byte leaf,
 including the terminal tree. Every query still discloses both values and uses

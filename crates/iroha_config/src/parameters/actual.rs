@@ -68,6 +68,8 @@ use std::{
 mod actual_soranet_handshake_debug;
 mod amx_relay;
 pub use amx_relay::{AmxRelay, AmxRelayRoute};
+mod legacy_genesis;
+pub use legacy_genesis::{LegacyGenesisCryptoV1, LegacyGenesisStakingV1, LegacyGenesisV1};
 mod kagemusha_enrollment;
 pub use kagemusha_enrollment::{
     KagemushaEnrollmentIssuer, KagemushaEnrollmentProvider, KagemushaEnrollmentWorker,
@@ -2467,54 +2469,6 @@ impl_default!(ViralIncentives => {
             campaign_cap: defaults::governance::viral_campaign_cap(),
         }
 });
-/// Runtime-upgrade provenance enforcement modes (actual layer).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeUpgradeProvenanceMode {
-    /// Provenance is optional; when provided it is verified.
-    Optional,
-    /// Provenance is required for runtime upgrade manifests.
-    Required,
-}
-impl RuntimeUpgradeProvenanceMode {
-    /// Return whether provenance is required.
-    #[inline]
-    #[must_use]
-    pub const fn is_required(self) -> bool {
-        matches!(self, Self::Required)
-    }
-}
-impl From<user::RuntimeUpgradeProvenanceMode> for RuntimeUpgradeProvenanceMode {
-    fn from(mode: user::RuntimeUpgradeProvenanceMode) -> Self {
-        match mode {
-            user::RuntimeUpgradeProvenanceMode::Optional => Self::Optional,
-            user::RuntimeUpgradeProvenanceMode::Required => Self::Required,
-        }
-    }
-}
-/// Runtime-upgrade provenance policy (actual layer).
-#[derive(Debug, Clone)]
-pub struct RuntimeUpgradeProvenancePolicy {
-    /// Enforcement mode for provenance.
-    pub mode: RuntimeUpgradeProvenanceMode,
-    /// Require at least one SBOM digest entry when provenance is present/required.
-    pub require_sbom: bool,
-    /// Require a non-empty SLSA attestation when provenance is present/required.
-    pub require_slsa: bool,
-    /// Trusted signer public keys.
-    pub trusted_signers: BTreeSet<PublicKey>,
-    /// Minimum number of trusted signatures required.
-    pub signature_threshold: usize,
-}
-impl_default!(RuntimeUpgradeProvenancePolicy => {
-        Self {
-            mode: RuntimeUpgradeProvenanceMode::Optional,
-            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
-            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            trusted_signers: BTreeSet::new(),
-            signature_threshold:
-                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
-        }
-});
 /// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParliamentTimedOvn {
@@ -2715,8 +2669,6 @@ pub struct Governance {
     pub debug_trace_pipeline: bool,
     /// Allowed JDG signature schemes for attestation validation.
     pub jdg_signature_schemes: BTreeSet<JdgSignatureScheme>,
-    /// Runtime upgrade provenance enforcement policy.
-    pub runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy,
     /// Viral incentive policy for social rewards.
     pub viral_incentives: ViralIncentives,
     /// `SoraFS` pin policy constraints enforced during manifest admission.
@@ -2823,7 +2775,6 @@ impl_default!(Governance => {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenancePolicy::default(),
             viral_incentives: ViralIncentives::default(),
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_pin_fee_asset_id: defaults::governance::sorafs_pin_fee::asset_id()
@@ -3166,12 +3117,6 @@ impl_default!(NexusAxt => {
 /// Governed atomic private cross-dataspace settlement configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Whether admission is enabled, subject to the governed activation height.
-    pub enabled: bool,
-    /// First block height at which the path may be admitted.
-    pub activation_height: Option<u64>,
-    /// Minimum notice required between governance approval and activation.
-    pub minimum_activation_notice_blocks: NonZeroU64,
     /// Audited fixed-shape private-note proof profile version.
     pub proof_profile_version: NonZeroU16,
     /// Maximum number of ordered dataspace legs in one bundle.
@@ -3208,12 +3153,6 @@ pub struct NexusAtomicPrivateSettlement {
 }
 impl_default!(NexusAtomicPrivateSettlement => {
         Self {
-            enabled: defaults::nexus::atomic_private_settlement::ENABLED,
-            activation_height: None,
-            minimum_activation_notice_blocks: NonZeroU64::new(
-                defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
-            )
-            .expect("private-settlement activation notice must be non-zero"),
             proof_profile_version: NonZeroU16::new(
                 defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
             )
@@ -3530,6 +3469,9 @@ pub struct Nexus {
     pub commit: Commit,
     /// Data-availability sampling configuration.
     pub da: Da,
+    /// Configured terms of a signed genesis that predates genesis-authored policy; see
+    /// [`LegacyGenesisV1`]. `None` on every network whose genesis signs its policies.
+    pub legacy_genesis: Option<LegacyGenesisV1>,
 }
 impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
         Self {
@@ -3555,6 +3497,7 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             autoscale: Autoscale::default(),
             commit: Commit::default(),
             da: Da::default(),
+            legacy_genesis: None,
         }
 });
 impl Nexus {
@@ -3758,9 +3701,6 @@ struct NexusConsensusAxtV1 {
 }
 #[derive(Encode)]
 struct NexusConsensusAtomicPrivateSettlementV1 {
-    enabled: bool,
-    activation_height: Option<u64>,
-    minimum_activation_notice_blocks: u64,
     proof_profile_version: u16,
     max_participants: u16,
     max_expiry_blocks: u64,
@@ -4064,12 +4004,6 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             replay_retention_slots: nexus.axt.replay_retention_slots.get(),
         },
         atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
-            enabled: nexus.atomic_private_settlement.enabled,
-            activation_height: nexus.atomic_private_settlement.activation_height,
-            minimum_activation_notice_blocks: nexus
-                .atomic_private_settlement
-                .minimum_activation_notice_blocks
-                .get(),
             proof_profile_version: nexus.atomic_private_settlement.proof_profile_version.get(),
             max_participants: nexus.atomic_private_settlement.max_participants.get(),
             max_expiry_blocks: nexus.atomic_private_settlement.max_expiry_blocks.get(),
@@ -4169,6 +4103,13 @@ pub fn nexus_consensus_policy_preimage_with_runtime_policies(
             )?,
         },
     };
+    if let Some(legacy) = nexus.legacy_genesis.as_ref() {
+        return Ok(legacy_genesis::nexus_policy_preimage(
+            preimage,
+            legacy,
+            original_fees.unwrap_or(&nexus.fees),
+        ));
+    }
     Ok(preimage.encode())
 }
 #[derive(Encode)]
@@ -4238,6 +4179,7 @@ pub fn execution_policy_digest_v1(
     settlement: &Settlement,
     nexus_policy_digest: [u8; 32],
     zk_policy_digest: [u8; 32],
+    legacy_crypto: Option<&LegacyGenesisCryptoV1>,
 ) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
     const VERSION: u16 = 1;
@@ -4332,6 +4274,10 @@ pub fn execution_policy_digest_v1(
     policy.push("pipeline.amx_per_syscall_ns", &pipeline.amx_per_syscall_ns);
     // Ordinary crypto admission belongs exclusively to committed Parameters.
     // Local generation defaults and implementation selection carry no execution authority.
+    // A pre-policy genesis instead bound its configured crypto terms at this position.
+    if let Some(crypto) = legacy_crypto {
+        legacy_genesis::push_execution_crypto(&mut policy, crypto);
+    }
     // Oracle state transitions, economics, governance, and binding admission.
     policy.push(
         "oracle.history_depth",
@@ -4497,29 +4443,19 @@ pub fn execution_policy_digest_v1(
             .map(|scheme| scheme.scheme_id())
             .collect::<Vec<_>>(),
     );
-    let provenance = &governance.runtime_upgrade_provenance;
-    policy.push(
-        "governance.runtime_upgrade_provenance.mode",
-        &match provenance.mode {
-            RuntimeUpgradeProvenanceMode::Optional => 1_u8,
-            RuntimeUpgradeProvenanceMode::Required => 2,
-        },
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.require_sbom",
-        &provenance.require_sbom,
-    );
-    policy.push(
-        "governance.runtime_upgrade_provenance.require_slsa",
-        &provenance.require_slsa,
-    );
+    // The node-configured runtime-upgrade provenance check is deleted; provenance is the
+    // committed `runtime_provenance_policy_v1` (`specs/live_runtime_upgrades.md` §6). Genesis
+    // signs this preimage, so its five terms keep the values every network committed.
+    policy.push("governance.runtime_upgrade_provenance.mode", &1_u8);
+    policy.push("governance.runtime_upgrade_provenance.require_sbom", &false);
+    policy.push("governance.runtime_upgrade_provenance.require_slsa", &false);
     policy.push(
         "governance.runtime_upgrade_provenance.trusted_signers",
-        &execution_policy_canonical_set(provenance.trusted_signers.iter()),
+        &execution_policy_canonical_set(std::iter::empty::<&PublicKey>()),
     );
     policy.push(
         "governance.runtime_upgrade_provenance.signature_threshold",
-        &execution_policy_usize(provenance.signature_threshold),
+        &execution_policy_usize(0),
     );
     let viral = &governance.viral_incentives;
     policy.push(
@@ -5771,16 +5707,26 @@ pub fn sumeragi_nexus_amx_context_preimage(
         tag::STAKING_RESTRICTED_VALIDATOR_MODE,
         &restricted_validator_mode,
     );
-    preimage.field(
-        tag::STAKING_MAX_VALIDATORS,
-        &nexus.staking.max_validators.get(),
-    );
-    // The exact caller-owned original policy is encoded once as a typed option.
-    // No node-local fee defaults, account rendering or monetary mirror is consulted.
-    preimage.field(
-        tag::ROOT_FEE_POLICY,
-        &original_fees.map(norito::core::PayloadRef),
-    );
+    if let Some(legacy) = nexus.legacy_genesis.as_ref() {
+        // A pre-policy genesis committed its configured staking terms and each fee term.
+        legacy_genesis::write_amx_staking_and_fees(
+            &mut preimage,
+            nexus,
+            legacy,
+            original_fees.unwrap_or(&nexus.fees),
+        );
+    } else {
+        preimage.field(
+            tag::STAKING_MAX_VALIDATORS,
+            &nexus.staking.max_validators.get(),
+        );
+        // The exact caller-owned original policy is encoded once as a typed option.
+        // No node-local fee defaults, account rendering or monetary mirror is consulted.
+        preimage.field(
+            tag::ROOT_FEE_POLICY,
+            &original_fees.map(norito::core::PayloadRef),
+        );
+    }
     preimage.field(
         tag::DATASPACE_FEE_SPONSOR_PROGRAM_IDS,
         &nexus.dataspace_fee_sponsor_program_ids,
@@ -10609,8 +10555,9 @@ pub struct StreamingCodec {
     pub cabac_mode: CabacMode,
     /// Trellis-enabled block sizes (empty until claim-avoidance ships).
     pub trellis_block_sizes: Vec<u16>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact.
-    pub rans_tables_path: PathBuf,
+    /// Operator-selected `SignedRansTablesV1` artefact. `None` uses the canonical tables compiled
+    /// into the binary ([`defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML`]).
+    pub rans_tables_path: Option<PathBuf>,
     /// Entropy mode advertised by manifests/headers.
     pub entropy_mode: EntropyMode,
     /// Bundle width used when `entropy_mode` enables bundled rANS.
@@ -10631,7 +10578,7 @@ impl StreamingCodec {
         Self {
             cabac_mode: CabacMode::Disabled,
             trellis_block_sizes: defaults::streaming::codec::trellis_blocks(),
-            rans_tables_path: defaults::streaming::codec::rans_tables_path(),
+            rans_tables_path: None,
             entropy_mode: EntropyMode::RansBundled,
             bundle_width: defaults::streaming::codec::bundle_width(),
             bundle_accel: BundleAcceleration::None,

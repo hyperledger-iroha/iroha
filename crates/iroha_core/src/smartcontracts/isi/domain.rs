@@ -5554,39 +5554,6 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_has_runtime_upgrade_state() {
-        assert_account_unregister_guard(
-            |tx, _domain_id, _authority, account_id| {
-                let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-                    name: "runtime-guard".to_string(),
-                    description: "guard".to_string(),
-                    abi_version: 1,
-                    abi_hash: [0x51; 32],
-                    added_syscalls: Vec::new(),
-                    added_pointer_types: Vec::new(),
-                    start_height: 1,
-                    end_height: 2,
-                    sbom_digests: Vec::new(),
-                    slsa_attestation: Vec::new(),
-                    provenance: Vec::new(),
-                };
-                let upgrade_id = manifest.id();
-                tx.world.runtime_upgrades.insert(
-                    upgrade_id,
-                    iroha_data_model::runtime::RuntimeUpgradeRecord {
-                        manifest,
-                        status: iroha_data_model::runtime::RuntimeUpgradeStatus::Proposed,
-                        proposer: account_id.clone(),
-                        created_height: 1,
-                    },
-                );
-            },
-            "account with runtime upgrade state must not be unregistered",
-            "active runtime upgrade proposal state",
-            "error should explain runtime-upgrade conflict",
-        );
-    }
-    #[test]
     fn unregister_account_rejects_when_account_has_viral_escrow_state() {
         assert_account_unregister_guard(
             |tx, _domain_id, _authority, account_id| {

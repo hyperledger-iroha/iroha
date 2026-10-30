@@ -151,6 +151,9 @@ pub mod retail_fee;
 /// Retained P2P ownership through final gossip processing.
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod retained_gossip;
+/// Live runtime upgrades: the definitions this release executes and each root's selection.
+#[cfg_attr(test, deny(clippy::large_stack_arrays))]
+pub mod runtime;
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod secure_file_metadata;
 /// Unified XOR settlement engine.
@@ -248,6 +251,11 @@ pub fn with_authenticated_genesis_crypto_policy<R>(
 ) -> Result<R, block::BlockValidationError> {
     let authenticated =
         block::authenticate_genesis_block_intents(source, configured_genesis_account)?;
+    if let Some(legacy) = pipeline_gas_policy::legacy_genesis_policies() {
+        // The same selection refuses a genesis that also signs its own policy.
+        authenticated.initial_policies(source)?;
+        return Ok(inspect(&legacy.crypto));
+    }
     Ok(authenticated
         .initial_crypto_policy(source)?
         .inspect(inspect))

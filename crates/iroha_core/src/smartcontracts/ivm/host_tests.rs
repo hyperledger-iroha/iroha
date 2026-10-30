@@ -2311,7 +2311,7 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
         "mismatched opaque instruction".to_owned(),
     ));
     let payload = norito::to_bytes(&instruction).expect("encode instruction");
-    // Tag 2 is not part of ABI v1 (the retired contract-originated SCCP send).
+    // ABI v1 tags 1 and 2 accept only their respective ballot and X.509 requests.
     for operation_tag in [
         0,
         ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT,
@@ -2319,7 +2319,10 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
         u64::MAX,
     ] {
         let mut host = local_contract_host(authority.clone());
-        let mut vm = ivm::IVM::new(1_000_000);
+        // Tag 2 funds its canonical decoder before checking the instruction type.
+        let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
+        let mut vm = ivm::IVM::try_new_with_memory_budget(1_000_000, &budget)
+            .expect("fund instruction decoding");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
         vm.set_register(11, operation_tag);
@@ -2337,7 +2340,7 @@ fn execute_instruction_syscall_rejects_zero_unknown_and_mismatched_tags() {
 fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
     // specs/sccp.md §4.4: contracts record no SCCP messages. In a contract frame the
     // canonical encoded instruction decodes (a decode failure would be `NoritoInvalid`)
-    // and then fails under the only v1 tag, under tag 2 and under every other tag. A
+    // and then fails under both v1 tags and under every unknown tag. A
     // generic frame may not call `0xA0` at all. Nothing is queued in either frame.
     let authority = (*ALICE_ID).clone();
     let instruction = InstructionBox::from(
@@ -2357,7 +2360,10 @@ fn execute_instruction_syscall_rejects_record_sccp_message_under_every_tag() {
             } else {
                 CoreHost::new(authority.clone())
             };
-            let mut vm = ivm::IVM::new(1_000_000);
+            // Tag 2 funds its canonical decoder before checking the instruction type.
+            let budget = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
+            let mut vm = ivm::IVM::try_new_with_memory_budget(1_000_000, &budget)
+                .expect("fund instruction decoding");
             let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
             vm.set_register(10, ptr);
             vm.set_register(11, operation_tag);
@@ -5107,6 +5113,7 @@ seiyaku Callee {
 }
 include!("host/nested_contract_state_and_rollback_tests.rs");
 include!("host/attachment_lifecycle_tests.rs");
+include!("host/x509_attachment_tests.rs");
 include!("host/nested_return_funding_tests.rs");
 include!("host/shared_vm_cycle_budget_tests.rs");
 #[test]
@@ -7509,6 +7516,7 @@ fn host_execution_artifacts_apply_queued_uses_queued_authority_snapshot() {
     let source_call = Hash::from(source.hash_as_entrypoint());
     let mut stx = block.transaction_for_fastpq_testing(source_call);
     let artifacts = HostExecutionArtifacts {
+        x509_queue_backing: None,
         queued: vec![QueuedEffect {
             payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
                 InstructionBox::from(Transfer::asset_quantity(
@@ -7579,6 +7587,7 @@ fn rejected_queued_confidential_instruction_retains_host_artifact_gas() {
             .expect("completed fixture gas quote");
     assert!(confidential_gas_delta > 0);
     let artifacts = HostExecutionArtifacts {
+        x509_queue_backing: None,
         queued: vec![QueuedEffect {
             payload: crate::smartcontracts::ivm::host::QueuedEffectPayload::Instruction(
                 instruction.clone(),
@@ -7767,6 +7776,7 @@ seiyaku DurableOwner {
         .expect("foreign durable path");
     assert!(!authorization.owns_durable_state_path(&foreign_path));
     let artifacts = HostExecutionArtifacts {
+        x509_queue_backing: None,
         queued: Vec::new(),
         entrypoint_authorization: Some(authorization.clone()),
         confidential_gas_delta: 0,

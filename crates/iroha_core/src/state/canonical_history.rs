@@ -219,6 +219,12 @@ impl AuthenticatedExecutionIdentity {
     pub(crate) const fn result(&self) -> iroha_sumeragi::types::Hash32 {
         self.result
     }
+
+    /// The same height and hashes with another execution result.
+    #[cfg(test)]
+    pub(crate) const fn with_result_for_test(self, result: iroha_sumeragi::types::Hash32) -> Self {
+        Self { result, ..self }
+    }
 }
 
 impl<'a> CanonicalHistorySource<'a> {

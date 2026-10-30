@@ -1284,98 +1284,85 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
     }
 }
 #[test]
-fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
-    let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-        proposed_at_height: 1,
+fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity() {
+    let current = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+        max_polynomial_count: 2,
     });
-    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 1,
-        activated_at_height: 3,
-        state_since_height: 3,
-    });
-    let suspended = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
-        proposed_at_height: 1,
-        activated_at_height: 3,
-        state_since_height: 4,
-    });
-    let resumed = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 1,
-        activated_at_height: 3,
-        state_since_height: 5,
-    });
-    let retired = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-        proposed_at_height: 1,
-        activated_at_height: Some(3),
-        state_since_height: 6,
-    });
-    proposed
-        .validate_transition_to(&active)
-        .expect("proposal activates");
-    for mismatched_active in [
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 2,
-            activated_at_height: 3,
-            state_since_height: 3,
-        }),
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
-            activated_at_height: 3,
-            state_since_height: 4,
-        }),
-    ] {
-        assert_eq!(
-            proposed.validate_transition_to(&mismatched_active),
-            Err(PrivacyLifecycleTransitionError::InvalidTransition)
+    for count in [1, 3, 4] {
+        PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height: 7,
+            effective_at_height: 8,
+            next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                max_polynomial_count: count,
+            }),
+        }
+        .validate_against(&current)
+        .expect("ordinary increase or decrease within hard bounds");
+    }
+    for count in [0, 2, 5] {
+        assert!(
+            PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: 7,
+                effective_at_height: 8,
+                next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                    JindoLimitsV1 {
+                        max_polynomial_count: count
+                    }
+                )
+            }
+            .validate_against(&current)
+            .is_err(),
+            "zero, no-op and over-ceiling values cannot enter policy"
         );
     }
-    active
-        .validate_transition_to(&suspended)
-        .expect("active suspends");
-    suspended
-        .validate_transition_to(&resumed)
-        .expect("suspension resumes");
-    resumed
-        .validate_transition_to(&retired)
-        .expect("active retires");
-    assert!(retired.validate_transition_to(&active).is_err());
-    let invalid = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 4,
-        activated_at_height: 3,
-        state_since_height: 3,
-    });
-    assert!(invalid.validate().is_err());
-    let rewritten_history = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
-        proposed_at_height: 2,
-        activated_at_height: 3,
-        state_since_height: 4,
-    });
-    assert!(active.validate_transition_to(&rewritten_history).is_err());
+    assert!(
+        PrivacyProtocolLimitsUpdateV1 {
+            scheduled_at_height: 7,
+            effective_at_height: 8,
+            next_limits: PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1
+        }
+        .validate_against(&current)
+        .is_err()
+    );
+    for (scheduled, effective) in [(0, 8), (7, 7), (7, 6), (u64::MAX, u64::MAX)] {
+        assert!(
+            PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: scheduled,
+                effective_at_height: effective,
+                next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                    JindoLimitsV1 {
+                        max_polynomial_count: 3
+                    }
+                )
+            }
+            .validate_against(&current)
+            .is_err()
+        );
+    }
 }
 #[test]
-fn activation_effective_height_uses_active_lifecycle_payload() {
+fn actual_compiled_profile_admission_has_no_activation_height_prerequisite() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let envelope = envelope(statement_for(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     ));
-    let mut activation = activation(&envelope);
-    activation.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 1,
-        activated_at_height: 2,
-        state_since_height: 5,
-    });
-    assert_eq!(
-        envelope.validate_against_activation(&activation, &limits, 4),
-        Err(
-            PrivacyProofEnvelopeValidationError::ActivationNotEffective {
-                current_height: 4,
-                effective_height: 5,
-            }
-        )
-    );
-    assert_eq!(
-        envelope.validate_against_activation(&activation, &limits, 5),
-        Ok(())
-    );
+    let compiled = profile(&envelope);
+    envelope
+        .validate_against_profile_v1(&compiled, &compiled.protocol_limits, &limits)
+        .expect("actual native tuple and bounded statement need no activation timestamp");
+    let row = PrivacyCapabilityRowV1 {
+        protocol_id: compiled.protocol_id,
+        compiled_profile: PrivacyCompiledProfileResultV1::Available(compiled),
+        policy: None,
+    };
+    for height in [1, 4, 5, u64::MAX] {
+        row.validate_at_committed_height(height)
+            .expect("absent ordinary policy never disables compiled support");
+        assert_eq!(
+            row.effective_protocol_limits_v1(),
+            Some(compiled.protocol_limits)
+        );
+    }
 }
 #[test]
 fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
@@ -1423,37 +1410,40 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     proof_limited.max_proof_bytes_per_action = 2;
     proof_limited.validate().expect("lower proof limit");
     assert!(base.validate_with_limits(&proof_limited).is_err());
-    let mut governed = activation(&base);
-    base.validate_against_activation(&governed, &limits, 2)
-        .expect("active matching activation");
-    assert!(
-        base.validate_against_activation(&governed, &limits, 1)
-            .is_err()
+    let mut compiled = profile(&base);
+    base.validate_against_profile_v1(&compiled, &compiled.protocol_limits, &limits)
+        .expect("matching actual profile and limits");
+    compiled.parameter_digest = PrivacyParameterDigestV1::new(raw(222));
+    assert_eq!(
+        base.validate_against_profile_v1(&compiled, &compiled.protocol_limits, &limits),
+        Err(PrivacyProofEnvelopeValidationError::ProfileParameterDigestMismatch)
     );
-    governed.parameter_digest = PrivacyParameterDigestV1::new(raw(222));
-    assert!(
-        base.validate_against_activation(&governed, &limits, 2)
-            .is_err()
-    );
-    governed = activation(&base);
-    governed.lifecycle = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
-        proposed_at_height: 1,
-        activated_at_height: 2,
-        state_since_height: 3,
+    compiled = profile(&base);
+    compiled.verifier_digest = PrivacyVerifierDigestV1::new([0; 32]);
+    assert!(matches!(
+        base.validate_against_profile_v1(&compiled, &compiled.protocol_limits, &limits),
+        Err(PrivacyProofEnvelopeValidationError::InvalidProfile(_))
+    ));
+    compiled = profile(&base);
+    let tighter = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+        max_aggregation_count: 1,
     });
-    assert!(
-        base.validate_against_activation(&governed, &limits, 3)
-            .is_err()
-    );
-    governed = activation(&base);
-    governed.protocol_limits =
-        PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(VeRangeActivationLimitsV1 {
-            max_aggregation_count: 1,
-        });
-    assert!(
-        base.validate_against_activation(&governed, &limits, 2)
-            .is_err()
-    );
+    assert!(matches!(
+        base.validate_against_profile_v1(&compiled, &tighter, &limits),
+        Err(PrivacyProofEnvelopeValidationError::ProfileStatementLimits(
+            _
+        ))
+    ));
+    assert!(matches!(
+        base.validate_against_profile_v1(
+            &compiled,
+            &PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+            &limits
+        ),
+        Err(PrivacyProofEnvelopeValidationError::ProfileProtocolLimits(
+            _
+        ))
+    ));
     let framed = norito::to_bytes(&base).expect("frame envelope");
     let mut truncated = framed.clone();
     truncated.pop();
@@ -1469,183 +1459,108 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
 }
 
 #[test]
-fn explicit_activation_accepts_same_height_and_later_governed_activation() {
-    let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-        proposed_at_height: 7,
-    });
-    proposed.validate().expect("nonzero proposal");
-    for activated_at_height in [7, 8, 700] {
-        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height,
-            state_since_height: activated_at_height,
-        });
-        proposed
-            .validate_transition_to(&active)
-            .expect("explicit initial activation preserves proposal history");
-    }
-    let before_proposal = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: 6,
-        state_since_height: 6,
-    });
-    assert!(matches!(
-        proposed.validate_transition_to(&before_proposal),
-        Err(PrivacyLifecycleTransitionError::NextState(
-            PrivacyLifecycleValidationError::HeightOrder { .. }
-        ))
-    ));
-    let rewritten_proposal = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 6,
-        activated_at_height: 7,
-        state_since_height: 7,
-    });
-    assert_eq!(
-        proposed.validate_transition_to(&rewritten_proposal),
-        Err(PrivacyLifecycleTransitionError::InvalidTransition)
-    );
-    let false_initial_interval = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: 7,
-        state_since_height: 8,
-    });
-    assert_eq!(
-        proposed.validate_transition_to(&false_initial_interval),
-        Err(PrivacyLifecycleTransitionError::InvalidTransition)
-    );
-    assert!(matches!(
-        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-            proposed_at_height: 0,
-        })
-        .validate(),
-        Err(PrivacyLifecycleValidationError::ZeroHeight { .. })
-    ));
-}
-
-#[test]
-fn immediate_activation_preserves_strict_later_lifecycle_history() {
-    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: 7,
-        state_since_height: 7,
-    });
-    for state_since_height in [6, 7] {
-        let suspended = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: 7,
-            state_since_height,
-        });
-        let retired = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: Some(7),
-            state_since_height,
-        });
-        assert!(active.validate_transition_to(&suspended).is_err());
-        assert!(active.validate_transition_to(&retired).is_err());
-    }
-    let suspended = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: 7,
-        state_since_height: 8,
-    });
-    active
-        .validate_transition_to(&suspended)
-        .expect("later suspension");
-    let resumed = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: 7,
-        state_since_height: 9,
-    });
-    suspended
-        .validate_transition_to(&resumed)
-        .expect("later resumption");
-    for state_since_height in [7, 8] {
-        let too_early = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: 7,
-            state_since_height,
-        });
-        assert!(suspended.validate_transition_to(&too_early).is_err());
-    }
-    let retired = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: Some(7),
-        state_since_height: 10,
-    });
-    resumed
-        .validate_transition_to(&retired)
-        .expect("later retirement");
-    assert_eq!(
-        retired.validate_transition_to(&resumed),
-        Err(PrivacyLifecycleTransitionError::RetiredIsTerminal)
-    );
-    let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-        proposed_at_height: 7,
-    });
-    let retired_without_activation =
-        PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: None,
-            state_since_height: 700,
-        });
-    proposed
-        .validate_transition_to(&retired_without_activation)
-        .expect("pending governance can retire without a scheduled deadline");
-    let same_height_retirement = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
-        proposed_at_height: 7,
-        activated_at_height: None,
-        state_since_height: 7,
-    });
-    assert!(
-        proposed
-            .validate_transition_to(&same_height_retirement)
-            .is_err()
-    );
-}
-
-#[test]
-fn pending_capability_requires_explicit_activation_and_preserves_committed_height_guards() {
+fn default_limits_remain_available_without_protocol_registration() {
     let mut snapshot = capability_snapshot();
     let row = &mut snapshot.protocols[1];
-    row.activation.as_mut().expect("PGC activation").lifecycle =
-        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-            proposed_at_height: 7,
-        });
-    for committed_height in [7, 700, u64::MAX] {
-        row.validate_at_committed_height(committed_height)
-            .expect("pending governance has no automatic activation deadline");
-        assert!(!row.activation.expect("activation").lifecycle.is_active());
+    let PrivacyCompiledProfileResultV1::Available(compiled) = row.compiled_profile else {
+        panic!("PGC compiled fixture");
+    };
+    row.policy = None;
+    assert_eq!(
+        row.effective_protocol_limits_v1(),
+        Some(compiled.protocol_limits)
+    );
+    for height in [1, 7, 700, u64::MAX] {
+        row.validate_at_committed_height(height)
+            .expect("compiled defaults");
     }
-    assert!(matches!(
-        row.validate_at_committed_height(6),
-        Err(PrivacyCapabilityRowValidationErrorV1::ProposalAfterCommitted { .. })
-    ));
-    row.activation.as_mut().expect("PGC activation").lifecycle =
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: 7,
-            state_since_height: 7,
-        });
+    snapshot.validate().expect("optional policy removed");
+    assert!(snapshot.exact12_capability_manifest_v1().unwrap().protocols[1].is_network_available());
+}
+
+#[test]
+fn optional_policy_persists_without_making_an_unavailable_engine_available() {
+    let mut row = PrivacyCapabilityRowV1 {
+        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
+            PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete,
+        ),
+        policy: Some(PrivacyProtocolPolicyV1 {
+            protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            current_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+            pending_update: None,
+        }),
+    };
     row.validate_at_committed_height(7)
-        .expect("same-block active snapshot");
-    row.activation.as_mut().expect("PGC activation").lifecycle =
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: 8,
-            state_since_height: 8,
-        });
+        .expect("ordinary policy is independent of engine availability");
+    assert_eq!(row.effective_protocol_limits_v1(), None);
+    row.policy.as_mut().unwrap().protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(matches!(
         row.validate_at_committed_height(7),
-        Err(PrivacyCapabilityRowValidationErrorV1::ActivationAfterCommitted { .. })
+        Err(PrivacyCapabilityRowValidationErrorV1::PolicyProtocolMismatch { .. })
     ));
-    row.activation.as_mut().expect("PGC activation").lifecycle =
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 7,
-            activated_at_height: 7,
-            state_since_height: 8,
-        });
+    row.policy.as_mut().unwrap().protocol_id = row.protocol_id;
+    row.policy.as_mut().unwrap().current_limits = PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1;
     assert!(matches!(
         row.validate_at_committed_height(7),
-        Err(PrivacyCapabilityRowValidationErrorV1::LifecycleStateAfterCommitted { .. })
+        Err(PrivacyCapabilityRowValidationErrorV1::Policy(_))
     ));
+}
+
+#[test]
+fn pending_ordinary_policy_preserves_exact_committed_height_guards() {
+    let compiled = profile(&envelope(statement_for(
+        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+    )));
+    let mut row = PrivacyCapabilityRowV1 {
+        protocol_id: compiled.protocol_id,
+        compiled_profile: PrivacyCompiledProfileResultV1::Available(compiled),
+        policy: Some(PrivacyProtocolPolicyV1 {
+            protocol_id: compiled.protocol_id,
+            current_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                JindoLimitsV1 {
+                    max_polynomial_count: 2,
+                },
+            ),
+            pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
+                scheduled_at_height: 7,
+                effective_at_height: 8,
+                next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                    JindoLimitsV1 {
+                        max_polynomial_count: 3,
+                    },
+                ),
+            }),
+        }),
+    };
+    row.validate_at_committed_height(7)
+        .expect("next-block update is pending");
+    for height in [6, 8, 700, u64::MAX] {
+        assert!(
+            matches!(
+                row.validate_at_committed_height(height),
+                Err(PrivacyCapabilityRowValidationErrorV1::Policy(_))
+            ),
+            "future claimed schedule and unapplied due update must fail"
+        );
+    }
+    let pending = row
+        .policy
+        .as_mut()
+        .unwrap()
+        .pending_update
+        .as_mut()
+        .unwrap();
+    pending.scheduled_at_height = u64::MAX - 1;
+    pending.effective_at_height = u64::MAX;
+    row.validate_at_committed_height(u64::MAX - 1)
+        .expect("last future block is representable");
+    assert!(row.validate_at_committed_height(u64::MAX).is_err());
+    row.policy = None;
+    row.validate_at_committed_height(u64::MAX)
+        .expect("no registration prerequisite");
+    assert_eq!(
+        row.effective_protocol_limits_v1(),
+        Some(compiled.protocol_limits)
+    );
 }

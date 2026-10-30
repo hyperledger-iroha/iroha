@@ -202,7 +202,7 @@ fn sign_and_publish(
         .wrap_err("failed to reload persisted genesis.json before signing")?;
     let key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0.clone())
         .wrap_err("make genesis key pair")?;
-    let (bound, block, _nexus_context) =
+    let (bound, block, nexus_context) =
         crate::genesis::staging::bind_and_sign_staged_sumeragi_context_with_preimage(
             persisted,
             &key_pair,
@@ -229,6 +229,12 @@ fn sign_and_publish(
         framed.len()
     );
     custody::write(&signed_path, &framed)?;
+    // `iroha3d --check-config` reads this preimage beside the signed genesis to name the fields
+    // of a node configuration that differ from what the genesis commits.
+    custody::write(
+        signed_path.with_file_name("nexus-amx-context.v1.bin"),
+        &nexus_context,
+    )?;
     let decoded = read_signed_genesis(&signed_path)
         .wrap_err("read and decode the generated signed genesis body")?;
     ensure!(

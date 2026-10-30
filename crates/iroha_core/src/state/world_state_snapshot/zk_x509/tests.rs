@@ -93,19 +93,26 @@ impl Fixture {
                 iroha_executor_data_model::permission::governance::CanEnactGovernance.into(),
             ]),
         );
-        // Signed genesis admits two actions within the unchanged per-block cap.
-        config.genesis_instructions = vec![
-            RegisterPrivacyZkX509TrustAnchorV1::new(anchor).into(),
-            RegisterPrivacyZkX509CertificatePolicyV1::new(policy.clone()).into(),
-        ];
+        // The signed genesis transaction carries one privacy action, as required
+        // by the unchanged per-transaction cap.
+        config.genesis_instructions = vec![RegisterPrivacyZkX509TrustAnchorV1::new(anchor).into()];
         let mut chain = CertifiedTestChain::start(config).unwrap();
-        // The CRL is the next ordinary signed action, after its anchor/policy.
+        // Separate signed transactions install the policy before its CRL while
+        // staying within the unchanged two-action block cap at height two.
+        let register_policy = chain.sign(
+            &signer,
+            [RegisterPrivacyZkX509CertificatePolicyV1::new(policy.clone()).into()],
+            NOW - 1,
+        );
         let register_crl = chain.sign(
             &signer,
             [RegisterPrivacyZkX509CrlV1::new(crl).into()],
             NOW - 1,
         );
-        assert_eq!(chain.commit_at(NOW, vec![register_crl]), vec![true]);
+        assert_eq!(
+            chain.commit_at(NOW, vec![register_policy, register_crl]),
+            vec![true, true]
+        );
         Self {
             chain,
             signer,
@@ -153,6 +160,40 @@ impl Fixture {
         );
         assert_eq!(self.chain.commit_at(NOW + 1000, vec![tx]), vec![true]);
         successor
+    }
+}
+
+#[test]
+fn provider_fixture_preserves_transaction_boundaries_and_consensus_limits() {
+    let fixture = Fixture::new();
+    let view = fixture.chain.state().view();
+    let policy = view.world().privacy_consensus_policy.get();
+    assert_eq!(policy, &PrivacyConsensusPolicyV1::taira_default());
+    assert_eq!(policy.current_limits.max_actions_per_transaction, 1);
+    assert_eq!(policy.current_limits.max_actions_per_block, 2);
+    assert_eq!(fixture.chain.height(), 2);
+    let committed = fixture.chain.committed(2);
+    let transactions = committed.block().external_transactions();
+    assert_eq!(transactions.len(), 2);
+    let expected: [iroha_data_model::isi::InstructionBox; 2] = [
+        RegisterPrivacyZkX509CertificatePolicyV1::new(fixture.policy.clone()).into(),
+        RegisterPrivacyZkX509CrlV1::new(fixture.crl).into(),
+    ];
+    for (index, (transaction, instruction)) in transactions.zip(&expected).enumerate() {
+        assert!(matches!(
+            transaction.instructions(),
+            iroha_data_model::transaction::Executable::Instructions(instructions)
+                if instructions.iter().eq(core::iter::once(instruction))
+        ));
+        assert!(
+            committed
+                .block()
+                .network_output_at(u32::try_from(index).unwrap())
+                .unwrap()
+                .1
+                .result
+                .is_ok()
+        );
     }
 }
 
@@ -630,15 +671,21 @@ fn owned_context_stages_real_holder_outside_writers_then_rejects_rotated_selecti
         type Error = std::io::Error;
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             self.0 += 1;
-            Err(std::io::Error::other("stale attempt must not request entropy"))
+            Err(std::io::Error::other(
+                "stale attempt must not request entropy",
+            ))
         }
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             self.0 += 1;
-            Err(std::io::Error::other("stale attempt must not request entropy"))
+            Err(std::io::Error::other(
+                "stale attempt must not request entropy",
+            ))
         }
         fn try_fill_bytes(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
             self.0 += 1;
-            Err(std::io::Error::other("stale attempt must not request entropy"))
+            Err(std::io::Error::other(
+                "stale attempt must not request entropy",
+            ))
         }
     }
     impl rand::TryCryptoRng for NoEntropy {}

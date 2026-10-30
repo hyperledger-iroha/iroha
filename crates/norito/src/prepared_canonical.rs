@@ -2,12 +2,16 @@
 
 use std::alloc::Layout;
 
-use iroha_allocation::{AllocationReservation, PrepaidSharedError};
+use iroha_allocation::{
+    AllocationBudget, AllocationRefusal, AllocationReservation, PrepaidSharedError,
+};
 
 use crate::{
     CanonicalDecodeScope, DecodeLimits, Error, NoritoDeserialize, NoritoSerialize,
     canonical_decode_limits, checked_canonical_header,
-    core::{DecodeAttemptError, DecodeBudgetContext, TypedFieldSlot, classify_decode_attempt},
+    core::{
+        DecodeAttemptError, DecodeBudgetContext, Header, TypedFieldSlot, classify_decode_attempt,
+    },
     decode_canonical_with_scopes_into_slot,
 };
 
@@ -23,6 +27,58 @@ pub struct PreparedCanonicalDecode {
     frame_bytes: usize,
     defaults: DecodeBudgetContext,
     schema: DecodeBudgetContext,
+}
+
+/// Original failure from canonical decoding with explicitly funded counter controls.
+#[derive(Debug, thiserror::Error)]
+pub enum CanonicalDecodeControlError {
+    /// The unchanged canonical failure, including its original decode-scope provenance.
+    #[error(transparent)]
+    Decode(DecodeAttemptError),
+    /// The original pool could not admit both exact counter-control layouts.
+    #[error(transparent)]
+    Admission(AllocationRefusal),
+    /// An admitted counter control could not be physically constructed.
+    #[error(transparent)]
+    Control(PrepaidSharedError),
+    /// A retained workspace could not establish another original decoding scope.
+    #[error(transparent)]
+    Scope(crate::core::PreparedDecodeScopeError),
+}
+
+/// Decode a canonical frame with both counter controls funded by the original pool.
+///
+/// This checks the same canonical header as [`crate::decode_canonical_with_limits`]
+/// before admitting either control, then runs the same canonical decoding kernel.
+/// Each control retains its original charge until its final owner retires, including
+/// any retained decode error. Schema and default limits remain invalid input;
+/// enclosing physical limits retain their original local-refusal provenance.
+///
+/// This owns only the counter controls, not input bytes, decoded graphs, or custom
+/// serializer scratch. Those allocations require their own physical owners.
+///
+/// # Errors
+/// Returns the original header/decode error, pool admission refusal, or physical
+/// control-construction failure without replacing or stringifying any cause.
+pub fn decode_canonical_with_owned_controls<T>(
+    bytes: &[u8],
+    limits: DecodeLimits,
+    budget: &AllocationBudget,
+) -> Result<T, CanonicalDecodeControlError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    let header = classify_decode_attempt(|| checked_canonical_header(bytes))
+        .map_err(CanonicalDecodeControlError::Decode)?;
+    let mut reservation = budget
+        .try_reserve_layouts(PreparedCanonicalDecode::allocation_layouts())
+        .map_err(CanonicalDecodeControlError::Admission)?;
+    let prepared = PreparedCanonicalDecode::from_reservation(bytes.len(), limits, &mut reservation)
+        .map_err(CanonicalDecodeControlError::Control)?;
+    prepared
+        .decode_into_with_header(bytes, || Ok(header), |value| value)
+        .map_err(CanonicalDecodeControlError::Decode)
 }
 
 impl PreparedCanonicalDecode {
@@ -82,15 +138,36 @@ impl PreparedCanonicalDecode {
         T: NoritoSerialize,
         for<'de> T: NoritoDeserialize<'de>,
     {
+        let frame_bytes = self.frame_bytes;
+        self.decode_into_with_header(
+            bytes,
+            || {
+                if bytes.len() != frame_bytes {
+                    return Err(Error::LengthMismatch);
+                }
+                checked_canonical_header(bytes)
+            },
+            finish,
+        )
+    }
+
+    // Keep header-first admission and preadmitted decoding on the exact same slot,
+    // scope and cleanup path. A previously checked header is never parsed twice.
+    fn decode_into_with_header<T, Output>(
+        self,
+        bytes: &[u8],
+        header: impl FnOnce() -> Result<Header, Error>,
+        finish: impl FnOnce(T) -> Output,
+    ) -> Result<Output, DecodeAttemptError>
+    where
+        T: NoritoSerialize,
+        for<'de> T: NoritoDeserialize<'de>,
+    {
         let mut slot = TypedFieldSlot::<T>::new();
         let decoded = classify_decode_attempt(|| {
-            if bytes.len() != self.frame_bytes {
-                return Err(Error::LengthMismatch);
-            }
-            let header = checked_canonical_header(bytes)?;
             decode_canonical_with_scopes_into_slot(
                 bytes,
-                header,
+                header()?,
                 &mut slot,
                 CanonicalDecodeScope::Prepared(&self.defaults),
                 CanonicalDecodeScope::Prepared(&self.schema),
@@ -109,6 +186,10 @@ impl PreparedCanonicalDecode {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "prepared_canonical/owned_controls_tests.rs"]
+mod owned_controls_tests;
 
 #[cfg(test)]
 mod tests {

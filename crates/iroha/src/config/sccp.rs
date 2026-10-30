@@ -19,6 +19,14 @@ pub mod defaults {
     pub const JOURNAL_DIR_NAME: &str = "sccp-journal";
     /// Most `[[sccp.deployments]]` entries.
     pub const MAX_DEPLOYMENTS: usize = 256;
+    /// Highest Ethereum `maxFeePerGas` a wallet transaction may carry: 200 gwei.
+    pub const ETHEREUM_MAX_FEE_PER_GAS_WEI: u64 = 200_000_000_000;
+    /// Highest Ethereum `gasLimit × maxFeePerGas` a wallet transaction may carry: 0.25 ETH.
+    pub const ETHEREUM_MAX_TOTAL_FEE_WEI: u64 = 250_000_000_000_000_000;
+    /// Highest BSC `maxFeePerGas` a wallet transaction may carry: 20 gwei.
+    pub const BSC_MAX_FEE_PER_GAS_WEI: u64 = 20_000_000_000;
+    /// Highest BSC `gasLimit × maxFeePerGas` a wallet transaction may carry: 0.05 BNB.
+    pub const BSC_MAX_TOTAL_FEE_WEI: u64 = 50_000_000_000_000_000;
 }
 
 const fn ms(millis: u64) -> DurationMs {
@@ -44,6 +52,9 @@ pub struct SccpClientConfigUser {
     /// `[sccp.endpoints]`: RPC endpoint lists per chain.
     #[config(nested)]
     pub endpoints: SccpClientEndpointsUser,
+    /// `[sccp.fee_caps]`: EIP-1559 fee ceilings per EVM network.
+    #[config(nested)]
+    pub fee_caps: SccpClientFeeCapsUser,
     /// `[[sccp.secret_headers]]`: secret request headers read from owner-only files.
     #[config(default)]
     pub secret_headers: WithOrigin<Vec<SccpClientSecretHeaderUser>>,
@@ -68,6 +79,36 @@ pub struct SccpClientEndpointsUser {
     /// TON liteservers as `<ipv4>:<port>:<base64 ed25519 public key>`.
     #[config(default)]
     pub ton_liteservers: Vec<String>,
+}
+
+/// `[sccp.fee_caps]`: the most one EIP-1559 transaction may charge its payer, in wei. Fees
+/// and gas come from one public endpoint, so a wallet refuses a quote above these caps before
+/// signing or journaling anything. Every cap is nonzero.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SccpClientFeeCapsUser {
+    /// Highest Ethereum `maxFeePerGas`.
+    #[config(default = "defaults::ETHEREUM_MAX_FEE_PER_GAS_WEI")]
+    pub ethereum_max_fee_per_gas_wei: u64,
+    /// Highest Ethereum `gasLimit × maxFeePerGas`.
+    #[config(default = "defaults::ETHEREUM_MAX_TOTAL_FEE_WEI")]
+    pub ethereum_max_total_fee_wei: u64,
+    /// Highest BSC `maxFeePerGas`.
+    #[config(default = "defaults::BSC_MAX_FEE_PER_GAS_WEI")]
+    pub bsc_max_fee_per_gas_wei: u64,
+    /// Highest BSC `gasLimit × maxFeePerGas`.
+    #[config(default = "defaults::BSC_MAX_TOTAL_FEE_WEI")]
+    pub bsc_max_total_fee_wei: u64,
+}
+
+impl Default for SccpClientFeeCapsUser {
+    fn default() -> Self {
+        Self {
+            ethereum_max_fee_per_gas_wei: defaults::ETHEREUM_MAX_FEE_PER_GAS_WEI,
+            ethereum_max_total_fee_wei: defaults::ETHEREUM_MAX_TOTAL_FEE_WEI,
+            bsc_max_fee_per_gas_wei: defaults::BSC_MAX_FEE_PER_GAS_WEI,
+            bsc_max_total_fee_wei: defaults::BSC_MAX_TOTAL_FEE_WEI,
+        }
+    }
 }
 
 /// A TON code reference in a pinned deployment.
@@ -130,6 +171,7 @@ impl Default for SccpClientConfigUser {
             confirmation_timeout_ms: ms(defaults::CONFIRMATION_TIMEOUT_MS),
             journal_dir: WithOrigin::inline(PathBuf::new()),
             endpoints: SccpClientEndpointsUser::default(),
+            fee_caps: SccpClientFeeCapsUser::default(),
             secret_headers: WithOrigin::inline(Vec::new()),
             deployments: Vec::new(),
         }
@@ -159,6 +201,21 @@ mod tests {
         );
         assert!(user.journal_dir.value().as_os_str().is_empty());
         assert!(user.endpoints.bsc.is_empty());
+        let (caps, default_caps) = (&user.fee_caps, &default.fee_caps);
+        assert_eq!(
+            [
+                caps.ethereum_max_fee_per_gas_wei,
+                caps.ethereum_max_total_fee_wei,
+                caps.bsc_max_fee_per_gas_wei,
+                caps.bsc_max_total_fee_wei,
+            ],
+            [
+                default_caps.ethereum_max_fee_per_gas_wei,
+                default_caps.ethereum_max_total_fee_wei,
+                default_caps.bsc_max_fee_per_gas_wei,
+                default_caps.bsc_max_total_fee_wei,
+            ]
+        );
         assert!(user.secret_headers.value().is_empty());
         assert!(user.deployments.is_empty());
     }

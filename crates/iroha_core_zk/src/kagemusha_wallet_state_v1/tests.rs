@@ -405,7 +405,7 @@ fn frozen_rejects_rebound_successor_with_another_credential_lease() {
 pub(super) struct MemoryArchive {
     scheme: [u8; 32],
     wallet: [u8; 32],
-    records: Arc<Mutex<BTreeMap<ArchiveKey, Vec<u8>>>>,
+    pub(super) records: Arc<Mutex<BTreeMap<ArchiveKey, Vec<u8>>>>,
     pub(super) reads: Arc<AtomicUsize>,
     draft_reads: Arc<AtomicUsize>,
     pub(super) fail_remove: bool,
@@ -551,7 +551,7 @@ impl ArchiveStore for MemoryArchive {
 pub(super) struct TestCustody {
     credential: KagemushaWalletCredentialV1,
     enrollment: KagemushaWalletMarkerV1,
-    checkpoint: Option<custody::ArchiveCheckpointV1>,
+    pub(super) checkpoint: Option<custody::ArchiveCheckpointV1>,
     status: SlotStatus,
     retained: BTreeMap<[u8; 32], Retained<KagemushaWalletCompletionRecordV1>>,
     tombstones: BTreeMap<[u8; 32], crate::kagemusha_wallet_advance_v1::KagemushaWalletTombstoneV1>,
@@ -945,6 +945,11 @@ impl TestProofs {
 
 mod deferred_archive_capacity_tests;
 mod deferred_archive_tests;
+
+/// Shared explicitly mock source for queue/session persistence tests.
+pub(super) fn deferred_archive_completing_fixture() -> (Wallet, [u8; 32], Vec<u8>) {
+    deferred_archive_tests::completing()
+}
 mod fold_retention_tests;
 mod folding_preemption_tests;
 mod maintenance_tests;
@@ -1262,7 +1267,6 @@ pub(super) fn synthetic_payout_wallet(scheme: KagemushaWalletSchemeV1, chain: St
         capsule_sources: IndexRoot::default(),
         issued_requests: IndexRoot::default(),
         sessions: IndexRoot::default(),
-        deferred_archive: deferred_archive::DeferredIndex::default(),
         activation: None,
         close_loads: IndexRoot::default(),
         ledger_checkpoint: None,
@@ -4122,4 +4126,80 @@ fn retained_current_manifest_payload_decodes_and_reencodes_exactly() {
         selected_bytes == bytes,
         "manifest read preserves every original byte"
     );
+}
+
+/// Source-defined fixed Manifest field fixture. This independently serializes the
+/// documented field sequence so inserting another required field cannot silently lock it.
+#[test]
+fn fixed_manifest_source_fields_match_the_complete_current_payload() {
+    fn append_len(out: &mut Vec<u8>, mut value: usize) {
+        while value >= 0x80 {
+            out.push((value as u8 & 0x7f) | 0x80);
+            value >>= 7;
+        }
+        out.push(value as u8);
+    }
+    fn field<T: norito::NoritoSerialize>(out: &mut Vec<u8>, value: &T) {
+        let frame = archive::encode(value).unwrap();
+        let header = norito::core::Header::read(frame.as_slice()).unwrap();
+        let len = usize::try_from(header.length).unwrap();
+        append_len(out, len);
+        out.extend_from_slice(&frame[frame.len() - len..]);
+    }
+    fn raw(out: &mut Vec<u8>, value: &[u8; 32]) {
+        append_len(out, value.len());
+        out.extend_from_slice(value);
+    }
+    let mut w = wallet();
+    w.commit(bootstrap()).unwrap();
+    let (_, mut m) = w.manifest().unwrap();
+    m.sessions = IndexRoot([31; 32]);
+    m.activation = Some([32; 32]);
+    m.close_loads = IndexRoot([33; 32]);
+    m.ledger_checkpoint = Some([34; 32]);
+    m.finality_epoch = Some(35);
+    m.ledger_retired = Some([36; 32]);
+    m.folded = Some(0);
+    m.checkpoint_count = 37;
+    m.checkpoint_digest = [38; 32];
+    let mut expected = Vec::new();
+    raw(&mut expected, &m.scheme_id);
+    raw(&mut expected, &m.wallet_id);
+    field(&mut expected, &m.indexed);
+    raw(&mut expected, &m.capsule);
+    field(&mut expected, &m.steps);
+    field(&mut expected, &m.operations);
+    field(&mut expected, &m.credits);
+    field(&mut expected, &m.outgoing);
+    field(&mut expected, &m.folds);
+    field(&mut expected, &m.claims);
+    field(&mut expected, &m.preparations);
+    field(&mut expected, &m.blacklist);
+    field(&mut expected, &m.capsule_plans);
+    field(&mut expected, &m.capsule_sources);
+    field(&mut expected, &m.issued_requests);
+    field(&mut expected, &m.sessions);
+    field(&mut expected, &m.activation);
+    field(&mut expected, &m.close_loads);
+    field(&mut expected, &m.ledger_checkpoint);
+    field(&mut expected, &m.finality_epochs);
+    field(&mut expected, &m.finality_epoch);
+    field(&mut expected, &m.ledger_retired);
+    field(&mut expected, &m.ledger_load_plans);
+    field(&mut expected, &m.ledger_load_ordinals);
+    field(&mut expected, &m.ledger_unload_outcomes);
+    field(&mut expected, &m.direct_anchors);
+    field(&mut expected, &m.fold_pending);
+    field(&mut expected, &m.folded);
+    field(&mut expected, &m.checkpoint_count);
+    raw(&mut expected, &m.checkpoint_digest);
+    field(&mut expected, &m.credit_tree);
+    field(&mut expected, &m.collection);
+    let frame = archive::encode(&m).unwrap();
+    let header = norito::core::Header::read(frame.as_slice()).unwrap();
+    let len = usize::try_from(header.length).unwrap();
+    assert_eq!(len, expected.len());
+    assert_eq!(&frame[frame.len() - len..], expected);
+    let restored: manifest::Manifest = archive::decode(&frame).unwrap();
+    assert_eq!(archive::encode(&restored).unwrap(), frame);
 }

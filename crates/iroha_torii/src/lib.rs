@@ -1,14 +1,5 @@
 //! The web server of Iroha. `Torii` translates to gateway.
-// The shipping API's unit-test harness has over 2,048 descriptors. Rustc 1.93
-// generates their reference array at a dummy span, beyond Clippy's 16 KiB
-// threshold; application buffers are not the source of this diagnostic.
-#![cfg_attr(
-    all(test, feature = "node-api"),
-    expect(
-        clippy::large_stack_arrays,
-        reason = "rustc generates a test descriptor reference array larger than 16 KiB for the node API test harness"
-    )
-)]
+#![cfg_attr(test, deny(clippy::large_stack_arrays))]
 #![allow(unexpected_cfgs)]
 //!
 //! Crate features:
@@ -411,6 +402,26 @@ fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> 
             bind_reusable_tcp_listener_from_addrs((v.host.as_ref(), v.port).to_socket_addrs()?)
         }
     }
+}
+/// Adopt an exact managed endpoint without releasing its bound socket.
+fn adopt_torii_tcp_listener(
+    address: &SocketAddr,
+    listener: std::net::TcpListener,
+) -> std::io::Result<TcpListener> {
+    let actual = listener.local_addr()?;
+    let matches = match address {
+        SocketAddr::Ipv4(expected) => actual == std::net::SocketAddr::V4((*expected).into()),
+        SocketAddr::Ipv6(expected) => actual == std::net::SocketAddr::V6((*expected).into()),
+        SocketAddr::Host(_) => false,
+    };
+    if !matches {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "prebound Torii listener does not match the configured numeric address",
+        ));
+    }
+    listener.set_nonblocking(true)?;
+    TcpListener::from_std(listener)
 }
 #[derive(Debug)]
 struct SocketAdmissionState {
@@ -1366,8 +1377,8 @@ pub async fn collection_query_for_bench(
     .await
 }
 pub use runtime::{
-    ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
-    handle_runtime_upgrades_list,
+    ProposeUpgradeResponse, RuntimeProposeUpgradeRequest, handle_runtime_cancel_upgrade,
+    handle_runtime_propose_upgrade, handle_runtime_upgrades_list,
 };
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
 #[derive(Clone)]
@@ -2559,6 +2570,8 @@ struct AppState {
     da_receipt_signer: KeyPair,
     torii_proxy_bridge_signer: KeyPair,
     vpn_operator_signer: Option<KeyPair>,
+    /// The node's validator key pair, which signs its runtime support attestations.
+    runtime_attestation_signer: Option<KeyPair>,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -13239,12 +13252,34 @@ async fn handler_runtime_upgrades_list(
     let payload = crate::runtime::handle_runtime_upgrades_list(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
+async fn handler_runtime_containments_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/containments",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_runtime_containments_list(app.state.clone()).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
 async fn handler_runtime_propose_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
-    body: crate::utils::extractors::NoritoJson<crate::runtime::ProposeUpgradeDto>,
+    body: crate::utils::extractors::NoritoJson<crate::runtime::RuntimeProposeUpgradeRequest>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     check_access_enforced(
@@ -13260,29 +13295,6 @@ async fn handler_runtime_propose_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
-    Ok(crate::utils::respond_with_format(&payload, format))
-}
-async fn handler_runtime_activate_upgrade(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    id: AxPath<String>,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/runtime/upgrades/activate",
-        true,
-    )
-    .await?;
-    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let payload = crate::runtime::handle_runtime_activate_upgrade(id).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_cancel_upgrade(
@@ -13306,6 +13318,51 @@ async fn handler_runtime_cancel_upgrade(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_runtime_cancel_upgrade(id).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+async fn handler_runtime_attest_upgrade(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    id: AxPath<String>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/upgrades/attest",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_runtime_attest_upgrade(
+        app.state.clone(),
+        &app.build_status,
+        app.runtime_attestation_signer.as_ref(),
+        id,
+    )
+    .await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+async fn handler_runtime_release(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/runtime/release", true).await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload =
+        crate::runtime::handle_runtime_release(app.state.clone(), &app.build_status).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_zk_roots(
@@ -16966,6 +17023,7 @@ mod direct_dataspace_definition_query_scope_tests {
     use super::*;
 
     use iroha_data_model::Registrable as _;
+    use iroha_model_base::domain::DomainId;
 
     #[test]
     fn direct_definition_query_uses_exact_home_and_unknown_id_stays_unclassified() {
@@ -25704,7 +25762,7 @@ async fn handler_bridge_finality_attestation_inner(
     if api_token_principal.is_some() {
         crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/attestation");
     }
-    let mut response = routing::handle_v1_bridge_finality_attestation(
+    let (response, release) = routing::handle_v1_bridge_finality_attestation(
         app.state.clone(),
         (status, identity, build_fingerprint),
         height,
@@ -25713,8 +25771,8 @@ async fn handler_bridge_finality_attestation_inner(
         format,
         query_permit,
     )
-    .await?
-    .into_response();
+    .await?;
+    let mut response = response.into_response();
     protect_bridge_finality_attestation_response(&mut response);
     let mut response = proof_response_with_exact_egress(
         app.as_ref(),
@@ -25726,6 +25784,18 @@ async fn handler_bridge_finality_attestation_inner(
     )
     .await?;
     protect_bridge_finality_attestation_response(&mut response);
+    // The authority this statement was proved under must still hold as it leaves.
+    if let Some(release) = release
+        && !iroha_core::sumeragi::finality::retained_attestation_releasable(&app.state, &release)
+    {
+        return Ok(bridge_attestation::failure_response(
+            iroha_torii_shared::bridge_attestation::FinalityAttestationFailureReason::FinalityUnavailable,
+            challenge,
+            release.height(),
+            None,
+            format,
+        ));
+    }
     Ok(response)
 }
 async fn handler_bridge_finality_bundle(
@@ -35344,6 +35414,7 @@ pub struct Torii {
     da_receipt_signer: KeyPair,
     proxy_bridge_signer: KeyPair,
     vpn_operator_signer: Option<KeyPair>,
+    runtime_attestation_signer: Option<KeyPair>,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -35558,6 +35629,7 @@ pub struct ToriiRuntimeDeps {
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     torii_proxy_bridge_signer: Option<KeyPair>,
     vpn_operator_signer: Option<KeyPair>,
+    runtime_attestation_signer: Option<KeyPair>,
 }
 impl ToriiRuntimeDeps {
     /// Construct dependencies from the owning executable identity and telemetry.
@@ -35653,6 +35725,7 @@ impl ToriiRuntimeDeps {
             vpn_relay_trust: None,
             torii_proxy_bridge_signer: None,
             vpn_operator_signer: None,
+            runtime_attestation_signer: None,
         }
     }
 
@@ -36153,6 +36226,14 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_vpn_operator_signer(mut self, signer: KeyPair) -> Self {
         self.vpn_operator_signer = Some(signer);
+        self
+    }
+    /// Attach the node's validator key pair, with which the node signs its runtime support
+    /// attestations (`specs/live_runtime_upgrades.md` §6, "Attest"). Torii returns only signed
+    /// attestations; the key never leaves the node.
+    #[must_use]
+    pub fn with_runtime_attestation_signer(mut self, signer: KeyPair) -> Self {
+        self.runtime_attestation_signer = Some(signer);
         self
     }
 }
@@ -38852,8 +38933,10 @@ impl Torii {
             NODE_PROJECTION_CHECKPOINT => canonical_account_get(handler_node_query_projection_checkpoint, app_state, 0);
             RUNTIME_UPGRADES => operator_get(handler_runtime_upgrades_list, app_state);
             RUNTIME_UPGRADE_PROPOSE => operator_post(handler_runtime_propose_upgrade, app_state);
-            RUNTIME_UPGRADE_ACTIVATE => operator_post(handler_runtime_activate_upgrade, app_state);
             RUNTIME_UPGRADE_CANCEL => operator_post(handler_runtime_cancel_upgrade, app_state);
+            RUNTIME_UPGRADE_ATTEST => operator_post(handler_runtime_attest_upgrade, app_state);
+            RUNTIME_RELEASE => operator_get(handler_runtime_release, app_state);
+            RUNTIME_CONTAINMENTS => operator_get(handler_runtime_containments_list, app_state);
         );
         #[cfg(feature = "app_api")]
         {
@@ -39031,47 +39114,11 @@ impl Torii {
         );
         Ok(())
     }
-    /// Construct `Torii` with telemetry disabled.
+    /// Construct `Torii` with explicit runtime capabilities.
     ///
-    /// Embeddings that provide telemetry must use [`Self::new_with_handle`] and
-    /// pass an explicit [`routing::MaybeTelemetry`] profile.
-    ///
-    /// # Errors
-    ///
-    /// Returns a component-qualified error if configuration, runtime dependencies,
-    /// or durable component initialization fails; see [`Self::new_with_handle`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        build_identity: iroha_core::release_identity::BuildIdentity,
-        chain_id: ChainId,
-        network_id: NetworkId,
-        kiso: KisoHandle,
-        config: Config,
-        queue: Arc<Queue>,
-        events: EventsSender,
-        query_service: LiveQueryStoreHandle,
-        kura: Arc<Kura>,
-        state: Arc<CoreState>,
-        da_receipt_signer: KeyPair,
-        online_peers: OnlinePeersProvider,
-    ) -> Result<Self, ToriiBuildError> {
-        Self::new_with_handle(
-            chain_id,
-            network_id,
-            kiso,
-            config,
-            queue,
-            events,
-            query_service,
-            kura,
-            state,
-            da_receipt_signer,
-            online_peers,
-            None,
-            ToriiRuntimeDeps::new(build_identity, routing::MaybeTelemetry::disabled()),
-        )
-    }
-    /// Construct `Torii`.
+    /// With `app_api`, Strict startup requires the node-owned bounded private-settlement
+    /// availability and phase signers in `runtime_deps`. The receipt signer does not
+    /// supply these capabilities. Emergency Fast withholds them until a Strict restart.
     ///
     /// # Errors
     ///
@@ -39341,6 +39388,7 @@ impl Torii {
             .torii_proxy_bridge_signer
             .unwrap_or_else(|| da_receipt_signer.clone());
         let vpn_operator_signer = runtime_deps.vpn_operator_signer;
+        let runtime_attestation_signer = runtime_deps.runtime_attestation_signer;
         let app_query_limits = routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
@@ -40699,6 +40747,7 @@ ingress,
             da_receipt_signer,
             proxy_bridge_signer: torii_proxy_bridge_signer,
             vpn_operator_signer,
+            runtime_attestation_signer,
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams,
             #[cfg(feature = "app_api")]
@@ -41633,6 +41682,7 @@ ingress,
             da_receipt_signer: self.da_receipt_signer.clone(),
             torii_proxy_bridge_signer: self.proxy_bridge_signer.clone(),
             vpn_operator_signer: self.vpn_operator_signer.clone(),
+            runtime_attestation_signer: self.runtime_attestation_signer.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             #[cfg(feature = "app_api")]
@@ -42086,6 +42136,7 @@ ingress,
         self.push.clone()
     }
     /// To handle incoming requests `Torii` should be started first.
+    /// An owned prebound listener retains a managed launcher's exact endpoint reservation.
     ///
     /// # Errors
     /// Can fail due to listening to network or if http server fails
@@ -42093,6 +42144,7 @@ ingress,
     pub async fn start(
         self,
         shutdown_signal: ShutdownSignal,
+        prebound_listener: Option<std::net::TcpListener>,
     ) -> core::result::Result<(), Report<Error>> {
         let _shutdown_on_drop = ShutdownOnDrop::new(shutdown_signal.clone());
         if shutdown_signal.is_sent() {
@@ -42135,10 +42187,13 @@ ingress,
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
         // Bind before launching any background service. A bind failure must leave no detached
         // Torii workers behind in the caller's runtime.
-        let listener = bind_torii_tcp_listener(torii_address.clone())
-            .change_context(Error::StartServer)
-            .attach("failed to bind to the specified address")
-            .attach_with(|| self.address.clone().into_attachment())?;
+        let listener = match prebound_listener {
+            Some(listener) => adopt_torii_tcp_listener(&torii_address, listener),
+            None => bind_torii_tcp_listener(torii_address.clone()),
+        }
+        .change_context(Error::StartServer)
+        .attach("failed to bind to the specified address")
+        .attach_with(|| self.address.clone().into_attachment())?;
         let https = match https {
             Some(prepared) => Some(
                 prepared
@@ -42235,6 +42290,13 @@ ingress,
                     &self.events,
                     shutdown_signal.clone(),
                 ),
+            });
+            critical_workers.push(ToriiCriticalWorker {
+                name: "finality_prefix_ladder",
+                task: tokio::spawn(finality_interval::keep_prefix_ladder_warm(
+                    app_state.clone(),
+                    shutdown_signal.clone(),
+                )),
             });
         }
         if let Some(runtime) = self.iso_bridge.as_ref() {

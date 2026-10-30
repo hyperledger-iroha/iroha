@@ -11,7 +11,10 @@ use super::{
 use crate::{
     isi::{
         InstructionBox, instruction_wire_id,
-        privacy::{BootstrapPrivacyPgcAccountsV1, SubmitPrivacyProofV1},
+        privacy::{
+            BootstrapPrivacyPgcAccountsV1, PrivacyZkX509RequestErrorV1, SubmitPrivacyProofV1,
+            SubmitPrivacyZkX509CertificateV1,
+        },
         registry::is_instruction_wire_id_registered,
     },
     nexus::LanePrivacyProof,
@@ -280,13 +283,24 @@ impl TransactionPayload {
     /// Returns the first violation.
     pub fn validate_signed_attachments_v1(&self) -> Result<(), SignedAttachmentErrorV1> {
         let check_request = |instruction: &InstructionBox, position: usize| {
-            let Some(bootstrap) = instruction
+            let action_index = if let Some(bootstrap) = instruction
                 .as_any()
-                .downcast_ref::<BootstrapPrivacyPgcAccountsV1>()
-            else {
+                .downcast_ref::<BootstrapPrivacyPgcAccountsV1>(
+            ) {
+                bootstrap.proof_ref.action_index
+            } else if let Some(request) = instruction
+                .as_any()
+                .downcast_ref::<SubmitPrivacyZkX509CertificateV1>()
+            {
+                if self.network_id() != Some(&request.statement.context.network_id) {
+                    return Err(SignedAttachmentErrorV1::InvocationTargetMismatch {
+                        action_index: request.proof_ref.action_index,
+                    });
+                }
+                request.proof_ref.action_index
+            } else {
                 return Ok(());
             };
-            let action_index = bootstrap.proof_ref.action_index;
             let action = self
                 .attachments
                 .as_ref()
@@ -393,6 +407,19 @@ impl TransactionPayload {
                                         action_index,
                                     });
                                 }
+                            }
+                            if let Some(request) = instruction
+                                .as_any()
+                                .downcast_ref::<SubmitPrivacyZkX509CertificateV1>(
+                            ) {
+                                request.validate_action_v1(action).map_err(
+                                    |error| match error {
+                                        PrivacyZkX509RequestErrorV1::Attachment(source) => source,
+                                        _ => SignedAttachmentErrorV1::InvocationTargetMismatch {
+                                            action_index,
+                                        },
+                                    },
+                                )?;
                             }
                             if !bound_direct.insert(*instruction_index) {
                                 return Err(SignedAttachmentErrorV1::DuplicateInvocation {

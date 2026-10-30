@@ -1248,6 +1248,47 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
         }
         Ok(Some(*row))
     }
+    /// Emit only the requested adjacent writer columns while retaining every
+    /// source-cell validation and the original product/terminal recurrence.
+    /// The inactive shortcut depends only on the complete public fixed tuple.
+    pub(crate) fn next_selected_columns_v1(
+        &mut self,
+        first: usize,
+        width: usize,
+    ) -> Result<Option<[F; 8]>, P256CrossTraceBusErrorV1> {
+        if width == 0
+            || width > 8
+            || first
+                .checked_add(width)
+                .is_none_or(|end| end > P256_CROSS_TRACE_WRITER_AUX_WIDTH_V1)
+        {
+            return Err(P256CrossTraceBusErrorV1::Topology);
+        }
+        if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1 {
+            return Ok(None);
+        }
+        let fixed = self.fixed.source_v1().row_v1(self.next_row)?;
+        // Even inactive schedule rows retain the dense path's source validation.
+        let sources = projected_writer_source_values_v1(self.value_bus, self.next_row, fixed)?;
+        let (selected, after) = selected_writer_columns_v1(
+            fixed,
+            sources,
+            self.running,
+            self.terminal,
+            self.challenges,
+            first,
+            width,
+        );
+        let selected = zeroize::Zeroizing::new(selected);
+        self.running = after;
+        self.next_row += 1;
+        if self.next_row == P256_CROSS_TRACE_VALUE_BUS_TRACE_SIZE_V1
+            && self.running != self.terminal
+        {
+            return Err(P256CrossTraceBusErrorV1::Constraint);
+        }
+        Ok(Some(*selected))
+    }
     /// Constant writer-source product terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.terminal
@@ -1336,6 +1377,82 @@ pub fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<A: Polynomial
     }
     residues
 }
+/// Complete public inactive tuple; an inactive bit alone is insufficient.
+fn writer_slot_is_inactive_v1(fixed: &P256CrossTraceWriterFixedRowV1, slot: usize) -> bool {
+    fixed.events[slot] == P256CrossTraceEventFixedV1::inactive()
+        && fixed.multiplicity_small[slot] == F::ZERO
+        && fixed.multiplicity_64[slot] == F::ZERO
+        && fixed.multiplicity_65[slot] == F::ZERO
+        && fixed.multiplicity_129[slot] == F::ZERO
+}
+
+/// Select the canonical flattened writer layout without constructing that array.
+fn writer_aux_column_v1(row: &P256CrossTraceWriterAuxRowV1, column: usize) -> F {
+    const SLOTS: usize = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+    const LANES: usize = P256_CROSS_TRACE_LANES_V1;
+    const POWERS: usize = P256_CROSS_TRACE_WRITER_POWERS_V1;
+    if column < SLOTS {
+        row.event_values[column]
+    } else if column < SLOTS + SLOTS * LANES * POWERS {
+        let index = column - SLOTS;
+        row.powers[index / (LANES * POWERS)][index / POWERS % LANES][index % POWERS]
+    } else if column < SLOTS + SLOTS * LANES * (POWERS + 1) {
+        let index = column - SLOTS - SLOTS * LANES * POWERS;
+        row.selected_power[index / LANES][index % LANES]
+    } else if column < SLOTS + SLOTS * LANES * (POWERS + 2) {
+        let index = column - SLOTS - SLOTS * LANES * (POWERS + 1);
+        row.product_before[index / LANES][index % LANES]
+    } else {
+        row.terminal[column - SLOTS - SLOTS * LANES * (POWERS + 2)]
+    }
+}
+
+/// The caller validates the selected interval before source replay starts.
+fn selected_writer_columns_v1(
+    fixed: P256CrossTraceWriterFixedRowV1,
+    sources: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    before: [F; P256_CROSS_TRACE_LANES_V1],
+    terminal: [F; P256_CROSS_TRACE_LANES_V1],
+    challenges: P256CrossTraceChallengesV1,
+    first: usize,
+    width: usize,
+) -> ([F; 8], [F; P256_CROSS_TRACE_LANES_V1]) {
+    let mut selected = zeroize::Zeroizing::new([F::ZERO; 8]);
+    if (0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1)
+        .all(|slot| writer_slot_is_inactive_v1(&fixed, slot))
+    {
+        const PRODUCT_START: usize = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1
+            * (1 + P256_CROSS_TRACE_LANES_V1 * (P256_CROSS_TRACE_WRITER_POWERS_V1 + 1));
+        const TERMINAL_START: usize =
+            PRODUCT_START + P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 * P256_CROSS_TRACE_LANES_V1;
+        for (offset, output) in selected[..width].iter_mut().enumerate() {
+            let column = first + offset;
+            *output = if column < P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+                F::ZERO
+            } else if column < PRODUCT_START {
+                F::ONE
+            } else if column < TERMINAL_START {
+                before[(column - PRODUCT_START) % P256_CROSS_TRACE_LANES_V1]
+            } else {
+                terminal[column - TERMINAL_START]
+            };
+        }
+        (*selected, before)
+    } else {
+        let mut row =
+            zeroize::Zeroizing::new(build_writer_row_v1(fixed, sources, before, challenges));
+        row.terminal = terminal;
+        for (offset, output) in selected[..width].iter_mut().enumerate() {
+            *output = writer_aux_column_v1(&row, first + offset);
+        }
+        let final_slot = P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - 1;
+        let after = core::array::from_fn(|lane| {
+            row.product_before[final_slot][lane].mul(row.selected_power[final_slot][lane])
+        });
+        (*selected, after)
+    }
+}
+
 fn build_writer_row_v1(
     fixed: P256CrossTraceWriterFixedRowV1,
     source_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
@@ -1357,12 +1474,7 @@ fn build_writer_row_v1(
         // Its compression and all powers are one, so the product carries exactly.
         // Keep unusual fixed tuples on the direct path rather than assuming that
         // an inactive flag alone proves the remaining selectors are canonical.
-        if fixed.events[slot] == P256CrossTraceEventFixedV1::inactive()
-            && fixed.multiplicity_small[slot] == F::ZERO
-            && fixed.multiplicity_64[slot] == F::ZERO
-            && fixed.multiplicity_65[slot] == F::ZERO
-            && fixed.multiplicity_129[slot] == F::ZERO
-        {
+        if writer_slot_is_inactive_v1(&fixed, slot) {
             continue;
         }
         for lane in 0..P256_CROSS_TRACE_LANES_V1 {

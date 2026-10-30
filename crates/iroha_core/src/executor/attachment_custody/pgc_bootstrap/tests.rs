@@ -21,10 +21,9 @@ use iroha_data_model::{
     block::BlockHeader,
     isi::{InstructionBox, Log, instruction_wire_id},
     privacy::{
-        PrivacyActiveLifecycleV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofBytesV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProtocolLifecycleV1, PrivacyRootV1, PrivacyVerifierDigestV1,
+        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyRootV1, PrivacyVerifierDigestV1,
     },
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder,
@@ -142,7 +141,7 @@ struct Fixture {
     balances: Vec<TwistedElGamalCiphertextV1>,
     plaintexts: Vec<u32>,
     randomness: Vec<SecretScalarV1>,
-    activation: PrivacyProtocolActivationRecordV1,
+    profile: PrivacyCompiledProfileSnapshotV1,
     network: NetworkId,
     tx: SignedTransaction,
     old_context_proof: Vec<u8>,
@@ -152,7 +151,7 @@ impl Fixture {
         BootstrapContext {
             network_id: &self.network,
             genesis_hash: *self.network.as_bytes(),
-            activation: &self.activation,
+            profile: &self.profile,
         }
     }
     fn prove(&self, statement_digest: [u8; 32], index: u32) -> Vec<u8> {
@@ -170,11 +169,11 @@ impl Fixture {
                 genesis_hash: *self.network.as_bytes(),
                 action_index: index,
                 statement_digest,
-                parameter_id: *self.activation.parameter_id.as_bytes(),
-                parameter_digest: *self.activation.parameter_digest.as_bytes(),
-                verifier_digest: *self.activation.verifier_digest.as_bytes(),
-                statement_schema_digest: *self.activation.statement_schema_digest.as_bytes(),
-                engine_manifest_digest: *self.activation.engine_manifest_digest.as_bytes(),
+                parameter_id: *self.profile.parameter_id.as_bytes(),
+                parameter_digest: *self.profile.parameter_digest.as_bytes(),
+                verifier_digest: *self.profile.verifier_digest.as_bytes(),
+                statement_schema_digest: *self.profile.statement_schema_digest.as_bytes(),
+                engine_manifest_digest: *self.profile.engine_manifest_digest.as_bytes(),
                 generator_digest: parameters.generator_digest(),
             },
         )
@@ -237,15 +236,9 @@ fn fixture() -> &'static Fixture {
             total_supply: 1600,
             accounts,
         };
-        let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .unwrap()
-            .activation_record(PrivacyProtocolLifecycleV1::Active(
-                PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 1,
-                    state_since_height: 1,
-                },
-            ));
+            .into();
         // A temporary attachment-free signed owner is only an initialization
         // value; the final fixture below is a real, fully signed N=16 proof.
         let temporary =
@@ -258,7 +251,7 @@ fn fixture() -> &'static Fixture {
             balances,
             plaintexts,
             randomness,
-            activation,
+            profile,
             network,
             tx: temporary,
             old_context_proof: vec![],
@@ -528,14 +521,14 @@ fn trusted_network_genesis_and_profile_cannot_be_replaced() {
         consume(&f.tx, &f.bootstrap, context),
         Err(BootstrapError::NetworkMismatch)
     ));
-    let mut activation = f.activation;
-    activation.verifier_digest = PrivacyVerifierDigestV1::new([0x71; 32]);
+    let mut profile = f.profile;
+    profile.verifier_digest = PrivacyVerifierDigestV1::new([0x71; 32]);
     assert!(matches!(
         consume(
             &f.tx,
             &f.bootstrap,
             BootstrapContext {
-                activation: &activation,
+                profile: &profile,
                 ..f.context()
             }
         ),
@@ -543,14 +536,14 @@ fn trusted_network_genesis_and_profile_cannot_be_replaced() {
             CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch
         ))
     ));
-    let mut activation = f.activation;
-    activation.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    let mut profile = f.profile;
+    profile.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(matches!(
         consume(
             &f.tx,
             &f.bootstrap,
             BootstrapContext {
-                activation: &activation,
+                profile: &profile,
                 ..f.context()
             }
         ),

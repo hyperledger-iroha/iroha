@@ -274,15 +274,18 @@ impl MainCaPrivatePlanV1 {
     ) -> Result<MainCaOriginalAuxiliaryV1, ZkX509StarkErrorV1> {
         ca.validate_source_plan_v1(&self.shared)
             .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-        let reserved = MainCaOriginalAuxiliaryV1::payload_bound_v1()
-            .checked_add(8 * NATIVE_ROWS_V1 * 8 + 8192)
-            .and_then(|bytes| {
-                ca.allocated_payload_bytes_v1()
-                    .ok()
-                    .and_then(|ca| bytes.checked_add(ca))
-            })
-            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
-        let policy = policy.reserve_additional_v1(reserved)?;
+        let buffers = main_ca_resources::MainCaJointBufferPlanV1::new_v1(layout)?;
+        buffers.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::Registration,
+            ca,
+            None,
+        )?;
+        // MAIN24 is already included in PrivateLinks. Its construction owns
+        // only a bounded native replay batch before quotient work starts.
+        buffers.check_replay_subphase_v1(
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            8 * NATIVE_ROWS_V1 * 8 + 8192,
+        )?;
         let mut columns = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1::<Vec<F>>);
         columns
             .try_reserve_exact(CA_MAIN_EXTRA_OPENINGS_V1)
@@ -305,6 +308,11 @@ impl MainCaPrivatePlanV1 {
             columns,
         };
         retained.validate_v1(self)?;
+        buffers.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            ca,
+            Some(&retained),
+        )?;
         Ok(retained)
     }
 
@@ -334,21 +342,21 @@ impl MainCaPrivatePlanV1 {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn accumulate_deep_v1(
         &self,
+        layout: &AggregateProofLayoutV1,
         retained: &MainCaOriginalAuxiliaryV1,
         z: E,
         values: &[E],
         mixes: &[E],
-        policy: main_bounded_transform::MainBoundedTransformPolicyV1,
         accumulator: &mut [E],
     ) -> Result<(), ZkX509StarkErrorV1> {
         retained.validate_v1(self)?;
         self.supplemental_v1(z, values, mixes)?;
-        // The parent's policy has already charged the CA stage and common FRI
-        // owners; count the actual retained MAIN cache and deferred polynomial.
-        let _reserved = policy.reserve_additional_v1(
-            Self::DEEP_PRIVATE_BYTES_V1
-                .checked_add(retained.allocated_payload_bytes_v1()?)
-                .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
+        // All ordinary/group/key DEEP replay has returned before this call.
+        // Finalization already charges MAIN24; its separate replay allowance
+        // now contains only this deferred extension column and metadata.
+        main_ca_resources::MainCaJointBufferPlanV1::new_v1(layout)?.check_replay_subphase_v1(
+            main_ca_resources::MainCaBufferPhaseV1::Finalization,
+            Self::DEEP_PRIVATE_BYTES_V1,
         )?;
         let count = NATIVE_ROWS_V1 + MASK_DEGREE + 1;
         if accumulator.len() < count {
@@ -443,19 +451,16 @@ impl MainCaPrivatePlanV1 {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        let allowance = Self::quotient_private_bytes_v1()
-            .checked_add(
-                ca.allocated_payload_bytes_v1()
-                    .map_err(|_| ZkX509StarkErrorV1::ProofTooLarge)?,
-            )
-            .and_then(|bytes| {
-                retained
-                    .allocated_payload_bytes_v1()
-                    .ok()
-                    .and_then(|cache| bytes.checked_add(cache))
-            })
-            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
-        let policy = policy.reserve_additional_v1(allowance)?;
+        // The complete PrivateLinks lifetime already includes these original
+        // owners, quotient scratch and outer composition. Registration-local
+        // matrices and caches have dropped before MAIN24 is constructed. Check
+        // the actual retained capacities before allocation without charging the
+        // same owners again against the global device-staging headroom.
+        main_ca_resources::MainCaJointBufferPlanV1::new_v1(layout)?.check_original_owners_v1(
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            ca,
+            Some(retained),
+        )?;
         let shared = layout.as_shared()?;
         let cap = shared
             .fri_degree_cap(AGGREGATE_PARAMETERS_V1)

@@ -1,0 +1,4 @@
+extends = "base.toml"
+
+[nexus.atomic_private_settlement]
+minimum_activation_notice_blocks = 1

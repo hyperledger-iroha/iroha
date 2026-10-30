@@ -1268,7 +1268,7 @@ async fn transparency_proof_token_verify_accepts_signature_and_digest() {
         digest_key_hex: Some(hex::encode([0x22; 32])),
         now_unix: Some(1_700_000_120),
     };
-    let app = mk_app_state_for_tests();
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
     let response = handle_post_sorafs_transparency_token_verify(
         State(app),
         HeaderMap::new(),
@@ -1321,7 +1321,7 @@ async fn transparency_proof_token_verify_reports_invalid_inputs() {
         digest_key_hex: Some(hex::encode([0x22; 32])),
         now_unix: Some(1_700_000_120),
     };
-    let app = mk_app_state_for_tests();
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
     let response = handle_post_sorafs_transparency_token_verify(
         State(app.clone()),
         HeaderMap::new(),
@@ -1375,7 +1375,7 @@ async fn transparency_proof_token_verify_rejects_noncanonical_verifying_key() {
     ];
     let mut request = valid_transparency_proof_token_verify_request(0xA9);
     request.verifying_key_hex = hex::encode(ED25519_NONCANONICAL_IDENTITY);
-    let app = mk_app_state_for_tests();
+    let app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
     let response = handle_post_sorafs_transparency_token_verify(
         State(app),
         HeaderMap::new(),
@@ -1393,7 +1393,7 @@ async fn transparency_proof_token_verify_rejects_noncanonical_verifying_key() {
 }
 #[tokio::test]
 async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.proof_rate_limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
@@ -1425,7 +1425,7 @@ async fn transparency_proof_token_verify_uses_proof_rate_limiter() {
 }
 #[tokio::test]
 async fn transparency_proof_token_verify_honors_api_token_enforcement() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_native_app_state_for_tests();
     {
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;

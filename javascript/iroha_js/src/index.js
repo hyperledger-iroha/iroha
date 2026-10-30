@@ -683,3 +683,5 @@ export { inspectAccountViaNativeTransport, inspectToriiAccountIdentityViaNativeT
 export { requestNativeMultisigViaTransport, inspectNativeMultisigPrepareViaTransport, inspectNativeMultisigSignedViaTransport, queryNativeMultisigFinalityViaTransport, queryNativeMultisigProposalFinalityViaTransport } from "./nativeMultisigTransport.js";
 
 export { deriveMultisigProposalId } from "./multisigOccurrence.js";
+
+export { PrivacyX509DirectTransactionV1, preparePrivacyX509DirectTransactionV1, buildPrivacyX509DirectTransactionV1 } from "./privacyX509Transaction.js";

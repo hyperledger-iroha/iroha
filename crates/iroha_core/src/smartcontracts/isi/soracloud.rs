@@ -7571,8 +7571,12 @@ fn distribute_hf_join_refunds(
     }
     Ok(())
 }
-fn resolve_fee_sink_account(state_transaction: &StateTransaction<'_, '_>) -> AccountId {
-    state_transaction.nexus.fees.fee_sink_account_id.clone()
+fn resolve_fee_sink_account(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<AccountId, InstructionExecutionError> {
+    // Ordinary charges use the predecessor; authenticated H1 uses its authored policy.
+    crate::executor::root_fees::execution_custody_policy(state_transaction)
+        .map(|fees| fees.fee_sink_account_id.clone())
 }
 fn transfer_hf_shared_lease_amount(
     authority: &AccountId,
@@ -7599,17 +7603,10 @@ fn transfer_hf_shared_lease_amount(
 fn resolve_fee_asset_definition_id(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AssetDefinitionId, InstructionExecutionError> {
-    crate::block::parse_asset_definition_literal_with_world(
-        &state_transaction.world,
-        &state_transaction.nexus.fees.fee_asset_id.canonical_address(),
-        state_transaction.block_unix_timestamp_ms(),
-    )
-    .ok_or_else(|| {
-        InstructionExecutionError::InvariantViolation(
-            "invalid nexus.fees.fee_asset_id; expected canonical Base58 asset definition id or active asset alias"
-                .into(),
-        )
-    })
+    // The committed policy already owns a typed canonical currency; aliases and
+    // transaction-local policy updates cannot substitute another asset here.
+    crate::executor::root_fees::execution_custody_policy(state_transaction)
+        .map(|fees| fees.fee_asset_id.clone())
 }
 fn resolve_agent_asset_definition_literal(
     state_transaction: &StateTransaction<'_, '_>,
@@ -7659,7 +7656,7 @@ fn transfer_uploaded_model_amount(
         return Ok(());
     }
     let fee_asset_definition_id = resolve_fee_asset_definition_id(state_transaction)?;
-    let sink_account = resolve_fee_sink_account(state_transaction);
+    let sink_account = resolve_fee_sink_account(state_transaction)?;
     transfer_hf_shared_lease_amount(
         authority,
         &fee_asset_definition_id,
@@ -11819,7 +11816,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             status: SoraHfSharedLeaseStatusV1::Active,
             queued_next_window: None,
         };
-        let sink_account = resolve_fee_sink_account(state_transaction);
+        let sink_account = resolve_fee_sink_account(state_transaction)?;
         transfer_hf_shared_lease_amount(
             authority,
             &lease_asset_definition_id,
@@ -12180,7 +12177,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             let next_window_expires_at_ms = pool.window_expires_at_ms.saturating_add(lease_term_ms);
             source_record.updated_at_ms = now_ms;
             record_hf_source(state_transaction, source_record)?;
-            let sink_account = resolve_fee_sink_account(state_transaction);
+            let sink_account = resolve_fee_sink_account(state_transaction)?;
             transfer_hf_shared_lease_amount(
                 authority,
                 &lease_asset_definition_id,
@@ -12241,7 +12238,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         pool.active_member_count = 1;
         pool.status = SoraHfSharedLeaseStatusV1::Active;
         pool.queued_next_window = None;
-        let sink_account = resolve_fee_sink_account(state_transaction);
+        let sink_account = resolve_fee_sink_account(state_transaction)?;
         transfer_hf_shared_lease_amount(
             authority,
             &lease_asset_definition_id,

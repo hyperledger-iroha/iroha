@@ -6,7 +6,10 @@ use crate::{
     cs::{Advice, Column, ConstraintSystem, Fixed, Rotation, Selector},
     frontend::{Circuit, Error as LayoutError, Layouter, SimpleFloorPlanner, Value},
     keys::pk::CosetCachePolicy,
-    keys::{KeygenConfigV2, ProvingKey, RebuildError, keygen_pk_from_vk_v2, keygen_pk_v2},
+    keys::{
+        KeygenConfigV2, ProvingKey, RebuildError, check_source_v2_cancellable,
+        keygen_pk_from_vk_v2, keygen_pk_v2,
+    },
     pcs::ipa::commit::test_observation::CommitmentProbe,
     verify_full,
 };
@@ -243,6 +246,41 @@ fn parity<C: PastaCurve>() {
 fn compiled_member_preserves_original_and_verified_proof_bytes_on_both_curves() {
     parity::<Ep>();
     parity::<Eq>();
+}
+
+fn source_verification<C: PastaCurve>() {
+    let f = Fixture::<C>::new();
+    let ordinary = profile(entries(vec![f.entry()]));
+    assert!(!ordinary.member(ROLE).unwrap().verifies_source());
+    let member = ordinary.verifying_sources().member(ROLE).unwrap();
+    assert!(member.verifies_source());
+    assert_eq!(member.role_path(), ROLE);
+    // The selection changes no original check: admission mints the same seal.
+    let probe = CommitmentProbe::start();
+    let (_, _, ordinary_seal) = f
+        .admit(ordinary.member(ROLE).unwrap())
+        .unwrap()
+        .into_parts();
+    let admitted = f.admit(member).unwrap();
+    assert!(admitted.clone().into_parts().2.same_source(&ordinary_seal));
+    // The installed source passes and a same-descriptor fixed change is refused,
+    // exactly as a proof-time rebuild would refuse it, without commitment work.
+    check_source_v2_cancellable(&f.params, &f.source, &admitted.view(), None).unwrap();
+    let changed = Source {
+        fixed: C::ScalarExt::from(8),
+        value: Value::unknown(),
+    };
+    assert_eq!(
+        check_source_v2_cancellable(&f.params, &changed, &admitted.view(), None).err(),
+        Some(RebuildError::Source)
+    );
+    assert_eq!(probe.calls(), 0);
+}
+
+#[test]
+fn source_verifying_profile_marks_members_and_refuses_changed_sources_without_msm() {
+    source_verification::<Ep>();
+    source_verification::<Eq>();
 }
 
 #[test]

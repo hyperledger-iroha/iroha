@@ -86,6 +86,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
                 "iroha_privacy_exact12_fixture_bundle_v1",
                 "iroha_privacy_validate_exact12_fixture_bundle_v1",
                 "iroha_privacy_validate_exact12_capability_manifest_v1",
+                "iroha_privacy_validate_exact12_submit_proof_construction_v1",
                 "iroha_privacy_free_buffer",
             ),
         )
@@ -104,6 +105,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             '"${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
             "Hyperledger.Iroha.Sdk.Tests.PrivacyNativeTests",
             "Hyperledger.Iroha.Sdk.Tests.PrivacyExact12FixtureCodecV1Tests",
+            "Hyperledger.Iroha.Sdk.Tests.PrivacyX509PreparedTransactionV1Tests",
             "Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests",
             '--filter-class "${test_class}"',
         ):

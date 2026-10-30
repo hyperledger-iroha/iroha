@@ -206,8 +206,19 @@ export JAVA_HOME
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test --no-build-cache --rerun-tasks \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyCapabilitiesV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityManifestV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyCapabilityModelInvariantV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyCompiledProfileCatalogV1Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test \
   --tests org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1Test \
+  --tests org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.tx.SignedAttachmentVectorsTest \
+  --tests org.hyperledger.iroha.sdk.tx.norito.SignedAttachmentsCodecTest \
+  --tests org.hyperledger.iroha.sdk.tx.TransactionBuilderTest \
+  --tests org.hyperledger.iroha.sdk.tx.SignedTransactionHasherTest \
+  --tests org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \

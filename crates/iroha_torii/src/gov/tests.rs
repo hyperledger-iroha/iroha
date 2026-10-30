@@ -239,43 +239,53 @@ async fn parliament_attempt_draft_rejects_inexact_json_u64_proposals_before_fram
         governance::types::{
             FIRST_RELEASE_MAX_EXACT_JSON_U64, ProposalKind, RuntimeUpgradeProposal,
         },
-        runtime::RuntimeUpgradeManifest,
+        runtime::{
+            definition::SelectionId,
+            lifecycle::{ChangeSetV1, RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1},
+        },
     };
 
-    let proposal = |start_height, end_height| {
+    let proposal = |effective_height, proposed_ms| {
         ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
             proposal_operator: ALICE_ID.clone(),
-            manifest: RuntimeUpgradeManifest {
-                name: "bounded Parliament runtime upgrade".to_owned(),
-                description: "Torii exact JSON integer guard".to_owned(),
-                abi_version: 1,
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height,
-                end_height,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
+            action: RuntimeUpgradeActionV1::Schedule(ChangeSetV1 {
+                network: iroha_data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                        [0x11; 32],
+                    )),
+                ),
+                root: RootScopeV1::Universal,
+                predecessor: SelectionId([0x01; 32]),
+                successor: SelectionId([0x02; 32]),
+                effective_height,
+                publish: Vec::new(),
+                transitions: Vec::new(),
+                qualification: [0x03; 32],
+            }),
+            notice: RuntimeNoticeV1 {
+                blocks: 1,
+                ms: 0,
+                approval_cushion_ms: 0,
             },
+            proposed_ms,
         })
     };
     let maximum = FIRST_RELEASE_MAX_EXACT_JSON_U64;
-    for (start_height, end_height, expected_message) in [
+    for (effective_height, proposed_ms, expected_message) in [
         (
             maximum + 1,
-            maximum + 1,
-            "runtime-upgrade proposal start height exceeds the exact JSON integer maximum",
+            0,
+            "runtime-upgrade proposal effective height exceeds the exact JSON integer maximum",
         ),
         (
             maximum,
             maximum + 1,
-            "runtime-upgrade proposal end height exceeds the exact JSON integer maximum",
+            "runtime-upgrade proposal notice exceeds the exact JSON integer maximum",
         ),
     ] {
         let request = ParliamentAttemptDraftRequestV1 {
             version: PARLIAMENT_API_VERSION_V1,
-            proposal: proposal(start_height, end_height),
+            proposal: proposal(effective_height, proposed_ms),
             attempt_sequence: 0,
         };
         let error = handle_gov_parliament_attempt_draft(NoritoJson(request))
@@ -283,13 +293,13 @@ async fn parliament_attempt_draft_rejects_inexact_json_u64_proposals_before_fram
             .expect_err("an inexact public JSON integer must not produce a draft");
         assert!(
             format!("{error:?}").contains(expected_message),
-            "unexpected rejection for ({start_height}, {end_height}): {error:?}"
+            "unexpected rejection for ({effective_height}, {proposed_ms}): {error:?}"
         );
     }
 
     let boundary_request = ParliamentAttemptDraftRequestV1 {
         version: PARLIAMENT_API_VERSION_V1,
-        proposal: proposal(maximum - 1, maximum),
+        proposal: proposal(maximum, maximum),
         attempt_sequence: 0,
     };
     let boundary_response = handle_gov_parliament_attempt_draft(NoritoJson(boundary_request))
@@ -2395,6 +2405,9 @@ fn signed_governed_manifest_for_verification(
 
 #[test]
 fn governed_manifest_verification_authenticates_exact_content_and_refunds_its_frame() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     use iroha_core::execution_attempt::ExecutionAttemptError;
     let signing = crate::routing::manifest_signing_test_support::ManifestSigningFixture::new(1);
     let mut manifest = signed_governed_manifest_for_verification(&signing);
@@ -2432,6 +2445,9 @@ fn governed_manifest_verification_authenticates_exact_content_and_refunds_its_fr
 
 #[test]
 fn governed_manifest_verification_preserves_counter_and_one_short_frame_capacity() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     use iroha_allocation::{AllocationRefusal, release::ReleaseRegistration};
     use iroha_core::execution_attempt::ExecutionAttemptError;
     use std::{
@@ -2525,6 +2541,9 @@ fn governed_manifest_verification_preserves_counter_and_one_short_frame_capacity
 
 #[test]
 fn governed_manifest_verification_keeps_an_enclosing_codec_refusal_local() {
+    // Retain unrelated constructor EBR generations while measuring only the
+    // original reader/capture owners and their exact synchronous refunds.
+    let _constructor_retirement = crossbeam_epoch::pin();
     use iroha_core::execution_attempt::ExecutionAttemptError;
     use norito::core::DecodeBudgetContext;
 

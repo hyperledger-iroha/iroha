@@ -756,11 +756,242 @@ get fun `test recovery concurrent retry cannot redirect original in flight exces
     expect(completed).toNotHaveTx<ReturnExcessesBack>({ to: attacker });
     expect(jettonBalanceOf(env, alice)).toEqual(77);
     expect(minterStorage(env).recovery.load().count).toEqual(0);
-    // Delayed confirmation cannot restart a completed mint or allocate another row.
+    // Delayed confirmation cannot restart a completed mint or allocate another
+    // row. Its Missing ACK names a completed row: the retry's value goes back
+    // to the retry's own response, and the minter keeps none of it.
+    val balance = testing.getAccountBalance(env.minter.address);
     val late = net.send(env.minter.address, forwardOut(retryStep, 0));
     expect(late).toHaveAllSuccessfulTxs();
     expect(late).toNotHaveTx<SccpRecoveryDispatch>({});
+    expect(late).toHaveSuccessfulTx<ReturnExcessesBack>({ to: attacker });
+    expect(testing.getAccountBalance(env.minter.address)).toEqual(balance);
     expect(jettonBalanceOf(env, alice)).toEqual(77);
+    expect(minterStorage(env).recovery.load().count).toEqual(0);
+}
+
+/// Fees of one transaction plus the forwarding fee still carried by its
+/// inbound message: what the value of that message lost to the network.
+fun stepCost(step: SendResult): coins {
+    val tx = step.tx.load();
+    var cost = tx.totalFees.grams;
+    val info = tx.loadInMsg<RemainingBitsAndRefs>().info;
+    if (info is TlbInternalMessage) {
+        cost += info.forwardFee;
+    }
+    return cost;
+}
+
+get fun `test recovery a retry racing its in-flight original gets back its quote less fees`() {
+    val env = setupEnv();
+    val alice = testing.treasury("alice").address;
+    val keeper = testing.treasury("keeper").address;
+    val d = deliverDefault(env, 0, 77, alice);
+    val cursor = testing.createTraceIterationCursor(env.deployer, recoveryFinalizeMessage(env, d));
+    val (step, index) = recoverBeforeDispatch(cursor, SCCP_RECOVERY_CONSUME);
+    cursor.close();
+    val operationId = step.outMessages.at<SccpRecoveryDispatch>(index).loadBody().operationId;
+    val bucket = env.minter.getBucketAddress(0);
+    // A keeper retries while the consume is still in flight: its
+    // confirmation queues behind the consume at the bucket.
+    val quote = env.minter.retryRequiredValue();
+    val retry = testing.processSingleTraceStep(
+        keeper,
+        createMessage({
+            bounce: BounceMode.Only256BitsOfBody,
+            dest: env.minter.address,
+            value: quote,
+            body: SccpRetry {
+                queryId: 99,
+                response: keeper,
+                operationId,
+            },
+        }),
+    );
+    val consumed = testing.processSingleTraceStep(env.minter.address, forwardOut(step, index));
+    val confirmed = testing.processSingleTraceStep(env.minter.address, forwardOut(retry, 0));
+    val applied = confirmed.outMessages.at<SccpRecoveryAck>(0).loadBody();
+    expect(applied.result).toEqual(SCCP_RECEIPT_APPLIED);
+    expect(applied.response).toEqual(keeper);
+    // The original's Prepared moves the row to deletion. The keeper's
+    // duplicate Prepared repeats the deletion with the keeper's value.
+    val prepared = testing.processSingleTraceStep(bucket, forwardOut(consumed, 0));
+    val repeated = testing.processSingleTraceStep(bucket, forwardOut(confirmed, 0));
+    val dropped = testing.processSingleTraceStep(env.minter.address, forwardOut(prepared, 0));
+    val droppedAgain = testing.processSingleTraceStep(env.minter.address, forwardOut(repeated, 0));
+    // the original's Dropped advances the row to its mint
+    val minting = testing.processSingleTraceStep(bucket, forwardOut(dropped, 0));
+    expect(
+        minterStorage(env).recovery.load().operations.mustGet(operationId).load().stage,
+    ).toEqual(SCCP_RECOVERY_MINT);
+    // The keeper's Dropped names the consume stage that the row has left. It
+    // advances nothing and returns its value to the keeper; the minter keeps
+    // none of it.
+    val balance = testing.getAccountBalance(env.minter.address);
+    val late = net.send(bucket, forwardOut(droppedAgain, 0));
+    expect(late).toHaveAllSuccessfulTxs();
+    expect(late).toNotHaveTx<SccpRecoveryDispatch>({});
+    expect(testing.getAccountBalance(env.minter.address)).toEqual(balance);
+    val paid = retry.tx.load().loadInMsg<SccpRetry>().info;
+    val returned = late
+        .findTransaction<ReturnExcessesBack>({ to: keeper })!
+        .loadInMsg<ReturnExcessesBack>()
+        .info;
+    var fees = stepCost(retry) + stepCost(confirmed) + stepCost(repeated) + stepCost(droppedAgain);
+    var i = 0;
+    repeat (late.size()) {
+        fees += stepCost(late.at(i));
+        i += 1;
+    }
+    expect(paid is TlbInternalMessage).toBeTrue();
+    expect(returned is TlbInternalMessage).toBeTrue();
+    if (paid is TlbInternalMessage) {
+        expect(paid.value.grams).toEqual(quote);
+    }
+    if (returned is TlbInternalMessage) {
+        // at least the quote less the fees of the keeper's five hops
+        expect(returned.value.grams + fees >= quote).toBeTrue();
+        println(
+            "retry racing its original: quote {}, returned {}, fees {}",
+            quote,
+            returned.value.grams,
+            fees,
+        );
+    }
+    // the original completes its mint and returns its own excess
+    val completed = net.send(env.minter.address, forwardOut(minting, 0));
+    expect(completed).toHaveAllSuccessfulTxs();
+    expect(completed).toHaveSuccessfulTx<ReturnExcessesBack>({ to: env.deployer });
+    expect(completed).toNotHaveTx<ReturnExcessesBack>({ to: keeper });
+    expect(jettonBalanceOf(env, alice)).toEqual(77);
+    val state = env.minter.getSccpState();
+    expect(state.totalSupply).toEqual(77);
+    expect(state.pendingSupply).toEqual(0);
+    expect(state.opCount).toEqual(1);
+    expect(minterStorage(env).recovery.load().count).toEqual(0);
+}
+
+get fun `test recovery destinations refuse dispatch, confirmation and deletion from a stranger`() {
+    val env = setupEnv();
+    val alice = testing.treasury("alice").address;
+    val stranger = testing.treasury("stranger").address;
+    // the wallet retains the receipt of a delivered mint whose ACK is pending
+    val minted = deliverDefault(env, 0, 77, alice);
+    var cursor = testing.createTraceIterationCursor(
+        env.deployer,
+        recoveryFinalizeMessage(env, minted),
+    );
+    val mint = recoverUntilDispatch(cursor, SCCP_RECOVERY_MINT);
+    cursor.close();
+    val mintAck = mint.outMessages.at<SccpRecoveryAck>(0).loadBody();
+    // the bucket retains the receipt of a consume whose ACK is pending
+    val consumed = deliverDefault(env, 1, 5, alice);
+    cursor = testing.createTraceIterationCursor(
+        env.deployer,
+        recoveryFinalizeMessage(env, consumed),
+    );
+    val consume = recoverUntilDispatch(cursor, SCCP_RECOVERY_CONSUME);
+    cursor.close();
+    val consumeAck = consume.outMessages.at<SccpRecoveryAck>(0).loadBody();
+    val wallet = walletOf(env, alice);
+    val bucket = bucketOf(env, 0);
+    val walletBefore = recoveryAccountData(wallet.address);
+    val bucketBefore = recoveryAccountData(bucket.address);
+    expect(WalletStorage.fromCell(walletBefore).recovery.load().count).toEqual(1);
+    expect(BucketStorage.fromCell(bucketBefore).recovery.load().count).toEqual(1);
+    val value = sccpWalletRecoveryFloor() + sccpBucketFloor() + grams("1");
+    // A stranger's mint would credit tokens, and its deletion would erase the
+    // receipt that keeps the pending mint from being repeated.
+    val walletSent: array<SendResultList> = [
+        wallet.sendSccpRecoveryDispatch(
+            stranger,
+            mintAck.operationId + 1000,
+            SCCP_RECOVERY_MINT,
+            1,
+            0,
+            1,
+            1000,
+            0,
+            stranger,
+            { value, bounce: true },
+        ),
+        wallet.sendSccpRecoveryConfirm(
+            stranger,
+            mintAck.operationId,
+            SCCP_RECOVERY_MINT,
+            mintAck.attempt,
+            0,
+            stranger,
+            { value, bounce: true },
+        ),
+        wallet.sendSccpRecoveryDrop(
+            stranger,
+            mintAck.operationId,
+            SCCP_RECOVERY_MINT,
+            mintAck.attempt,
+            0,
+            stranger,
+            { value, bounce: true },
+        ),
+    ];
+    // a stranger's consume would set a flag, its deletion would erase a receipt
+    val bucketSent: array<SendResultList> = [
+        bucket.sendSccpRecoveryDispatch(
+            stranger,
+            consumeAck.operationId + 1000,
+            SCCP_RECOVERY_CONSUME,
+            1,
+            2,
+            1,
+            0,
+            0,
+            stranger,
+            { value, bounce: true },
+        ),
+        bucket.sendSccpRecoveryConfirm(
+            stranger,
+            consumeAck.operationId,
+            SCCP_RECOVERY_CONSUME,
+            consumeAck.attempt,
+            0,
+            stranger,
+            { value, bounce: true },
+        ),
+        bucket.sendSccpRecoveryDrop(
+            stranger,
+            consumeAck.operationId,
+            SCCP_RECOVERY_CONSUME,
+            consumeAck.attempt,
+            0,
+            stranger,
+            { value, bounce: true },
+        ),
+    ];
+    var i = 0;
+    repeat (walletSent.size()) {
+        expect(walletSent.get(i)).toHaveFailedTx({
+            to: wallet.address,
+            exitCode: SccpErrors.NotMinter as int,
+        });
+        expect(walletSent.get(i)).toNotHaveTx<SccpRecoveryAck>({ to: env.minter.address });
+        expect(bucketSent.get(i)).toHaveFailedTx({
+            to: bucket.address,
+            exitCode: SccpErrors.NotMinter as int,
+        });
+        expect(bucketSent.get(i)).toNotHaveTx<SccpRecoveryAck>({ to: env.minter.address });
+        i += 1;
+    }
+    expect(i).toEqual(3);
+    // balance, flags and receipts are untouched
+    expect(recoveryAccountData(wallet.address).hash()).toEqual(walletBefore.hash());
+    expect(recoveryAccountData(bucket.address).hash()).toEqual(bucketBefore.hash());
+    expect(jettonBalanceOf(env, alice)).toEqual(77);
+    expect(isConsumedAt(env, 1)).toBeTrue();
+    expect(isConsumedAt(env, 2)).toBeFalse();
+    // the minter's own exchanges still complete both operations
+    expect(net.send(wallet.address, forwardOut(mint, 0))).toHaveAllSuccessfulTxs();
+    expect(net.send(bucket.address, forwardOut(consume, 0))).toHaveAllSuccessfulTxs();
+    expect(jettonBalanceOf(env, alice)).toEqual(82);
+    expect(env.minter.getSccpState().opCount).toEqual(2);
     expect(minterStorage(env).recovery.load().count).toEqual(0);
 }
 

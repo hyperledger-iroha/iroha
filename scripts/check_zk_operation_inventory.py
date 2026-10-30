@@ -2222,13 +2222,10 @@ class Checker:
         dispatch_code = anchor_closure(self.tree, {"path": dispatch.get("path", ""),
                                                    "symbol": "fn " + dispatch.get("function", "") + "("}) or ""
         instruction = section.get("single_route", {}).get("handler", {}).get("entry", {})
-        gate = roles.get("gate_site")
-        gated = self.handler_is_gated(instruction, "resolve_qualified_privacy_activation_v1")
-        if gated and not isinstance(gate, dict):
-            self.error("exact12.roles: the handler calls the admission gate; record it as `gate_site`")
-        if not gated and gate is not None:
-            self.error("exact12.roles: the handler no longer calls the admission gate; remove `gate_site` and "
-                       "record applied roles as `implemented`")
+        if roles.get("gate_site") is not None or section.get("admission_gate") is not None:
+            self.error("exact12.roles: retired documentary admission-gate metadata is forbidden")
+        if not self.handler_is_gated(instruction, "resolve_admitted_privacy_protocol_v1"):
+            self.error("exact12.roles: selected native implementation and policy admission must remain in the handler")
         tasks = self.tasks()
         seen_protocols: list[str] = []
         for row in rows:
@@ -2263,12 +2260,12 @@ class Checker:
             expected_effects = (
                 "unreachable" if verification == "refused"
                 else "none" if row.get("effect_class") == "VerifyOnly"
-                else "gated" if gated else "implemented"
+                else "implemented"
             )
             if row.get("state_effects") != expected_effects:
                 self.error(
                     f"{label}: state_effects must be `{expected_effects}` (verification `{verification}`, effect class "
-                    f"`{row.get('effect_class')}`, admission gate {'present' if gated else 'absent'}), "
+                    f"`{row.get('effect_class')}`), "
                     f"recorded `{row.get('state_effects')}`"
                 )
             if row.get("delivery") not in DELIVERY:
@@ -2300,9 +2297,76 @@ class Checker:
             if {row.get("verification") for row in own} != {protocol.get("status", {}).get("verification")}:
                 self.error(f"exact12.roles: protocol {variant} is recorded `{protocol.get('status', {}).get('verification')}`, "
                            f"its roles {sorted({str(row.get('verification')) for row in own})}")
+            role_states = {row.get("state_effects") for row in own}
+            if role_states != {protocol.get("status", {}).get("state_effects")}:
+                self.error(f"exact12.roles: protocol {variant} records state effects "
+                           f"`{protocol.get('status', {}).get('state_effects')}`, its roles {sorted(role_states)}")
             if sorted({row.get("ledger_effect") for row in own}) != sorted(protocol.get("ledger_effect", [])):
                 self.error(f"exact12.roles: protocol {variant} records ledger effects {protocol.get('ledger_effect')}, "
                            f"its roles {sorted({str(row.get('ledger_effect')) for row in own})}")
+
+    def dedicated_effect_owners(self, route: dict, rows: list[dict]) -> list[str]:
+        """Check each request-only role's sole effect owner and generic refusal.
+
+        These are source invariants, not runtime custody or proof qualification.
+        A dedicated carrier may share the semantic native verifier, but it may
+        not retain a second generic route or accept an unbound attachment.
+        """
+        owners: list[str] = []
+        roles = {row.get("role"): row for row in rows}
+        seen: set[str] = set()
+        generic = code_only(self.production(route.get("handler", {}).get("path", "")))
+        preparation = fn_body(generic, "prepare") or ""
+        for record in route.get("dedicated_requests", []):
+            role, owner = record.get("role"), record.get("path")
+            label = f"exact12.single_route.dedicated_requests[{role}]"
+            if role in seen or role not in roles or owner in owners:
+                self.error(f"{label}: role and effect owner must be unique and recorded")
+            seen.add(role)
+            row = roles.get(role, {})
+            if row.get("executor_arm", {}).get("path") != owner:
+                self.error(f"{label}: effect owner differs from the role executor")
+            operation = next((op for op in self.inv.get("operations", []) if op.get("id") == record.get("operation")), None)
+            if operation is None or operation.get("handler", {}).get("path") != owner:
+                self.error(f"{label}: dedicated instruction must name its actual owner")
+            protocol = row.get("protocol", "")
+            guard = f"if instruction.envelope.protocol_id == PrivacyProtocolIdV1::{protocol} {{ return Err("
+            if not contains(preparation, guard):
+                self.error(f"{label}: generic preparation must reject this protocol")
+            effect = row.get("ledger_effect", "")
+            executor = fn_body(generic, "execute_after_admission") or ""
+            if not contains(executor, f"VerifiedPrivacyLedgerEffectsV1::{effect}(_) => Err("):
+                self.error(f"{label}: generic executor must reject this effect in execute_after_admission")
+            source = code_only(self.production(owner or ""))
+            for function in ("execute_x509_submission", "execute_x509_after_admission"):
+                body = fn_body(source, function) or ""
+                if not contains(body, "binding.require_original_execution(request, proof, authority, state_transaction)?;"):
+                    self.error(f"{label}: {function} must reject a foreign original binding")
+            entry_body = fn_body(source, "execute_x509_submission") or ""
+            admission = (
+                "let admitted = resolve_admitted_privacy_protocol_v1( "
+                "&state_transaction.world.privacy_protocol_policies, "
+                f"PrivacyProtocolIdV1::{protocol}, state_transaction.block_height(), "
+                ") .map_err(|error| invalid_privacy_parameter(error.to_string()))?;"
+            )
+            if not contains(entry_body, admission):
+                self.error(f"{label}: selected implementation and policy admission must reject")
+            body = fn_body(source, "execute_x509_after_admission") or ""
+            checks = (
+                f"if effects.role() != PrivacyActionRoleV1::{role}",
+                f"|| effects.protocol_id() != PrivacyProtocolIdV1::{protocol}",
+                "|| effects.statement_digest() != statement_digest",
+                "|| effects.action_index() != expected_action_index",
+                "|| effects.encoded_action_bytes() != encoded_action_bytes { return Err(",
+                f"let VerifiedPrivacyLedgerEffectsV1::{effect}(effect) = effects.into_ledger() else {{ return Err(",
+            )
+            if not all(contains(body, check) for check in checks):
+                self.error(f"{label}: verified effect bindings and variant must reject substitution")
+            for call in ("verify_privacy_zk_x509_attached_v1", "apply_verified_effect"):
+                if len(re.findall(r"\b" + call + r"\s*\(", body)) != 1:
+                    self.error(f"{label}: selected verifier and effect application must each occur once")
+            owners.append(owner)
+        return owners
 
     def check_exact12_single_route(self) -> None:
         section = self.inv.get("exact12", {})
@@ -2400,8 +2464,9 @@ class Checker:
             if item.get("use") not in EFFECT_USES:
                 self.error(f"{prefix}: ledger_consumers[{item.get('path')}].use must be one of {EFFECT_USES}")
         applying = [item.get("path") for item in consumers if item.get("use") == "ledger_application"]
-        if applying != [handler.get("path")]:
-            self.error(f"{prefix}: exactly the handler applies a verified effect, recorded {applying}")
+        dedicated = self.dedicated_effect_owners(route, rows)
+        if applying != [handler.get("path"), *dedicated]:
+            self.error(f"{prefix}: exactly the recorded role owners apply verified effects, recorded {applying}")
         enum = effects.get("enum", {})
         variants = enum_variants(self.tree.read(enum.get("path", "")) or "", enum.get("enum", "")) or []
         variant_use = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(enum.get("enum", "")) + r"\s*::\s*(\w+)")

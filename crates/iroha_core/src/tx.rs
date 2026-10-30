@@ -40,7 +40,7 @@ use iroha_data_model::{
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
-        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        runtime_upgrade::{AttestRuntimeSupportV1, ContainRuntimeV1},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -1304,9 +1304,8 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::staking::FinalizePublicLaneUnbond,
         iroha_data_model::isi::ExecuteTrigger,
         iroha_data_model::isi::CustomInstruction,
-        ProposeRuntimeUpgrade,
-        ActivateRuntimeUpgrade,
-        CancelRuntimeUpgrade,
+        AttestRuntimeSupportV1,
+        ContainRuntimeV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
@@ -3612,21 +3611,16 @@ impl StateBlock<'_> {
         crate::pipeline::overlay::validate_header_policy(&meta).map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
         })?;
-        // Runtime upgrade admission: if there is an activated runtime upgrade record for this ABI
-        // version, require that the computed ABI hash matches the active manifest.
-        //
-        // This is redundant under the v1-only policy (all valid manifests must match ABI v1),
-        // but guards against tampered WSV and keeps admission deterministic across nodes.
+        // A contract executes only under a host profile its root selected
+        // (`specs/live_runtime_upgrades.md` §3.1).
         {
-            let current_height = state_transaction._curr_block.height().get();
-            if let Some(expected) = crate::smartcontracts::ivm::active_runtime_abi_hash(
-                &state_transaction.world,
-                current_height,
-            )
-            .map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
-            })? && expected != abi_hash
-            {
+            let active =
+                crate::smartcontracts::ivm::active_host_abi_hashes(&state_transaction.world)
+                    .map_err(|error| {
+                        TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
+                    })?;
+            if !active.contains(&abi_hash) {
+                let expected = active.first().copied().unwrap_or(abi_hash);
                 return Err(
                     TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                         iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
@@ -4015,15 +4009,15 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
     let contains_runtime_upgrade = |instruction: &InstructionBox| {
         instruction
             .as_any()
-            .downcast_ref::<ProposeRuntimeUpgrade>()
+            .downcast_ref::<AttestRuntimeSupportV1>()
             .is_some()
             || instruction
                 .as_any()
-                .downcast_ref::<ActivateRuntimeUpgrade>()
+                .downcast_ref::<ContainRuntimeV1>()
                 .is_some()
             || instruction
                 .as_any()
-                .downcast_ref::<CancelRuntimeUpgrade>()
+                .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
                 .is_some()
     };
     match tx.instructions() {
@@ -5513,7 +5507,6 @@ pub mod tests {
         permission::Permissions,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
-        runtime::RuntimeUpgradeManifest,
         smart_contract::ContractArtifactId,
         transaction::{TransactionBuilder, executable::ContractInvocation},
     };
@@ -5742,11 +5735,7 @@ pub mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([
-            iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-                manifest_bytes: vec![0x01],
-            },
-        ])
+        .with_instructions([crate::runtime::change_set::test_support::attest_instruction()])
         .sign(keypair.private_key())
     }
 
@@ -6835,11 +6824,7 @@ pub mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_metadata(metadata)
-        .with_instructions([
-            iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-                manifest_bytes: vec![0x01],
-            },
-        ])
+        .with_instructions([crate::runtime::change_set::test_support::attest_instruction()])
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         block.lane_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
@@ -6856,7 +6841,7 @@ pub mod tests {
         );
         assert_eq!(overlay.current_lane_id, Some(native.lane_id));
         assert_eq!(overlay.current_dataspace_id, Some(native.dataspace_id));
-        assert!(overlay.world.runtime_upgrades.iter().next().is_none());
+        assert!(overlay.world.runtime_change_sets.iter().next().is_none());
     }
 
     #[test]
@@ -7973,25 +7958,16 @@ pub mod tests {
     #[test]
     fn prepared_governance_transaction_hash_matches_canonical_entrypoint_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let manifest = RuntimeUpgradeManifest {
-            name: "runtime.upgrade.hash.test".into(),
-            description: "runtime upgrade hash fixture".into(),
-            abi_version: 1,
-            abi_hash: [7; 32],
-            added_syscalls: Vec::new(),
-            added_pointer_types: Vec::new(),
-            start_height: 42,
-            end_height: 84,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
-        };
+        let action = crate::runtime::change_set::test_support::schedule(test_network_id(), 42);
         let signed = TransactionBuilder::new(
             test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgradeProposal { manifest }])
+        .with_instructions([ProposeRuntimeUpgradeProposal {
+            action,
+            provenance: Vec::new(),
+        }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -9239,9 +9215,8 @@ pub mod tests {
             TypeId::of::<
                 iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
             >(),
-            TypeId::of::<ProposeRuntimeUpgrade>(),
-            TypeId::of::<ActivateRuntimeUpgrade>(),
-            TypeId::of::<CancelRuntimeUpgrade>(),
+            TypeId::of::<AttestRuntimeSupportV1>(),
+            TypeId::of::<ContainRuntimeV1>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
             TypeId::of::<
@@ -9303,19 +9278,8 @@ pub mod tests {
             "proved bytecode remains time-sensitive even with an empty overlay"
         );
         let runtime_upgrade = ProposeRuntimeUpgradeProposal {
-            manifest: RuntimeUpgradeManifest {
-                name: "runtime.upgrade.nts.test".into(),
-                description: "NTS time-sensitive governance fixture".into(),
-                abi_version: 1,
-                abi_hash: [7; 32],
-                added_syscalls: Vec::new(),
-                added_pointer_types: Vec::new(),
-                start_height: 42,
-                end_height: 84,
-                sbom_digests: Vec::new(),
-                slsa_attestation: Vec::new(),
-                provenance: Vec::new(),
-            },
+            action: crate::runtime::change_set::test_support::schedule(test_network_id(), 42),
+            provenance: Vec::new(),
         };
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             runtime_upgrade
@@ -9387,16 +9351,14 @@ pub mod tests {
         );
     }
     #[test]
-    fn nts_enforcement_rejects_low_level_runtime_upgrade_when_unhealthy() {
+    fn nts_enforcement_rejects_runtime_support_attestation_when_unhealthy() {
         let (authority, keypair) = gen_account_in("wonderland");
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgrade {
-            manifest_bytes: vec![0xCA, 0xFE],
-        }])
+        .with_instructions([crate::runtime::change_set::test_support::attest_instruction()])
         .sign(keypair.private_key());
         let snapshot = crate::time::NetworkTimeAdmissionSnapshot {
             status: crate::time::NetworkTimeStatus {
@@ -13881,9 +13843,7 @@ pub mod tests {
             metadata_key: Some(Name::from_str("upgrade_id").expect("key")),
             allowed_ids: Some(BTreeSet::from(["v1".to_string()])),
         });
-        let instruction = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
-            manifest_bytes: vec![0x01, 0x02],
-        };
+        let instruction = crate::runtime::change_set::test_support::attest_instruction();
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),

@@ -18,10 +18,205 @@ use iroha_primitives::numeric::Quantity;
 #[path = "asset_uid/wallet_holdings.rs"]
 pub mod wallet_holdings;
 
+#[path = "asset_uid/binding_custody.rs"]
+pub(crate) mod binding_custody;
+
 pub const POLICY_ROOT: &str = "asset_uid_policy_v1/";
 pub const BINDING_ROOT: &str = "asset_uid_binding_v1/";
 pub const USAGE_ROOT: &str = "asset_uid_usage_v1/";
 type Error = InstructionExecutionError;
+
+#[cfg(test)]
+mod sccp_decode_tests {
+    use super::*;
+    use crate::smartcontracts::isi::sccp::test_support::{authority, blank_state, header};
+    use iroha_data_model::asset::uid::AssetUidDailyWindowV1;
+
+    fn check_original_decode_owner<T>(value: &T)
+    where
+        T: norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let state = blank_state();
+        let mut block = state.block(header(2));
+        let tx = block.transaction();
+        let bytes = encode(value).unwrap();
+        assert!(decode_with_owner::<T>(Some(&tx.world), &bytes).is_ok());
+        assert!(decode_with_owner::<T>(Some(&tx.world), &bytes[..bytes.len() / 2]).is_err());
+        assert!(
+            !tx.is_execution_deferred(),
+            "malformed policy is not a local failure"
+        );
+        let result =
+            norito::with_decode_limits_scope(norito::DecodeLimits::new(0, 0, 0, 0, 0), || {
+                decode_with_owner::<T>(Some(&tx.world), &bytes)
+            });
+        assert!(result.is_err());
+        assert!(tx.is_execution_deferred());
+        assert!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .decode_refusal()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn binding_roster_and_usage_keep_decoder_refusals_separate_from_malformed_state() {
+        let account = authority(1);
+        let definition = iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id();
+        check_original_decode_owner(&AssetUidBindingV1 {
+            asset_definition_id: definition.clone(),
+            account_id: account.clone(),
+            uid: [7; 32],
+        });
+        check_original_decode_owner(&AssetUidPolicyV1 {
+            asset_definition_id: definition.clone(),
+            uid: [7; 32],
+            revision: 1,
+            accounts: BTreeSet::from([account]),
+            holding_limit: Some(10_u32.into()),
+            daily_window: AssetUidDailyWindowV1::UtcDay,
+            daily_spend_limit: Some(5_u32.into()),
+            daily_outgoing_limit: Some(7_u32.into()),
+        });
+        check_original_decode_owner(&AssetUidUsageV1 {
+            asset_definition_id: definition,
+            uid: [7; 32],
+            daily_window: AssetUidDailyWindowV1::UtcDay,
+            day_start_ms: 0,
+            spend_amount: 2_u32.into(),
+            outgoing_amount: 3_u32.into(),
+        });
+    }
+
+    fn policy_control_fixture() -> AssetUidPolicyV1 {
+        AssetUidPolicyV1 {
+            asset_definition_id: iroha_data_model::sccp::escrow::sccp_taira_xor_asset_definition_id(
+            ),
+            uid: [7; 32],
+            revision: 1,
+            accounts: BTreeSet::from([authority(1)]),
+            holding_limit: None,
+            daily_window: AssetUidDailyWindowV1::UtcDay,
+            daily_spend_limit: None,
+            daily_outgoing_limit: None,
+        }
+    }
+
+    #[test]
+    fn sccp_policy_controls_wait_only_for_original_pool_and_retry_after_release() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            task::{Context, Poll, Waker},
+        };
+        let _fixture_retirement_pin = crossbeam_epoch::pin();
+        let state = blank_state();
+        let mut block = state.block(header(2));
+        let tx = block.transaction();
+        let bytes = encode(&policy_control_fixture()).unwrap();
+        let budget = tx
+            .world
+            .sccp_committee_generations
+            .allocation_budget()
+            .clone();
+        let mut registration = crate::unit_test_support::release_registration(&budget);
+        // This test retains the World writer while observing returned capacity.
+        // Native thread waits can observe credits before arbitrary task callbacks
+        // are released with that writer's physical guards.
+        registration.bind_thread(std::thread::current());
+        let baseline = budget.reserved_bytes();
+        let held = budget
+            .try_reserve_bytes(budget.limit_bytes() - baseline)
+            .unwrap();
+        let foreign = iroha_allocation::AllocationBudget::new(budget.limit_bytes());
+        let foreign_held = foreign.try_reserve_bytes(1).unwrap();
+
+        // Header rejection has precedence over control admission, even with no pool capacity.
+        assert!(decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes[..4]).is_err());
+        assert!(!tx.is_execution_deferred());
+        assert!(
+            decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes).is_err(),
+            "HC974 policy decoder controls must refuse on the original exhausted pool"
+        );
+        let reason = tx.borrow_execution_deferral().unwrap();
+        let Some(iroha_allocation::AllocationRefusal::Capacity {
+            requested_bytes,
+            release,
+            ..
+        }) = reason.allocation_refusal()
+        else {
+            panic!("control admission must retain its original capacity refusal");
+        };
+        assert_eq!(
+            *requested_bytes,
+            norito::PreparedCanonicalDecode::allocation_layouts()
+                .iter()
+                .map(std::alloc::Layout::size)
+                .sum::<usize>()
+        );
+        let mut wait = release.clone().wait_for_release(&mut registration);
+        let mut context = Context::from_waker(Waker::noop());
+        assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Pending);
+        drop(foreign_held);
+        assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Pending);
+        drop(held);
+        assert_eq!(Pin::new(&mut wait).poll(&mut context), Poll::Ready(()));
+        drop(wait);
+        drop(reason);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        drop(tx);
+        let tx = block.transaction();
+        let retry_baseline = budget.reserved_bytes();
+        assert_eq!(
+            decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes).unwrap(),
+            policy_control_fixture()
+        );
+        assert_eq!(budget.reserved_bytes(), retry_baseline);
+        assert!(!tx.is_execution_deferred());
+    }
+
+    #[test]
+    fn sccp_policy_first_and_second_control_allocator_refusals_refund_original_pool() {
+        let _fixture_retirement_pin = crossbeam_epoch::pin();
+        let bytes = encode(&policy_control_fixture()).unwrap();
+        let layout = norito::PreparedCanonicalDecode::allocation_layouts()[0];
+        for occurrence in 0..2 {
+            let state = blank_state();
+            let mut block = state.block(header(2));
+            let tx = block.transaction();
+            let budget = tx
+                .world
+                .sccp_committee_generations
+                .allocation_budget()
+                .clone();
+            let baseline = budget.reserved_bytes();
+            let (result, refused) = crate::test_allocations::refuse_layout_occurrence_during(
+                layout,
+                occurrence,
+                || decode_with_owner::<AssetUidPolicyV1>(Some(&tx.world), &bytes),
+            );
+            assert!(
+                refused,
+                "selected canonical control must reach the native allocator"
+            );
+            assert!(result.is_err());
+            let reason = tx.borrow_execution_deferral().unwrap();
+            assert!(reason.allocator_refusal().is_some());
+            assert!(
+                reason.allocation_refusal().is_none(),
+                "physical failure has no invented pool wait"
+            );
+            assert!(reason.decode_refusal().is_none());
+            assert_eq!(
+                budget.reserved_bytes(),
+                baseline,
+                "partial controls must refund after destruction"
+            );
+        }
+    }
+}
 
 fn reject(message: impl Into<String>) -> Error {
     Error::InvariantViolation(message.into().into())
@@ -57,7 +252,30 @@ where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
-    norito::decode_canonical(bytes).map_err(|e| reject(format!("invalid asset UID state: {e}")))
+    decode_with_owner(None, bytes)
+}
+
+fn decode_with_owner<T>(owner: Option<&WorldTransaction<'_, '_>>, bytes: &[u8]) -> Result<T, Error>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
+    crate::execution_attempt::canonical_policy_decode(
+        owner,
+        bytes,
+        norito::canonical_decode_limits(bytes.len()),
+    )
+    .map_err(|error| {
+        let rejected = |error: norito::CanonicalDecodeControlError| {
+            reject(format!("invalid asset UID state: {error}"))
+        };
+        match owner {
+            Some(owner) => owner.attempt_error_to_instruction_error(
+                crate::execution_attempt::canonical_decode_control_attempt_error(error, rejected),
+            ),
+            None => rejected(error),
+        }
+    })
 }
 
 pub fn encode<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
@@ -70,13 +288,22 @@ pub fn policy(
     definition: &AssetDefinitionId,
     uid: &[u8; 32],
 ) -> Result<Option<AssetUidPolicyV1>, Error> {
+    policy_with_owner(world, definition, uid, None)
+}
+
+fn policy_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    uid: &[u8; 32],
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidPolicyV1>, Error> {
     let Some(bytes) = world
         .smart_contract_state()
         .get(&policy_key(definition, uid))
     else {
         return Ok(None);
     };
-    let value: AssetUidPolicyV1 = decode(bytes)?;
+    let value: AssetUidPolicyV1 = decode_with_owner(owner, bytes)?;
     value.validate_shape().map_err(reject)?;
     if &value.asset_definition_id != definition || &value.uid != uid {
         return Err(reject("asset UID policy differs from its canonical key"));
@@ -96,6 +323,15 @@ pub fn binding(
         return Ok(None);
     };
     let value: AssetUidBindingV1 = decode(bytes)?;
+    validate_binding(&value, definition, account)?;
+    Ok(Some(value))
+}
+
+fn validate_binding(
+    value: &AssetUidBindingV1,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+) -> Result<[u8; 32], Error> {
     if &value.asset_definition_id != definition
         || &value.account_id != account
         || value.uid == [0; 32]
@@ -104,7 +340,7 @@ pub fn binding(
             "asset UID membership differs from its canonical key",
         ));
     }
-    Ok(Some(value))
+    Ok(value.uid)
 }
 
 pub fn member_policy(
@@ -112,10 +348,21 @@ pub fn member_policy(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<AssetUidPolicyV1>, Error> {
-    let Some(member) = binding(world, definition, account)? else {
+    member_policy_with_owner(world, definition, account, None)
+}
+
+/// Retain the transaction's decode owner across both membership and policy reads.
+pub(super) fn member_policy_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidPolicyV1>, Error> {
+    let Some(uid) = binding_custody::binding_uid_with_owner(world, definition, account, owner)?
+    else {
         return Ok(None);
     };
-    let value = policy(world, definition, &member.uid)?
+    let value = policy_with_owner(world, definition, &uid, owner)?
         .ok_or_else(|| reject("asset UID membership has no policy"))?;
     if !value.accounts.contains(account) {
         return Err(reject("asset UID membership is absent from policy roster"));
@@ -129,7 +376,15 @@ fn beneficial_policy(
     world: &impl WorldReadOnly,
     id: &AssetId,
 ) -> Result<Option<AssetUidPolicyV1>, Error> {
-    if let Some(value) = member_policy(world, id.definition(), id.account())? {
+    beneficial_policy_with_owner(world, id, None)
+}
+
+fn beneficial_policy_with_owner(
+    world: &impl WorldReadOnly,
+    id: &AssetId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetUidPolicyV1>, Error> {
+    if let Some(value) = member_policy_with_owner(world, id.definition(), id.account(), owner)? {
         return Ok(Some(value));
     }
     for (_, escrow) in world.asset_escrows().iter() {
@@ -137,7 +392,7 @@ fn beneficial_policy(
             && escrow.custody == *id.account()
             && !escrow.remaining_amount.is_zero()
         {
-            return member_policy(world, id.definition(), &escrow.seller);
+            return member_policy_with_owner(world, id.definition(), &escrow.seller, owner);
         }
     }
     Ok(None)
@@ -236,6 +491,15 @@ fn usage(
     policy: &AssetUidPolicyV1,
     day: u64,
 ) -> Result<AssetUidUsageV1, Error> {
+    usage_with_owner(world, policy, day, None)
+}
+
+fn usage_with_owner(
+    world: &impl WorldReadOnly,
+    policy: &AssetUidPolicyV1,
+    day: u64,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<AssetUidUsageV1, Error> {
     let Some(bytes) =
         world
             .smart_contract_state()
@@ -250,7 +514,7 @@ fn usage(
             outgoing_amount: Quantity::zero(),
         });
     };
-    let value: AssetUidUsageV1 = decode(bytes)?;
+    let value: AssetUidUsageV1 = decode_with_owner(owner, bytes)?;
     if value.spend_amount > value.outgoing_amount
         || value.asset_definition_id != policy.asset_definition_id
         || value.uid != policy.uid
@@ -279,16 +543,51 @@ pub struct Movement<'a> {
 /// Returning encoded writes lets the caller finish every fallible preflight
 /// before writing balances. Every sibling wallet is checked against the same
 /// exclusive transaction World; independent legs call this separately.
+/// Decoder refusals remain bound to that transaction through the actual movement recheck.
 pub fn prepare_movements(
-    world: &impl WorldReadOnly,
+    world: &WorldTransaction<'_, '_>,
     movements: &[Movement<'_>],
     now_ms: u64,
 ) -> Result<Vec<(StatePath, Vec<u8>)>, Error> {
+    check_movements(world, movements, now_ms, Some(world))?
+        .into_iter()
+        .map(|(key, value)| encode(&value).map(|bytes| (key, bytes)))
+        .collect()
+}
+
+/// Check an ordered occurrence without encoding usage writes that the caller discards.
+///
+/// Settlement performs this check before its actual native movements. It must retain
+/// the cumulative balance and calendar checks of `prepare_movements`, but it neither
+/// publishes the temporary usage rows nor needs an encoded copy of each row.
+/// The original transaction retains local binding, policy and usage decode refusals.
+/// TODO: admit the shared policy decoding and map scratch to the original execution
+/// pool; removing unused encoded output alone does not close that resource boundary.
+pub(crate) fn precheck_movements(
+    transaction: &StateTransaction<'_, '_>,
+    movements: &[Movement<'_>],
+    now_ms: u64,
+) -> Result<(), Error> {
+    check_movements(
+        transaction.world(),
+        movements,
+        now_ms,
+        Some(&transaction.world),
+    )
+    .map(drop)
+}
+
+fn check_movements(
+    world: &impl WorldReadOnly,
+    movements: &[Movement<'_>],
+    now_ms: u64,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<BTreeMap<StatePath, AssetUidUsageV1>, Error> {
     let mut balances = BTreeMap::new();
     let mut activities = BTreeMap::<StatePath, AssetUidUsageV1>::new();
     for movement in movements {
-        let source_policy = beneficial_policy(world, movement.source)?;
-        let destination_policy = beneficial_policy(world, movement.destination)?;
+        let source_policy = beneficial_policy_with_owner(world, movement.source, owner)?;
+        let destination_policy = beneficial_policy_with_owner(world, movement.destination, owner)?;
         if (source_policy.is_some() || destination_policy.is_some())
             && (movement.source.definition() != movement.destination.definition()
                 || movement.source.scope() != &AssetBalanceScope::Global
@@ -328,12 +627,9 @@ pub fn prepare_movements(
                 ),
             ));
         }
-        activity::charge_activity(world, movement, now_ms, &mut activities)?;
+        activity::charge_activity(world, movement, now_ms, &mut activities, owner)?;
     }
-    activities
-        .into_iter()
-        .map(|(key, value)| encode(&value).map(|bytes| (key, bytes)))
-        .collect()
+    Ok(activities)
 }
 
 /// Retain the allowed beneficial holding ceiling before funding new custody.

@@ -603,12 +603,11 @@ fn digests_are_pinned() {
     // The first-release profile admits complete 17 MiB transaction-gossip frames.
     // Pipeline fee and ZK validity policies belong to committed parameters.
     // The signed staking recipe binds 21-day unbonding and 10000-bps maximum slashing.
-    // TODO: regenerate this exact consensus digest with the native owner after the coordinated cut.
     // The root fee policy is part of the signed genesis recipe (`[genesis_recipe.root_fees]`),
     // with sponsor-vault custody and an explicit, empty fee-exemption set.
     assert_eq!(
         profile.consensus_digest(4).unwrap().to_string(),
-        "34eaf875a5c6e3601cd783a9aee740b2ee919af2deb8ee0566267a3bded999cb"
+        "83ac8c1633eac71099af70e34acef54a2d9dd63458fd9fea2771978c9c29a14b"
     );
     // The retired Torii KAGEMUSHA command policy is absent from this canonical input.
     // Native proof-backend selection above does not change this separate policy input.
@@ -1228,4 +1227,82 @@ fn signed_staking_recipe_survives_fee_exemption_authoring_and_duplicate_retry() 
             .genesis_recipe,
         base.genesis_recipe,
     );
+}
+
+
+/// Emit exact public compiled-profile inputs for independently replayable golden refreshes.
+/// The capture does not update expectations or certify a network or a release.
+#[test]
+#[ignore = "explicit native capture of public profile bytes; redirect stdout to a retained report"]
+fn capture_compiled_profile_digest_preimages() {
+    for id in ProfileId::ALL {
+        let profile = Profile::compiled(id).expect("compiled profile");
+        let geometry = profile.derive(4).expect("four-validator geometry");
+        let consensus = ConsensusDigestInputV1 {
+            profile: id.as_str().to_owned(),
+            version: profile.version(),
+            chain_discriminant: profile.chain_discriminant(),
+            static_config: CanonicalTableV1::from_table(profile.static_config()).unwrap(),
+            derived_config: CanonicalTableV1::from_table(&profile.derived_config(&geometry))
+                .unwrap(),
+            geometry,
+            genesis_recipe: profile.genesis_recipe().clone(),
+        };
+        let policy = PolicyDigestInputV1 {
+            profile: id.as_str().to_owned(),
+            version: profile.version(),
+            node_tunable: profile.node_tunable().to_vec(),
+            policy: CanonicalTableV1::from_table(profile.policy()).unwrap(),
+            host: profile.host().clone(),
+            roles: ProfileRole::ALL
+                .into_iter()
+                .map(|role| {
+                    (
+                        role.as_str().to_owned(),
+                        CanonicalTableV1::from_table(profile.role(role)).unwrap(),
+                    )
+                })
+                .collect(),
+        };
+        let consensus_bytes = norito::encode_canonical(&consensus).unwrap();
+        let decoded: ConsensusDigestInputV1 = norito::decode_canonical(&consensus_bytes).unwrap();
+        assert_eq!(decoded, consensus);
+        let policy_bytes = norito::encode_canonical(&policy).unwrap();
+        let decoded: PolicyDigestInputV1 = norito::decode_canonical(&policy_bytes).unwrap();
+        assert_eq!(decoded, policy);
+        for (kind, domain, encoded, expected, fields) in [
+            (
+                "profile_consensus",
+                CONSENSUS_DIGEST_DOMAIN,
+                consensus_bytes,
+                profile.consensus_digest(4).unwrap(),
+                format!("{consensus:#?}"),
+            ),
+            (
+                "profile_policy",
+                POLICY_DIGEST_DOMAIN,
+                policy_bytes,
+                profile.policy_digest().unwrap(),
+                format!("{policy:#?}"),
+            ),
+        ] {
+            let preimage = [domain, encoded.as_slice()].concat();
+            assert_eq!(<[u8; 32]>::from(Hash::new(&preimage)), expected.0);
+            let record = norito::json!({
+                "schema_version": 1,
+                "kind": kind,
+                "case": (id.as_str()),
+                "validators": 4,
+                "domain_hex": (hex::encode(domain)),
+                "encoded_hex": (hex::encode(&encoded)),
+                "preimage_hex": (hex::encode(&preimage)),
+                "digest_hex": (expected.to_string()),
+                "canonical_fields": fields,
+            });
+            println!(
+                "IROHA_CONFIG_DIGEST_CAPTURE_V1={}",
+                norito::json::to_json(&record).unwrap()
+            );
+        }
+    }
 }

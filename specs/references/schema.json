@@ -5190,6 +5190,7 @@
       }
     ]
   },
+  "ChangeSetId": "Array<u8, 32>",
   "CheckMusubiPinOutboxV1": {
     "Struct": [
       {
@@ -6346,6 +6347,14 @@
       }
     ]
   },
+  "CryptoAdmissionPolicyV1": {
+    "Struct": [
+      {
+        "name": "allowed_algorithms",
+        "type": "Vec<Algorithm>"
+      }
+    ]
+  },
   "CryptoStatus": {
     "Struct": [
       {
@@ -6375,6 +6384,12 @@
     ]
   },
   "CustomParameterId": "Name",
+  "CustomParameters": {
+    "Map": {
+      "key": "CustomParameterId",
+      "value": "CustomParameter"
+    }
+  },
   "DaCommitmentBundle": {
     "Struct": [
       {
@@ -7221,6 +7236,7 @@
       }
     ]
   },
+  "DefinitionId": "Array<u8, 32>",
   "DiagnosticTraceStatus": {
     "Struct": [
       {
@@ -8515,6 +8531,21 @@
         "discriminant": 2,
         "tag": "time",
         "type": "TimeExecutionOutputV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "network_with_lifecycle",
+        "type": "NetworkExecutionOutputV2"
+      },
+      {
+        "discriminant": 4,
+        "tag": "pipeline_with_lifecycle",
+        "type": "PipelineExecutionOutputV2"
+      },
+      {
+        "discriminant": 5,
+        "tag": "time_with_lifecycle",
+        "type": "TimeExecutionOutputV2"
       }
     ]
   },
@@ -8556,7 +8587,7 @@
     "Struct": [
       {
         "name": "parameters",
-        "type": "SortedMap<CustomParameterId, CustomParameter>"
+        "type": "CustomParameters"
       },
       {
         "name": "instructions",
@@ -13483,6 +13514,11 @@
         "discriminant": 10,
         "tag": "InvariantViolation",
         "type": "String"
+      },
+      {
+        "discriminant": 11,
+        "tag": "Runtime",
+        "type": "RuntimeRejectionV1"
       }
     ]
   },
@@ -18358,6 +18394,18 @@
       }
     ]
   },
+  "NetworkExecutionOutputV2": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "NetworkExecutionOutputV1"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "TriggerLifecycleEffectsV1"
+      }
+    ]
+  },
   "NexusDataspaceCatalogStatus": {
     "Struct": [
       {
@@ -19388,6 +19436,9 @@
   "Option<BridgeProofRecord>": {
     "Option": "BridgeProofRecord"
   },
+  "Option<ChangeSetId>": {
+    "Option": "ChangeSetId"
+  },
   "Option<CommitCertificate>": {
     "Option": "CommitCertificate"
   },
@@ -19712,9 +19763,6 @@
   "Option<RoleId>": {
     "Option": "RoleId"
   },
-  "Option<RuntimeUpgradeId>": {
-    "Option": "RuntimeUpgradeId"
-  },
   "Option<RwaId>": {
     "Option": "RwaId"
   },
@@ -19786,6 +19834,9 @@
   },
   "Option<TriggerId>": {
     "Option": "TriggerId"
+  },
+  "Option<TriggerLifecycleRetryStateV1>": {
+    "Option": "TriggerLifecycleRetryStateV1"
   },
   "Option<UniversalAccountId>": {
     "Option": "UniversalAccountId"
@@ -21115,7 +21166,7 @@
       },
       {
         "name": "custom",
-        "type": "SortedMap<CustomParameterId, CustomParameter>"
+        "type": "CustomParameters"
       }
     ]
   },
@@ -21809,6 +21860,18 @@
       {
         "name": "completions",
         "type": "Vec<InvocationCompletionV1>"
+      }
+    ]
+  },
+  "PipelineExecutionOutputV2": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "PipelineExecutionOutputV1"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "TriggerLifecycleEffectsV1"
       }
     ]
   },
@@ -22613,18 +22676,6 @@
     ]
   },
   "PrivacyAuditBundleDigestV1": "Array<u8, 32>",
-  "PrivacyDeploymentActivationV1": {
-    "Struct": [
-      {
-        "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
-      },
-      {
-        "name": "activation_height",
-        "type": "u64"
-      }
-    ]
-  },
   "PrivacyDeploymentValidatorCanaryV1": {
     "Struct": [
       {
@@ -22722,7 +22773,7 @@
     ]
   },
   "PrivacyEngineManifestDigestV1": "Array<u8, 32>",
-  "PrivacyExact12CatalogCommitmentV1": "GoldilocksDigest384V1",
+  "PrivacyExact12CatalogCommitmentV1": "Array<u8, 32>",
   "PrivacyExact12DeploymentQualificationDigestV1": "Array<u8, 32>",
   "PrivacyExact12DeploymentQualificationV1": {
     "Struct": [
@@ -22745,14 +22796,6 @@
       {
         "name": "release_manifest_digest",
         "type": "PrivacyExact12ReleaseManifestDigestV1"
-      },
-      {
-        "name": "activation_transaction_digest",
-        "type": "PrivacyReleaseArtifactDigestV1"
-      },
-      {
-        "name": "activations",
-        "type": "Vec<PrivacyDeploymentActivationV1>"
       },
       {
         "name": "validator_roster_digest",
@@ -26652,6 +26695,30 @@
     ]
   },
   "ResolvedSettlementMovements": "Vec<ResolvedSettlementMovement>",
+  "RestrictionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Deprecated",
+        "type": "u64"
+      },
+      {
+        "discriminant": 1,
+        "tag": "AdmissionClosed",
+        "type": "u64"
+      },
+      {
+        "discriminant": 2,
+        "tag": "CompletionOnly",
+        "type": "u64"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Disabled",
+        "type": "u64"
+      }
+    ]
+  },
   "Result<Vec<DataTriggerStep>, TransactionRejectionReason>": {
     "Result": {
       "err": "TransactionRejectionReason",
@@ -26825,6 +26892,7 @@
       }
     ]
   },
+  "RootFeeExemptions": "Vec<AccountId>",
   "RootFeePolicy": {
     "Struct": [
       {
@@ -26841,7 +26909,7 @@
       },
       {
         "name": "successful_claim_fee_exempt_authorities",
-        "type": "SortedVec<AccountId>"
+        "type": "RootFeeExemptions"
       },
       {
         "name": "base_fee",
@@ -26861,19 +26929,78 @@
       }
     ]
   },
+  "RuntimeRejectionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "DefinitionInactive",
+        "type": "RuntimeRejectionV1::DefinitionInactive"
+      },
+      {
+        "discriminant": 1,
+        "tag": "DefinitionRestricted",
+        "type": "RuntimeRejectionV1::DefinitionRestricted"
+      },
+      {
+        "discriminant": 2,
+        "tag": "ExpectationMismatch",
+        "type": "RuntimeRejectionV1::ExpectationMismatch"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::DefinitionInactive": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::DefinitionRestricted": {
+    "Struct": [
+      {
+        "name": "definition",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "restriction",
+        "type": "RestrictionV1"
+      }
+    ]
+  },
+  "RuntimeRejectionV1::ExpectationMismatch": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "Option<String>"
+      }
+    ]
+  },
   "RuntimeUpgradeActivated": {
     "Struct": [
       {
         "name": "id",
-        "type": "RuntimeUpgradeId"
+        "type": "ChangeSetId"
       },
       {
-        "name": "abi_version",
-        "type": "u16"
-      },
-      {
-        "name": "at_height",
+        "name": "height",
         "type": "u64"
+      },
+      {
+        "name": "successor",
+        "type": "SelectionId"
+      }
+    ]
+  },
+  "RuntimeUpgradeAttested": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "ChangeSetId"
+      },
+      {
+        "name": "validator",
+        "type": "PublicKey"
       }
     ]
   },
@@ -26881,7 +27008,39 @@
     "Struct": [
       {
         "name": "id",
-        "type": "RuntimeUpgradeId"
+        "type": "ChangeSetId"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeContained": {
+    "Struct": [
+      {
+        "name": "containment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "incident",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "effective_height",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeContainmentExpired": {
+    "Struct": [
+      {
+        "name": "containment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
       }
     ]
   },
@@ -26889,18 +27048,38 @@
     "Enum": [
       {
         "discriminant": 0,
-        "tag": "Proposed",
-        "type": "RuntimeUpgradeProposed"
+        "tag": "Scheduled",
+        "type": "RuntimeUpgradeScheduled"
       },
       {
         "discriminant": 1,
+        "tag": "Attested",
+        "type": "RuntimeUpgradeAttested"
+      },
+      {
+        "discriminant": 2,
         "tag": "Activated",
         "type": "RuntimeUpgradeActivated"
       },
       {
-        "discriminant": 2,
+        "discriminant": 3,
+        "tag": "Lapsed",
+        "type": "RuntimeUpgradeLapsed"
+      },
+      {
+        "discriminant": 4,
         "tag": "Canceled",
         "type": "RuntimeUpgradeCanceled"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Contained",
+        "type": "RuntimeUpgradeContained"
+      },
+      {
+        "discriminant": 6,
+        "tag": "ContainmentExpired",
+        "type": "RuntimeUpgradeContainmentExpired"
       }
     ]
   },
@@ -26908,7 +27087,7 @@
     "Struct": [
       {
         "name": "id_matcher",
-        "type": "Option<RuntimeUpgradeId>"
+        "type": "Option<ChangeSetId>"
       },
       {
         "name": "event_set",
@@ -26921,37 +27100,56 @@
       "masks": [
         {
           "mask": 1,
-          "name": "Proposed"
+          "name": "Scheduled"
         },
         {
           "mask": 2,
-          "name": "Activated"
+          "name": "Attested"
         },
         {
           "mask": 4,
+          "name": "Activated"
+        },
+        {
+          "mask": 8,
+          "name": "Lapsed"
+        },
+        {
+          "mask": 16,
           "name": "Canceled"
+        },
+        {
+          "mask": 32,
+          "name": "Contained"
+        },
+        {
+          "mask": 64,
+          "name": "ContainmentExpired"
         }
       ],
       "repr": "u32"
     }
   },
-  "RuntimeUpgradeId": "Array<u8, 32>",
-  "RuntimeUpgradeProposed": {
+  "RuntimeUpgradeLapsed": {
     "Struct": [
       {
         "name": "id",
-        "type": "RuntimeUpgradeId"
+        "type": "ChangeSetId"
       },
       {
-        "name": "abi_version",
-        "type": "u16"
-      },
-      {
-        "name": "start_height",
+        "name": "height",
         "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeScheduled": {
+    "Struct": [
+      {
+        "name": "id",
+        "type": "ChangeSetId"
       },
       {
-        "name": "end_height",
+        "name": "effective_height",
         "type": "u64"
       }
     ]
@@ -29065,6 +29263,7 @@
       }
     ]
   },
+  "SelectionId": "Array<u8, 32>",
   "SetAssetFiLinkAttestationV1": {
     "Struct": [
       {
@@ -31756,12 +31955,6 @@
     "Map": {
       "key": "AccountId",
       "value": "u8"
-    }
-  },
-  "SortedMap<CustomParameterId, CustomParameter>": {
-    "Map": {
-      "key": "CustomParameterId",
-      "value": "CustomParameter"
     }
   },
   "SortedMap<Hash, Vec<TransferTranscript>>": {
@@ -34684,6 +34877,18 @@
       }
     ]
   },
+  "TimeExecutionOutputV2": {
+    "Struct": [
+      {
+        "name": "execution",
+        "type": "TimeExecutionOutputV1"
+      },
+      {
+        "name": "trigger_lifecycle",
+        "type": "TriggerLifecycleEffectsV1"
+      }
+    ]
+  },
   "TimeInterval": {
     "Struct": [
       {
@@ -35713,6 +35918,258 @@
       {
         "name": "name",
         "type": "Name"
+      }
+    ]
+  },
+  "TriggerLifecycleActionCodecV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "norito_canonical_v1"
+      }
+    ]
+  },
+  "TriggerLifecycleActionFrameV1": {
+    "Struct": [
+      {
+        "name": "codec",
+        "type": "TriggerLifecycleActionCodecV1"
+      },
+      {
+        "name": "bytes",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "insert",
+        "type": "TriggerLifecycleChangeV1::Insert"
+      },
+      {
+        "discriminant": 1,
+        "tag": "update",
+        "type": "TriggerLifecycleChangeV1::Update"
+      },
+      {
+        "discriminant": 2,
+        "tag": "remove",
+        "type": "TriggerLifecycleChangeV1::Remove"
+      },
+      {
+        "discriminant": 3,
+        "tag": "invoke",
+        "type": "TriggerLifecycleChangeV1::Invoke"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Insert": {
+    "Struct": [
+      {
+        "name": "after",
+        "type": "TriggerLifecycleStateV1"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Invoke": {
+    "Struct": [
+      {
+        "name": "state",
+        "type": "TriggerLifecycleStateV1"
+      },
+      {
+        "name": "callback_index",
+        "type": "u32"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Remove": {
+    "Struct": [
+      {
+        "name": "before",
+        "type": "TriggerLifecycleStateV1"
+      }
+    ]
+  },
+  "TriggerLifecycleChangeV1::Update": {
+    "Struct": [
+      {
+        "name": "before",
+        "type": "TriggerLifecycleStateV1"
+      },
+      {
+        "name": "after",
+        "type": "TriggerLifecycleStateV1"
+      }
+    ]
+  },
+  "TriggerLifecycleEffectV1": {
+    "Struct": [
+      {
+        "name": "ordinal",
+        "type": "u32"
+      },
+      {
+        "name": "trigger_id",
+        "type": "TriggerId"
+      },
+      {
+        "name": "origin",
+        "type": "TriggerLifecycleOriginV1"
+      },
+      {
+        "name": "change",
+        "type": "TriggerLifecycleChangeV1"
+      }
+    ]
+  },
+  "TriggerLifecycleEffectsV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "complete",
+        "type": "TriggerLifecycleEffectsV1::Complete"
+      }
+    ]
+  },
+  "TriggerLifecycleEffectsV1::Complete": {
+    "Struct": [
+      {
+        "name": "effects",
+        "type": "Vec<TriggerLifecycleEffectV1>"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "direct_network_instruction",
+        "type": "TriggerLifecycleOriginV1::DirectNetworkInstruction"
+      },
+      {
+        "discriminant": 1,
+        "tag": "derived",
+        "type": "TriggerLifecycleOriginV1::Derived"
+      },
+      {
+        "discriminant": 2,
+        "tag": "invocation_policy",
+        "type": "TriggerLifecycleOriginV1::InvocationPolicy"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1::Derived": {
+    "Struct": [
+      {
+        "name": "callback_index",
+        "type": "Option<u32>"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1::DirectNetworkInstruction": {
+    "Struct": [
+      {
+        "name": "item_index",
+        "type": "u32"
+      }
+    ]
+  },
+  "TriggerLifecycleOriginV1::InvocationPolicy": {
+    "Struct": [
+      {
+        "name": "callback_index",
+        "type": "u32"
+      },
+      {
+        "name": "policy",
+        "type": "TriggerLifecyclePolicyV1"
+      }
+    ]
+  },
+  "TriggerLifecyclePolicyV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "consume_repeat"
+      },
+      {
+        "discriminant": 1,
+        "tag": "remove_depleted"
+      },
+      {
+        "discriminant": 2,
+        "tag": "clear_time_retry"
+      },
+      {
+        "discriminant": 3,
+        "tag": "advance_time_retry"
+      },
+      {
+        "discriminant": 4,
+        "tag": "exhaust_time_retry"
+      },
+      {
+        "discriminant": 5,
+        "tag": "quarantine_pipeline"
+      }
+    ]
+  },
+  "TriggerLifecycleRetryStateV1": {
+    "Struct": [
+      {
+        "name": "attempt",
+        "type": "u32"
+      },
+      {
+        "name": "next_time_ms",
+        "type": "u64"
+      }
+    ]
+  },
+  "TriggerLifecycleStateKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "data"
+      },
+      {
+        "discriminant": 1,
+        "tag": "by_call"
+      },
+      {
+        "discriminant": 2,
+        "tag": "pipeline"
+      },
+      {
+        "discriminant": 3,
+        "tag": "time"
+      }
+    ]
+  },
+  "TriggerLifecycleStateV1": {
+    "Struct": [
+      {
+        "name": "kind",
+        "type": "TriggerLifecycleStateKindV1"
+      },
+      {
+        "name": "registered_at_height",
+        "type": "Option<u64>"
+      },
+      {
+        "name": "action_hash",
+        "type": "Option<Hash>"
+      },
+      {
+        "name": "action",
+        "type": "TriggerLifecycleActionFrameV1"
+      },
+      {
+        "name": "retry_state",
+        "type": "Option<TriggerLifecycleRetryStateV1>"
       }
     ]
   },
@@ -36776,9 +37233,6 @@
   "Vec<PrivacyAcceptedMediumDispositionV1>": {
     "Vec": "PrivacyAcceptedMediumDispositionV1"
   },
-  "Vec<PrivacyDeploymentActivationV1>": {
-    "Vec": "PrivacyDeploymentActivationV1"
-  },
   "Vec<PrivacyDeploymentValidatorCanaryV1>": {
     "Vec": "PrivacyDeploymentValidatorCanaryV1"
   },
@@ -36973,6 +37427,9 @@
   },
   "Vec<TriggerId>": {
     "Vec": "TriggerId"
+  },
+  "Vec<TriggerLifecycleEffectV1>": {
+    "Vec": "TriggerLifecycleEffectV1"
   },
   "Vec<TwitterBindingRecord>": {
     "Vec": "TwitterBindingRecord"

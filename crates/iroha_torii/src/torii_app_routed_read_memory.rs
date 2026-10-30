@@ -1,4 +1,4 @@
-// Response-corridor memory accounting for application-API routed reads.
+// Response-corridor memory accounting shared by history and application-API routed reads.
 // Local producer coverage is separate and exhaustively inventoried in the
 // routed-read source-bound tests.
 // Axum 0.8.9 collects at most two dynamic parameters on the routed-read
@@ -564,10 +564,9 @@ impl ToriiRoutedReadMemoryBudget {
 /// Allocate a `Vec` with exactly the admitted non-ZST element layout.
 ///
 /// `Vec::try_reserve_exact` is permitted to return spare capacity. Observing and charging that
-/// excess after allocation is too late for a strict peak proof, so routed-read retained and merge
-/// vectors use the allocator directly after their complete byte request has been admitted.
+/// excess after allocation is too late for a strict peak proof, so history and routed-read retained
+/// and merge vectors use the allocator directly after their complete byte request has been admitted.
 #[allow(unsafe_code)]
-#[cfg(feature = "app_api")]
 #[expect(
     clippy::result_large_err,
     reason = "HTTP rejections retain the complete Axum response at this transport boundary."
@@ -680,7 +679,6 @@ fn torii_routed_read_accounting_response() -> Response {
         "proxied application response memory accounting overflowed",
     )
 }
-#[cfg(feature = "app_api")]
 fn torii_routed_read_allocation_response(phase: &'static str, bytes: usize) -> Response {
     torii_proxy_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -747,3 +745,44 @@ fn torii_routed_read_json_encode_response() -> Response {
 }
 #[cfg(all(test, feature = "app_api"))]
 include!("tests/lib_routed_reads/routed_read_memory_bounds.rs");
+
+#[cfg(test)]
+mod shared_exact_read_allocation_tests {
+    use super::*;
+
+    #[test]
+    fn history_and_routed_reads_share_exact_nonzero_empty_and_zst_allocations() {
+        let mut values = torii_routed_read_exact_vec::<u64>(
+            3,
+            "shared read records",
+            3 * core::mem::size_of::<u64>(),
+        )
+        .expect("exact admitted layout allocates");
+        assert_eq!(values.len(), 0);
+        assert_eq!(values.capacity(), 3);
+        values.extend([11, 22, 33]);
+        assert_eq!(values, [11, 22, 33]);
+        assert_eq!(values.capacity(), 3);
+
+        let empty = torii_routed_read_exact_vec::<u64>(0, "empty read records", 0)
+            .expect("empty read needs no allocation");
+        assert!(empty.is_empty());
+        assert_eq!(empty.capacity(), 0);
+        let mut zero_sized = torii_routed_read_exact_vec::<()>(3, "zero-sized read records", 0)
+            .expect("zero-sized elements need no allocation");
+        zero_sized.extend([(); 3]);
+        assert_eq!(zero_sized.len(), 3);
+    }
+
+    #[test]
+    fn shared_read_layout_overflow_preserves_the_allocation_refusal() {
+        let response =
+            torii_routed_read_exact_vec::<u64>(usize::MAX, "overflowing read records", usize::MAX)
+                .expect_err("invalid layouts refuse before allocation");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.headers().get("x-iroha-reject-code").unwrap(),
+            "route_unavailable"
+        );
+    }
+}

@@ -704,12 +704,13 @@ mod tests {
     #[test]
     fn coalition_rate_remains_bound_to_each_retained_world_snapshot() {
         let state = blank_state();
+        // Publish isolated World generations; this fixture does not finalize blocks.
         {
             let mut block = state.block(header(3));
             let mut tx = block.transaction();
             seed(&mut tx, ["10", "20", "30", "40"], 10_000);
             tx.apply();
-            block.commit().unwrap();
+            block.commit_world_overlay_for_testing().unwrap();
         }
         let original = state.view();
         {
@@ -717,7 +718,7 @@ mod tests {
             let mut tx = block.transaction();
             seed(&mut tx, ["10", "20", "30", "40"], 5_000);
             tx.apply();
-            block.commit().unwrap();
+            block.commit_world_overlay_for_testing().unwrap();
         }
         let current = state.view();
         let stop = AtomicBool::new(false);

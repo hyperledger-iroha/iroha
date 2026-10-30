@@ -243,6 +243,63 @@ pub fn verify_rotation_steps(
     })
 }
 
+/// Longest a destination head may lag this machine's clock before a new outbound record is
+/// refused. The destination's own time is its head's timestamp, as served by one endpoint: a
+/// halted destination chain, or an endpoint stuck on an old head, would otherwise make a
+/// committee that is about to expire look live, and the escrowed record could then neither
+/// mint nor be voided until that chain resumes.
+pub const MAX_DESTINATION_HEAD_LAG_MS: u64 = 5 * 60 * 1000;
+
+/// The times at which an outbound record judges its destination ([`destination_times`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DestinationTimesV1 {
+    /// Committee liveness and trust horizon: the later of the head time and this machine's
+    /// clock, so a lagging head never extends trust.
+    pub horizon_ms: u64,
+    /// Fast-pause expiry: the earlier of the two, so a pause counts while it is unexpired at
+    /// either time.
+    pub pause_ms: u64,
+}
+
+/// The destination head lags this machine's clock by more than
+/// [`MAX_DESTINATION_HEAD_LAG_MS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaleDestinationHead {
+    /// The destination head's time.
+    pub head_ms: u64,
+    /// This machine's clock.
+    pub wall_ms: u64,
+}
+impl fmt::Display for StaleDestinationHead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "destination head time {} ms lags this machine's clock {} ms by more than {} ms: \
+             the destination chain may be halted or the endpoint stale",
+            self.head_ms, self.wall_ms, MAX_DESTINATION_HEAD_LAG_MS
+        )
+    }
+}
+impl std::error::Error for StaleDestinationHead {}
+
+/// Choose the times at which a new outbound record judges a destination whose head time is
+/// `head_ms`, given this machine's clock `wall_ms`.
+///
+/// # Errors
+/// Refuses a head that lags `wall_ms` by more than [`MAX_DESTINATION_HEAD_LAG_MS`].
+pub fn destination_times(
+    head_ms: u64,
+    wall_ms: u64,
+) -> Result<DestinationTimesV1, StaleDestinationHead> {
+    if wall_ms.saturating_sub(head_ms) > MAX_DESTINATION_HEAD_LAG_MS {
+        return Err(StaleDestinationHead { head_ms, wall_ms });
+    }
+    Ok(DestinationTimesV1 {
+        horizon_ms: head_ms.max(wall_ms),
+        pause_ms: head_ms.min(wall_ms),
+    })
+}
+
 /// A destination cannot safely accept a new transfer for the requested time horizon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitteeHorizonError {

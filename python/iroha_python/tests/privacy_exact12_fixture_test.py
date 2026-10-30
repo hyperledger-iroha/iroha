@@ -20,6 +20,7 @@ from iroha_python.privacy_exact12 import (
     PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1,
     PRIVACY_EXACT12_PROTOCOL_IDS_V1,
     PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1,
+    PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1,
     PrivacyExact12FixtureBundleV1,
     PrivacyExact12FixtureCodecV1,
     PrivacyExact12FixtureErrorV1,
@@ -319,7 +320,7 @@ def test_checked_fixture_decodes_all_rows_and_reencodes_byte_identically() -> No
     assert tuple(row.protocol_id for row in bundle.rows) == PRIVACY_PROTOCOL_IDS_V1
     assert PRIVACY_EXACT12_PROTOCOL_IDS_V1 == PRIVACY_PROTOCOL_IDS_V1 == matrix_ids
     assert all(
-        row.submit_proof_wire_id == PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1 for row in bundle.rows
+        row.submit_proof_wire_id == (PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1 if index == 5 else PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1) for index, row in enumerate(bundle.rows)
     )
     assert encode_privacy_exact12_fixture_bundle_v1(bundle) == FIXTURE_BYTES
     assert encode_privacy_exact12_fixture_bundle_base64_v1(bundle) == FIXTURE_BASE64
@@ -687,7 +688,7 @@ def test_byte_complete_fields_and_cross_row_substitutions_fail_closed() -> None:
             0,
             replace(bundle.rows[0], **{field: getattr(bundle.rows[1], field)}),
         )
-    with pytest.raises(PrivacyExact12FixtureErrorV1, match="wire identifier"):
+    with pytest.raises(PrivacyExact12FixtureErrorV1, match="wire"):
         replace(bundle.rows[0], submit_proof_wire_id="iroha.privacy.submit-proof.legacy")
 
 
@@ -1055,3 +1056,40 @@ def test_trusted_archive_identity_closes_signature_and_opaque_proof_substitution
     assert decode_privacy_exact12_fixture_bundle_v1(proof_archive) == proof_bundle
     with pytest.raises(PrivacyExact12FixtureErrorV1, match="trusted canonical"):
         require_trusted_privacy_exact12_fixture_bundle_v1(proof_archive, FIXTURE_BYTES)
+
+
+def test_x509_fixture_uses_exact_request_action_statement_and_original_occurrence() -> None:
+    bundle = _bundle()
+    row = bundle.rows[5]
+    assert row.submit_proof_wire_id == PRIVACY_EXACT12_SUBMIT_X509_WIRE_ID_V1
+    request_schema = "iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1"
+    request = _fields(_frame_payload(row.submit_proof_instruction_norito, 0), 2)
+    statement = _fields(request[0], 20)
+    context = _fields(statement[0], 8)
+    assert context[2] == _encode_fields([bytes(32)])
+    assert request[1] == _encode_fields([struct.pack("<I", 0), struct.pack("<I", 0)])
+    with pytest.raises(PrivacyExact12FixtureErrorV1):
+        replace(row, submit_proof_wire_id=PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1)
+    for slot in (1, 0xffffffff):
+        changed = request.copy()
+        changed[1] = _encode_fields([struct.pack("<I", 0), struct.pack("<I", slot)])
+        _assert_row_rejected(bundle, 5, replace(row, submit_proof_instruction_norito=
+            _frame(_encode_fields(changed), request_schema, 0)))
+    changed_context = context.copy()
+    changed_context[2] = _encode_fields([row.transaction_intent_digest])
+    changed_statement = statement.copy(); changed_statement[0] = _encode_fields(changed_context)
+    changed = request.copy(); changed[0] = _encode_fields(changed_statement)
+    _assert_row_rejected(bundle, 5, replace(row, submit_proof_instruction_norito=
+        _frame(_encode_fields(changed), request_schema, 0)))
+    unsigned = _fields(row.unsigned_transaction_payload_norito, 9)
+    for field in (1, 2, 3, 6, 7, 8):
+        changed_unsigned = unsigned.copy()
+        value = bytearray(changed_unsigned[field]); value[-1] ^= 1
+        changed_unsigned[field] = bytes(value)
+        _assert_row_rejected(bundle, 5, replace(row, unsigned_transaction_payload_norito=_encode_fields(changed_unsigned)))
+    for field in ("transaction_intent_projection_norito", "transaction_intent_digest"):
+        value = bytearray(getattr(row, field)); value[-1] ^= 1
+        _assert_row_rejected(bundle, 5, replace(row, **{field: bytes(value)}))
+    fields = _fields(row.unsigned_transaction_payload_norito, 9)
+    fields[8] = b"\x00"
+    _assert_row_rejected(bundle, 5, replace(row, unsigned_transaction_payload_norito=_encode_fields(fields)))

@@ -7,9 +7,16 @@ intent before recovery. Keys and transport authentication headers are runtime-on
 
 A crash before or after dispatch leaves the same original pending. Ordinary recovery observes
 only. Explicit `--rebroadcast` reconciles first and may resend only the identical signed bytes;
-it never changes a nonce, seqno, fee or proof. `--retry` prepares a new attempt only after a known
-failed outcome, a confirmed pending settlement, or observed progress of a paid TON recovery.
-Confirmation polling uses the original nested client configuration.
+it never changes a nonce, seqno, fee or proof. `flow::drive_step_guarded` asks a refusal-only
+guard again before the first dispatch and every rebroadcast; burns re-run their pre-burn guard
+there, and a refusal sends nothing and writes no dispatch marker. `--retry` prepares a new attempt
+only after a known failed outcome, a confirmed pending settlement, or observed progress of a paid
+TON recovery. Confirmation polling uses the original nested client configuration.
+
+`pure::evm::EvmFeeCapsV1` bounds what one EIP-1559 transaction may charge its payer; the CLI
+refuses an endpoint quote above the `[sccp.fee_caps]` caps before signing or journaling it.
+`pure::preflight` bounds the selected World cut to a few blocks behind the authenticated tip, and
+`pure::ton_address` accepts TON recipients only with a valid user-friendly checksum.
 
 A confirmed Taira instruction is distinct from final settlement. Final message status records
 release, bounce, refund or stranded custody separately. TON transfer completion requires the

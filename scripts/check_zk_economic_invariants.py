@@ -28,7 +28,7 @@ This script is the drift guard for that file. It fails when:
   protocols, the ledger-effect classes the verifier returns, the
   proof-managed transitions, the public-reserve owners and the constant list
   of protocols that may own a reserve, the root roles with their management
-  and the protocols they belong to, the protocol lifecycle states, the
+  and the protocols they belong to, the native implementation readiness states, the
   value-balance directions and the
   committed World maps that hold pool or nullifier state (so another
   shielded pool cannot appear without a protocol entry or a recorded reason
@@ -215,7 +215,7 @@ VOCABULARY = {
 }
 # How an operation's `state_effects` in the operation inventory maps to the status of its rows.
 EFFECT_STATUS_OF = {
-    "implemented": ("implemented",),
+    "implemented": ("implemented", "unreachable"),
     "gated": ("gated", "unreachable"),
     "unreachable": ("unreachable",),
     "absent": ("absent",),
@@ -556,9 +556,9 @@ class Checker:
                     self.error(f"{label}: a class recorded as moving no value lists the identifiers its arm must not name")
                 if located is not None:
                     text, position = located
-                    span = arm_span(readers.rust_index(text).code, position)
+                    span = block_span(text, arm.get("symbol", ""))
                     if span is None:
-                        self.error(f"{label}: `{arm.get('symbol')}` opens no match arm")
+                        self.error(f"{label}: `{arm.get('symbol')}` opens no effect body")
                     else:
                         body = readers.rust_index(text).code[span[0] : span[1]]
                         for word in item.get("forbidden", []):
@@ -614,16 +614,14 @@ class Checker:
                     self.error(f"closed_lists.root_roles.{variant}: the source makes it a root of {sorted(users.get(variant, []))}, "
                                f"recorded {sorted(item.get('protocols', []))}")
 
-        states = lists.get("lifecycle_states", {})
+        if "lifecycle_states" in lists:
+            self.error("closed_lists.lifecycle_states is retired; implementation readiness is not a lifecycle switch")
+        states = lists.get("implementation_readiness", {})
         recorded = {item.get("variant"): item for item in states.get("states", [])}
-        self.compare("closed_lists.lifecycle_states", list(recorded), self.enum(states, "closed_lists.lifecycle_states"))
-        switches = {item.get("state") for item in self.inventory.get("root_policy", {}).get("generic_suspension_switch", {}).get("found", [])}
+        self.compare("closed_lists.implementation_readiness", list(recorded), self.enum(states, "closed_lists.implementation_readiness"))
         for variant, item in recorded.items():
-            if item.get("admits_value_effects"):
-                continue
-            if variant not in switches:
-                self.error(f"closed_lists.lifecycle_states.{variant}: a state that admits no value effect is recorded under "
-                           "root_policy.generic_suspension_switch.found")
+            if item.get("native_implementation_available") is not (variant == "Available"):
+                self.error(f"closed_lists.implementation_readiness.{variant}: availability must match the native implementation result")
 
         self.check_pool_state(lists.get("pool_state", {}), protocols)
 
@@ -788,7 +786,7 @@ class Checker:
             elif status not in allowed:
                 self.error(f"{label}: effect_status {status} contradicts the operation inventory, which records "
                            f"{operation.get('status', {}).get('state_effects')} for {operation['id']}")
-            elif status == "unreachable" and operation.get("status", {}).get("state_effects") == "gated":
+            elif status == "unreachable" and operation.get("status", {}).get("state_effects") in ("gated", "implemented"):
                 compiled = exact12.get(protocol.get("exact12_variant", ""), {}).get("compiled_profile", {}).get("state")
                 if compiled != "refused":
                     self.error(f"{label}: unreachable needs a refused compiled profile in the operation inventory, found {compiled}")

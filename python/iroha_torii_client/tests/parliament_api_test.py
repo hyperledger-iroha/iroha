@@ -149,23 +149,26 @@ def _proposal() -> dict[str, Any]:
     }
 
 
-def _runtime_upgrade_proposal(start_height: int, end_height: int) -> dict[str, Any]:
+def _runtime_upgrade_proposal(effective_height: int) -> dict[str, Any]:
     return {
         "kind": "RuntimeUpgrade",
         "payload": {
-            "manifest": {
-                "name": "runtime-v1",
-                "description": "exact public JSON",
-                "abi_version": 1,
-                "abi_hash": [0x22] * 32,
-                "added_syscalls": [],
-                "added_pointer_types": [],
-                "start_height": start_height,
-                "end_height": end_height,
-                "sbom_digests": [],
-                "slsa_attestation": "",
-                "provenance": [],
-            }
+            "proposal_operator": CANONICAL_OWNER,
+            "action": {
+                "kind": "Schedule",
+                "content": {
+                    "network": NETWORK_ID,
+                    "root": {"kind": "Universal", "content": None},
+                    "predecessor": "5a" * 32,
+                    "successor": "6b" * 32,
+                    "effective_height": effective_height,
+                    "publish": [],
+                    "transitions": [],
+                    "qualification": "3c" * 32,
+                },
+            },
+            "notice": {"blocks": 3_600, "ms": 1_209_600_000, "approval_cushion_ms": 86_400_000},
+            "proposed_ms": 1_700_000_000_000,
         },
     }
 
@@ -713,9 +716,9 @@ def test_request_bindings_and_exact_proposal_integers_fail_before_dispatch() -> 
             expected_governance_attempt_id=ATTEMPT_ID,
             canonical_auth=_auth(),
         )
-    with pytest.raises(TypeError, match="9007199254740991"):
+    with pytest.raises(TypeError, match=r"effective_height must be an integer in 0\.\.9007199254740991"):
         client.draft_parliament_attempt_v1(
-            _runtime_upgrade_proposal(1 << 53, (1 << 53) + 1),
+            _runtime_upgrade_proposal(1 << 53),
             0,
             expected_proposal_content_id=PROPOSAL_ID,
             expected_governance_attempt_id=ATTEMPT_ID,

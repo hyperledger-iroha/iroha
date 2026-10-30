@@ -24,7 +24,9 @@ object KagemushaWalletAndroidStorageV1 {
     @JvmStatic
     fun privateNoBackupFilesDir(context: Context): File {
         val application = context.applicationContext ?: context
-        check(!application.isDeviceProtectedStorage) { "Wallet storage requires a credential-encrypted context" }
+        storageCheck(!application.isDeviceProtectedStorage, WalletStoragePreparationFailureV1.PRIVACY) {
+            "Wallet storage requires a credential-encrypted context"
+        }
         val supplied = application.noBackupFilesDir.absoluteFile
         // Resolve only the trusted Android system parent alias; never canonicalize the final leaf.
         val selected = File(checkNotNull(supplied.parentFile).canonicalFile, supplied.name)
@@ -33,7 +35,11 @@ object KagemushaWalletAndroidStorageV1 {
 
     /** The fixed native leaf and its immutable sibling witness are one first-init boundary.
      * The witness is durably published before mkdir. Missing/partial/mismatched witnessed
-     * custody is refused, never recreated. Losing both objects is outside this local fence. */
+     * custody is refused, never recreated. Across openings it binds the root inode and owner
+     * within the Context-owned CE no-backup namespace. Its initial mount device is only an
+     * observation: stock Android can renumber it across restart/OS updates (§1.2/§2.1 of the
+     * single design). Every live named/held device comparison remains required. This local
+     * fence is not an independent rollback anchor; losing both objects is outside it. */
     internal fun preparedCustodyRoot(context: Context): File =
         prepareCustodyRoot(privateNoBackupFilesDir(context), AndroidOperations)
 
@@ -48,7 +54,8 @@ object KagemushaWalletAndroidStorageV1 {
     }
 
     internal fun prepareCustodyRoot(parent: File, operations: CustodyOperations): File {
-        check(parent.isAbsolute && parent.toPath().normalize().toFile() == parent)
+        storageCheck(parent.isAbsolute && parent.toPath().normalize().toFile() == parent,
+            WalletStoragePreparationFailureV1.PATH)
         val parentNamed = operations.lstat(parent)
         requirePrivateDirectory(parentNamed, operations)
         val child = File(parent, KAGEMUSHA_WALLET_ANDROID_CUSTODY_DIR_NAME_V1)
@@ -60,7 +67,9 @@ object KagemushaWalletAndroidStorageV1 {
             val existingWitness = operations.lstatOrAbsent(witness)
             if (existingWitness != null) {
                 requireWitness(existingWitness, operations)
-                check(existingChild != null) { "Previously initialized wallet custody is missing" }
+                storageCheck(existingChild != null, WalletStoragePreparationFailureV1.ROOT_MISSING) {
+                    "Previously initialized wallet custody is missing"
+                }
             }
             revalidatePrivateDirectory(parent, parentDescriptor, parentNamed, operations)
             withDescriptor(operations.openWitness(witness, existingWitness == null), operations) { witnessDescriptor ->
@@ -71,7 +80,8 @@ object KagemushaWalletAndroidStorageV1 {
                 if (existingWitness == null) {
                     // A crash from this point leaves a visible incomplete witness and refuses
                     // subsequent admission. Never delete it or infer permission to recreate.
-                    check(operations.readWitness(witnessDescriptor).isEmpty())
+                    storageCheck(operations.readWitness(witnessDescriptor).isEmpty(),
+                        WalletStoragePreparationFailureV1.WITNESS_SHAPE)
                     operations.fsync(witnessDescriptor)
                     operations.fsync(parentDescriptor)
                 }
@@ -94,7 +104,7 @@ object KagemushaWalletAndroidStorageV1 {
                         operations.fsync(witnessDescriptor)
                         operations.fchmod(witnessDescriptor, 0x100) // Seal only this new witness.
                     } else {
-                        check(operations.readWitness(witnessDescriptor).contentEquals(binding)) {
+                        requireWitnessBinding(operations.readWitness(witnessDescriptor), binding) {
                             "Wallet custody witness is incomplete or names another root"
                         }
                     }
@@ -105,26 +115,31 @@ object KagemushaWalletAndroidStorageV1 {
                     revalidatePrivateDirectory(parent, parentDescriptor, parentNamed, operations)
                     revalidatePrivateDirectory(child, childDescriptor, childNamed, operations)
                     revalidateWitness(witness, witnessDescriptor, witnessIdentity, operations)
-                    check(operations.readWitness(witnessDescriptor).contentEquals(binding))
+                    requireWitnessBinding(operations.readWitness(witnessDescriptor), binding)
                     child
                 }
             }
         }
     }
 
+    // Keep the immutable 32-byte frame, including the initial mount observation, unchanged.
+    // Native custody/key/replay validation remains responsible for the retained wallet state.
     private fun witnessBinding(root: Stat): ByteArray = ByteBuffer.allocate(32)
         .put(byteArrayOf(75, 71, 77, 82, 79, 79, 84, 49)) // KGMROOT1, local filesystem identity only.
         .putLong(root.device).putLong(root.inode).putInt(root.uid).putInt(root.gid).array()
 
     private fun requirePrivateDirectory(stat: Stat, operations: Operations) {
         requireOwnedDirectory(stat, operations)
-        check(stat.mode and PERMISSION_BITS == PRIVATE_MODE) { "Wallet custody directory is not private" }
+        storageCheck(stat.mode and PERMISSION_BITS == PRIVATE_MODE, WalletStoragePreparationFailureV1.PRIVACY) {
+            "Wallet custody directory is not private"
+        }
     }
 
     private fun requireWitness(stat: Stat, operations: Operations, pending: Boolean = false) {
         val mode = if (pending) 0x180 else 0x100
-        check(stat.mode and TYPE_MASK == 0x8000 && stat.mode and PERMISSION_BITS == mode &&
-            stat.uid == operations.uid && stat.gid == operations.gid && stat.links == 1L) {
+        storageCheck(stat.mode and TYPE_MASK == 0x8000 && stat.mode and PERMISSION_BITS == mode &&
+            stat.uid == operations.uid && stat.gid == operations.gid && stat.links == 1L,
+            WalletStoragePreparationFailureV1.WITNESS_SHAPE) {
             "Wallet custody witness is not a private single-link file"
         }
     }
@@ -177,7 +192,8 @@ object KagemushaWalletAndroidStorageV1 {
 
     /** The syscall seam is internal; public callers can select only their own Context directory. */
     internal fun prepare(directory: File, operations: Operations): File {
-        check(directory.isAbsolute && directory.toPath().normalize().toFile() == directory)
+        storageCheck(directory.isAbsolute && directory.toPath().normalize().toFile() == directory,
+            WalletStoragePreparationFailureV1.PATH)
         val named = operations.lstat(directory)
         requireOwnedDirectory(named, operations)
         val descriptor = operations.openDirectory(directory)
@@ -198,11 +214,15 @@ object KagemushaWalletAndroidStorageV1 {
             val sealed = operations.fstat(descriptor)
             requireOwnedDirectory(sealed, operations)
             requireSame(opened, sealed)
-            check(sealed.mode and PERMISSION_BITS == PRIVATE_MODE) { "Wallet no-backup parent remains non-private" }
+            storageCheck(sealed.mode and PERMISSION_BITS == PRIVATE_MODE, WalletStoragePreparationFailureV1.PRIVACY) {
+                "Wallet no-backup parent remains non-private"
+            }
             val after = operations.lstat(directory)
             requireOwnedDirectory(after, operations)
             requireSame(sealed, after)
-            check(after.mode == sealed.mode) { "Wallet no-backup parent mode changed" }
+            storageCheck(after.mode == sealed.mode, WalletStoragePreparationFailureV1.IDENTITY) {
+                "Wallet no-backup parent mode changed"
+            }
             return directory
         } catch (caught: Throwable) {
             failure = caught
@@ -217,16 +237,41 @@ object KagemushaWalletAndroidStorageV1 {
     }
 
     private fun requireOwnedDirectory(stat: Stat, operations: Operations) {
-        check(stat.mode and TYPE_MASK == DIRECTORY && stat.uid == operations.uid && stat.gid == operations.gid) {
+        storageCheck(stat.mode and TYPE_MASK == DIRECTORY && stat.uid == operations.uid && stat.gid == operations.gid,
+            WalletStoragePreparationFailureV1.PRIVACY) {
             "Wallet no-backup parent is not the application's directory"
         }
-        check(stat.mode and PRIVATE_MODE == PRIVATE_MODE) { "Wallet no-backup parent lacks owner access" }
-        check(stat.mode and (SPECIAL_BITS or OTHERS_WRITE) == 0) { "Wallet no-backup parent has unsafe permissions" }
+        storageCheck(stat.mode and PRIVATE_MODE == PRIVATE_MODE, WalletStoragePreparationFailureV1.PRIVACY) {
+            "Wallet no-backup parent lacks owner access"
+        }
+        storageCheck(stat.mode and (SPECIAL_BITS or OTHERS_WRITE) == 0, WalletStoragePreparationFailureV1.PRIVACY) {
+            "Wallet no-backup parent has unsafe permissions"
+        }
     }
 
     private fun requireSame(first: Stat, second: Stat) {
-        check(first.device == second.device && first.inode == second.inode &&
-            first.uid == second.uid && first.gid == second.gid) { "Wallet no-backup parent identity changed" }
+        storageCheck(first.device == second.device && first.inode == second.inode &&
+            first.uid == second.uid && first.gid == second.gid, WalletStoragePreparationFailureV1.IDENTITY) {
+            "Wallet no-backup parent identity changed"
+        }
+    }
+
+    private inline fun storageCheck(value: Boolean, failure: WalletStoragePreparationFailureV1,
+        message: () -> Any = { "Check failed." }) {
+        if (!value) throw WalletStoragePreparationExceptionV1(failure, message = message().toString())
+    }
+
+    private inline fun requireWitnessBinding(actual: ByteArray, expected: ByteArray,
+        message: () -> Any = { "Check failed." }) {
+        // st_dev (bytes 8..15) names the current mount, not durable storage identity. Compare
+        // the exact frame/magic and root inode/uid/gid without rewriting the original witness.
+        val matches = actual.size == 32 && expected.size == 32 &&
+            (0 until 8).all { actual[it] == expected[it] } &&
+            (16 until 32).all { actual[it] == expected[it] }
+        if (!matches) throw WalletStoragePreparationExceptionV1(
+            WalletStoragePreparationFailureV1.WITNESS_BINDING,
+            walletStorageWitnessMismatchV1(actual, expected), message().toString(),
+        )
     }
 
     private object AndroidOperations : CustodyOperations {

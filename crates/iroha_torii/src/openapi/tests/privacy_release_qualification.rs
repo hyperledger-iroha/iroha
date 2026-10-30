@@ -120,10 +120,6 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         release_signatures: Vec::new(),
         manifest_digest: PrivacyExact12ReleaseManifestDigestV1::new([1; 32]),
     };
-    let activation = PrivacyDeploymentActivationV1 {
-        protocol_id: PrivacyProtocolIdV1::ALL[0],
-        activation_height: 1,
-    };
     let validator_canary = PrivacyDeploymentValidatorCanaryV1 {
         validator_index: 1,
         validator: key.public_key().clone(),
@@ -148,8 +144,6 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         ),
         genesis_hash: [1; 32],
         release_manifest_digest: PrivacyExact12ReleaseManifestDigestV1::new([1; 32]),
-        activation_transaction_digest: PrivacyReleaseArtifactDigestV1::new([1; 32]),
-        activations: Vec::new(),
         validator_roster_digest: PrivacyReleaseArtifactDigestV1::new([1; 32]),
         endpoint_version: "schema-fixture".to_owned(),
         convergence_height: 1,
@@ -162,6 +156,26 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         release_manifest: release_manifest.clone(),
         deployment_qualification: deployment_qualification.clone(),
     };
+    assert!(!schemas.contains_key("PrivacyDeploymentActivationV1"));
+    let deployment = norito::json::to_value(&deployment_qualification).unwrap();
+    for retired in ["activation_transaction_digest", "activations"] {
+        assert!(!deployment.as_object().unwrap().contains_key(retired));
+        assert!(
+            !schemas["PrivacyExact12DeploymentQualificationV1"]["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key(retired)
+        );
+        let mut changed = deployment.clone();
+        changed
+            .as_object_mut()
+            .unwrap()
+            .insert(retired.to_owned(), Value::Null);
+        assert!(
+            norito::json::from_value::<PrivacyExact12DeploymentQualificationV1>(changed).is_err(),
+            "retired diagnostic field {retired} must not re-enter the layout"
+        );
+    }
     let samples = [
         (
             "PrivacyReleaseSourceIdentityV1",
@@ -206,10 +220,6 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         (
             "PrivacyExact12ReleaseManifestV1",
             norito::json::to_value(&release_manifest).unwrap(),
-        ),
-        (
-            "PrivacyDeploymentActivationV1",
-            norito::json::to_value(&activation).unwrap(),
         ),
         (
             "PrivacyDeploymentValidatorCanaryV1",
@@ -359,11 +369,6 @@ fn privacy_release_qualification_inventory_counts_match_native_contract() {
         ),
         (
             "PrivacyExact12DeploymentQualificationV1",
-            "activations",
-            PrivacyProtocolIdV1::COUNT,
-        ),
-        (
-            "PrivacyExact12DeploymentQualificationV1",
             "validator_canaries",
             PRIVACY_EXACT12_DEPLOYMENT_VALIDATORS_V1,
         ),
@@ -392,33 +397,35 @@ fn privacy_release_qualification_inventory_counts_match_native_contract() {
 }
 
 #[test]
-fn privacy_release_qualification_is_required_and_explicitly_nullable() {
+fn privacy_runtime_manifest_binds_network_without_documentary_qualification() {
     let document = canonical_document();
     let schemas = component_schemas(&document);
     let manifest = PrivacyExact12CapabilityManifestV1 {
         version: 1,
+        network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x91; 32])),
+        ),
         committed_height: 0,
         consensus_policy: PrivacyConsensusPolicyV1::default(),
-        qualification: None,
         protocols: Vec::new(),
         manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new([1; 32]),
     };
     let native = norito::json::to_value(&manifest).unwrap();
-    assert!(native.as_object().unwrap().contains_key("qualification"));
-    assert!(native["qualification"].is_null());
+    assert!(!native.as_object().unwrap().contains_key("qualification"));
+    assert!(native.as_object().unwrap().contains_key("network_id"));
     let contract = &schemas["PrivacyExact12CapabilityManifestV1"];
-    assert!(
-        contract["required"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v.as_str() == Some("qualification"))
-    );
+    let required = contract["required"].as_array().unwrap();
+    assert!(required.iter().any(|v| v.as_str() == Some("network_id")));
+    assert!(!required.iter().any(|v| v.as_str() == Some("qualification")));
     assert_eq!(
-        contract["properties"]["qualification"]["oneOf"],
-        norito::json!([
-            {"$ref":"#/components/schemas/PrivacyExact12QualificationRecordV1"}, {"type":"null"}
-        ])
+        contract["properties"]["network_id"],
+        norito::json!({"$ref":"#/components/schemas/NetworkId"})
+    );
+    assert!(
+        !contract["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("qualification")
     );
 }
 #[test]

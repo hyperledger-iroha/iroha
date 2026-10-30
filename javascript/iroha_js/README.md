@@ -873,7 +873,7 @@ The first-release native catalog surface exposes local build metadata:
 `isPrivacyNativeAvailable()` and `privacyCompiledProfileCatalogV1()`. The
 latter returns this binary's canonical Norito
 `PrivacyCompiledProfileCatalogV1` archive. It intentionally contains no
-committed height, consensus policy, activation, or readiness projection and
+committed height, consensus policy, protocol policy, or readiness projection and
 cannot authorize a network operation. Import
 `getPrivacyExact12CapabilityManifestV1` from
 `@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
@@ -883,9 +883,12 @@ dependencies and must preserve HTTPS authentication, response URL, and redirect 
 Public archive decoding is inspection-only; copying or re-decoding transport
 bytes loses admission authority. The authenticated ABI33 binding applies
 the bounded canonical decoder; transaction construction must then call
-`requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
-state, registered production qualification, and byte-exact equality with the
-selected local compiled-profile row and deployment network. The admission result
+`requirePrivacyExact12CapabilityAdmissionV1`, which requires a supported canonical
+implementation under committed resource policy and byte-exact equality with the
+selected local compiled-profile row and authoritative top-level network identity.
+Review receipts and all-protocol qualification records are not admission requirements.
+An incomplete X509 joint security reduction remains an explicit unsupported
+implementation reason; sample proof verification is not that reduction. The admission result
 retains that exact network and Torii origin. There is no browser, JSON snapshot, or
 mock authorization fallback. The generic
 request/build/verify dispatcher and its free-form algorithm aliases do not
@@ -1007,8 +1010,13 @@ in wire order: `zk-ace-pq-authorization-v1`,
 `monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
 `pq-masp-stark-v1`. Each manifest row has exactly `protocol_id`,
 `operation_schema`, `execution_mode`, `privacy_feature_mask`,
-`compiled_profile`, `readiness`, and `activation`. Unknown fields, aliases,
+`compiled_profile`, `readiness`, and `policy`. Unknown fields, aliases,
 duplicates, case-folded labels, and whitespace-normalized labels fail closed.
+The optional protocol policy supplies current limits and a scheduled future
+update. Absence uses native defaults; policy cannot enable an unavailable proof
+relation. Consensus and protocol updates may increase or decrease limits within
+the canonical bounds. Admission checks the selected limits against the actual
+native profile ceiling.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -3731,17 +3739,6 @@ and encodes code bytes as base64 strings before signing:
 > `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` when the node is locked down.
 
 ```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({
-  publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
-```
-
-```js
 import {
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
@@ -3981,12 +3978,25 @@ The governance ISI builders mirror the first-release Torii DTOs. Proposal
 builders contain immutable proposal content only; Parliament derives lifecycle
 timing and execution automatically. Hash inputs are normalized into the typed
 32-byte governance hash wrappers, while ballot builders retain their standalone
-referendum/election encoding:
+referendum/election encoding.
+
+SCCP proposal normalization and typed Torii reads share validation of the closed
+action tags, external network keys, safe-integer base revisions, and the exact
+sorted, deduplicated subject set derived from the ordered actions. All action
+bodies enforce exact fields and static value bounds, including deployment/network
+matching, committee-pin shape, distinct destination words, bounded light-client
+bootstrap bytes, and canonical stranded-release recipients. Parameter updates
+check both individual and joint bounds using exact arithmetic. Account validation
+uses the mandatory native codec. The node authenticates committee pins and opaque
+bootstraps; committed state determines authorization, current revisions, staking
+and Parliament parameter bounds, and enactment.
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
+import { Buffer } from "node:buffer";
 
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({
+  publicKey: Buffer.from("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "hex"),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -4107,6 +4117,35 @@ builders (`buildCreateElectionTransaction`, `buildSubmitBallotTransaction`, and
 `buildFinalizeElectionTransaction`) enforce the 2..=64 V1 election option
 bound. Ballot ciphertexts and Halo2 proofs use canonical helper paths across
 SDKs. See `index.d.ts` for the full set of confidential input shapes.
+
+### Direct X509 preparation and signing
+
+The Node.js `@iroha/iroha-js/privacy-x509` entry point exports
+`preparePrivacyX509DirectTransactionV1` and `buildPrivacyX509DirectTransactionV1`.
+Preparation accepts an authenticated Torii capability manifest, exact `NetworkId`,
+canonical proof-free request, original authority, fee payment, explicit creation
+time and positive TTL, and optional nonce and metadata. Choose the original TTL
+to cover proof generation and submission; preparation supplies no implicit lifetime.
+It retains one direct action and one
+original Proof/ActionProof occurrence. The prepared object's byte getters return
+copies; pass `materializedStatementNorito` to the holder prover, then call
+`prepared.sign(rawProof, privateKey)` with the authority's exact 32-byte Ed25519
+key. The one-call form accepts the same inputs plus `{ prove, privateKey }`; its
+callback receives that exact statement before signing.
+
+The Rust owner derives the ordered intent and ActionStatement using the canonical
+model, and repeats selected-profile, network, authority and committed-limit checks
+at signing. It also requires the canonical X5S1 container and its exact original
+statement/network header binding before signing. Returned signed bytes cover the entire original payload and proof
+occurrence. An offline decoded manifest, supplied digest, fake capability object,
+mixed action or alternate native bridge cannot authorize this producer. The API
+does not submit transactions or claim proof/State verification.
+
+X509 currently refuses construction with the actual
+`JointSecurityReductionIncomplete` failure. The producer does not substitute
+fixture bytes or a documentary receipt for the missing joint-security construction.
+Its native tests distinguish structural planning/transaction-signature checks from
+valid credential-proof acceptance.
 
 ### Native-independent Exact12 fixture codec
 
@@ -4515,40 +4554,93 @@ if (snapshot) {
 
 ### Runtime and capability helpers
 
-`ToriiClient` now covers the runtime capability endpoints so SDK consumers can surface ABI
-versioning data without crafting raw HTTP calls. Use `getNodeCapabilities()` to inspect ABI
+`ToriiClient` covers the runtime capability endpoints and the governed runtime change-set
+lifecycle (`specs/live_runtime_upgrades.md` §6). Use `getNodeCapabilities()` to inspect ABI
 support and cryptography acceleration flags, `getRuntimeAbiActive()`/`getRuntimeAbiHash()` to
-mirror the compiler guardrails, `getRuntimeMetrics()` for aggregate counters, and
-`listRuntimeUpgrades()` to page through recorded manifests. The helper trio
-`proposeRuntimeUpgrade()`, `activateRuntimeUpgrade()`, and `cancelRuntimeUpgrade()` post the
-runtime JSON endpoints and return transaction skeletons (`wire_id` + payload hex) that you can
-sign via `TxBuilder`, so rollout automation no longer needs bespoke HTTP clients.
+mirror the compiler guardrails, and `getRuntimeMetrics()` for the recorded change sets counted by
+status (`scheduled`, `activated`, `lapsed`, `canceled`).
+
+The runtime changes only through change sets. A `ChangeSetV1` moves the universal root from one
+selection (`predecessor`) to the next (`successor`) at `effective_height`, publishing new
+immutable definitions and applying transitions. The change-set helpers are operator routes: they
+require an immutable `OperatorSigningContext` and sign every request.
+
+- `listRuntimeUpgrades()` returns the committed selection (`selectionIdHex` and the opaque
+  `selection`), the validator `committee` and `committeeDigestHex` that support attestations bind,
+  and every recorded change set by effective height, then identity. A new change set names as its
+  predecessor the selection it will meet: the committed one, advanced by every change set scheduled
+  to take effect before it. Each item types `idHex`, `effectiveHeight`, `predecessorHex`,
+  `successorHex`, `status` (`Scheduled`, or `Activated`, `Lapsed` or `Cancelled` with the
+  `height` at which that happened) and the frozen `notice`. The complete `ChangeSetRecordV1` stays
+  available as `record`, with integers above `Number.MAX_SAFE_INTEGER` as bigint.
+- `proposeRuntimeUpgrade(changeSet, { provenance })` posts the exact `ChangeSetV1` JSON object as
+  `change_set` with the trusted release signers' `ChangeSetEndorsementV1` objects as `provenance`,
+  and returns the drafted SORA Parliament proposal that schedules it. While the universal root
+  commits a `runtime_provenance_policy_v1`, the proposal needs endorsements from its threshold of
+  distinct trusted signers (each produced by `iroha runtime upgrade endorse`); a root without that
+  policy takes none, and `provenance` defaults to `[]`. Before sending, the SDK requires the exact
+  snake_case field set, the universal root, 32-byte lowercase hex identities and an
+  `effective_height` of at most `Number.MAX_SAFE_INTEGER`; pass larger integers inside published
+  definitions or transitions as bigint.
+- `cancelRuntimeUpgrade(idHex)` returns the drafted proposal that withdraws a scheduled change set.
+- `attestRuntimeUpgrade(idHex)` asks the node to sign its support for a scheduled change set with
+  its own validator key. The node refuses unless its release executes the successor selection and
+  its key is a committee member; the draft holds exactly one `iroha.runtime.support.attest.v1`
+  instruction to submit.
+- `getRuntimeRelease()` reports the node's build, its release digest, and whether its release
+  executes the committed selection and each scheduled successor, naming the first definition it
+  lacks (`ToriiRuntimeReleaseSupport`).
+
+Each propose or cancel draft contains exactly one
+`iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal` instruction (`wire_id` and the
+framed `payload_hex`) for your wallet or key store to sign and submit; admission happens when the
+signed proposal executes. There is no activation call: an approved change set activates at the
+start of its effective block once the validator committee has attested support and the frozen
+notice has elapsed, and otherwise lapses.
 
 ```js
-const torii = new ToriiClient("http://localhost:8080");
+import { NetworkId, OperatorSigningContext, ToriiClient } from "@iroha/iroha-js";
+
+const torii = new ToriiClient(toriiUrl, {
+  localSigningContext,
+  operatorSigningContext: new OperatorSigningContext(
+    NetworkId.parse(exactNetworkId),
+    runtimeOperatorSigner,
+  ),
+});
 const caps = await torii.getNodeCapabilities();
 console.log("ABI version", caps.abiVersion);
 console.log("Allowed curve IDs", caps.crypto.curves.allowedCurveIds);
 console.log("Allowed curve bitmap", caps.crypto.curves.allowedCurveBitmap);
 
-const abi = await torii.getRuntimeAbiActive();
+const abi = await torii.getRuntimeAbiActive({ canonicalAuth });
 console.log(`Runtime ABI v${abi.abiVersion}`);
+const { upgradeEventsTotal } = await torii.getRuntimeMetrics({ canonicalAuth });
+console.log(`scheduled=${upgradeEventsTotal.scheduled} lapsed=${upgradeEventsTotal.lapsed}`);
 
-const upgrades = await torii.listRuntimeUpgrades();
-for (const item of upgrades) {
-  console.log(`${item.idHex} -> ${item.record.status.kind}`);
+const runtime = await torii.listRuntimeUpgrades();
+console.log(`selection ${runtime.selectionIdHex}, committee of ${runtime.committee.length}`);
+for (const item of runtime.items) {
+  const at = item.status.kind === "Scheduled" ? "" : ` at ${item.status.height}`;
+  console.log(`${item.idHex} effective ${item.effectiveHeight}: ${item.status.kind}${at}`);
 }
 
-const manifest = {
-  name: "ABI v1 maintenance",
-  description: "Schedule a no-ABI-change runtime rollout",
-  abiVersion: 1,
-  abiHash: "0123...cdef",
-  startHeight: 10_000,
-  endHeight: 10_500,
-};
-const draft = await torii.proposeRuntimeUpgrade(manifest);
-console.log(draft.tx_instructions);
+// Nothing is scheduled before this change set, so it meets the committed selection. The
+// endorsements come from the trusted release signers of the committed provenance policy.
+const draft = await torii.proposeRuntimeUpgrade({
+  network: exactNetworkId,
+  root: { kind: "Universal", content: null },
+  predecessor: runtime.selectionIdHex,
+  successor: successorSelectionIdHex,
+  effective_height: 120_000,
+  publish: [],
+  transitions: [{ kind: "Activate", content: definitionIdHex }],
+  qualification: qualificationDigestHex,
+}, { provenance: releaseSignerEndorsements });
+const [{ wire_id: wireId, payload_hex: payloadHex }] = draft.tx_instructions;
+
+const withdrawal = await torii.cancelRuntimeUpgrade(scheduledChangeSetIdHex);
+console.log(withdrawal.tx_instructions[0].wire_id);
 ```
 
 ### Network time helpers
@@ -4586,16 +4678,6 @@ first non-empty one) exceeds it. Twenty cadences cover one crashed leader's view
 change at the Sumeragi default timings; pass a deployment-specific threshold to
 `isStatusQueueStalled(status, thresholdMs)` instead when the local consensus
 timers are known.
-
-```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
-```
 
 ```js
 import { extractToriiFeatureConfig } from "@iroha/iroha-js";
@@ -4999,16 +5081,6 @@ const browserTorii = new ToriiBrowserClient("https://torii.example", {
 
 const visibleNfts = await browserTorii.explorerNfts.list({ limit: 25 });
 const visibleDomains = await browserTorii.domains.list({ limit: 25 }); // signed with the read identity
-```
-
-```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
 ```
 
 ```js
@@ -5457,16 +5529,6 @@ rejected.
 - Developer-friendly environment overrides are supported for local workflows: `IROHA_TORII_TIMEOUT_MS`, `IROHA_TORII_MAX_RETRIES`, `IROHA_TORII_BACKOFF_INITIAL_MS`, `IROHA_TORII_BACKOFF_MULTIPLIER`, `IROHA_TORII_MAX_BACKOFF_MS`, `IROHA_TORII_RETRY_STATUSES`, `IROHA_TORII_RETRY_METHODS`, `IROHA_TORII_API_TOKEN`, and `IROHA_TORII_AUTH_TOKEN`.
 - Retryable status codes default to `{429, 502, 503, 504}`; methods default to `GET`, `HEAD`, and `OPTIONS`. Override them when your workflow needs different semantics.
 - See `recipes/configured-client.mjs` for a script that loads an `iroha_config` JSON document, applies environment overrides, and instantiates `ToriiClient` with the merged settings.
-
-```js
-import { AccountAddress } from "@iroha/iroha-js";
-
-const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
-});
-console.log(address.canonicalHex());
-console.log(address.toI105(753));
-console.log(address.toI105());
-```
 
 ```js
 import { ToriiClient, resolveToriiClientConfig } from "@iroha/iroha-js";

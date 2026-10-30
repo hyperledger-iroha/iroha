@@ -12,12 +12,13 @@ trusted_peers_pop = [{ public_key = "REPLACE_WITH_SEED_PUBLIC_KEY", pop_hex = "R
 
 # role defaults to validator; use observer or lane_validator when appropriate.
 # The profile owns the network prefix, policy, limits, and storage layout.
+# Addresses are plain host:port; the checked addr:host:port#CRC form is also accepted.
 [network]
-address = "addr:0.0.0.0:1337#BF18"
+address = "0.0.0.0:1337"
 public_address = "REPLACE_WITH_PUBLIC_ADDRESS"
 
 [torii]
-address = "addr:127.0.0.1:8080#8942"
+address = "127.0.0.1:8080"
 
 [genesis]
 public_key = "REPLACE_WITH_GENESIS_PUBLIC_KEY"

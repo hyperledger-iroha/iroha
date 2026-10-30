@@ -60,6 +60,7 @@ fi
 for test_class in \
   "Hyperledger.Iroha.Sdk.Tests.PrivacyNativeTests" \
   "Hyperledger.Iroha.Sdk.Tests.PrivacyExact12CapabilityManifestV1Tests" \
+  "Hyperledger.Iroha.Sdk.Tests.PrivacyX509PreparedTransactionV1Tests" \
   "Hyperledger.Iroha.Sdk.Tests.PrivacyExact12FixtureCodecV1Tests" \
   "Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests"
 do

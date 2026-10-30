@@ -498,6 +498,24 @@ nominal identity. Struct and tuple fields flatten in declaration order; Option, 
 List retain one active-only handle. Private and public functions use this same
 convention, including calls with one argument or one result.
 
+`ledger::credentials::present_x509(request: bytes) -> PendingAction` submits
+one canonical `InstructionBox(SubmitPrivacyZkX509CertificateV1)` through ABI V1
+operation tag 2. The request carries independent public inputs with a ZERO
+transaction-intent field and a signed attachment reference; it carries no proof
+bytes. The existing metered bytes normalizer supplies the exact `NoritoBytes`
+carrier. The host returns the original signed attachment action ordinal only
+after retaining funded queue custody. This token does not report verification,
+authorization, an applied nullifier or a committed effect.
+
+`PendingAction` has no source constructor, numeric/bool conversion, comparison,
+public argument/result schema, serialization or durable-state representation.
+It may be copied and passed or returned through internal functions, including
+local products, options, results and lists, within the same invocation. Its
+internal call-table node is distinct (CS1 tag 13), occupies one public word,
+and accepts only a `u32` ordinal. Public and cross-contract boundaries reject
+it recursively. Branching on a local option or result discriminant says only
+which local value was constructed; the queued action's outcome remains unavailable.
+
 The authenticated CNTR callable descriptors bind every function root, its
 aligned stack-frame reservation, and every argument/result slot's representation
 and privacy role. Admission checks public signatures against their canonical
@@ -592,7 +610,7 @@ The V1 type vocabulary is:
 <!-- BEGIN GENERATED: kotodama-v1-source-policy -->
 | Source policy | Canonical V1 values |
 | --- | --- |
-| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `ListError`, `NumericError`, `StateMap`, `StateCursor`, `StatePage`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage`, `AssetUidHoldingQuote` |
+| Active type spellings | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `Json`, `AccountId`, `AssetDefinitionId`, `AssetId`, `DomainId`, `Name`, `NftId`, `DataSpaceId`, `Option`, `Result`, `List`, `ListError`, `NumericError`, `StateMap`, `StateCursor`, `StatePage`, `Secret`, `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`, `QueryPage`, `AssetUidHoldingQuote`, `PendingAction` |
 | Forbidden in every source identifier position | `Amount` |
 | Reserved retired numeric type spellings | `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `num`, `Int`, `Integer`, `float`, `f32`, `f64`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `amount`, `money`, `Quantity`, `number` |
 | Ordinary value/function identifier examples | `amount` |

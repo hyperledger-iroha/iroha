@@ -441,7 +441,7 @@ _REVIEWED_PUBLIC_MOCK_ENV_INPUTS = frozenset({
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env",
 })
 _REVIEWED_PUBLIC_NONOPERATIONAL_FIXTURE_PINS = {
-    "crates/iroha_config/tests/fixtures/full.env": ("159bdddf2c286caf700320df07b79edbf0a78a8385c7bef6d8a5b0db7d4e0c31", 2089),
+    "crates/iroha_config/tests/fixtures/full.env": ("89a46c809c1c5791a4d8f075af920995611b0b85249ed6193df084c54cad7fa4", 2048),
     "crates/iroha_config/tests/fixtures/minimal_file_and_env.env": ("196c68787e11f84107aaa983a5cb02a97b5d2ef6f860269c85920a1baf5817f5", 26),
     "crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt": ("06f3e6f960e02cb8a452e85d634d6b5b7518ac511d9ab98c69d2ba3e42d8eb4f", 53080),
     "crates/kotodama_lang/src/assets/diagnostics_v1/secret_reject_cases_v1.tsv": ("cbb124b4bda971357c61de40bf82566436efecf593e4bb5f9df8e4ac77b678db", 3525),
@@ -488,7 +488,6 @@ _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/bytes/Cargo.toml.orig",
     "vendor/http-body-util/Cargo.toml.orig",
     "vendor/concread/Cargo.toml.orig",
-    "vendor/wayland-scanner-0.31.10/Cargo.toml.orig",
     "vendor/aes/tests/data/aes128.blb",
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",

@@ -63,6 +63,22 @@ public sealed class TransactionBuilder
         PrivacyProtocolIdV1 protocol) =>
         PrivacyExact12CapabilityAdmissionV1.RequireForConstruction(admission, protocol, NetworkId);
 
+    /// <summary>Freeze one proof-free X509 request and this otherwise empty transaction context in native custody.</summary>
+    /// <remarks>Requires authenticated selected admission. X509 currently refuses with JointSecurityReductionIncomplete.</remarks>
+    public PrivacyX509PreparedTransactionV1 PrepareX509Transaction(
+        PrivacyExact12CapabilityTupleAdmissionV1 admission, ReadOnlySpan<byte> requestNorito)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        if (executableEntries.Count != 0 || forceExecutableBatch)
+            throw new InvalidOperationException("X509 preparation requires an otherwise empty direct transaction builder.");
+        var archive = admission.CopyAuthenticatedArchive(PrivacyProtocolIdV1.IrohaZkX509StarkP256V1, NetworkId);
+        var context = new TransactionEncodingContext(AuthorityAccountId);
+        // Resolve time once. No later builder mutation can alter this original native payload.
+        var payload = NoritoCodec.Encode("iroha_data_model::transaction::signed::model::TransactionPayload",
+            BuildPayloadBytes(context, EffectiveCreationTimeMilliseconds()), NoritoCodec.CanonicalLayoutFlags);
+        return PrivacyX509PreparedTransactionV1.Prepare(admission, NetworkId, archive, payload, requestNorito.ToArray());
+    }
+
     public TransactionBuilder AddInstruction(TransactionInstruction instruction)
     {
         ArgumentNullException.ThrowIfNull(instruction);

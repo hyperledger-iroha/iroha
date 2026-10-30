@@ -55,33 +55,35 @@ fn assert_exact_due_parliament_effect_enacted(
 }
 
 #[test]
-fn parliament_runtime_upgrade_enacts_at_the_exact_due_height() {
+fn parliament_runtime_upgrade_schedules_at_the_exact_due_height() {
+    use iroha_data_model::runtime::lifecycle::{
+        ChangeSetStatusV1, RuntimeNoticeV1, RuntimeUpgradeActionV1,
+    };
+
     let state = blank_test_state();
     let block = new_dummy_block_at_height(
         NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).expect("due height is nonzero"),
     );
     let mut state_block = state.block(block.as_ref().header());
-    let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
-        name: "exact-due-runtime-upgrade".to_owned(),
-        description: "activate the fixed first-release ABI at the certified height".to_owned(),
-        abi_version: 1,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        added_syscalls: Vec::new(),
-        added_pointer_types: Vec::new(),
-        start_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT,
-        end_height: PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 1,
-        sbom_digests: Vec::new(),
-        slsa_attestation: Vec::new(),
-        provenance: Vec::new(),
+    let change_set = crate::runtime::change_set::test_support::add_instruction(
+        *state_block.network_id(),
+        PARLIAMENT_DUE_CERTIFICATE_HEIGHT + 10,
+    );
+    let change_set_id = change_set.id().expect("change-set identity");
+    let notice = RuntimeNoticeV1 {
+        blocks: 10,
+        ms: 0,
+        approval_cushion_ms: 0,
     };
-    let upgrade_id = manifest.id();
     let fixture = {
         let mut seed = state_block.transaction();
         let fixture = seed_due_parliament_certificate(
             &mut seed,
             ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
                 proposal_operator: ALICE_ID.clone(),
-                manifest: manifest.clone(),
+                action: RuntimeUpgradeActionV1::Schedule(change_set.clone()),
+                notice,
+                proposed_ms: 0,
             }),
         );
         seed.apply();
@@ -97,18 +99,22 @@ fn parliament_runtime_upgrade_enacts_at_the_exact_due_height() {
     );
     let record = execution
         .world
-        .runtime_upgrades
-        .get(&upgrade_id)
-        .expect("runtime-upgrade effect record");
-    assert_eq!(record.manifest, manifest);
+        .runtime_change_sets
+        .get(&change_set_id)
+        .expect("scheduled change set");
+    assert_eq!(record.change_set, change_set);
+    assert_eq!(record.status, ChangeSetStatusV1::Scheduled);
+    assert_eq!(record.approved_height, PARLIAMENT_DUE_CERTIFICATE_HEIGHT);
     assert_eq!(
-        record.status,
-        iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(
-            PARLIAMENT_DUE_CERTIFICATE_HEIGHT
-        )
+        record.notice, notice,
+        "the notice frozen at proposal applies"
     );
-    assert_eq!(&record.proposer, &*ALICE_ID);
-    assert_eq!(record.created_height, PARLIAMENT_DUE_CERTIFICATE_HEIGHT);
+    assert!(record.attestations.is_empty(), "no validator attested yet");
+    assert_eq!(
+        *execution.world.runtime_selection.get(),
+        crate::runtime::founded_selection().expect("baseline"),
+        "scheduling changes no selection before the effective height"
+    );
     assert_exact_due_parliament_effect_enacted(&execution, &fixture);
 }
 

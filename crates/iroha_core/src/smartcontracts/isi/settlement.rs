@@ -2590,13 +2590,16 @@ mod tests {
             AssetId::new(payment_asset_id.clone(), BOB_ID.clone()),
             payment_balance,
         );
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             [domain],
             [alice, bob],
             [delivery_def, payment_def],
             [alice_delivery, bob_payment],
             [],
         );
+        // Entity retirement must pass the independent original monetary guards
+        // before settlement reference retention is observable.
+        crate::smartcontracts::isi::domain::monetary_test_support::install(&mut world);
         // Component account registration owns its policy before the first snapshot.
         let mut parameters = crate::state::parameter_cell_block_for_testing(&world)
             .expect("funded component parameter fixture");

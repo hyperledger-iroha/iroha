@@ -253,13 +253,18 @@ fn dedup_rows() -> Vec<Value> {
     let retained = retained_generation_fixture(&record);
     let world = World::new();
     let mut seen = 0u32;
+    let mut maximum = None;
     [("first_signer_set",7u32),("same_signer_set",7),("different_signer_set",11)].into_iter().map(|(label,signers)| {
         let message = certificate(4,"body",signers).3;
         let id = forgery_evidence_id(7, &message, signers);
         let budget = world.sccp_forgery_offences.allocation_budget().clone();
         let selected = new_signers(&world.view(), &retained, signers, &budget).unwrap();
+        let duplicate = is_duplicate(selected, maximum, 7);
         let row = json!({"label": (label),"input": {"generation": (7u64),"signers": (signers),"already_recorded": (seen)},
-            "expected": {"outcome": (if selected==0 {"EvidenceDuplicate"} else {"Recorded"}),"new_signers": (selected),"evidence_id": (hx(&id))}});
+            "expected": {"outcome": (if duplicate {"EvidenceDuplicate"} else {"Recorded"}),"new_signers": (selected),"evidence_id": (hx(&id))}});
+        if !duplicate {
+            maximum = Some(7);
+        }
         for (index, member) in record.members.iter().enumerate() {
             if selected & (1 << index) != 0 {
                 let member = member.as_ref().unwrap();

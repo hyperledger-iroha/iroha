@@ -394,7 +394,7 @@ fn multisig_read_contract_request(
 }
 #[tokio::test]
 async fn multisig_read_http_contract_is_signed_post_only_closed_and_bounded() {
-    let router = multisig_read_contract_test_router(mk_app_state_for_tests());
+    let router = multisig_read_contract_test_router(mk_native_app_state_for_tests());
     let alias_body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
     let unsigned = router
         .clone()
@@ -511,7 +511,7 @@ async fn multisig_read_http_contract_is_signed_post_only_closed_and_bounded() {
 }
 #[tokio::test]
 async fn multisig_read_handler_requires_api_token_and_signed_viewer_auth() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = mk_native_app_state_for_tests();
     let state = Arc::get_mut(&mut app).expect("unique app state");
     state.require_api_token = true;
     state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));

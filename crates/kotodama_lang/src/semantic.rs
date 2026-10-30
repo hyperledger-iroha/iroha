@@ -63,6 +63,7 @@ pub const COLLECTION_ITERATION_LIMIT: i64 = 64;
 /// compiler allocate more expanded type nodes than a source could contain lexical tokens. Expansion
 /// is measured with saturating arithmetic before any recursive type materialization occurs.
 pub const MAX_EXPANDED_TYPE_NODES: usize = ivm_abi::call::MAX_CALL_SCHEMA_NODES_V1;
+pub(crate) mod ballot_literals;
 mod call_target;
 pub(crate) mod contract_imports;
 use contract_imports::analyze_contract_call;
@@ -70,6 +71,7 @@ mod effect_sites;
 mod id_literals;
 #[cfg(test)]
 mod multifile_tests;
+pub(crate) mod trigger_literals;
 mod trigger_lowering;
 mod type_help;
 mod value_traits;
@@ -239,6 +241,8 @@ pub enum Type {
     Name,
     Json,
     Unit,
+    /// Opaque local queue token; never proof success or an authoritative effect.
+    PendingAction,
     /// A closed nominal error type with an authenticated variant schema.
     ErrorEnum(Arc<ContractErrorTypeDescriptor>),
     /// A closed nominal ordinary enum, distinct from raisable errors.
@@ -832,6 +836,9 @@ impl SemanticContext {
                 params.push(parse_declared_param_type(self, param, &function.modifiers)?);
             }
             let return_type = parse_declared_type(self, &function.ret_ty)?.unwrap_or(Type::Unit);
+            if function.modifiers.kind != FunctionKind::Private {
+                reject_pending_action_boundary(&return_type)?;
+            }
             signatures.insert(
                 function.name.clone(),
                 FunctionSignature {
@@ -2066,7 +2073,8 @@ fn collect_struct_dependencies(
                 pending.push(ok);
             }
             Type::Tuple(items) => pending.extend(items.iter().rev()),
-            Type::ContractRef(_)
+            Type::PendingAction
+            | Type::ContractRef(_)
             | Type::Int
             | Type::Decimal
             | Type::Quantity
@@ -2255,7 +2263,8 @@ fn measure_expanded_type(
                         .map(|(_, field)| (field, depth.saturating_add(1))),
                 );
             }
-            Type::ContractRef(_)
+            Type::PendingAction
+            | Type::ContractRef(_)
             | Type::Int
             | Type::Decimal
             | Type::Quantity
@@ -3605,6 +3614,12 @@ fn analyze_with_context(
             let ty = resolve_struct_type_with_context(context, &ty).inspect_err(|_| {
                 context.capture_diagnostic(fn_return_sources.get(&name).copied().flatten(), None);
             })?;
+            if fn_modifiers
+                .get(&name)
+                .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private)
+            {
+                reject_pending_action_boundary(&ty)?;
+            }
             Ok((name, ty))
         })
         .collect::<Result<HashMap<_, _>, SemanticError>>()?;
@@ -4397,6 +4412,36 @@ fn capture_builtin_argument_help(
     args: &[Expr],
     argument_types: &[Type],
 ) {
+    if error.code == "E_ACCESS_INCOMPLETE"
+        && builtin == Builtin::RegisterTrigger
+        && let Some(argument) = args.first()
+    {
+        context.capture_diagnostic(context.expression_source(argument), None);
+        return;
+    }
+    if matches!(
+        error.code,
+        "E_INVALID_POINTER_LITERAL" | "E_POINTER_LITERAL_REQUIRED"
+    ) && matches!(builtin, Builtin::PointerConstructor(_))
+        && let Some(argument) = args.first()
+    {
+        context.capture_diagnostic(context.expression_source(argument), None);
+        return;
+    }
+    if builtin == Builtin::BuildSubmitBallotInline {
+        let index = match error.code {
+            "E_BALLOT_ELECTION_ID" => Some(0),
+            "E_BALLOT_NULLIFIER" => Some(2),
+            "E_BALLOT_LITERAL_REQUIRED" => args.iter().position(|argument| {
+                matches!(argument.kind(), Expr::Ident(name) if is_external_parameter(context, name))
+            }),
+            _ => None,
+        };
+        if let Some(argument) = index.and_then(|index| args.get(index)) {
+            context.capture_diagnostic(context.expression_source(argument), None);
+            return;
+        }
+    }
     if error.code == "E_INVALID_ID_LITERAL"
         && let (Builtin::PointerConstructor(constructor), Some(argument)) = (builtin, args.first())
         && let Expr::String(raw) = argument.kind()
@@ -4984,6 +5029,25 @@ fn coerce_contextual_numeric_literals(
     }
     Ok(())
 }
+/// Queue tokens may propagate internally, but cannot cross an invocation boundary.
+fn reject_pending_action_boundary(root: &Type) -> Result<(), SemanticError> {
+    let mut pending = vec![root];
+    let mut visited = HashSet::new();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty as *const Type) {
+            continue;
+        }
+        match ty {
+            Type::PendingAction => return Err(sem_err("K2003", "PendingAction is an execution-local queue token and cannot cross a public or cross-contract parameter or return boundary".into())),
+            Type::Secret(inner) | Type::Option(inner) | Type::StateCursor(inner) | Type::List(inner, _) => pending.push(inner),
+            Type::Result(left, right) | Type::StateMap(left, right) => { pending.push(right); pending.push(left); }
+            Type::Tuple(items) => pending.extend(items),
+            Type::Struct { fields, .. } => pending.extend(fields.iter().map(|(_, ty)| ty)),
+            _ => {}
+        }
+    }
+    Ok(())
+}
 fn list_element_contains_resource_handle(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Secret(_)
@@ -5097,7 +5161,8 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
         | Type::SoracloudRequest
         | Type::SoracloudResponse
         | Type::NamedStruct(_)
-        | Type::ContractRef(_) => false,
+        | Type::ContractRef(_)
+        | Type::PendingAction => false,
     }
 }
 pub(crate) fn is_supported_durable_key_type(ty: &Type) -> bool {
@@ -5534,6 +5599,9 @@ fn analyze_function(
         param_types.push(typed_param);
     }
     let expected_ret = Some(parse_declared_type(context, &func.ret_ty)?.unwrap_or(Type::Unit));
+    if func.modifiers.kind != FunctionKind::Private {
+        reject_pending_action_boundary(expected_ret.as_ref().expect("return type is present"))?;
+    }
     if func.modifiers.kind != FunctionKind::Private
         && expected_ret
             .as_ref()
@@ -8075,6 +8143,7 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
             "build_submit_ballot_inline expects (string election_id, bytes ciphertext, bytes nullifier32, string backend, bytes proof, bytes vk)",
         ),
         Builtin::ScExecuteSubmitBallot
+        | Builtin::PresentX509
         | Builtin::ZkVerifyBatch
         | Builtin::ZkVoteVerifyBallot
         | Builtin::ZkVoteVerifyTally => M::NameSuffix(
@@ -8337,6 +8406,7 @@ fn fixed_builtin_result_type(descriptor: &str) -> Type {
     match descriptor {
         "AssetUidHoldingQuote" => asset_uid_holding_quote_type(),
         "()" => Type::Unit,
+        "PendingAction" => Type::PendingAction,
         "AccountId" => Type::AccountId,
         "Json" => Type::Json,
         "Name" => Type::Name,
@@ -8384,6 +8454,14 @@ fn analyze_fixed_builtin_call(
             })
     {
         return Err(sem_err("K2003", message.render(builtin)));
+    }
+    if builtin == Builtin::BuildSubmitBallotInline {
+        if let ExprKind::String(raw) = args[0].kind() {
+            ballot_literals::election_id(raw)?;
+        }
+        if let ExprKind::Bytes(raw) = args[2].kind() {
+            ballot_literals::nullifier(raw)?;
+        }
     }
     let expression = typed_builtin_call(
         builtin,
@@ -8953,6 +9031,18 @@ fn analyze_surface_builtin_call(
             if arg_ty != Type::String {
                 return Err(sem_err("K2003", format!("{name} expects string")));
             }
+            if constructor != PointerConstructor::Json
+                && let ExprKind::Ident(parameter) = arg_typed[0].kind()
+                && is_external_parameter(context, parameter)
+            {
+                return Err(sem_err(
+                    "E_POINTER_LITERAL_REQUIRED",
+                    format!(
+                        "{} requires a compile-time string literal; entrypoint parameter `{parameter}` is only available at runtime",
+                        builtin.source_name()
+                    ),
+                ));
+            }
             if let ExprKind::String(raw) = arg_typed[0].kind()
                 && let Err(invalid) = id_literals::validate(
                     constructor,
@@ -8961,6 +9051,18 @@ fn analyze_surface_builtin_call(
                 )
             {
                 return Err(sem_err("E_INVALID_ID_LITERAL", invalid.message));
+            }
+            if let ExprKind::String(raw) = arg_typed[0].kind() {
+                match constructor {
+                    PointerConstructor::AxtDescriptor => {
+                        crate::pointer_literals::axt_descriptor(raw).map(|_| ())
+                    }
+                    PointerConstructor::AxtAnchoredSpendV1 => {
+                        crate::pointer_literals::axt_anchored_spend(raw).map(|_| ())
+                    }
+                    _ => Ok(()),
+                }
+                .map_err(|message| sem_err("E_INVALID_POINTER_LITERAL", message))?;
             }
             if constructor == PointerConstructor::Json {
                 let ExprKind::String(raw) = arg_typed[0].kind() else {
@@ -9635,8 +9737,62 @@ fn analyze_surface_builtin_call(
         | Builtin::TestActorSign => {
             unreachable!("test helpers are validated before generic builtin analysis")
         }
+        Builtin::RegisterTrigger => {
+            let call = analyze_fixed_builtin_call(builtin, arg_typed)?;
+            if !context.test_builtins_enabled
+                && let ExprKind::Call { args, .. } = call.kind()
+            {
+                trigger_literals::validate_registration_literal(&args[0])?;
+            }
+            Ok(call)
+        }
+        Builtin::BuildSubmitBallotInline => {
+            let call = analyze_fixed_builtin_call(builtin, arg_typed)?;
+            if let ExprKind::Call { args, .. } = call.kind()
+                && let Some((index, parameter)) =
+                    args.iter().enumerate().find_map(|(index, argument)| {
+                        let ExprKind::Ident(name) = argument.kind() else {
+                            return None;
+                        };
+                        is_external_parameter(context, name).then_some((index, name))
+                    })
+            {
+                return Err(sem_err(
+                    "E_BALLOT_LITERAL_REQUIRED",
+                    format!(
+                        "{} requires compile-time literal `{}`; entrypoint parameter `{parameter}` is only available at runtime",
+                        builtin.source_name(),
+                        builtin.signature().parameter_names[index],
+                    ),
+                ));
+            }
+            Ok(call)
+        }
         _ => analyze_fixed_builtin_call(builtin, arg_typed),
     }
+}
+
+/// Recognize an immutable external parameter without classifying local or private-call values.
+fn is_external_parameter(context: &SemanticContext, name: &str) -> bool {
+    // Parameters cannot be assigned or shadowed, so a matching identifier remains runtime input.
+    context
+        .current_function_modifiers
+        .borrow()
+        .as_ref()
+        .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private)
+        && context
+            .current_function_name
+            .borrow()
+            .as_ref()
+            .is_some_and(|function| {
+                context
+                    .function_params
+                    .borrow()
+                    .get(function)
+                    .is_some_and(|parameters| {
+                        parameters.iter().any(|parameter| parameter.name == name)
+                    })
+            })
 }
 
 fn enclosing_return_type(context: &SemanticContext) -> Option<Type> {
@@ -10352,7 +10508,8 @@ fn is_native_json_value_type(ty: &Type) -> bool {
         | Type::Tuple(_)
         | Type::Struct { .. }
         | Type::NamedStruct(_)
-        | Type::ContractRef(_) => false,
+        | Type::ContractRef(_)
+        | Type::PendingAction => false,
     }
 }
 fn analyze_native_json_value(
@@ -11195,7 +11352,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&payload) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Option<T> V1 payloads must be durable-value types".into(),
+                    message: "Option<T> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11230,7 +11387,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&payload) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Option<T> V1 payloads must be durable-value types".into(),
+                    message: "Option<T> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11262,7 +11419,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&error) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Result<T, E> V1 payloads must be durable-value types".into(),
+                    message: "Result<T, E> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11296,7 +11453,7 @@ fn analyze_expr_expected_inner(
             if !is_supported_sum_payload(&ok) || !is_supported_sum_payload(&error_ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "Result<T, E> V1 payloads must be durable-value types".into(),
+                    message: "Result<T, E> V1 payloads must be supported local value types".into(),
                 });
             }
             Ok(TypedExpr {
@@ -12858,7 +13015,16 @@ fn analyze_sum_type_call(
     })
 }
 fn is_supported_sum_payload(ty: &Type) -> bool {
-    is_supported_durable_value_type(ty)
+    match resolve_struct_type(ty) {
+        Type::PendingAction => true,
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, field)| is_supported_sum_payload(field)),
+        Type::Tuple(items) => items.iter().all(is_supported_sum_payload),
+        Type::Option(inner) | Type::List(inner, _) => is_supported_sum_payload(&inner),
+        Type::Result(ok, err) => is_supported_sum_payload(&ok) && is_supported_sum_payload(&err),
+        other => is_supported_durable_value_type(&other),
+    }
 }
 fn parse_declared_type(
     context: &SemanticContext,
@@ -13164,6 +13330,9 @@ fn parse_declared_param_type(
         );
     })?;
 
+    if modifiers.kind != FunctionKind::Private {
+        reject_pending_action_boundary(&ty)?;
+    }
     if modifiers.kind != FunctionKind::Private && crate::secret::type_contains_secret(&ty) {
         context.capture_diagnostic(
             param.ty.as_ref().and_then(|ty| context.type_source(ty)),
@@ -13285,6 +13454,7 @@ fn convert_type_expr_inner(
                 name if declared_enum_type(context, name).is_some() => {
                     declared_enum_type(context, name).expect("declared enum type")
                 }
+                "PendingAction" => Type::PendingAction,
                 "bool" => Type::Bool,
                 "string" => Type::String,
                 "bytes" => Type::Bytes,
@@ -19475,7 +19645,7 @@ mod tests {
             } }" => "parse ledger amount call", "whole literal must coerce exactly at a quantity boundary"; }
     #[rustfmt::skip]
     analyze_ok_tests! { canonical_trigger_operations_type_check: "fn f() { \
-                ledger::trigger::register(trigger_spec: Json::parse(\"{}\")); \
+                ledger::trigger::register(trigger_spec: Json::parse(\"{\\\"id\\\":\\\"wake\\\"}\")); \
                 ledger::trigger::unregister(trigger: Name::parse(\"wake\")); \
             }" => "parse canonical trigger operations", "analyze canonical trigger operations"; }
     include!("semantic/tests/trigger_semantics_tests.rs");

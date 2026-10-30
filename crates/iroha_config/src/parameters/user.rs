@@ -64,6 +64,10 @@ mod sccp;
 pub use sccp::{
     SccpKeeper, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
 };
+mod socket_addr;
+pub use socket_addr::{ConfigSocketAddr, ConfigSocketAddrError};
+mod legacy_genesis;
+pub use legacy_genesis::{CryptoCurves, CurveIdListConfig};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -143,6 +147,23 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
 }
 fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
     AccountId::parse_encoded(raw).unwrap_or_else(|err| panic!("{context}: {err}"))
+}
+/// Parse an account setting whose omitted value is a fixed code-default account.
+///
+/// The default literal is rendered for the default chain discriminant, but it names the same
+/// account on every chain, so an omitted setting stays valid when a node selects another
+/// `chain_discriminant`. An explicitly configured literal must still use the node's prefix.
+fn parse_account_or_default(
+    raw: &str,
+    default_literal: fn() -> String,
+    default_account: fn() -> AccountId,
+    context: &str,
+) -> AccountId {
+    if raw == default_literal() {
+        default_account()
+    } else {
+        parse_account_id_literal(raw, context)
+    }
 }
 fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
     let trimmed = value.trim();
@@ -1413,7 +1434,9 @@ impl Root {
         };
         let gov = gov_provider_binding_valid.then(|| self.gov.parse());
         let nts = self.nts.parse(&mut emitter);
-        let nexus = self.nexus.parse(&mut emitter);
+        let mut nexus_input = self.nexus;
+        let legacy_staking = nexus_input.staking.take_legacy_genesis();
+        let nexus = nexus_input.parse(&mut emitter);
         let confidential = self.confidential.parse();
         let streaming = if let Some(ref key_pair) = key_pair {
             self.streaming
@@ -1432,7 +1455,11 @@ impl Root {
                 ),
             );
         }
-        let crypto = self.crypto.parse(&mut emitter);
+        let mut crypto_input = self.crypto;
+        let legacy_crypto = crypto_input.take_legacy_genesis();
+        let crypto = crypto_input.parse(&mut emitter);
+        let legacy_genesis =
+            legacy_genesis::parse(legacy_crypto, legacy_staking, &crypto, &mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let amx_relay = self.amx_relay.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
@@ -1444,13 +1471,17 @@ impl Root {
         if let Err(message) = snapshot.validate_read_buffer_budget() {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
+        if let Err(message) = snapshot.upgrade_checkpoint.checkpoint() {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
+        }
         // The verification attempt budget is the one local value `[confidential]` gives ZK.
         zk.verify_timeout = confidential.verify_timeout;
         emitter.into_result()?;
         soracloud_runtime.assert_runtime_posture();
         let sumeragi =
             sumeragi.expect("sumeragi configuration should be valid when emitter succeeds");
-        let nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
+        let mut nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
+        nexus.legacy_genesis = legacy_genesis;
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
@@ -2097,102 +2128,6 @@ impl SorafsTelemetryPolicy {
         }
     }
 }
-/// Runtime-upgrade provenance enforcement modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum RuntimeUpgradeProvenanceMode {
-    /// Provenance is optional; when provided it is verified.
-    #[default]
-    Optional,
-    /// Provenance is required for runtime upgrade manifests.
-    Required,
-}
-impl json::JsonSerialize for RuntimeUpgradeProvenanceMode {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-impl json::JsonDeserialize for RuntimeUpgradeProvenanceMode {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "governance.runtime_upgrade_provenance.mode".into(),
-            message: err.to_string(),
-        })
-    }
-}
-fn default_runtime_upgrade_provenance_mode() -> RuntimeUpgradeProvenanceMode {
-    RuntimeUpgradeProvenanceMode::from_str(defaults::governance::RUNTIME_UPGRADE_PROVENANCE_MODE)
-        .expect("invalid runtime upgrade provenance mode default")
-}
-/// Runtime-upgrade provenance policy (user view).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct RuntimeUpgradeProvenance {
-    /// Whether provenance is required for runtime upgrade manifests.
-    #[config(default = "default_runtime_upgrade_provenance_mode()")]
-    pub mode: RuntimeUpgradeProvenanceMode,
-    /// Require at least one SBOM digest entry when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM")]
-    pub require_sbom: bool,
-    /// Require a non-empty SLSA attestation when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA")]
-    pub require_slsa: bool,
-    /// Minimum number of trusted signatures required when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD")]
-    pub signature_threshold: usize,
-    /// Trusted signer public keys (multihash).
-    #[config(default)]
-    pub trusted_signers: Vec<String>,
-}
-impl RuntimeUpgradeProvenance {
-    fn parse(self) -> actual::RuntimeUpgradeProvenancePolicy {
-        if matches!(self.mode, RuntimeUpgradeProvenanceMode::Optional)
-            && (self.require_sbom || self.require_slsa || self.signature_threshold > 0)
-        {
-            panic!(
-                "governance.runtime_upgrade_provenance.mode=optional cannot require sbom/slsa/signatures"
-            );
-        }
-        let mut trusted_signers = BTreeSet::new();
-        for signer in self.trusted_signers {
-            let pk = PublicKey::from_str(signer.trim()).unwrap_or_else(|err| {
-                panic!("invalid runtime upgrade provenance signer {signer}: {err}");
-            });
-            trusted_signers.insert(pk);
-        }
-        if self.signature_threshold > 0 {
-            assert!(
-                !trusted_signers.is_empty(),
-                "governance.runtime_upgrade_provenance.signature_threshold requires trusted_signers"
-            );
-            assert!(
-                self.signature_threshold <= trusted_signers.len(),
-                "governance.runtime_upgrade_provenance.signature_threshold exceeds trusted_signers"
-            );
-        }
-        actual::RuntimeUpgradeProvenancePolicy {
-            mode: self.mode.into(),
-            require_sbom: self.require_sbom,
-            require_slsa: self.require_slsa,
-            trusted_signers,
-            signature_threshold: self.signature_threshold,
-        }
-    }
-}
-impl Default for RuntimeUpgradeProvenance {
-    fn default() -> Self {
-        Self {
-            mode: default_runtime_upgrade_provenance_mode(),
-            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
-            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            signature_threshold:
-                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
-            trusted_signers: Vec::new(),
-        }
-    }
-}
 /// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct ParliamentTimedOvn {
@@ -2376,9 +2311,6 @@ pub struct Governance {
     /// Allowed JDG signature schemes for attestation validation.
     #[config(default = "defaults::governance::jdg_signature_schemes()")]
     pub jdg_signature_schemes: Vec<String>,
-    /// Runtime upgrade provenance enforcement policy.
-    #[config(nested)]
-    pub runtime_upgrade_provenance: RuntimeUpgradeProvenance,
     /// Account supplying viral incentive payouts and sender bonuses.
     #[config(
         env = "GOV_VIRAL_INCENTIVE_POOL_ACCOUNT",
@@ -2603,7 +2535,6 @@ impl Default for Governance {
             alias_frontier_telemetry: defaults::governance::ALIAS_FRONTIER_TELEMETRY,
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenance::default(),
             viral_incentive_pool_account: defaults::governance::viral_incentive_pool_account(),
             viral_escrow_account: defaults::governance::viral_escrow_account(),
             viral_reward_asset_id: defaults::governance::viral_reward_asset_id(),
@@ -2748,12 +2679,16 @@ impl Governance {
             "governance.parliament_timed_ovn.max_corpus_entries must cover the largest hidden-ballot body (max(policy_jury_size, confirmation_jury_size)={maximum_hidden_body_size})"
         );
         let viral_incentives = actual::ViralIncentives {
-            incentive_pool_account: parse_account_id_literal(
+            incentive_pool_account: parse_account_or_default(
                 &self.viral_incentive_pool_account,
+                defaults::governance::viral_incentive_pool_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid viral incentive pool account id",
             ),
-            escrow_account: parse_account_id_literal(
+            escrow_account: parse_account_or_default(
                 &self.viral_escrow_account,
+                defaults::governance::viral_escrow_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid viral escrow account id",
             ),
             reward_asset_definition_id: self
@@ -2790,7 +2725,6 @@ impl Governance {
             );
         }
         let jdg_signature_schemes = normalize_jdg_signature_schemes(self.jdg_signature_schemes);
-        let runtime_upgrade_provenance = self.runtime_upgrade_provenance.parse();
         actual::Governance {
             // Relation-selecting keys are committed per election; a node names none.
             vk_ballot: None,
@@ -2804,17 +2738,23 @@ impl Governance {
                 .parse()
                 .expect("invalid citizenship asset id"),
             citizenship_bond_amount: self.citizenship_bond_amount,
-            citizenship_escrow_account: parse_account_id_literal(
+            citizenship_escrow_account: parse_account_or_default(
                 &self.citizenship_escrow_account,
+                defaults::governance::citizenship_escrow_account,
+                defaults::governance::citizenship_escrow_account_id,
                 "invalid citizenship escrow account id",
             ),
             min_bond_amount: self.min_bond_amount,
-            bond_escrow_account: parse_account_id_literal(
+            bond_escrow_account: parse_account_or_default(
                 &self.bond_escrow_account,
+                defaults::governance::bond_escrow_account,
+                defaults::governance::bond_escrow_account_id,
                 "invalid governance bond escrow account id",
             ),
-            slash_receiver_account: parse_account_id_literal(
+            slash_receiver_account: parse_account_or_default(
                 &self.slash_receiver_account,
+                defaults::governance::slash_receiver_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid governance slash receiver account id",
             ),
             slash_double_vote_bps: self.slash_double_vote_bps,
@@ -2824,15 +2764,16 @@ impl Governance {
             alias_frontier_telemetry: self.alias_frontier_telemetry,
             debug_trace_pipeline: self.debug_trace_pipeline,
             jdg_signature_schemes,
-            runtime_upgrade_provenance,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
             sorafs_pin_fee_asset_id: self
                 .sorafs_pin_fee_asset_id
                 .parse()
                 .expect("invalid SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account: parse_account_id_literal(
+            sorafs_pin_fee_treasury_account: parse_account_or_default(
                 &self.sorafs_pin_fee_treasury_account,
+                defaults::governance::sorafs_pin_fee::treasury_account,
+                defaults::governance::sorafs_pin_fee::treasury_account_id,
                 "invalid SoraFS pin fee treasury account id",
             ),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
@@ -5364,8 +5305,9 @@ pub struct StreamingCodec {
     pub cabac_mode: WithOrigin<CabacMode>,
     /// Block sizes that may use trellis scans (empty until claim-avoidance ships).
     pub trellis_blocks: WithOrigin<Vec<u16>>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact shared across encoders/decoders.
-    pub rans_tables_path: WithOrigin<PathBuf>,
+    /// Optional `SignedRansTablesV1` artefact shared across encoders/decoders. Omit it to use the
+    /// canonical tables compiled into the binary.
+    pub rans_tables_path: Option<WithOrigin<PathBuf>>,
     /// Entropy coder advertised in manifests/headers.
     pub entropy_mode: WithOrigin<String>,
     /// Bundle width for the bundled rANS path.
@@ -5388,7 +5330,7 @@ impl ReadConfigTrait for StreamingCodec {
             .finish_with_origin();
         let rans_tables_path = reader
             .read_parameter::<PathBuf>(["rans_tables_path"])
-            .value_or_else(defaults::streaming::codec::rans_tables_path)
+            .value_optional()
             .finish_with_origin();
         let entropy_mode = reader
             .read_parameter::<String>(["entropy_mode"])
@@ -5424,11 +5366,15 @@ impl StreamingCodec {
     ) -> Option<actual::StreamingCodec> {
         let cabac_mode = Self::resolve_cabac_mode(self.cabac_mode, emitter)?;
         let trellis_blocks = Self::validate_trellis_blocks(self.trellis_blocks, emitter)?;
-        let (rans_tables_path, rans_tables_origin) =
-            Self::validate_rans_tables_path(self.rans_tables_path, emitter, files)?;
         let entropy_mode = Self::parse_entropy_mode(self.entropy_mode, emitter)?;
-        let tables_max_width =
-            Self::bundle_tables_max_width(&rans_tables_path, rans_tables_origin, emitter, files)?;
+        let (rans_tables_path, tables_max_width) = match self.rans_tables_path {
+            Some(configured) => {
+                let (path, origin) = Self::validate_rans_tables_path(configured, emitter, files)?;
+                let width = Self::bundle_tables_max_width(&path, origin, emitter, files)?;
+                (Some(path), width)
+            }
+            None => (None, Self::canonical_tables_max_width(emitter)?),
+        };
         let bundle_width = Self::validate_bundle_width(
             self.bundle_width,
             entropy_mode,
@@ -5533,6 +5479,21 @@ impl StreamingCodec {
             return None;
         };
         Some((resolved, origin))
+    }
+    fn canonical_tables_max_width(emitter: &mut Emitter<ParseError>) -> Option<u8> {
+        match norito::streaming::parse_bundle_tables_from_toml(
+            defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML,
+        ) {
+            Ok(tables) => Some(tables.max_width()),
+            Err(source) => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidStreamingConfig)
+                        .attach("the compiled-in canonical rANS tables are invalid")
+                        .attach(source),
+                );
+                None
+            }
+        }
     }
     fn bundle_tables_max_width(
         rans_tables_path: &Path,
@@ -7279,8 +7240,10 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
-        let operator_account_id = parse_account_id_literal(
+        let operator_account_id = parse_account_or_default(
             &operator_account_id,
+            defaults::soranet::vpn::operator_account_id,
+            defaults::governance::bond_escrow_account_id,
             "invalid network.soranet_vpn.operator_account_id",
         );
         let operator_private_key = match (operator_private_key, operator_private_key_file) {
@@ -7610,11 +7573,11 @@ mod soranet_vpn_tests {
 pub struct Network {
     /// Peer-to-peer address (internal, will be used only to bind to it).
     #[config(env = "P2P_ADDRESS")]
-    pub address: WithOrigin<SocketAddr>,
+    pub address: WithOrigin<ConfigSocketAddr>,
     /// Peer-to-peer address (external, as seen by other peers).
     /// Will be gossiped to connected peers so that they can gossip it to other peers.
     #[config(env = "P2P_PUBLIC_ADDRESS")]
-    pub public_address: WithOrigin<SocketAddr>,
+    pub public_address: WithOrigin<ConfigSocketAddr>,
     /// P2P relay role (disabled/hub/spoke/assist) for constrained topologies.
     #[config(default = "RelayMode::Disabled")]
     pub relay_mode: RelayMode,
@@ -7623,7 +7586,7 @@ pub struct Network {
     /// When set, values are attempted in order and the node may fall back to
     /// subsequent entries if the preferred hub is unreachable.
     #[config(default)]
-    pub relay_hub_addresses: Vec<WithOrigin<SocketAddr>>,
+    pub relay_hub_addresses: Vec<WithOrigin<ConfigSocketAddr>>,
     /// Hop limit for relayed frames.
     #[config(default = "defaults::network::RELAY_TTL")]
     pub relay_ttl: u8,
@@ -8097,9 +8060,11 @@ impl Network {
             quic_max_idle_timeout_ms,
             ..
         } = self;
+        let address = address.map(ConfigSocketAddr::into_inner);
+        let public_address = public_address.map(ConfigSocketAddr::into_inner);
         let mut relay_hub_addresses: Vec<SocketAddr> = user_relay_hub_addresses
             .into_iter()
-            .map(WithOrigin::into_value)
+            .map(|address| address.into_value().into_inner())
             .collect();
         // Deduplicate while preserving operator-supplied order.
         if relay_hub_addresses.len() > 1 {
@@ -8997,6 +8962,13 @@ pub struct Crypto {
         default = "defaults::crypto::SM2_DISTID_DEFAULT.to_owned()"
     )]
     pub sm2_distid_default: String,
+    /// Retired signing allowlist of a network whose signed genesis predates genesis-authored
+    /// crypto admission. Setting it selects that network's legacy genesis profile
+    /// (`legacy_genesis`); every other network authors the policy in genesis.
+    pub allowed_signing: Option<AlgorithmListConfig>,
+    /// Retired curve allowlist configured together with `allowed_signing`.
+    #[config(nested)]
+    pub curves: CryptoCurves,
 }
 impl Crypto {
     /// Convert this user configuration into the runtime representation.
@@ -9504,7 +9476,7 @@ impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
     }
 }
 /// Validator modes and capacity; monetary terms come from committed State.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
@@ -9516,11 +9488,37 @@ pub struct NexusStaking {
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
+    /// Retired monetary terms of the legacy genesis profile (`crypto.allowed_signing`); a
+    /// genesis that authors its staking policy refuses them. Omitted terms take the
+    /// retired V1 defaults.
+    pub min_validator_stake: Option<Quantity>,
+    /// Retired maximum stake-share rows per validator of the legacy genesis profile.
+    pub max_stake_shares_per_validator: Option<NonZeroU32>,
+    /// Retired maximum pending unbonds per share of the legacy genesis profile.
+    pub max_pending_unbonds_per_share: Option<NonZeroU32>,
+    /// Retired unbonding delay of the legacy genesis profile.
+    pub unbonding_delay_ms: Option<DurationMs>,
+    /// Retired maximum slash ratio (basis points) of the legacy genesis profile.
+    pub max_slash_bps: Option<u16>,
+    /// Retired stake asset literal of the legacy genesis profile.
+    pub stake_asset_id: Option<String>,
+    /// Retired stake escrow account literal of the legacy genesis profile.
+    pub stake_escrow_account_id: Option<String>,
+    /// Retired slash sink account literal of the legacy genesis profile.
+    pub slash_sink_account_id: Option<String>,
 }
 impl_default!(NexusStaking {
     public_validator_mode: LaneValidatorModeConfig::StakeElected,
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    min_validator_stake: None,
+    max_stake_shares_per_validator: None,
+    max_pending_unbonds_per_share: None,
+    unbonding_delay_ms: None,
+    max_slash_bps: None,
+    stake_asset_id: None,
+    stake_escrow_account_id: None,
+    slash_sink_account_id: None,
 });
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
@@ -10511,16 +10509,6 @@ impl_default!(NexusAxt {
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Whether admission is enabled, subject to the governed activation height.
-    #[config(default = "defaults::nexus::atomic_private_settlement::ENABLED")]
-    pub enabled: bool,
-    /// First block height at which the path may be admitted.
-    pub activation_height: Option<u64>,
-    /// Minimum governance notice before activation, in blocks.
-    #[config(
-        default = "defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS"
-    )]
-    pub minimum_activation_notice_blocks: u64,
     /// Audited fixed-shape private-note proof profile version.
     #[config(default = "defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION")]
     pub proof_profile_version: u16,
@@ -10575,10 +10563,6 @@ pub struct NexusAtomicPrivateSettlement {
     pub permitted_policy_versions: Vec<u16>,
 }
 impl_default!(NexusAtomicPrivateSettlement {
-    enabled: defaults::nexus::atomic_private_settlement::ENABLED,
-    activation_height: None,
-    minimum_activation_notice_blocks:
-        defaults::nexus::atomic_private_settlement::MINIMUM_ACTIVATION_NOTICE_BLOCKS,
     proof_profile_version: defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
     max_participants: defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
     max_expiry_blocks: defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
@@ -10604,13 +10588,6 @@ impl NexusAtomicPrivateSettlement {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::NexusAtomicPrivateSettlement> {
         let mut invalid = false;
-        if self.enabled && self.activation_height.is_none() {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.atomic_private_settlement.enabled requires activation_height"),
-            );
-        }
         macro_rules! nonzero_u64 {
             ($value:expr, $field:literal) => {{
                 NonZeroU64::new($value).unwrap_or_else(|| {
@@ -10623,10 +10600,6 @@ impl NexusAtomicPrivateSettlement {
                 })
             }};
         }
-        let minimum_activation_notice_blocks = nonzero_u64!(
-            self.minimum_activation_notice_blocks,
-            "nexus.atomic_private_settlement.minimum_activation_notice_blocks"
-        );
         let max_expiry_blocks = nonzero_u64!(
             self.max_expiry_blocks,
             "nexus.atomic_private_settlement.max_expiry_blocks"
@@ -10856,9 +10829,6 @@ impl NexusAtomicPrivateSettlement {
             return None;
         }
         Some(actual::NexusAtomicPrivateSettlement {
-            enabled: self.enabled,
-            activation_height: self.activation_height,
-            minimum_activation_notice_blocks,
             proof_profile_version,
             max_participants,
             max_expiry_blocks,
@@ -11030,6 +11000,7 @@ impl Nexus {
             }
         }
         Some(actual::Nexus {
+            legacy_genesis: None,
             fees: defaults::nexus::fees::genesis_policy(),
             storage,
             staking,
@@ -12458,6 +12429,119 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<PrivateKey>,
+    /// Last block executed by the previous node release of this running network.
+    #[config(nested)]
+    pub upgrade_checkpoint: SnapshotUpgradeCheckpoint,
+}
+/// Last block executed by the previous node release of a running network.
+///
+/// A release whose execution writes differ from its predecessor's cannot re-execute the history
+/// the predecessor certified. With a checkpoint it restores the World at `height` from the
+/// predecessor's signed snapshot, proves that World against the block's certified World root and
+/// executes from the next block on. Blocks at or below the checkpoint are never re-executed.
+#[derive(Debug, Clone, Default, ReadConfig)]
+pub struct SnapshotUpgradeCheckpoint {
+    /// Height of the last block the previous release executed.
+    pub height: Option<u64>,
+    /// Hex hash (64 digits) of that block.
+    pub block_hash: Option<String>,
+    /// Public key that signed the checkpoint snapshot when another validator produced it.
+    pub signer: Option<PublicKey>,
+}
+/// A validated [`SnapshotUpgradeCheckpoint`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeCheckpoint {
+    /// Height of the last block the previous release executed.
+    pub height: u64,
+    /// Hash of that block.
+    pub block_hash: [u8; 32],
+    /// Signer of the checkpoint snapshot when it is not the node's own snapshot key.
+    pub signer: Option<PublicKey>,
+}
+impl SnapshotUpgradeCheckpoint {
+    /// The configured checkpoint, or `None` when this network has none.
+    ///
+    /// # Errors
+    /// Only one of `height` and `block_hash` is set, the height is below 2 (genesis is always
+    /// re-executed), or the hash is not 64 hex digits.
+    pub fn checkpoint(&self) -> core::result::Result<Option<UpgradeCheckpoint>, String> {
+        let (height, block_hash) = match (self.height, self.block_hash.as_deref()) {
+            (None, None) => {
+                if self.signer.is_some() {
+                    return Err(
+                        "snapshot.upgrade_checkpoint.signer needs height and block_hash".to_owned(),
+                    );
+                }
+                return Ok(None);
+            }
+            (Some(height), Some(block_hash)) => (height, block_hash),
+            _ => {
+                return Err(
+                    "snapshot.upgrade_checkpoint needs both height and block_hash".to_owned(),
+                );
+            }
+        };
+        if height < 2 {
+            return Err("snapshot.upgrade_checkpoint.height must be at least 2".to_owned());
+        }
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(block_hash.trim(), &mut bytes).map_err(|error| {
+            format!("snapshot.upgrade_checkpoint.block_hash must be 64 hex digits: {error}")
+        })?;
+        Ok(Some(UpgradeCheckpoint {
+            height,
+            block_hash: bytes,
+            signer: self.signer.clone(),
+        }))
+    }
+}
+#[cfg(test)]
+mod upgrade_checkpoint_tests {
+    use super::*;
+
+    const HASH: &str = "889e753c2f11c8836f7fdd651132c7b9f5fcf3c5ed6b7a1531b6fd4911c855a3";
+
+    fn checkpoint(height: Option<u64>, block_hash: Option<&str>) -> SnapshotUpgradeCheckpoint {
+        SnapshotUpgradeCheckpoint {
+            height,
+            block_hash: block_hash.map(str::to_owned),
+            signer: None,
+        }
+    }
+
+    #[test]
+    fn absent_checkpoint_is_none() {
+        assert_eq!(checkpoint(None, None).checkpoint(), Ok(None));
+    }
+
+    #[test]
+    fn checkpoint_parses_height_and_hash() {
+        let parsed = checkpoint(Some(5518), Some(HASH))
+            .checkpoint()
+            .expect("valid checkpoint")
+            .expect("configured");
+        assert_eq!(parsed.height, 5518);
+        assert_eq!(hex::encode(parsed.block_hash), HASH);
+        assert_eq!(parsed.signer, None);
+    }
+
+    #[test]
+    fn checkpoint_refuses_partial_genesis_and_malformed_values() {
+        assert!(checkpoint(Some(5518), None).checkpoint().is_err());
+        assert!(checkpoint(None, Some(HASH)).checkpoint().is_err());
+        assert!(checkpoint(Some(1), Some(HASH)).checkpoint().is_err());
+        assert!(
+            checkpoint(Some(5518), Some(&HASH[2..]))
+                .checkpoint()
+                .is_err()
+        );
+        assert!(checkpoint(Some(5518), Some("zz")).checkpoint().is_err());
+        let signer_only = SnapshotUpgradeCheckpoint {
+            signer: Some(iroha_crypto::KeyPair::random().public_key().clone()),
+            ..checkpoint(None, None)
+        };
+        assert!(signer_only.checkpoint().is_err());
+    }
 }
 impl Snapshot {
     fn validate_read_buffer_budget(&self) -> core::result::Result<(), String> {
@@ -13766,7 +13850,7 @@ impl core::fmt::Debug for RedactedConfigSecret {
 pub struct Torii {
     /// Listening address for the public Torii API.
     #[config(env = "API_ADDRESS")]
-    pub address: WithOrigin<SocketAddr>,
+    pub address: WithOrigin<ConfigSocketAddr>,
     /// Maximum HTTP payload size accepted by the API.
     #[config(default = "defaults::torii::MAX_CONTENT_LEN")]
     pub max_content_len: Bytes,
@@ -15285,7 +15369,7 @@ impl Torii {
             actual::AttachmentSanitizerMode::Subprocess
         });
         let torii = actual::Torii {
-            address: self.address,
+            address: self.address.map(ConfigSocketAddr::into_inner),
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
             receipt_signer,
@@ -33410,7 +33494,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Forced),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
             bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33424,9 +33508,9 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(PathBuf::from(
+            rans_tables_path: Some(WithOrigin::inline(PathBuf::from(
                 "codec/rans/tables/does_not_exist.toml",
-            )),
+            ))),
             entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
             bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33436,11 +33520,32 @@ mod configuration_regression_tests {
         assert!(emitter.into_result().is_err());
     }
     #[test]
+    fn codec_parse_uses_compiled_in_tables_without_a_path() {
+        let codec = StreamingCodec {
+            cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+            trellis_blocks: WithOrigin::inline(Vec::new()),
+            rans_tables_path: None,
+            entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
+            bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
+            bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
+        };
+        let mut emitter = Emitter::new();
+        let parsed = codec
+            .parse(&mut emitter)
+            .expect("omitted table path selects the compiled-in canonical tables");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.rans_tables_path, None);
+        assert_eq!(
+            defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML.as_bytes(),
+            fs::read(bundled_tables_path()).expect("repository tables")
+        );
+    }
+    #[test]
     fn codec_parse_rejects_unknown_entropy_mode() {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline("invalid".to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33455,7 +33560,7 @@ mod configuration_regression_tests {
             let codec = StreamingCodec {
                 cabac_mode: WithOrigin::inline(CabacMode::Disabled),
                 trellis_blocks: WithOrigin::inline(Vec::new()),
-                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
                 entropy_mode: WithOrigin::inline(entropy_mode.to_owned()),
                 bundle_width: WithOrigin::inline(2),
                 bundle_accel: WithOrigin::inline("cpu_simd".to_owned()),
@@ -33468,7 +33573,7 @@ mod configuration_regression_tests {
             let codec = StreamingCodec {
                 cabac_mode: WithOrigin::inline(CabacMode::Disabled),
                 trellis_blocks: WithOrigin::inline(Vec::new()),
-                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
                 entropy_mode: WithOrigin::inline("rans_bundled".to_owned()),
                 bundle_width: WithOrigin::inline(2),
                 bundle_accel: WithOrigin::inline(bundle_accel.to_owned()),
@@ -33489,7 +33594,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33513,7 +33618,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline("cpu_simd".to_string()),
@@ -33535,7 +33640,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline("gpu".to_string()),
@@ -34061,12 +34166,38 @@ mod configuration_regression_tests {
         );
     }
     #[test]
-    fn governance_default_account_literals_reject_foreign_chain_override() {
+    fn governance_default_accounts_parse_under_any_chain_prefix() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
-        let result = std::panic::catch_unwind(|| Governance::default().parse());
+        let parsed = Governance::default().parse();
+        let default_account = defaults::governance::bond_escrow_account_id();
+        assert_eq!(parsed.bond_escrow_account, default_account);
+        assert_eq!(parsed.citizenship_escrow_account, default_account);
+        assert_eq!(parsed.slash_receiver_account, default_account);
+        assert_eq!(
+            parsed.viral_incentives.incentive_pool_account,
+            default_account
+        );
+        assert_eq!(
+            parsed.sorafs_pin_fee_treasury_account,
+            defaults::governance::sorafs_pin_fee::treasury_account_id()
+        );
+    }
+    #[test]
+    fn explicit_governance_account_literals_reject_foreign_chain_prefix() {
+        let account = AccountId::new(
+            "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                .parse()
+                .expect("public key"),
+        );
+        let mut governance = Governance::default();
+        governance.bond_escrow_account = account
+            .to_i105_for_discriminant(defaults::common::chain_discriminant())
+            .expect("default-prefix literal");
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+        let result = std::panic::catch_unwind(move || governance.parse());
         assert!(
             result.is_err(),
-            "account literals for another chain discriminant must be rejected"
+            "a configured literal for another chain discriminant must be rejected"
         );
     }
     #[test]

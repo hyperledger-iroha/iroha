@@ -33,8 +33,11 @@
 //!
 //! **Destination watch** (`[sccp.keeper].watch`) reads bounded EVM log ranges and TON
 //! transaction pages, including older-history backfill. Discovered certificate bytes pass
-//! the original-state forgery verifier and retained anchor roots before submission. Cursor
-//! storage has a finite allocation pool; local refusal retains the discovery position.
+//! the original-state forgery verifier and retained anchor roots before submission; evidence
+//! that the §4.9 step-7 predicate finds duplicate retires its discovery item. Its queue
+//! admission skips the node-wide pairing bucket that remote floods share, but still pays the
+//! pairing. Cursor storage has a finite allocation pool; local refusal retains the discovery
+//! position.
 //!
 //! # Task structure of the light-client duty
 //!
@@ -93,7 +96,7 @@ use iroha_core::{
         light_clients::{WorldLightClientView, admission_profiles, preverify_keeper_advance},
         store,
     },
-    state::{State, StateReadOnly, WorldReadOnly},
+    state::{State, StateReadOnly},
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
@@ -550,7 +553,8 @@ impl std::error::Error for RejectedSourceAdvance {}
 /// `instruction`.
 ///
 /// The keeper key's account is neither registered nor funded, so the transaction is submitted
-/// only when it is quoted fee-exempt (§4.19).
+/// only when it is quoted fee-exempt (§4.19). It enters the queue as this node's own keeper
+/// submission ([`Queue::push_local_keeper_with_state`]).
 fn submit_transaction(
     state: &State,
     queue: &Queue,
@@ -621,8 +625,10 @@ fn submit_transaction_at(
         crate::accept_internal_transaction(transaction, state.network_id_ref(), &parameters)
     }
     .wrap_err("accept SCCP transaction")?;
+    // The keeper's own submissions: forgery evidence skips the pairing bucket that remote
+    // floods share, so forgers cannot delay it (§4.9 ingress).
     queue
-        .push_with_lane_with_state(accepted, state)
+        .push_local_keeper_with_state(accepted, state)
         .map(|_| ())
         .map_err(|failure| eyre::eyre!("enqueue SCCP transaction: {}", failure.err))
 }
@@ -1392,7 +1398,11 @@ mod tests {
 
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_config_base::WithOrigin;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{World, WorldReadOnly},
+    };
     use iroha_data_model::sccp::light_client::{SccpLcFreezeReasonV1, SccpLcParliamentFreezeV1};
 
     use super::{fakes::*, *};
@@ -1756,13 +1766,8 @@ mod tests {
                     iroha_primitives::json::Json::new(metadata),
                 )))
                 .expect("install the signed SCCP handshake fixture");
-            block
-                .set_parameter_for_testing(
-                    crate::daemon_fixture_crypto_policy()
-                        .into_parameter()
-                        .expect("encode the explicit keeper fixture crypto policy"),
-                )
-                .expect("install the keeper fixture's committed crypto policy");
+            // Leave the crypto policy absent for the first admission probe; the
+            // subsequent probes install explicit disallowed and allowed policies.
             block
                 .set_parameter_for_testing(Parameter::Custom(
                     iroha_config::parameters::defaults::nexus::fees::genesis_policy()
@@ -1788,11 +1793,18 @@ mod tests {
                 .commit_world_overlay_for_testing()
                 .expect("commit SCCP parameters");
         }
-        let key = KeyPair::random();
+        let key = KeyPair::from_seed(vec![0x5c; 32], iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(key.public_key().clone());
         assert!(
             state.view().world().account(&authority).is_err(),
             "the keeper key has no account"
+        );
+        assert!(
+            state
+                .transaction_admission_parameters()
+                .crypto_policy()
+                .is_none(),
+            "the initial probe requires a missing committed crypto policy"
         );
         let error = submit_transaction_at(
             &state,

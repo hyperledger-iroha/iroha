@@ -285,6 +285,95 @@ impl Drop for StopOnDrop {
     }
 }
 
+/// Retain the live walkthrough's diagnostics and attempt authenticated cleanup from launch onward.
+struct LiveWalkthroughCleanup {
+    temporary: Option<tempfile::TempDir>,
+    workspace: DeveloperWorkspace,
+    network: Option<ManagedNetwork>,
+    stopped: bool,
+}
+
+impl LiveWalkthroughCleanup {
+    fn stop(&mut self) -> UiResult<ManagedStatus> {
+        // Before Ready, only this fresh private fixture can have created `local`.
+        // Once captured, never resolve its name again during cleanup.
+        if self.network.is_none() {
+            self.network = Some(
+                self.workspace
+                    .network(Some("local"))
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        let status = self
+            .workspace
+            .stop(self.network.as_ref().expect("captured cleanup target"))
+            .map_err(|error| error.to_string())?;
+        if !matches!(status.phase, ManagedPhase::Stopped | ManagedPhase::Failed)
+            || status.running_peers != 0
+        {
+            return Err(format!(
+                "cleanup did not confirm zero owned validators: {status:?}"
+            ));
+        }
+        self.stopped = true;
+        eprintln!(
+            "MOCHI_LIVE_STOPPED phase={:?} running_peers=0",
+            status.phase
+        );
+        Ok(status)
+    }
+}
+
+impl Drop for LiveWalkthroughCleanup {
+    fn drop(&mut self) {
+        if !self.stopped
+            && let Err(error) = self.stop()
+        {
+            eprintln!("MOCHI_LIVE_CLEANUP_UNCONFIRMED: {error}");
+        }
+        if let Some(temporary) = self.temporary.take() {
+            eprintln!("MOCHI_LIVE_DIAGNOSTICS={}", temporary.keep().display());
+        }
+    }
+}
+
+#[test]
+fn live_walkthrough_cleanup_retains_diagnostics_before_a_generation_exists() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().to_path_buf();
+    let project = path.join("project");
+    let bin = path.join("bin");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&bin).unwrap();
+    for name in ["kagami", "iroha3d"] {
+        std::fs::copy(
+            std::env::current_exe().unwrap(),
+            bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .unwrap();
+    }
+    let workspace = DeveloperWorkspace::with_runtime(
+        &path.join("state"),
+        &project,
+        InstalledRuntime::from_directory(&bin).unwrap(),
+    )
+    .unwrap();
+    let mut cleanup = LiveWalkthroughCleanup {
+        temporary: Some(temporary),
+        workspace,
+        network: None,
+        stopped: false,
+    };
+    assert!(cleanup.stop().is_err());
+    assert!(!cleanup.stopped);
+    drop(cleanup);
+    assert!(
+        project.exists(),
+        "unconfirmed cleanup retains original diagnostics"
+    );
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 fn entry(
     title: &str,
     subtitle: &str,
@@ -657,10 +746,7 @@ fn run_call(desktop: &mut Desktop, entrypoint: &str, arguments: &str, mutate: bo
 #[test]
 #[ignore = "starts genuine validators; set MOCHI_PREVIEW_RUNTIME and MOCHI_PREVIEW_OUT"]
 fn live_walkthrough_with_a_real_generation() {
-    let Some(runtime) = std::env::var_os("MOCHI_PREVIEW_RUNTIME") else {
-        eprintln!("MOCHI_PREVIEW_RUNTIME is unset; nothing rendered");
-        return;
-    };
+    let runtime = std::env::var_os("MOCHI_PREVIEW_RUNTIME").expect("MOCHI_PREVIEW_RUNTIME");
     let out = PathBuf::from(std::env::var_os("MOCHI_PREVIEW_OUT").expect("MOCHI_PREVIEW_OUT"))
         .join("live");
     std::fs::create_dir_all(&out).unwrap();
@@ -674,6 +760,13 @@ fn live_walkthrough_with_a_real_generation() {
         InstalledRuntime::from_directory(Path::new(&runtime)).unwrap(),
     )
     .unwrap();
+    eprintln!("MOCHI_LIVE_STORE={}", workspace.state_root().display());
+    let mut cleanup = LiveWalkthroughCleanup {
+        temporary: Some(temporary),
+        workspace: workspace.clone(),
+        network: None,
+        stopped: false,
+    };
     let mut desktop = Desktop::model(project.clone());
     desktop.install_opened(inspect_workspace(workspace.clone()).unwrap());
     let mut light = Renderer::new(Theme::Light);
@@ -694,7 +787,7 @@ fn live_walkthrough_with_a_real_generation() {
     assert!(desktop.error.is_none(), "{:?}", desktop.error);
     assert!(desktop.ready(), "Quickstart selects the Ready localnet");
     let network = workspace.network(Some("local")).unwrap();
-    let _stop = StopOnDrop(Some((workspace.clone(), network.clone())));
+    cleanup.network = Some(network.clone());
     capture_after(
         &mut light,
         &mut desktop,
@@ -894,6 +987,12 @@ fn live_walkthrough_with_a_real_generation() {
     let mut dark = Renderer::new(Theme::Dark);
     desktop.brand = brand::Brand::load(&dark.context);
     dark.capture(&mut desktop, &out.join("12-home-final-dark.ppm"));
+    drop(desktop);
+    let stopped = cleanup
+        .stop()
+        .expect("live walkthrough cleanup must be authenticated");
+    assert_eq!(stopped.phase, ManagedPhase::Stopped);
+    assert_eq!(stopped.running_peers, 0);
 }
 
 /// Review the selected quick action through the observed validator's fee quote.

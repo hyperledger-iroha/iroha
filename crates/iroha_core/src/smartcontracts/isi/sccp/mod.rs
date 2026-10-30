@@ -8,7 +8,7 @@
 //! |---|---|
 //! | [`init`], [`params`], [`admission`], [`fees`] | ws31 (inbound eligibility arms: ws41) |
 //! | [`hook`], [`commitment`] | ws30 |
-//! | [`outbound`], [`escrow`], [`recipients`] | ws32 |
+//! | [`outbound`], [`escrow`], [`conservation`], [`recipients`] | ws32 |
 //! | [`registry`], [`governance`], [`controls`], [`light_clients`] (Parliament half) | ws33 |
 //! | [`light_clients`] (advance half), [`inbound`], [`settle`], [`voids`], [`self_claim`] | ws41 |
 //! | [`read`] (views served by Torii) | ws35 |
@@ -23,6 +23,7 @@ pub mod anchor_storage;
 pub mod anchors;
 pub mod commitment;
 pub mod committee_storage;
+pub mod conservation;
 pub mod controls;
 pub(crate) mod eligibility;
 pub mod escrow;
@@ -122,15 +123,37 @@ macro_rules! delegate_execute {
     )+};
 }
 
+/// Implement [`Execute`] like [`delegate_execute`] for each instruction that can move escrow
+/// value or change liability or `stranded`, and refuse any execution that is not a balanced
+/// entry ([`conservation::ValueGuard`], §4.15).
+macro_rules! delegate_value_execute {
+    ($($instruction:ty => $entry:expr),+ $(,)?) => {$(
+        impl Execute for $instruction {
+            fn execute(
+                self,
+                authority: &AccountId,
+                state_transaction: &mut StateTransaction<'_, '_>,
+            ) -> Result<(), Error> {
+                let guard = conservation::ValueGuard::capture(&*state_transaction.world)?;
+                ($entry)(self, authority, state_transaction)?;
+                guard.verify(&*state_transaction.world)
+            }
+        }
+    )+};
+}
+
+delegate_value_execute! {
+    RecordSccpMessage => outbound::execute_record,
+    SubmitSccpInboundMessageV1 => inbound::execute_submit_inbound,
+    SettleSccpV1 => settle::execute_settle,
+    SubmitSccpOutboundVoidV1 => |instruction, authority, state| voids::execute_submit_void(&instruction, authority, state),
+}
+
 delegate_execute! {
     iroha_data_model::isi::chain::Keepalive => keepalive::execute,
     InitializeSccpV1 => init::execute_initialize,
     AcceptSccpPausePanelSeatV1 => fast_pause::execute_accept,
     EndorseSccpFastPauseV1 => fast_pause::execute_endorse,
-    RecordSccpMessage => outbound::execute_record,
-    SubmitSccpInboundMessageV1 => inbound::execute_submit_inbound,
-    SettleSccpV1 => settle::execute_settle,
-    SubmitSccpOutboundVoidV1 => |instruction, authority, state| voids::execute_submit_void(&instruction, authority, state),
     ProveSccpForgedMintV1 => |instruction, authority, state| reconciliation::execute_prove(&instruction, authority, state),
     AdvanceSccpLightClientV1 => |instruction, authority, state| light_clients::execute_advance(&instruction, authority, state),
     ReportSccpLightClientEquivocationV1 => |instruction, authority, state| light_clients::execute_report_equivocation(&instruction, authority, state),

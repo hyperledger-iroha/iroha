@@ -163,7 +163,8 @@ fn forgery_record_preserves_new_offender_subset_and_rejects_bad_attribution_shap
     bad.offenders.clear();
     assert_eq!(
         bad.validate_shape(),
-        Err(SccpNativeDataError::OffenderCount)
+        Ok(()),
+        "a forgery signed only by unslashable members is still recorded"
     );
     bad = good.clone();
     bad.offenders = vec![good.offenders[0].clone(); 32];

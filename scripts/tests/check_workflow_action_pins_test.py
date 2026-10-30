@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts" / "check_workflow_action_pins.py"
@@ -119,6 +121,23 @@ class WorkflowActionPinsTests(unittest.TestCase):
 
         self.assertEqual(empty.returncode, 1)
         self.assertIn("contains no YAML files", empty.stderr)
+
+    def test_release_jobs_install_the_tools_they_execute(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/workspace_release.yml").read_text()
+        )
+        required = {
+            "release-diagnostics": {"cargo-nextest"},
+            "coverage": {"cargo-nextest", "cargo-llvm-cov"},
+        }
+        for job, tools in required.items():
+            installed = set()
+            for step in workflow["jobs"][job]["steps"]:
+                if step.get("uses", "").startswith("taiki-e/install-action@"):
+                    selected = step.get("with", {}).get("tool", "")
+                    self.assertTrue(selected, f"{job}: install-action requires tool")
+                    installed.update(selected.replace(",", " ").split())
+            self.assertTrue(tools <= installed, f"{job}: missing {tools - installed}")
 
     def test_repository_workflows_are_fully_pinned(self) -> None:
         result = run_checker(ROOT / ".github" / "workflows")

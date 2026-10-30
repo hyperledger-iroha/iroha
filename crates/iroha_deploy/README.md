@@ -46,6 +46,11 @@ What exists so far:
   Startup transfers the original runtime lock through inherited stdin, preserving ownership
   through worker loading and into its validator children. Unix retains the shared native file
   lock; Windows relies on the trusted inherited handle's writer exclusion.
+  The frontend retains all eight bound loopback sockets until authenticated native handoff
+  to its worker. The worker keeps them through validator startup and internal restarts,
+  transferring each pair only to its owned child after kernel process-identity checks.
+  Receivers verify the exact configured addresses before acknowledging adoption. Starting
+  a stopped generation reacquires its original endpoints and fails if they are occupied.
   Binary verification, worker loading, activation and Ready publication share the original
   startup budget. A same-boot continuous deadline includes suspend across the handoff;
   clock failures refuse startup. Selection preparation, including fresh generation validation,
@@ -104,7 +109,8 @@ What exists so far:
 - `sora_network` and `genesis`: canonical configuration generation, independent private
   authority seeds, profile policy and genuine core genesis execution for Nexus, the public
   Taira chain and the private dataspace presets (`kagami sora-network`), plus owner-private
-  roots. `localnet` is the dedicated developer generator behind `kagami localnet generate`
+  roots. `network` signs genesis and writes the shared `network.toml` for validators that
+  hold their own keys (`kagami network create`), with no Sora profile. `localnet` is the dedicated developer generator behind `kagami localnet generate`
   and `kagami localnet up`: it refuses public chain identities and Sora profiles, and emits
   peer configs limited to node essentials with no faucet, onboarding, fee sponsorship,
   alias setup or SoraNet VPN operator. Its `service_authorities` module is the opt-in
@@ -142,7 +148,9 @@ What exists so far:
   an existing parent attachment. After namespace completion, a certified parent
   World projection authenticates the exact active owner and lease generation.
   Only `attachment` receipts confirm anchoring. Native supervisor scheduling and CLI/GUI
-  wiring share this owner; combined real-network qualification remains outstanding.
+  wiring share this owner. The installed CLI passes the disposable four-parent/four-private
+  attachment, deployment, execution, recovery and parent-anchoring fixture on macOS.
+  Live Taira, native desktop and other-platform qualification remain outstanding.
   Initial custody directories publish their complete records and locks atomically;
   interrupted staging cannot leave an empty operation journal at its final path.
 - `definition`: parsers and validation for network definitions

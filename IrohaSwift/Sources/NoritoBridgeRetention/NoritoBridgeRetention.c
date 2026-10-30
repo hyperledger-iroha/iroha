@@ -207,6 +207,7 @@ static NoritoBridgeExportReference volatile required_exports[] = {
     (NoritoBridgeExportReference)iroha_privacy_free_buffer,
     (NoritoBridgeExportReference)iroha_privacy_validate_compiled_profile_catalog_v1,
     (NoritoBridgeExportReference)iroha_privacy_validate_exact12_capability_manifest_v1,
+    (NoritoBridgeExportReference)iroha_privacy_validate_exact12_submit_proof_construction_v1,
     (NoritoBridgeExportReference)iroha_privacy_validate_exact12_fixture_bundle_v1,
     (NoritoBridgeExportReference)soranet_mldsa_generate_keypair,
     (NoritoBridgeExportReference)soranet_mldsa_parameters,

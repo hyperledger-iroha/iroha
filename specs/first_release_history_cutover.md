@@ -16,13 +16,15 @@ A history is one signed genesis and the certified blocks built on it, all in the
 current canonical layouts. The genesis hash fixes the `NetworkId`, the consensus
 instance peers bind in the handshake, and the network a Kura store is bound to.
 
-Strict startup (`iroha_core::sumeragi::node::prepare`) starts from an empty
-State: it re-executes the stored genesis, replays every stored block, compares
-each result with the block's CommitQC, and finally compares the advanced World
-accumulator with a cold capture. Any difference is `NodeError::Replay` and the
-node does not start. A store whose durable journal names another network is
-refused before a State is anchored to it, and a supplied genesis that is not the
-stored one is refused before anything is applied.
+Strict startup (`iroha_core::sumeragi::node::prepare`) either starts from an empty
+State and re-executes the stored genesis, or resumes a restored native tip whose
+World passed the successor-root check described below. It replays every stored
+block after that tip, compares each replayed result with the block's CommitQC,
+and finally compares the advanced World accumulator with a cold capture. A
+replay difference is `NodeError::Replay` and the node does not start. A store whose
+durable journal names another network is refused before a State is anchored to
+it, and a supplied genesis that is not the stored one is refused before anything
+is applied.
 
 Every history-bearing wire type admits exactly one version (`history_wire` in
 the inventory). A stored block is the version byte `1`, the Norito header with
@@ -111,28 +113,21 @@ block policy. The pinned replay reads these exact values from the restored
 State and still verifies the native certified result, World root and execution
 tip. No old-cap exception or alternate decoder is retained.
 
-The 2026-10-20 capture replaces the preceding pinned frames with the current
-canonical block, transaction and result layouts. Its signed genesis funds the
-fixture's fee payers, and both ordinary `Log` transactions carry the exact Nexus
-fee limits required by the committed root policy. This declares `fresh_genesis`
-for the history wire, genesis and execution semantics represented by this
-fixture. The previous capture is rejected during canonical frame decoding; it
-is replaced directly, without an alternate decoder or a replay exception. The
-four-validator exporter and pinned replay check the new frames, complete World
-root and execution tip through the existing production paths.
+The 2026-10-28 capture uses the current canonical block, transaction and result
+layouts and the current World schema. The privacy protocol-policy table directly
+replaces the retired qualification and activation tables, changing the schema
+identity and empty predecessor root. The signed genesis authors the crypto
+admission, execution and Nexus policies required by ordinary execution; the
+fixture's fee payers are funded and both ordinary `Log` transactions carry the
+exact Nexus fee limits. This declares `fresh_genesis` for `state_layout`,
+`execution_root`, `genesis` and `execution_semantics` represented by this fixture.
 
-The ordinary signing-policy cutover declares `fresh_genesis` for `genesis` and
-`execution_semantics`. Genesis must contain exactly one signed
-`crypto_admission_policy_v1` parameter; the initial policy is selected only from
-that authenticated source before ordinary account or transaction admission.
-The preceding pinned genesis omits the parameter and is refused. Regenerate
-this fixture through its four-validator exporter with the explicit Ed25519,
-Secp256k1 and BLS-normal policy authored by the node fixture, and record the
-actual frame digest in the inventory. The native replay still checks every
-certificate, block hash, complete World root and execution tip, and still
-rejects an altered stored frame. No policy is injected during replay, no
-missing-policy default is introduced, and this local artifact replacement
-authorizes no live reset.
+The four-validator exporter creates new canonical frames and records their
+actual digest in the inventory. Pinned replay checks every certificate, block
+hash, complete World root and execution tip and rejects an altered stored frame.
+The previous capture is replaced directly; no policy is injected during replay,
+no missing-policy default or old-layout decoder is introduced, and this local
+artifact replacement authorizes no live reset.
 
 ## Deliberately incompatible change
 
@@ -211,19 +206,24 @@ declaration says no fresh genesis is needed. It compares bytes: it computes no
 ABI hash and admits no contract, which `abi_hash_versions` and the admission
 tests do.
 
-Declared cutover, 2026-10-05: surface `abi`, cutover `contract_redeployment`.
-Commit `a5d2617d6a` replaced the body of `CallSchemaV1`, the argument and result
-schema of every contract callable, with the compact CS1 body, and rewrote the
-`call_table_layout` clause of the hashed descriptor to describe it. That clause
-is the only difference between the descriptors before and after the commit; the
-syscall list, signatures and pointer types are unchanged and the ABI version
-stays 1. The hash is now
-`c7281066ec6f2fb47a2b0051c1d2ac95562f6ca7a576011cf173e07e845fdec1`. A contract
-compiled before the change is refused twice, by the callable decoder and by the
-manifest `abi_hash` comparison: recompile and redeploy it. No alias for the
-former hash and no second decoder exists. The pinned history holds no contract
-and no runtime-ABI record, so this cutover takes no fresh genesis. No live
-network was changed.
+Declared ABI cutover: surface `abi`, cutover `contract_redeployment`. The
+current sole V1 descriptor binds the compact CS1 callable schema, declared
+permission identities, authenticated native event schemas, typed contract-call
+arguments and results, generation-bound aliases, and the current asset UID,
+linked-FI and escrow custody operations. Its generated hash is recorded in the
+[ABI header contract](ivm_header.md) and the shared
+`crates/iroha_data_model/tests/fixtures/abi_v1_hash.rs` golden; the inventory
+pins that same complete descriptor.
+
+The operation-tagged `0xA0` bridge accepts `1=SubmitBallot` and
+`2=SubmitPrivacyZkX509CertificateV1`. Tag 2 consumes original signed attachment
+custody and returns a queued action ordinal; it does not report proof success or
+applied effects. Neither tag accepts `RecordSccpMessage` or arbitrary
+instructions. Contracts carrying an obsolete interface or ABI hash must be
+recompiled and redeployed; there is no hash alias or compatibility decoder.
+The pinned history holds no contract or runtime-ABI record, so this ABI cutover
+alone does not require fresh genesis for that fixture. A history that holds
+either requires fresh genesis with the cutover.
 
 Declared cutover, 2026-10-05 (ZK delivery plan task F.4): surfaces `genesis` and
 `execution_semantics`, cutover `fresh_genesis`. Every limit, window, verifier
@@ -289,9 +289,45 @@ that still encodes the former list produces transactions every node refuses at
 decode. No live network was changed. The inventory has no key for this
 declaration yet; the guard checks only the `abi` one.
 
+Declared cutover, 2026-10-30 (live-upgrade foundation, `live_runtime_upgrades.md`
+§14 step 2): surfaces `state_layout` and `execution_root`, cutover
+`fresh_genesis`. A World of this build is founded on the baseline catalog: it
+holds the tables `runtime_definitions` and the cell `runtime_selection`, and `S`
+of the World root binds the selection's commitment profile and installed storage
+instead of every compiled field. Every World root therefore differs, and a stored
+history from an earlier build does not replay in this binary. The pinned history
+is regenerated and its digest recorded; it now proves the founded baseline. A
+running network does not take a fresh genesis for this cutover: it adopts the
+foundation at a governed checkpoint (`live_runtime_upgrades.md` §13), and until
+then the upgrade checkpoint import founds the two runtime fields on the
+predecessor's World. No live network was changed.
+
 Classify by effect on the stored history, not by intent. When unsure, run the
 pinned-history test and the read-only probes against a store written by the
 previous build.
+
+## Live-upgrade foundation
+
+[`live_runtime_upgrades.md`](live_runtime_upgrades.md) replaces this
+classification on a network that runs it. Until that network's foundation
+genesis, every rule above applies unchanged. After it:
+
+- adding an instruction, event, permission, parameter or storage definition is a
+  governed change set, an ordinary change for the history rather than a
+  `fresh_genesis` cutover;
+- a change to anything a live selection contains ships as a new definition.
+  Dispatch through the root's authenticated selection is the upgrade mechanism,
+  not the version dispatch that rule 1 above prohibits;
+- nodes start from authenticated checkpoints, and a retired definition's code is
+  deleted once the checkpoint startup floor is above its last use. Blocks below
+  the floor stay verifiable by their certificates and are re-executed only with
+  the archived release, as "Obsolete histories" requires.
+
+A network enters the foundation through a fresh genesis or, when it is already
+running, through a one-time adoption at a governed checkpoint that becomes its
+trust anchor (`live_runtime_upgrades.md` §13). Blocks before the anchor are
+verified only with the archived predecessor release, and no bridge or import
+survives the adoption.
 
 ## Obsolete histories
 
@@ -313,9 +349,21 @@ same rule: a predecessor inventory is custody, never executable input.
 
 ## Snapshots and checkpoints
 
-Restart is full replay from the signed genesis. Authenticated snapshot restore
-is separate unfinished work: a positive-height snapshot does not replace native
-replay today, and no delivery waits for it or assumes it.
+Ordinary snapshot restoration can resume at height `H >= 2` below the Kura tip.
+It authenticates the native certified prefix, checks the claimed tip and undo,
+and compares a cold capture of the decoded World with `H+1`'s certified
+`parent_world_state_root` before building State. `node::prepare` then replays
+every stored block after `H` against its certificate. H1-only snapshots and
+positive-height emergency Fast manifests require fresh-State signed-genesis and
+certified-history replay.
+
+Authenticated complete-State checkpoint restoration remains unfinished.
+Transaction membership, canonical runtime policy and commit topologies are
+outside the World accumulator; a matching World root does not authenticate them.
+The original-source predecessor receipt is explicitly World-only and grants no
+complete-State or IVM admission capability. Decoding a snapshot also does not
+recreate the original native World publication cut. These implemented World and
+history checks therefore do not establish complete-State checkpoint authority.
 
 A future authenticated checkpoint must state its height, block hash and
 certified result, how they are authenticated against the genesis-bound

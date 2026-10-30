@@ -71,14 +71,15 @@ pub(super) const INTAKE_MEMORY_RESERVATION_BYTES: u64 = 6
     + 2 * (REQUEST_MAX_BYTES as u64 + PLAN_BOUND as u64)
     + 64 * 1024;
 
-// A deferred receipt transition updates at most five bounded index paths: permanent
-// receipt, unverified FIFO, actual Send, ready FIFO and retained request-only intent.
+// A deferred receipt transition updates at most six bounded index paths: permanent
+// receipt, unverified FIFO, actual Send, ready FIFO, retained request-only intent, and
+// the reserved sessions leaf selecting the complete bounded deferred metadata frame.
 // Each path writes at most 258 nodes. Two metadata publications cover intent retention
 // followed by verified queue membership. Eight provider pages per publication cover
 // redundant checkpoints, markers and anchor updates, including publication overlap.
 const DEFERRED_INDEX_BYTES: u64 =
-    5 * 258 * (index::INDEX_VALUE_LIMIT as u64 + archive::METADATA_BOUND as u64);
-const DEFERRED_INDEX_ENVELOPES: u64 = 5 * 258 * archive::METADATA_BOUND as u64;
+    6 * 258 * (index::INDEX_VALUE_LIMIT as u64 + archive::METADATA_BOUND as u64);
+const DEFERRED_INDEX_ENVELOPES: u64 = 6 * 258 * archive::METADATA_BOUND as u64;
 const DEFERRED_PUBLICATION_BYTES: u64 =
     2 * 8 * KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1 as u64;
 

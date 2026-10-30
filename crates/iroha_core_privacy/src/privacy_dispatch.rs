@@ -55,9 +55,9 @@ pub enum PrivacyRoleLimitationV1 {
     /// Vega: no complete Figure 9 relation with its fixed proving and
     /// verifying keys is compiled.
     VegaFigure9RelationIncomplete,
-    /// ZK-X509: the bounded joint certificate relation, its soundness
-    /// analysis and its maximum-proof resource bounds are incomplete.
-    ZkX509JointRelationIncomplete,
+    /// ZK-X509: the joint round-by-round/Fiat–Shamir security reduction for
+    /// its shared challenges and correlated cross-domain openings is incomplete.
+    ZkX509JointSecurityReductionIncomplete,
     /// The native engine of the role is not compiled into this build.
     NativeEngineNotCompiled,
 }
@@ -76,8 +76,8 @@ impl PrivacyRoleLimitationV1 {
             Self::VegaFigure9RelationIncomplete => {
                 "no complete Vega Figure 9 relation with fixed keys is compiled"
             }
-            Self::ZkX509JointRelationIncomplete => {
-                "the bounded joint ZK-X509 relation and its resource bounds are incomplete"
+            Self::ZkX509JointSecurityReductionIncomplete => {
+                "the joint ZK-X509 round-by-round/Fiat–Shamir security reduction is incomplete"
             }
             Self::NativeEngineNotCompiled => "the native engine is not compiled into this build",
         }
@@ -229,7 +229,7 @@ pub const PRIVACY_ROLE_DISPATCH_TABLE_V1: [PrivacyRoleDispatchRowV1; PrivacyActi
     ),
     row(
         PrivacyActionRoleV1::ZkX509CertificatePresentation,
-        unsupported(PrivacyRoleLimitationV1::ZkX509JointRelationIncomplete),
+        unsupported(PrivacyRoleLimitationV1::ZkX509JointSecurityReductionIncomplete),
         PrivacyRoleEffectClassV1::ZkX509Certificate,
     ),
     row(
@@ -440,7 +440,7 @@ mod tests {
             ),
             (
                 Role::ZkX509CertificatePresentation,
-                Some(Limitation::ZkX509JointRelationIncomplete),
+                Some(Limitation::ZkX509JointSecurityReductionIncomplete),
                 Class::ZkX509Certificate,
                 Effects::Unreachable,
             ),
@@ -555,7 +555,7 @@ mod tests {
             PrivacyRoleLimitationV1::ZkAceSoundnessDerivationIncomplete,
             PrivacyRoleLimitationV1::ZkAmsCompositeVerifierIncomplete,
             PrivacyRoleLimitationV1::VegaFigure9RelationIncomplete,
-            PrivacyRoleLimitationV1::ZkX509JointRelationIncomplete,
+            PrivacyRoleLimitationV1::ZkX509JointSecurityReductionIncomplete,
             PrivacyRoleLimitationV1::NativeEngineNotCompiled,
         ];
         let mut seen = std::collections::BTreeSet::new();

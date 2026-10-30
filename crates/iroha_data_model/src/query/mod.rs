@@ -2858,6 +2858,15 @@ impl CommittedTransaction {
             crate::block::execution_output::ExecutionOutputV1::Network(row) => &mut row.result.0,
             crate::block::execution_output::ExecutionOutputV1::Pipeline(row) => &mut row.result.0,
             crate::block::execution_output::ExecutionOutputV1::Time(row) => &mut row.result.0,
+            crate::block::execution_output::ExecutionOutputV1::NetworkWithLifecycle(row) => {
+                &mut row.execution.result.0
+            }
+            crate::block::execution_output::ExecutionOutputV1::PipelineWithLifecycle(row) => {
+                &mut row.execution.result.0
+            }
+            crate::block::execution_output::ExecutionOutputV1::TimeWithLifecycle(row) => {
+                &mut row.execution.result.0
+            }
         };
         *result = if result.is_ok() {
             Err(TransactionRejectionReason::Validation(

@@ -753,22 +753,36 @@ get fun `test a mint bounce retains prepaid recovery even when balance cannot fu
     cursor.close();
     val transfer = step.outMessages.at<SccpRecoveryDispatch>(index).loadBody();
     setAccountBalance(env.minter.address, 0);
+    // Taken before the configuration changes: after `testing.setConfig`, the
+    // test's own `GETSTORAGEFEE` no longer matches the emulated chain's.
+    val bounceValue = sccpGasFee(SCCP_GAS_MINTER_BOUNCE);
+    val floor = sccpMinterFloor();
+    // No message can be paid at all: the excess the bounce returns ignores
+    // errors and is skipped, and the custody update stands without it.
+    val previous = testing.getConfig();
+    var expensive = previous;
+    var prices = expensive.getMsgForwardPrices(BASECHAIN);
+    prices.lumpPrice *= 1000000;
+    expensive.setMsgForwardPrices(prices, BASECHAIN);
+    expect(testing.setConfig(expensive)).toBeTrue();
     val bounced = testing.processSingleTraceStep(
         walletOf(env, alice).address,
-        bouncedMessage(transfer, env.minter.address, sccpGasFee(SCCP_GAS_MINTER_BOUNCE)),
+        bouncedMessage(transfer, env.minter.address, bounceValue),
     );
+    expect(testing.setConfig(previous)).toBeTrue();
     expect(bounced.outMessages.size()).toEqual(0);
     reportGas("minter failed mint retained", bounced.gasUsed, SCCP_GAS_MINTER_BOUNCE);
     expect(env.minter.getSccpState().totalSupply).toEqual(0);
     expect(bucketOperation(env, transfer.operationId).stage).toEqual(SCCP_RECOVERY_UNCONSUME);
     expect(bucketOperation(env, transfer.operationId).phase).toEqual(SCCP_RECOVERY_FAILED);
     expect(isConsumedAt(env, 0)).toBeTrue();
+    expect(env.minter.minterFloor()).toEqual(floor);
     val quote = env.minter.retryRequiredValue();
-    expect(quote > sccpMinterFloor()).toBeTrue();
+    expect(quote > floor).toBeTrue();
     expect(sendRetry(env, transfer.operationId, quote)).toHaveAllSuccessfulTxs();
     expect(isConsumedAt(env, 0)).toBeFalse();
     expect(minterStorage(env).recovery.load().count).toEqual(0);
-    expect(testing.getAccountBalance(env.minter.address)).toEqual(sccpMinterFloor());
+    expect(testing.getAccountBalance(env.minter.address)).toEqual(floor);
     finalizeOk(env, 0, 500, alice);
     expect(env.minter.getSccpState().totalSupply).toEqual(500);
 }

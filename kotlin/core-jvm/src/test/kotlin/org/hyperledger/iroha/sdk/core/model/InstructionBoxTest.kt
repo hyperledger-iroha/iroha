@@ -59,6 +59,27 @@ class InstructionBoxTest {
     }
 
     @Test
+    fun `new X509 wire retains identity and refuses construction without admission`() {
+        val name = org.hyperledger.iroha.sdk.privacy.SubmitPrivacyZkX509CertificateV1.WIRE_ID
+        var selected = name
+        val bytes = samplePayloadBytes.copyOf()
+        val box = InstructionBox.of(object : WirePayload {
+            override val wireName: String get() = selected
+            override val payloadBytes: ByteArray get() = bytes
+            override val kind = InstructionKind.CUSTOM
+            override val arguments = emptyMap<String, String>()
+        })
+        selected = "iroha.custom"
+        bytes.fill(0)
+        assertEquals(name, box.name)
+        assertContentEquals(samplePayloadBytes, (box.payload as WirePayload).payloadBytes)
+        assertFailsWith<IllegalArgumentException> { box.requirePrivacyExact12ConstructionAdmission() }
+        assertFailsWith<IllegalArgumentException> {
+            box.requirePrivacyExact12Network(NetworkId.fromBytes(ByteArray(32) { 1 }))
+        }
+    }
+
+    @Test
     fun `fromWirePayload creates box with correct kind`() {
         val box = InstructionBox.fromWirePayload("iroha.register.domain", samplePayloadBytes)
         assertEquals(InstructionKind.REGISTER, box.kind)
@@ -184,7 +205,9 @@ class InstructionBoxTest {
             Arguments.of("iroha.execute_trigger", InstructionKind.EXECUTE_TRIGGER),
             Arguments.of("iroha.log", InstructionKind.LOG),
             Arguments.of("iroha.upgrade", InstructionKind.UPGRADE),
-            Arguments.of("iroha.runtime_upgrade", InstructionKind.UPGRADE),
+            // Governed change sets carry no executor upgrade; the retired manifest prefix is no alias.
+            Arguments.of("iroha.runtime.support.attest.v1", InstructionKind.CUSTOM),
+            Arguments.of("iroha.runtime_upgrade.propose", InstructionKind.CUSTOM),
             Arguments.of("custom.something", InstructionKind.CUSTOM),
         )
     }

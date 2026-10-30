@@ -100,7 +100,8 @@ fn kotodama_set_account_detail_with_authority() {
     vm.set_register(12, ivm::Memory::INPUT_START + off_json);
     vm.run().expect("run");
     // Drain instructions and verify SetKeyValue<Account>
-    let mut queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions);
+    let mut queued = CoreHost::with_host(&mut vm, CoreHost::drain_instructions)
+        .expect("ordinary instruction inspection retains no attachment owner");
     if queued.is_empty() {
         // Fallback for environments where host queue is pre-drained; synthesize expected ISI.
         let isi = iroha_data_model::isi::SetKeyValue::account(

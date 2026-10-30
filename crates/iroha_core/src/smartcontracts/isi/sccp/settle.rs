@@ -16,8 +16,15 @@
 //! (`FeeSinkUnavailable`) and a bounce without a free commitment leaf (`BlockLeavesFull`) keep
 //! the record `Pending`, and a refund the movement refuses keeps the record voided with its
 //! refund pending. So the proof or void that triggered settlement is still recorded, and one
-//! refusal never aborts a void range. Only an execution invariant violation fails, besides a
-//! local fee-sink read that did not complete, which defers the transaction.
+//! deterministic refusal never aborts a void range. Typed local refusals from the admitted
+//! preflight owners and transaction-aware metadata decoders defer the whole execution attempt;
+//! they never become a pending-credit reason. Input admission precedes registration. A later
+//! typed local refusal may follow tentative registration, but the sticky deferral forbids
+//! publishing the transaction and rolls back its registration, proof/void and monetary effects
+//! together. Invariant violations and unavailable original fee-policy reads also fail the call.
+//!
+//! TODO: shared UID and retail policy scratch still needs original-pool ownership and typed
+//! local refusal propagation through its remaining decoder/error-conversion paths.
 
 use super::{
     Error, escrow, leaves,
@@ -328,6 +335,12 @@ fn release_inbound(
             }
         }
     };
+    let credits = release_credits(&account, net, sink.as_ref(), fee);
+    let ordered_credits = credits.map(|credit| credit.map(|(to, value, _)| (to, value)));
+    // Own every bounded input before registration can mutate the transaction.
+    // A local refusal aborts the attempt and can never become a pending reason.
+    let prepared = escrow::PreparedReleases::new(state_transaction, network, &ordered_credits)
+        .map_err(|(_, error)| error)?;
     // The classification ran the identity precheck of `Register<Account>`, so this is an
     // ordinary registration that cannot be refused; the movement is prechecked against the
     // registered account below.
@@ -336,10 +349,16 @@ fn release_inbound(
     } else {
         false
     };
-    let credits = release_credits(&account, net, sink.as_ref(), fee);
-    let ordered_credits = credits.map(|credit| credit.map(|(to, value, _)| (to, value)));
-    if let Err((index, _)) = escrow::precheck_releases(state_transaction, network, &ordered_credits)
+    if let Err((index, error)) = prepared
+        .as_ref()
+        .map_or(Ok(()), |prepared| prepared.check(state_transaction))
     {
+        // SPEC: §13.4 HC972 turns a local refusal into a pending-credit write.
+        if state_transaction.is_execution_deferred()
+            && !cfg!(all(test, sumeragi_core_mutation = "HC972"))
+        {
+            return Err(error);
+        }
         return hold_inbound(
             state_transaction,
             message_id,
@@ -723,6 +742,12 @@ pub(super) fn refund(
                 false,
             );
         }
+        let prepared = escrow::PreparedReleases::new(
+            state_transaction,
+            network,
+            &[Some((&account, amount)), None],
+        )
+        .map_err(|(_, error)| error)?;
         let registered_now =
             !registered && recipients::ensure_registered(state_transaction, &account)?;
         if registered_now {
@@ -732,7 +757,16 @@ pub(super) fn refund(
                 message_id: Some(message_id),
             }));
         }
-        if escrow::precheck_release(state_transaction, network, &account, amount).is_err() {
+        if let Err((_, error)) = prepared
+            .as_ref()
+            .map_or(Ok(()), |prepared| prepared.check(state_transaction))
+        {
+            // SPEC: §13.4 HC972 also covers the refund caller's refusal boundary.
+            if state_transaction.is_execution_deferred()
+                && !cfg!(all(test, sumeragi_core_mutation = "HC972"))
+            {
+                return Err(error);
+            }
             return hold_refund(
                 state_transaction,
                 message_id,

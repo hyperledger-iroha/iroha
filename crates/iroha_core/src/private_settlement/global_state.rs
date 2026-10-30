@@ -1751,12 +1751,6 @@ impl PrivateSettlementGlobalStateV1 {
 /// Redacted global-state failure safe for consensus diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum PrivateSettlementGlobalStateErrorV1 {
-    /// The governed feature is disabled in the consensus configuration.
-    #[error("private-settlement is disabled")]
-    Disabled,
-    /// The carrier or governance operation precedes governed activation.
-    #[error("private-settlement is not active at this height")]
-    Activation,
     /// The configured node capability cannot enforce the V1 proof/policy profile.
     #[error("private-settlement capability is unavailable")]
     Capability,
@@ -3303,13 +3297,6 @@ pub mod tests {
             0,
         );
         let mut block = state.block(header);
-        block.nexus.atomic_private_settlement.enabled = true;
-        block.nexus.atomic_private_settlement.activation_height = Some(2);
-        block
-            .nexus
-            .atomic_private_settlement
-            .minimum_activation_notice_blocks =
-            NonZeroU64::new(2).expect("non-zero settlement activation notice");
         let lane_bound = receipt
             .manifest
             .legs
@@ -3354,6 +3341,21 @@ pub mod tests {
         )
         .expect("fixture settlement dataspace catalog");
 
+        let protocol_id =
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let policy_key = crate::privacy_state::PrivacyProtocolPolicyKeyV1::new(protocol_id);
+        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
+            .expect("actual compiled IVM private-note profile");
+        block.world.privacy_protocol_policies.insert(
+            policy_key,
+            iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
+                protocol_id,
+                current_limits:
+                    iroha_data_model::privacy::PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+                pending_update: None,
+            },
+        );
+
         let old_heads = receipt
             .legs
             .iter()
@@ -3374,7 +3376,7 @@ pub mod tests {
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(receipt.clone()),
                 Err(PrivateSettlementGlobalStateErrorV1::Capability),
-                "WSV admission must not trust the Torii capability gate"
+                "WSV admission must reject a malformed stored policy independently of Torii"
             );
             assert!(
                 transaction
@@ -3394,59 +3396,68 @@ pub mod tests {
                 .private_settlement_receipts
                 .get(&receipt.manifest.bundle_id)
                 .is_none(),
-            "missing compiled capability must leave the parent block byte-clean"
+            "invalid stored policy must leave the parent block byte-clean"
         );
 
-        let protocol_id =
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
-            .expect("compiled IVM private-note profile");
-        let proposed = profile.activation_record(
-            iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Proposed(
-                iroha_data_model::privacy::PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 1,
+        for (inputs, outputs) in [(1, 2), (2, 1)] {
+            let limits =
+                iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                    iroha_data_model::privacy::IvmPrivateNoteLimitsV1 {
+                        max_input_count: inputs,
+                        max_output_count: outputs,
+                    },
+                );
+            block.world.privacy_protocol_policies.insert(
+                policy_key,
+                iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
+                    protocol_id,
+                    current_limits: limits,
+                    pending_update: None,
                 },
-            ),
-        );
-        block.world.privacy_activations.insert(
-            crate::privacy_state::PrivacyActivationKeyV1::new(protocol_id),
-            proposed,
-        );
-        {
+            );
             let mut transaction = block.transaction();
+            let before = private_settlement_transaction_bytes(&transaction);
             assert_eq!(
                 transaction.apply_private_settlement_receipt_v1(receipt.clone()),
-                Err(PrivateSettlementGlobalStateErrorV1::Activation),
-                "a proposed generic capability must not activate the settlement profile"
+                Err(PrivateSettlementGlobalStateErrorV1::Capability),
+                "ordinary limits insufficient for settlement must reject before any leg mutates"
             );
+            assert_eq!(private_settlement_transaction_bytes(&transaction), before);
         }
+        block.world.privacy_protocol_policies.remove(policy_key);
+        assert_eq!(
+            crate::privacy_state::resolve_admitted_privacy_protocol_v1(
+                &block.world.privacy_protocol_policies,
+                protocol_id,
+                receipt.finalized_height,
+            )
+            .expect("available relation uses defaults without registration")
+            .profile(),
+            &profile.snapshot()
+        );
 
-        let active = profile.activation_record(
-            iroha_data_model::privacy::PrivacyProtocolLifecycleV1::Active(
-                iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
-                    proposed_at_height: 1,
-                    activated_at_height: 2,
-                    state_since_height: 2,
-                },
-            ),
-        );
-        block.world.privacy_activations.insert(
-            crate::privacy_state::PrivacyActivationKeyV1::new(protocol_id),
-            active,
-        );
+        // The default node configuration needs no enable flag or activation event.
+        // Exact authority context remains bound by the receipt and committee verifier.
         {
             let mut transaction = block.transaction();
-            assert_eq!(
-                transaction.apply_private_settlement_receipt_v1(receipt.clone()),
-                Err(PrivateSettlementGlobalStateErrorV1::Activation),
-                "configuration activation earlier than the notice window must fail closed"
+            let before = private_settlement_transaction_bytes(&transaction);
+            let mut wrong_network = receipt.clone();
+            wrong_network.manifest.network_id =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"different settlement network"),
+                ));
+            assert_ne!(
+                wrong_network.manifest.network_id,
+                receipt.manifest.network_id
             );
+            assert_eq!(
+                transaction.apply_private_settlement_receipt_v1(wrong_network),
+                Err(PrivateSettlementGlobalStateErrorV1::Network),
+            );
+            assert_eq!(private_settlement_transaction_bytes(&transaction), before);
         }
-        block
-            .nexus
-            .atomic_private_settlement
-            .minimum_activation_notice_blocks =
-            NonZeroU64::new(1).expect("non-zero settlement activation notice");
 
         {
             let mut transaction = block.transaction();

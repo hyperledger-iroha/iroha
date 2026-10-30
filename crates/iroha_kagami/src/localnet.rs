@@ -348,28 +348,19 @@ mod tests {
                 peer["torii"].get("account_onboarding").is_none(),
                 "developer localnets generate no onboarding authority"
             );
-            let authority = peer["gov"]["bond_escrow_account"]
-                .as_str()
-                .expect("governance account literal in the chain prefix");
             assert!(
-                iroha_data_model::account::address::AccountAddress::parse_encoded(
-                    authority,
-                    Some(369)
-                )
-                .is_ok()
-            );
-            assert!(
-                iroha_data_model::account::address::AccountAddress::parse_encoded(
-                    authority,
-                    Some(753)
-                )
-                .is_err()
+                peer.get("gov").is_none(),
+                "default governance accounts stay valid for every chain prefix"
             );
             let config = actual::Root::from_toml_source(
                 TomlSource::from_file(&path).expect("read native peer config"),
             )
             .expect("native config accepts generated genesis and account prefix");
             assert_eq!(config.genesis.expected_hash, signed.hash());
+            assert_eq!(
+                config.gov.bond_escrow_account,
+                iroha_config::parameters::defaults::governance::bond_escrow_account_id()
+            );
             assert!(
                 !peer["soracloud_runtime"]
                     .get("production_mode")

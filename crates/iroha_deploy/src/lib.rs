@@ -41,6 +41,7 @@ pub mod genesis;
 pub mod host;
 pub mod localnet;
 pub mod managed;
+pub mod network;
 pub mod provisioning;
 pub mod secret_toml;
 pub mod shell;

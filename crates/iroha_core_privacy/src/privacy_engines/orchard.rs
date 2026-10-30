@@ -50,7 +50,7 @@ pub const ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1: [u8; 4] = *b"ORC1";
 /// Exact retained rand-core 0.10 bridge used by the Orchard producer.
 pub(crate) const ORCHARD_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"bridge=chacha20poly1305-aead:source-key=entropy[0..32]:source-nonce=entropy[32..44]:source-plaintext=entropy[44..64]+IROHA-ORC-V1:seed-aad=iroha.privacy.orchard-v3.prover-rng.seed-bridge.v1:retained-key=ciphertext32:nonce-prefix=tag[0..4]:stream-aad=iroha.privacy.orchard-v3.prover-rng.stream-block.v1:stream-nonce=prefix4+u64be-counter:stream-plaintext=stream-aad+zeros-to64:counter-start=0:counter-u64max-exclusive:consumed-bytes-zeroized:state-zeroized+poisoned-on-error-unwind-drop:single-state-no-replay:v1";
 /// Complete native-engine profile descriptor.
-pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.16.0@8190e4d9b7e9c0140964e88b71f95276d2b50470|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.4.0:halo2-gadgets-0.6.0:incrementalmerkletree-0.9.0:pasta-curves-0.6.1:reddsa-0.6.1|producer=native-builder:two-phase-prepare-then-consuming-authorize:nonempty-spend-or-wallet-change:PostNu6_3:self-verified|prover_rng=shared-rand0.10-TryCryptoRng-fixed64-health-policy-v1+orchard-retained-bridge-policy-v1|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-native-consensus-binding-digest-and-public-bundle-v1|legacy=unrepresentable";
+pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.16.0@8190e4d9b7e9c0140964e88b71f95276d2b50470|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.4.1:halo2-gadgets-0.6.0:incrementalmerkletree-0.9.0:pasta-curves-0.6.1:reddsa-0.6.1|producer=native-builder:two-phase-prepare-then-consuming-authorize:nonempty-spend-or-wallet-change:PostNu6_3:self-verified|prover_rng=shared-rand0.10-TryCryptoRng-fixed64-health-policy-v1+orchard-retained-bridge-policy-v1|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-native-consensus-binding-digest-and-public-bundle-v1|legacy=unrepresentable";
 const SIGHASH_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.bundle-sighash.v1";
 const PROVER_RNG_SEED_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.seed-bridge.v1";
 const PROVER_RNG_STREAM_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.stream-block.v1";
@@ -1344,6 +1344,32 @@ pub(crate) mod tests {
     };
     use rand::{SeedableRng as _, rngs::StdRng};
     use std::sync::OnceLock;
+
+    #[test]
+    fn compiled_profile_identifies_the_locked_halo2_provider() {
+        let descriptor = std::str::from_utf8(ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1).unwrap();
+        let version = descriptor
+            .split("|critical_deps=halo2-proofs-")
+            .nth(1)
+            .and_then(|dependencies| dependencies.split(':').next())
+            .expect("profile names its Halo2 provider");
+        let lock = include_str!("../../../../Cargo.lock");
+        let package = lock
+            .split("[[package]]")
+            .find(|package| {
+                package
+                    .lines()
+                    .any(|line| line == "name = \"halo2_proofs\"")
+            })
+            .expect("locked Halo2 provider");
+        assert!(
+            package
+                .lines()
+                .any(|line| line == format!("version = \"{version}\"")),
+            "Orchard profile must identify the resolved Halo2 implementation"
+        );
+    }
+
     fn consensus_limits() -> PrivacyConsensusLimitsV1 {
         PrivacyConsensusLimitsV1::taira_default()
     }

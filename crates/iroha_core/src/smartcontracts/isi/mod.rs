@@ -375,9 +375,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::kaigi::RegisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::UnregisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>,
-    dispatch_instruction::<runtime_upgrade::ProposeRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::ActivateRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::CancelRuntimeUpgrade>,
+    dispatch_instruction::<runtime_upgrade::AttestRuntimeSupportV1>,
+    dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -731,7 +730,10 @@ define_instruction_handlers! {
     // key. Core checks the exact backend, envelope, limits and duplicate identity; this does
     // not authorize spending, key administration or stronger execution-proof semantics.
     dispatch_instruction::<zk::VerifyProof> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<zk::PruneProofs>,
+    // Any signed account may apply retention. Core reads cap/grace/batch from the
+    // committed policy; the caller can select only a backend, never a weaker policy.
+    // Removing proof records and their indexes changes no numeric asset balances.
+    dispatch_instruction::<zk::PruneProofs> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
@@ -776,7 +778,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
-    // Privacy governance checks exact native permissions and lifecycle state. Proof
+    // Privacy governance checks exact native permissions and committed policy. Proof
     // submissions and settlement carriers enforce their signed transaction bindings
     // and exhaustive verification in Core before committing persistent effects.
     // Asset-effect metadata is an independent audit: governance, roots, bootstraps and APS
@@ -784,19 +786,10 @@ define_instruction_handlers! {
     // Their ordinary signed network fees remain payable. SubmitPrivacyProof can authorize
     // transparent transfers, whose user payment legs retain the common signed assessment checks.
     dispatch_instruction::<
-        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
+        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<
-        iroha_data_model::isi::privacy::RegisterPrivacyExact12QualificationV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
-    > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
-    dispatch_instruction::<
-        iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
+        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -839,6 +832,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
@@ -879,6 +873,12 @@ pub(crate) fn execute_borrowed_instruction(
 ) -> Result<(), Error> {
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;
+    crate::runtime::resolve(
+        instruction,
+        state_transaction.world.runtime_selection.get(),
+        state_transaction._curr_block.height().get(),
+        || crate::runtime::obligations::step(instruction, &state_transaction.world),
+    )?;
     iroha_logger::debug!(isi=%instruction, "Executing");
     if let Some(result) = NATIVE_INSTRUCTIONS
         .get(instruction)
@@ -1145,11 +1145,8 @@ mod registry_dispatch_tests {
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;
-        assert_native_registration::<privacy::RegisterPrivacyProtocolActivationV1>();
-        assert_native_registration::<privacy::RegisterPrivacyExact12QualificationV1>();
-        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>();
-        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>();
-        assert_native_registration::<privacy::TransitionPrivacyProtocolLifecycleV1>();
+        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyUpdateV1>();
+        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsUpdateV1>();
         assert_native_registration::<privacy::PublishPrivacyRootV1>();
         assert_native_registration::<privacy::BootstrapPrivacyOrchardPoolV1>();
         assert_native_registration::<privacy::BootstrapPrivacyProofManagedPoolV1>();
@@ -1173,11 +1170,12 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RegisterPrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RotatePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
+        assert_native_registration::<privacy::SubmitPrivacyZkX509CertificateV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
         assert_reviewed_initial_family("iroha_data_model::isi::privacy::", &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::privacy::",
-            29,
+            27,
             &(BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()])),
         );
         assert_reviewed_asset_effect_family(

@@ -474,7 +474,7 @@ mod tests {
             roots.insert(key, provenance.clone());
             root_heads.insert(
                 PrivacyRootHeadKeyV1::new(namespace, role).expect("CA head key"),
-                PrivacyRootHeadRecordV1::new(key.epoch(), key.root(), provenance, None)
+                PrivacyRootHeadRecordV1::new(key.epoch(), key.root(), provenance, None, 1)
                     .expect("CA head"),
             );
         }

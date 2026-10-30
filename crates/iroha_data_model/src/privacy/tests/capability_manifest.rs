@@ -111,12 +111,12 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
                 PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable
             )
         ),
-        "a public operation mapping must not open the ZK-X509 readiness gate"
+        "a public operation mapping must not invent an executable X509 implementation"
     );
     assert!(!x509.is_network_available());
 }
 #[test]
-fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() {
+fn exact12_capability_manifest_is_canonical_content_bound_and_committed() {
     let manifest = exact12_capability_manifest();
     manifest.validate().expect("valid Exact12 manifest");
     assert_eq!(
@@ -140,19 +140,14 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
     let decoded_json: PrivacyExact12CapabilityManifestV1 =
         norito::json::from_json(&json).expect("decode manifest JSON");
     assert_eq!(decoded_json, manifest);
-    assert!(!json.contains("\"readiness\":\"production-qualified\""));
-    assert!(json.contains("missing-production-qualification"));
+    assert!(json.contains("\"readiness\":\"available\""));
+    assert!(!json.contains("qualification"));
     assert!(!json.contains("available-experimental"));
     assert!(!json.contains("limitation"));
+    assert_eq!(manifest.network_id, capability_snapshot().network_id);
     let pgc = &manifest.protocols[1];
-    assert_eq!(
-        pgc.readiness,
-        PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCapabilityUnavailableReasonV1::MissingProductionQualification
-        )
-    );
-    assert!(!pgc.is_network_available());
-    assert!(manifest.qualification.is_none());
+    assert_eq!(pgc.readiness, PrivacyCapabilityReadinessV1::Available);
+    assert!(pgc.is_network_available());
     for row in manifest
         .protocols
         .iter()
@@ -160,35 +155,31 @@ fn exact12_capability_manifest_is_canonical_self_authenticating_and_committed() 
     {
         assert!(
             !row.is_network_available(),
-            "local readiness without committed Active state is not network availability"
+            "this fixture has no executable compiled profile for the other protocols"
         );
     }
 }
 #[test]
-fn revised_jindo_is_unavailable_without_registered_production_evidence() {
+fn revised_jindo_is_available_with_compiled_defaults_and_no_registered_policy() {
     let mut snapshot = capability_snapshot();
-    let jindo_activation = activation(&envelope(statement_for(
+    let jindo_profile = profile(&envelope(statement_for(
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )));
     snapshot.protocols[6].compiled_profile =
-        PrivacyCompiledProfileResultV1::Available(compiled_profile_snapshot(&jindo_activation));
-    snapshot
-        .validate()
-        .expect("synthetic available Jindo profile");
+        PrivacyCompiledProfileResultV1::Available(jindo_profile);
+    snapshot.protocols[6].policy = None;
+    snapshot.validate().expect("synthetic actual Jindo profile");
     let manifest = snapshot
         .exact12_capability_manifest_v1()
         .expect("project Jindo capability");
     let jindo = &manifest.protocols[6];
+    assert_eq!(jindo.readiness, PrivacyCapabilityReadinessV1::Available);
+    assert!(jindo.is_network_available());
     assert_eq!(
-        jindo.readiness,
-        PrivacyCapabilityReadinessV1::Unavailable(
-            PrivacyCapabilityUnavailableReasonV1::NotRegistered
-        )
+        jindo.effective_protocol_limits_v1(),
+        Some(jindo_profile.protocol_limits)
     );
-    assert!(
-        !jindo.is_network_available(),
-        "Jindo has no committed activation"
-    );
+    assert_eq!(jindo.policy, None);
 }
 #[test]
 fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
@@ -230,7 +221,11 @@ fn exact12_capability_manifest_rejects_derived_field_and_digest_substitution() {
         )
     ));
     let mut readiness = manifest.clone();
-    readiness.protocols[1].readiness = PrivacyCapabilityReadinessV1::ProductionQualified;
+    readiness.protocols[1].readiness = PrivacyCapabilityReadinessV1::Unavailable(
+        PrivacyCapabilityUnavailableReasonV1::CompiledProfile(
+            PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+        ),
+    );
     redigest_exact12_capability_manifest(&mut readiness);
     assert!(matches!(
         readiness.validate(),
@@ -289,17 +284,15 @@ fn exact12_capability_manifest_rejects_shape_zero_digest_and_json_adversaries() 
     );
 }
 #[test]
-fn exact12_capability_manifest_rejects_false_jindo_certification() {
+fn exact12_capability_manifest_rejects_false_compiled_jindo_availability() {
     let mut snapshot = capability_snapshot();
-    let jindo_activation = activation(&envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
-    )));
-    snapshot.protocols[6].compiled_profile =
-        PrivacyCompiledProfileResultV1::Available(compiled_profile_snapshot(&jindo_activation));
+    snapshot.protocols[6].compiled_profile = PrivacyCompiledProfileResultV1::Unavailable(
+        PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+    );
     let mut manifest = snapshot
         .exact12_capability_manifest_v1()
-        .expect("project unregistered Jindo");
-    manifest.protocols[6].readiness = PrivacyCapabilityReadinessV1::ProductionQualified;
+        .expect("project unavailable Jindo");
+    manifest.protocols[6].readiness = PrivacyCapabilityReadinessV1::Available;
     redigest_exact12_capability_manifest(&mut manifest);
     assert!(matches!(
         manifest.validate(),
@@ -310,4 +303,86 @@ fn exact12_capability_manifest_rejects_false_jindo_certification() {
             }
         )
     ));
+}
+
+#[test]
+fn capability_network_identity_is_content_bound_without_release_evidence() {
+    let manifest = exact12_capability_manifest();
+    let mut other = manifest.clone();
+    other.network_id = network_id(0x95);
+    assert!(matches!(
+        other.validate(),
+        Err(PrivacyExact12CapabilityManifestValidationErrorV1::ManifestDigestMismatch { .. })
+    ));
+    redigest_exact12_capability_manifest(&mut other);
+    other
+        .validate()
+        .expect("a different network has a distinct canonical manifest");
+    assert_ne!(manifest.manifest_digest, other.manifest_digest);
+    assert_ne!(manifest.network_id, other.network_id);
+    // The digest is content identity. The authenticated transport must also compare this
+    // field with its expected network; a valid manifest alone is never authentication.
+    let json = norito::json::to_json(&manifest).expect("canonical JSON");
+    let old_authority = json.replacen('{', "{\"qualification\":null,", 1);
+    assert!(norito::json::from_json::<PrivacyExact12CapabilityManifestV1>(&old_authority).is_err());
+}
+#[test]
+fn joint_security_failure_survives_canonical_capability_projection() {
+    let mut snapshot = capability_snapshot();
+    snapshot.protocols[5].compiled_profile = PrivacyCompiledProfileResultV1::Unavailable(
+        PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete,
+    );
+    let manifest = snapshot
+        .exact12_capability_manifest_v1()
+        .expect("explicit unsupported row");
+    assert!(!manifest.protocols[5].is_network_available());
+    assert!(
+        manifest.protocols[1].is_network_available(),
+        "unrelated complete capability is unaffected"
+    );
+    let bytes = manifest.canonical_bytes().expect("canonical archive");
+    assert_eq!(
+        norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(&bytes).unwrap(),
+        manifest
+    );
+    let json = norito::json::to_json(&manifest).unwrap();
+    assert!(json.contains("joint-security-reduction-incomplete"));
+    assert_eq!(
+        norito::json::from_json::<PrivacyExact12CapabilityManifestV1>(&json).unwrap(),
+        manifest
+    );
+}
+
+#[test]
+fn optional_protocol_policy_is_content_bound_but_never_availability_authority() {
+    let mut snapshot = capability_snapshot();
+    snapshot.protocols[5].policy = Some(PrivacyProtocolPolicyV1 {
+        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        current_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+        pending_update: None,
+    });
+    let manifest = snapshot
+        .exact12_capability_manifest_v1()
+        .expect("policy for an unavailable implementation");
+    assert!(!manifest.protocols[5].is_network_available());
+    assert_eq!(manifest.protocols[5].effective_protocol_limits_v1(), None);
+    assert!(manifest.protocols[1].is_network_available());
+    let mut substituted = manifest.clone();
+    substituted.protocols[5].policy = None;
+    assert!(matches!(
+        substituted.validate(),
+        Err(PrivacyExact12CapabilityManifestValidationErrorV1::ManifestDigestMismatch { .. })
+    ));
+    redigest_exact12_capability_manifest(&mut substituted);
+    substituted
+        .validate()
+        .expect("absence of optional policy is valid and content-distinct");
+    assert!(!substituted.protocols[5].is_network_available());
+    assert_ne!(manifest.manifest_digest, substituted.manifest_digest);
+    let json = norito::json::to_json(&manifest).unwrap();
+    assert!(!json.contains("lifecycle"));
+    assert!(!json.contains("activation"));
+    let retired = json.replacen("\"policy\":", "\"activation\":", 1);
+    assert_ne!(retired, json);
+    assert!(norito::json::from_json::<PrivacyExact12CapabilityManifestV1>(&retired).is_err());
 }

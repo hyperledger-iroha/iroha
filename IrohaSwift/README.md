@@ -1753,33 +1753,43 @@ representations, missing canonical request authentication, and a missing or
 stale native bridge fail closed. The signed fetch bypasses local cached responses
 and sends `Cache-Control: no-cache, no-store` for current committed state.
 `PrivacyExact12CapabilityAdmissionV1` issues
-an opaque per-protocol token only when the committed row is active, ready, and
+an opaque per-protocol token only when the committed row is available and
 byte-identical to the ABI33 native-validated compiled catalog. The generic
-transaction-frame initializer rejects `SubmitPrivacyProofV1`, and the admitted
+transaction-frame initializer rejects both privacy submission wires, and the admitted
 factory revalidates the native catalog, manifest, consensus action ceiling, and
-complete final V1 envelope profile tuple both at construction and final encoding.
-The client must supply `localSigningContext.networkId`: the authenticated origin
-and its token retain that exact network, the deployment's raw32 network and genesis
-fields must match it, and every retained statement's context must bind it.
+protocol-specific request or envelope profile tuple at construction and final encoding.
+The client must supply `localSigningContext.networkId`: the authenticated origin,
+the capability manifest's top-level raw32 `network_id`, the opaque token and every
+retained statement must match that exact network. The manifest digest binds this
+network field together with committed height, policy and protocol rows.
 Final batch encoding also compares the token and statement against the batch's
 exact `networkId`; an admission from another network cannot be reused. Managed
 fixture projection and standalone native validation do not mint network authority.
 
-ABI33 requires exactly six privacy C exports, including
-`iroha_privacy_validate_exact12_capability_manifest_v1`. Swift passes the exact
+ABI33 requires exactly seven privacy C exports, including
+`iroha_privacy_validate_exact12_capability_manifest_v1` and
+`iroha_privacy_validate_exact12_submit_proof_construction_v1`. Swift passes the exact
 Torii archive to the canonical Rust validator before projecting its fields.
-Rust checks the complete release and deployment records, artifact counts,
-digests, audit signatures, and validator signatures. Every authority-bearing
-path also compares the selected tuple against the native local catalog.
-The managed decoder alone cannot establish production qualification; a bridge
-without the manifest validator is unavailable.
+Rust checks the canonical manifest, compiled profiles, and committed resource policies.
+Swift compares each row against the actual native catalog; a mismatch is retained
+on that row and blocks only admission for that selected protocol. Each protocol is
+`available` only when its canonical implementation is supported; ordinary
+committed policy selects effective limits. Unrelated protocols and documentary release or
+deployment evidence do not gate it. X509 currently reports
+`joint-security-reduction-incomplete` and remains unavailable. Every authority-bearing
+path compares the selected tuple against the native local catalog and the exact
+expected network. Managed decoding grants no network or proof authority; a bridge
+without the manifest validator is unavailable. This first-release wire has no
+qualification field or fallback decoder for the retired layout. Runtime availability
+does not claim engineering release, platform or network qualification.
 `exact12FixtureBundleV1()` returns byte-complete Rust-derived statements,
 envelopes, submit instructions, transaction intents, unsigned payloads, signed
 transactions, and transaction hashes for all twelve rows;
 `validateExact12FixtureBundleV1(_:)`
 accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 33
 availability requires both compiled-catalog symbols, both exact-12 fixture symbols,
-the capability-manifest validator, the zeroizing-free symbol, and successful typed probes. Generic
+the capability-manifest and construction validators, the zeroizing-free symbol,
+and successful typed probes. Generic
 request/build/verify dispatch and free-form selectors are absent; proofs use
 protocol-specific typed APIs.
 
@@ -1818,6 +1828,20 @@ external signer and normalize its signature to low-s, fixed 64-byte `r || s`
 before building a witness. This preparation neither authenticates current
 State nor proves a credential, pairs a device, or establishes network readiness.
 Missing native support and noncanonical or wrong-protocol input fail explicitly.
+
+`PrivacyX509DirectTransactionV1.prepare` retains one direct, proof-free X509
+request and its exact transaction fields. It derives the ordered intent and
+ActionStatement from the canonical signed-attachment plan and exposes the
+materialized statement for proving. `sign(rawProof:signingKey:)` revalidates the
+original network admission, binds the exact raw Proof/ActionProof occurrence,
+and signs with the matching single Ed25519 authority. The X509 execution wire
+is `iroha.privacy.submit_zk_x509_certificate.v1`; the generic submit-proof wire
+is refused for X509. This builder does not create contract or mixed-action
+bindings. It does not establish proof validity, State freshness, or production
+qualification; unavailable native or network admission still refuses construction.
+The Exact12 X509 row carries its original ActionStatement frame in the intent
+projection field; the other eleven protocols retain their existing projections.
+
 
 The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteOpening`, `ConfidentialNoteCommitment.deriveFromOpening`,
@@ -2066,41 +2090,56 @@ Query runtime adverts to surface ABI metadata:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let capabilities = try await torii.getNodeCapabilities()
-    let metrics = try await torii.getRuntimeMetrics()
-    let abiActive = try await torii.getRuntimeAbiActive()
+    let capabilities = try await torii.getNodeCapabilities(canonicalAuth: canonicalAuth)
+    let metrics = try await torii.getRuntimeMetrics(canonicalAuth: canonicalAuth)
+    let abiActive = try await torii.getRuntimeAbiActive(canonicalAuth: canonicalAuth)
     print("abi:", capabilities.abiVersion,
           "signed_tx_schema:", capabilities.signedTransactionSchemaHashHex ?? "missing",
           "active:", abiActive.abiVersion,
-          "upgrades:", metrics.upgradeEventsTotal)
+          "scheduled:", metrics.upgradeEventsTotal.scheduled,
+          "activated:", metrics.upgradeEventsTotal.activated)
 }
 ```
 
 Completion-based APIs (`getNodeCapabilities(completion:)`, etc.) are also available when
 Swift concurrency is not an option.
 
-Generate upgrade instructions via the runtime helpers:
+The runtime changes only through governed change sets (`ChangeSetV1`): SORA Parliament
+schedules a change set that moves the committed selection from its predecessor to its
+successor at an effective height. `listRuntimeUpgrades()` returns the committed selection and
+its identity, the attesting committee and digest, and every recorded change set with its
+status (`scheduled`, `activated`, `lapsed` or `cancelled`) and frozen notice; each record also
+keeps its complete JSON. `proposeRuntimeUpgrade(changeSet:provenance:)` and
+`cancelRuntimeUpgrade(idHex:)` draft the Parliament proposal for local signing. While the
+universal root commits a `runtime_provenance_policy_v1`, a proposal that schedules a change set
+needs `ToriiRuntimeChangeSetEndorsement`s from its threshold of distinct trusted release
+signers (`iroha runtime upgrade endorse` prints one); a root without that policy takes none. All three are operator routes and require the
+client's `ToriiOperatorSigningContext` (see the operator context below); without it they fail
+before any request is sent. Nothing activates a change set by request: at the start of its
+effective height it activates when every committee member attested it, its notice elapsed and
+it still applies to the committed selection, and lapses otherwise.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let manifest = ToriiRuntimeUpgradeManifest(
-        name: "Upgrade Foo",
-        description: "Refresh runtime provenance",
-        abiVersion: 1,
-        abiHashHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        addedSyscalls: [],
-        startHeight: 1_000,
-        endHeight: 1_200
+    let snapshot = try await torii.listRuntimeUpgrades()
+    for item in snapshot.items {
+        print(item.idHex, item.record.status, item.record.changeSet.effectiveHeight)
+    }
+
+    // A ChangeSetV1 object whose predecessor is `snapshot.selectionIdHex`; its effective
+    // height must be an exact JSON integer no larger than 2^53 - 1.
+    let changeSet = try ToriiRuntimeChangeSet(
+        json: ToriiJSONValue.decodeExact(from: Data(contentsOf: changeSetURL))
     )
-
-    let proposal = try await torii.proposeRuntimeUpgrade(manifest: manifest)
-    let proposalInstructions = proposal.txInstructions
-
-    let activation = try await torii.activateRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
-    let activationInstructions = activation.txInstructions
-    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
-    let cancellationInstructions = cancellation.txInstructions
-    // Feed the returned `txInstructions` into your transaction builder / submit pipeline.
+    let endorsements = try endorsementURLs.map {
+        try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(contentsOf: $0)))
+    }
+    let proposal = try await torii.proposeRuntimeUpgrade(
+        changeSet: changeSet,
+        provenance: endorsements
+    )
+    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: snapshot.items[0].idHex)
+    // Sign and submit `proposal.txInstructions` / `cancellation.txInstructions` locally.
 }
 ```
 
@@ -2597,6 +2636,12 @@ attempts. Locally signed `CastZkBallotRequest` transactions use the same
 closed `GovernanceZkBallotPublicInputs` model as REST, including typed `UInt64`
 durations and exact ballot directions. Arbitrary `NoritoJSON` public-input
 objects are intentionally not accepted.
+
+SCCP governance reads and `ToriiParliamentProposalV1` draft inputs validate all
+18 action bodies, their exact ordered base subjects, deployment destinations,
+amounts, light-client settings and parameter bounds. The public draft parser also
+rejects duplicate JSON keys and noncanonical integer tokens. Live network identity,
+authorization, bootstrap authentication and committed state remain node checks.
 
 The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 `sdk.submitGovernancePlainBallot(...)`, `sdk.getGovernanceProposal(idHex:)`). Unlock statistics (`/v1/gov/locks/stats`) accept optional `height` and `referendum_id` filters.

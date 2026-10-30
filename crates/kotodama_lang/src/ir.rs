@@ -905,6 +905,11 @@ pub enum Instr {
         dest: Temp,
         payload: Temp,
     },
+    /// Queue one X509 instruction; the returned ordinal has no effect authority.
+    PresentX509 {
+        dest: Temp,
+        payload: Temp,
+    },
     /// Operation-specific bridge to SMARTCONTRACT_EXECUTE_INSTRUCTION.
     VendorExecuteInstruction {
         payload: Temp,
@@ -5628,6 +5633,12 @@ fn lower_surface_builtin_call(
             });
             dest
         }
+        Builtin::PresentX509 => {
+            let payload = lower_expr(ctx, &args[0], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::PresentX509 { dest, payload });
+            dest
+        }
         Builtin::ScExecuteSubmitBallot => {
             let payload = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::VendorExecuteInstruction {
@@ -7626,6 +7637,7 @@ impl LowerCtx {
                 | Instr::ExpectRejectAs { .. }
                 | Instr::DirectHelperSyscall { .. }
                 | Instr::VendorExecuteInstruction { .. }
+                | Instr::PresentX509 { .. }
                 | Instr::SmartContractLifecycle { .. }
                 | Instr::SoracloudHostCall { .. }
         ) {

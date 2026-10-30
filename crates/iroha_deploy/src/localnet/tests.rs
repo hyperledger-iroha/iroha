@@ -132,6 +132,7 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
         "client.toml",
         "genesis.json",
         "genesis.signed.nrt",
+        "nexus-amx-context.v1.bin",
         GENESIS_EXPECTED_HASH_FILE,
         GENESIS_PUBLIC_KEY_FILE,
         GENESIS_PRIVATE_KEY_FILE,
@@ -147,7 +148,6 @@ fn developer_bundle_is_minimal_and_loads_like_the_node() {
     }
     for production_only in [
         "alias-setup.intent.json",
-        "nexus-amx-context.v1.bin",
         "runtime/onboarding.token",
         "runtime/onboarding-signer.key",
         "runtime/ledger-signer.key",
@@ -479,4 +479,35 @@ fn storage_preparation_binds_four_native_configs_and_a_private_client() {
         .unwrap();
     let error = prepared.load_operator_key_pair().unwrap_err().to_string();
     assert!(!error.contains("malformed-secret"));
+}
+
+#[test]
+fn custom_chain_prefix_configs_leave_default_governance_accounts_implicit() {
+    let (_temporary, parent) = private_parent();
+    let out_dir = parent.join("custom-prefix");
+    let opts = options(out_dir.clone(), SumeragiConsensusMode::Permissioned);
+    generate_localnet_with_chain(&opts, &mut BufWriter::new(Vec::new()), None, Some(777))
+        .expect("generate a localnet with a custom account prefix");
+    let path = out_dir.join("peer0.toml");
+    let source = fs::read_to_string(&path).expect("read generated peer config");
+    assert!(
+        source.starts_with(config::PEER_CONFIG_HEADER),
+        "operator-visible configs explain which values a node needs"
+    );
+    let table: toml::Table = toml::from_str(&source).expect("parse generated peer config");
+    assert_eq!(table["chain_discriminant"].as_integer(), Some(777));
+    assert!(
+        !table.contains_key("gov"),
+        "default governance accounts stay valid for every chain prefix"
+    );
+    let _chain_discriminant =
+        iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+    let parsed = config::parse_peer_config(&source, &path).expect("generated config");
+    let defaults = iroha_config::parameters::defaults::governance::bond_escrow_account_id();
+    assert_eq!(parsed.gov.bond_escrow_account, defaults);
+    assert_eq!(parsed.gov.citizenship_escrow_account, defaults);
+    assert_eq!(
+        parsed.gov.sorafs_pin_fee_treasury_account,
+        iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id()
+    );
 }

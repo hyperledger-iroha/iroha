@@ -451,6 +451,8 @@ fn native_message_capacity_refusal_keeps_original_wait_and_same_receipt_retry() 
 
 #[test]
 fn native_message_missing_or_future_record_refuses_and_final_owner_unwind_refunds() {
+    // Pin before genesis so retired fixture State generations cannot alter exact refunds.
+    let _fixture_epoch = crossbeam_epoch::pin();
     with_messages(|chain, first, second| {
         let stop = AtomicBool::new(false);
         let view = chain.state().view();

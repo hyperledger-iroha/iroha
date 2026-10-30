@@ -722,28 +722,29 @@ impl SnapshotSccpState {
                 }
             }
         }
+        // Every permanent SCCP record names its generation, including a record without
+        // offenders whose signers G6 left unresolved (§4.9 step 7); each offence's record
+        // shares its generation, as checked above.
+        let recorded_max = |previous: bool| {
+            evidence
+                .current()
+                .iter()
+                .map(|(id, _)| id)
+                .chain(evidence.revert_map().iter().map(|(id, _)| id))
+                .filter_map(|id| match &evidence_at(id, previous)?.evidence {
+                    iroha_data_model::block::consensus::RecordedEvidenceV1::SccpForgery(
+                        material,
+                    ) => Some(material.generation),
+                    iroha_data_model::block::consensus::RecordedEvidenceV1::Native(_) => None,
+                })
+                .max()
+        };
+        let (current_max, previous_max) = (recorded_max(false), recorded_max(true));
         drop(evidence);
-        let current_max = snapshot
-            .current()
-            .iter()
-            .map(|(key, _)| key.generation())
-            .max();
-        let previous_max = snapshot
-            .current()
-            .iter()
-            .filter(|(key, _)| snapshot.revert_map().get(key).is_none())
-            .map(|(key, _)| key.generation())
-            .chain(
-                snapshot
-                    .revert_map()
-                    .iter()
-                    .filter_map(|(key, value)| value.as_ref().map(|_| key.generation())),
-            )
-            .max();
         if max_current != current_max || max_previous.unwrap_or(max_current) != previous_max {
             return Err(invalid(
                 "sccp_forgery_max_generation",
-                "maximum does not match permanent current/undo offences",
+                "maximum does not match permanent current/undo SCCP evidence",
             )
             .into());
         }

@@ -189,7 +189,7 @@ async fn handle(
     let max_response = app
         .torii_proxy_max_response_bytes
         .min(NATIVE_AUTHORITY_ORIGINALS_MAX_BYTES_V1);
-    let response = routing::run_admitted_blocking(
+    let (response, release) = routing::run_admitted_blocking(
         admission,
         "native authority originals worker failed",
         move || {
@@ -239,16 +239,17 @@ async fn handle(
             let _proof_charge = budget
                 .try_reserve_bytes(proof_bytes)
                 .map_err(|_| capacity())?;
-            let attestation = iroha_core::sumeragi::finality::build_attestation(
-                &view,
-                status,
-                &identity,
-                fingerprint,
-                height,
-                challenge,
-                &signer,
-            )
-            .map_err(|_| unavailable())?;
+            let (attestation, release) =
+                iroha_core::sumeragi::finality::build_attestation_with_release(
+                    &view,
+                    status,
+                    &identity,
+                    fingerprint,
+                    height,
+                    challenge,
+                    &signer,
+                )
+                .map_err(|_| unavailable())?;
             drop(chain);
             drop(view);
             let mut encoded = match &intake.request.selector {
@@ -391,7 +392,7 @@ async fn handle(
                     ResponseFormat::Json => "application/json",
                 }),
             );
-            Ok(response)
+            Ok((response, release))
         },
     )
     .await?;
@@ -406,6 +407,10 @@ async fn handle(
     )
     .await?;
     require_permission(&app, &account)?;
+    // The embedded attestation's retained authority must still hold as it leaves.
+    if !iroha_core::sumeragi::finality::retained_attestation_releasable(&app.state, &release) {
+        return Err(unavailable());
+    }
     Ok(response)
 }
 

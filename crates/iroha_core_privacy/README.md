@@ -79,6 +79,49 @@ Paired-host enrollment, authenticated encrypted transport, host revocation and
 mobile/desktop bindings remain separate X.5 work. Native availability does not
 claim resource qualification or change the current consensus profile policy.
 
+X.509 proving expands thousands of masked columns onto the common evaluation
+domain and replays native sources to stay within the memory ceiling. CPU coset
+evaluation skips butterflies outside the public coefficient extent, including
+the complete masking tail; it never inspects private values to choose work.
+For common-domain log22 queries, the native-log5/log8 columns use direct Horner
+evaluation when their complete masked coefficient extent and selected rows fit
+the public bounds. This avoids a full device transform for a sparse query.
+Bounded P-256 value replay returns only its requested columns while preserving
+the original product traversal and terminal checks. These optimizations retain
+the same polynomial values, proof format, transcript and resource limits.
+Joined query replay retains sibling-pair Merkle roots, reducing the maximum
+replayed set to 272 rows. Selected pairs and every retained root are verified
+before returning the original root and frontier; upper tree reductions use
+bounded parallel tiles. The larger private cuts remain in every phase's budget.
+For native-log15/16/18/19 query batches of eight columns, an interleaved CPU
+transform shares public traversal and twiddle powers across the columns and
+evaluates only that smaller set. Its full scratch still occupies eight field
+columns and clears on every exit. Singleton batches retain device admission;
+backend selection depends only on the measured public geometry.
+Composition mixes scalar residues into Fp4 with exact widened accumulators and
+bounded carry correction. SHA base replay projects only the requested cells;
+P-256 writer replay projects public inactive rows without building full rows.
+Both source paths retain their validation and terminal checks.
+The memory plan derives its peak from complete MAIN/CA phase lifetimes,
+including retained Merkle cuts, and explicitly reserves two bounded coefficient
+replay batches for caching. Admission and cache capacity therefore do not rely
+on incidental padding in the hash-state representation.
+Joined transforms reuse only the headroom of absent registration owners, after
+global admission. Metal's exact-root forecast charges its sole unpublished
+staging allocation and no-copy view, the complete pool and twiddle caches, and
+the existing dispatch and process reserves. Paired global FFT stages reduce
+device memory passes while preserving resource barriers and publish-after-wait.
+
+The ignored release tests `common22_prefix_fft_reports_full_output_parity_and_timings`
+and `value_auxiliary_compact_projection_cost_diagnostic` compare these kernels
+with their dense references. The ignored
+`selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows` comparison
+forces the original Metal path alongside both CPU paths and checks exact values.
+Measure complete proving separately with
+`maximum_structural_credential_proof_with_retained_public_receipt`; its retained
+phase tree distinguishes source replay, transforms, composition and verification,
+and its unchanged 300-second assertion remains a qualification requirement.
+
 Focused validation reuses the ordinary warm target and native jobserver. Use a
 stable `--target-slot` only when another build runs concurrently:
 

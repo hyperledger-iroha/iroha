@@ -116,7 +116,9 @@ impl X509GovernanceRecords {
             grant_governance(&mut transaction);
             RegisterPrivacyZkX509TrustAnchorV1::new(anchor_origin)
                 .execute(&ALICE_ID, &mut transaction)
-                .expect("trust-anchor and CA root register atomically before activation");
+                .expect(
+                    "trust-anchor and CA root register atomically without a protocol policy row",
+                );
             assert_eq!(transaction.world.privacy_roots.iter().count(), 1);
             assert_eq!(transaction.world.privacy_root_heads.iter().count(), 1);
             let ca_head = transaction
@@ -139,7 +141,7 @@ impl X509GovernanceRecords {
             let mut transaction = block.transaction();
             RegisterPrivacyZkX509CertificatePolicyV1::new(policy_origin.clone())
                 .execute(&ALICE_ID, &mut transaction)
-                .expect("certificate-policy registration does not require premature activation");
+                .expect("certificate-policy registration needs no protocol activation");
             assert_eq!(transaction.privacy_budget_for_testing().0, 1);
             transaction.apply();
         }
@@ -575,8 +577,8 @@ impl X509GovernanceRecords {
 }
 
 #[test]
-fn zk_x509_governance_and_roots_are_exact_failure_atomic_and_preactivation() {
-    let state = state_with_activation(active_lifecycle());
+fn zk_x509_governance_and_roots_are_exact_failure_atomic_without_protocol_registration() {
+    let state = state_with_default_privacy_policy();
     let records = X509GovernanceRecords::new();
     records.register_anchor_and_policy(&state, TEST_BLOCK_HEIGHT);
     records.register_crl_and_rotate_anchor(&state, TEST_BLOCK_HEIGHT + 1);
@@ -685,7 +687,7 @@ fn register_temporal_crl(state: &State, record: PrivacyZkX509CrlRecordV1) {
 #[inline(never)]
 fn check_temporal_event_order(order: [u8; 3], first_block_events: usize) {
     assert!((1..=2).contains(&first_block_events));
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let records = X509GovernanceRecords::new();
     records.register_anchor_and_policy(&state, TEST_BLOCK_HEIGHT);
     register_temporal_crl(&state, records.crl_origin);
@@ -808,7 +810,7 @@ fn zk_x509_merged_events_respect_block_budget_and_supersede_originals() {
 
 #[test]
 fn zk_x509_failed_crl_publications_leave_the_exact_current_selection() {
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let records = X509GovernanceRecords::new();
     records.register_anchor_and_policy(&state, TEST_BLOCK_HEIGHT);
     register_temporal_crl(&state, records.crl_origin);
@@ -866,7 +868,7 @@ fn zk_x509_failed_crl_publications_leave_the_exact_current_selection() {
 
 #[test]
 fn zk_x509_expired_crl_revocation_is_immediate_without_older_fallback() {
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let records = X509GovernanceRecords::new();
     records.register_anchor_and_policy(&state, TEST_BLOCK_HEIGHT);
     register_temporal_crl(&state, records.crl_origin);
@@ -977,7 +979,7 @@ fn zk_x509_publication_freshness_uses_inclusive_seconds_and_calendar_ceiling() {
 #[inline(never)]
 fn check_calendar_publication(rotation: bool, beyond_calendar: bool) {
     use iroha_data_model::privacy::ZK_X509_MAX_UNIX_SECONDS_V1 as MAX;
-    let state = state_with_activation(active_lifecycle());
+    let state = state_with_default_privacy_policy();
     let records = X509GovernanceRecords::new();
     records.register_anchor_and_policy(&state, TEST_BLOCK_HEIGHT);
     if rotation {
