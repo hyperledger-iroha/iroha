@@ -5805,32 +5805,40 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         Self::validate_root_fee_policy(state_transaction)?;
         let original_parameters = root_fees::execution_parameters(state_transaction).clone();
-        let original_fees = original_parameters.root_fees().ok_or_else(|| {
-            ValidationFail::InternalError("original committed root fee policy is absent".into())
-        })?;
-        let cfg =
-            root_fees::effective(&state_transaction.world, original_fees).map_err(|error| {
-                match error {
+        let original_fees = root_fees::captured_execution_policy(
+            &original_parameters,
+            &state_transaction.nexus.fees,
+        )
+        .map_err(|reason| ValidationFail::InternalError(reason.into()))?;
+        let cfg = match root_fees::effective(&state_transaction.world, original_fees) {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                return Err(match error {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                         state_transaction.defer_execution(reason)
                     }
                     crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
                         nexus_fee_admission_error_to_validation_fail(error)
                     }
-                }
-            })?;
-        let private_scope = root_fees::private_scope(
+                });
+            }
+        };
+        let private_scope = match root_fees::private_scope(
             &state_transaction.world,
             state_transaction.current_dataspace_id,
-        )
-        .map_err(|error| match error {
-            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                state_transaction.defer_execution(reason)
+        ) {
+            Ok(scope) => scope,
+            Err(error) => {
+                return Err(match error {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        state_transaction.defer_execution(reason)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                        nexus_fee_admission_error_to_validation_fail(error)
+                    }
+                });
             }
-            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
-                nexus_fee_admission_error_to_validation_fail(error)
-            }
-        })?;
+        };
         if private_scope.is_some() && sponsor.is_some() {
             return Err(ValidationFail::NotPermitted(
                 "private-root fee sponsors require a scoped vault owner".into(),
@@ -5845,19 +5853,23 @@ impl Executor {
         } else {
             NexusFeePayer::Payer
         };
-        let asset_def = root_fees::currency(
+        let asset_def = match root_fees::currency(
             &state_transaction.world,
             &cfg,
             state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(|error| match error {
-            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                state_transaction.defer_execution(reason)
+        ) {
+            Ok(asset) => asset,
+            Err(error) => {
+                return Err(match error {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        state_transaction.defer_execution(reason)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                        nexus_fee_admission_error_to_validation_fail(error)
+                    }
+                });
             }
-            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
-                nexus_fee_admission_error_to_validation_fail(error)
-            }
-        })?;
+        };
         let actual_charge = FeeChargeBound {
             kind: FeeChargeKind::Nexus,
             asset_definition_id: asset_def.clone(),
@@ -5990,19 +6002,21 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         if !is_initial_genesis_context(state_transaction) {
             let original_parameters = root_fees::execution_parameters(state_transaction).clone();
-            let original_fees = original_parameters.root_fees().ok_or_else(|| {
-                ValidationFail::InternalError("original committed root fee policy is absent".into())
-            })?;
-            root_fees::effective(&state_transaction.world, original_fees).map_err(|error| {
-                match error {
+            let original_fees = root_fees::captured_execution_policy(
+                &original_parameters,
+                &state_transaction.nexus.fees,
+            )
+            .map_err(|reason| ValidationFail::InternalError(reason.into()))?;
+            root_fees::effective(&state_transaction.world, original_fees)
+                .map(|_| ())
+                .map_err(|error| match error {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                         state_transaction.defer_execution(reason)
                     }
                     crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
                         nexus_fee_admission_error_to_validation_fail(error)
                     }
-                }
-            })?;
+                })?;
         }
         Ok(())
     }

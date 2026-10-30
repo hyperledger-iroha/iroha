@@ -59,6 +59,7 @@ impl ValidBlock {
         state: &'state State,
         native_header: &iroha_sumeragi::message::BlockHeader,
         native_payload: &[u8],
+        successor_context: &mut crate::sumeragi::certified_chain::SuccessorContextPreparation,
     ) -> Result<NativeHeaderSource<'state>, BlockValidationError> {
         let matches = block
             .matches_resultless_proposal_wire(native_payload)
@@ -86,11 +87,16 @@ impl ValidBlock {
         };
         let generation = state.state_view_generation();
         let view = state.query_view();
-        let authenticated = crate::sumeragi::schedule::authenticate_successor_context(
-            &view,
-            &block.header(),
-            &expected_context,
-        );
+        let authenticated = successor_context
+            .authenticate(&view, &block.header(), &expected_context)
+            .and_then(|()| {
+                successor_context.prepare_continuation(
+                    &view,
+                    &block.header(),
+                    pulse,
+                    expected_context,
+                )
+            });
         let observed_generation = state.state_view_generation();
         if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
             return Err(BlockValidationError::NativeSourceChanged {

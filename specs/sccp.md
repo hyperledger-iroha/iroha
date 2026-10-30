@@ -6722,13 +6722,33 @@ smallest distinct data space ids inline. Transaction-aware SNS, asset metadata,
 UID/enrollment/FI, retail, FX custody, SoraFS reserve and moderation record reads
 preserve original decoder refusals
 instead of returning a deterministic credit refusal. Canonical transaction reads
-of UID/enrollment/FI, retail and SoraFS policy state fund both decoder controls
-from the original pool after validating the frame header; partial construction
-refuses locally and refunds its admitted controls. This control ownership does
-not fund the decoded graph. Shared decoded policies,
-UID rosters/maps, policy encoding and remaining retail scratch still require
-original-pool custody and complete physical-refusal handling;
-the complete settlement boundary remains open. This work is distinct from the
+of UID/enrollment/FI, retail and SoraFS policy state preserve the canonical header
+and scope rules. Native execution admits one shared pair of policy decoder
+controls before opening World and reuses their physical backing with distinct
+attempt identities. Standalone transactions admit their pair after validating
+the frame header. Native UID binding reads retain an original-pool preparation
+bank outside disposable World transactions:
+it owns one admitted raw path/row capture, both decoder controls and the actual
+single-key or multisig account graph. Every retry compares the current State row
+and canonical key before returning the fixed UID. Completed and partial read
+occurrences survive rollback. Unfinished metadata appends and exact empty
+path/row backing are retained before the next World acquisition; empty backing
+is filled only by a matching authoritative read. A fully captured decoder can
+advance before that acquisition, without granting a UID or rejection before the
+actual current-row check. The inline bank mutex preserves poisoning on unwind. Cancellation retires the original backing. Native successor
+authentication also retains the original parent receipt and independently
+signed genesis; both the header check and pristine schedule capture recheck the
+current State cut, physical source slots and transported context. World control
+admission includes its refund scope in the same atomic concrete demand.
+Standalone callers have no native retry job and retire their one-shot decode.
+Settlement release input construction admits the complete bounded account/key,
+charge-ledger and quantity demand atomically before materializing any prefix.
+These owners cover specific retry stages. Schedule capture, later World maps,
+scoped settlement preflight prefixes and other execution allocations can still retire
+before their original refusal reaches the scheduler. Complete scheduler
+no-self-wake qualification remains open with that execution-owner boundary. Shared decoded policies, UID rosters/maps, policy
+encoding and remaining retail scratch still require original-pool custody and
+complete physical-refusal handling; the complete settlement boundary remains open. This work is distinct from the
 generic S8/H3 State custody owned by the Sumeragi workstream.
 
 **Order of work.** Qualify the current combined candidate: workspace compilation/tests/lint,

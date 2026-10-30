@@ -191,7 +191,20 @@ fn original_post_merge_validation_refusal_retains_worker_owner_and_exact_availab
                 block.payload().as_slice(),
                 worker.state,
                 None,
+                &crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+                    worker
+                        .state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .unwrap(),
                 None,
+                &mut Default::default(),
+                &crate::execution_attempt::PolicyDecodeControls::try_new(
+                    &worker.state.ivm_execution_budget(),
+                )
+                .unwrap(),
             )
             .unpack(|_| {})
             .map(|_| ())
@@ -583,6 +596,9 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(
                 ),
             };
@@ -812,6 +828,9 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(
                 ),
             };
@@ -858,7 +877,20 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 block.payload().as_slice(),
                 worker.state,
                 None,
+                &crate::state::asset_uid::binding_custody::retry::BindingPreparations::try_new(
+                    worker
+                        .state
+                        .world
+                        .sccp_committee_generations
+                        .allocation_budget(),
+                )
+                .unwrap(),
                 None,
+                &mut Default::default(),
+                &crate::execution_attempt::PolicyDecodeControls::try_new(
+                    &worker.state.ivm_execution_budget(),
+                )
+                .unwrap(),
             )
             .unpack(|event| recorded_events.push(event.into()))
             .expect("actual available proposal seals its real execution and witness");

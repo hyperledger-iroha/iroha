@@ -78,11 +78,14 @@ jobs:
           cargo test --locked -p iroha_sccp_rpc 2>&1 | tee target/qualification/sccp/rpc.log
       - name: Check original-pool policy decoder controls and physical refusal
         run: |
-          cargo test --locked -p norito --lib prepared_canonical -- --test-threads=1 2>&1 | tee target/qualification/sccp/policy-decoder.log
+          cargo test --locked -p norito --lib -- prepared_canonical prepared_scope canonical_header_policy --test-threads=1 2>&1 | tee target/qualification/sccp/policy-decoder.log
           cargo test --locked -p norito --test exact_field_streaming_allocations -- canonical_controls prepared_canonical --test-threads=1 2>&1 | tee target/qualification/sccp/policy-decoder-allocator.log
+      - name: Check original-pool UID binding graphs and canonical parity
+        run: |
+          cargo test --locked -p iroha_data_model --lib -- asset::uid::binding_custody invalid_multisig_policies_reject_inside_ordinary_and_funded_complete_uid_bindings --test-threads=1 2>&1 | tee target/qualification/sccp/uid-binding.log
       - name: Check Core governance, fast-pause, forgery and liability fixtures
         run: |
-          cargo test --locked -p iroha_core --lib sccp 2>&1 | tee target/qualification/sccp/core-reference.log
+          cargo test --locked -p iroha_core --lib -- sccp state::asset_uid uid_binding_retry_tests execution_attempt::policy_decode certified_chain::successor_context state::world_acquisition --test-threads=1 2>&1 | tee target/qualification/sccp/core-reference.log
       - name: Check shared asset policy and scope behavior
         run: |
           cargo test --locked -p iroha_core --lib smartcontracts::isi::asset 2>&1 | tee target/qualification/sccp/asset-policy.log

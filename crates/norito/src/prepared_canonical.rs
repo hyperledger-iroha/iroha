@@ -41,6 +41,9 @@ pub enum CanonicalDecodeControlError {
     /// An admitted counter control could not be physically constructed.
     #[error(transparent)]
     Control(PrepaidSharedError),
+    /// A retained workspace could not establish another original decoding scope.
+    #[error(transparent)]
+    Scope(crate::core::PreparedDecodeScopeError),
 }
 
 /// Decode a canonical frame with both counter controls funded by the original pool.

@@ -6,6 +6,12 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;
 
+mod binding_custody;
+pub use binding_custody::{
+    AllocatedAssetUidBindingV1, AssetUidBindingDecodeError, PendingAssetUidBindingDecodeV1,
+    decode_asset_uid_binding_with_owned_controls,
+};
+
 /// Deterministic calendar used by an identity's native activity limit.
 #[derive(
     Clone,
@@ -164,6 +170,7 @@ impl AssetUidPolicyV1 {
     norito::NoritoSchema,
 )]
 #[norito(deny_unknown_fields)]
+#[norito(decode_fields)]
 #[norito_schema(name = "iroha_data_model::asset::uid::AssetUidBindingV1")]
 pub struct AssetUidBindingV1 {
     /// Governed definition.
