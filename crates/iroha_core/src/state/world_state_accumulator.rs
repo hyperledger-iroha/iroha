@@ -447,11 +447,10 @@ fn schema_digest(fingerprints: &BTreeMap<&'static str, Fingerprint>) -> Result<H
 /// certified for an imported World (`state::upgrade_checkpoint`).
 ///
 /// `current` is a cold capture, under this release's registry, of a World imported from the
-/// predecessor's snapshot with the added field still empty and the runtime fields founded on
-/// the baseline. The predecessor's registry held the retired fields instead and none of the
-/// founded ones. An import admits only the retired fields' empty values, so the retired cell
-/// adds its one element at `None` and the retired tables add none; the founded fields' baseline
-/// elements are removed again.
+/// predecessor's snapshot with the added tables still empty and the runtime fields founded on
+/// the baseline. The predecessor's registry held the retired tables instead and none of the
+/// founded fields. An import admits only the retired tables' empty values, which add no
+/// element; the founded fields' baseline elements are removed again.
 ///
 /// # Errors
 /// The registry of this release no longer matches the predecessor profile, or a value fails to
@@ -505,6 +504,13 @@ pub(in crate::state) fn predecessor_root(
         let kind = if retired.key.is_some() { TABLE } else { CELL };
         let key = retired.key.map(norito_identity_fingerprint).transpose()?;
         let value = norito_identity_fingerprint(retired.value)?;
+        if kind == CELL {
+            // An empty cell still holds one element, whose value this release can no longer type.
+            return Err(format!(
+                "{} is a retired cell, which no import admits",
+                retired.id
+            ));
+        }
         if fingerprints
             .insert(retired.id, (kind, key, value))
             .is_some()
@@ -512,15 +518,6 @@ pub(in crate::state) fn predecessor_root(
             return Err(format!(
                 "{} is still a canonical World field of this release",
                 retired.id
-            ));
-        }
-        if kind == CELL {
-            let empty: Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1> =
-                None;
-            predecessor.add(&element(
-                &path_hash(retired.id, CELL)?,
-                None,
-                &hash_value(&empty)?,
             ));
         }
     }

@@ -1123,7 +1123,7 @@ fn shared_schema_fold_is_the_registry_digest() {
 }
 
 #[test]
-fn predecessor_root_restores_the_retired_registry_and_cell() {
+fn predecessor_root_restores_the_retired_registry() {
     let index = field_index().as_ref().unwrap();
     // A World imported from the predecessor holds the founded runtime fields.
     let world = crate::state::World::default();
@@ -1137,31 +1137,20 @@ fn predecessor_root_restores_the_retired_registry_and_cell() {
     .unwrap()
         + 1;
     let (predecessor, root) = predecessor_root(&current).unwrap();
-    // The founded definitions and selection leave; the retired cell holds `None`; the
-    // retired table and the added table are empty.
-    assert_eq!(predecessor.entries(), current.entries() - founded + 1);
+    // The founded definitions and selection leave; the retired and the added tables are empty.
+    assert_eq!(predecessor.entries(), current.entries() - founded);
     assert_ne!(root, current.baseline_root().unwrap());
-    // Exactly the predecessor's identities enter its schema digest.
-    let fingerprint = norito_identity_fingerprint(&norito::schema::identity::nominal_name::<
-        Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
-    >())
-    .unwrap();
-    assert_eq!(
-        fingerprint,
-        norito_identity_fingerprint(
-            crate::state::upgrade_checkpoint::added_world_field("privacy_protocol_policies")
-                .unwrap()
-                .retired[0]
-                .value
-        )
-        .unwrap()
-    );
+    // The predecessor (f31b64d8c5) already had the privacy protocol policies.
     assert!(
         index
             .fingerprints
             .contains_key("world.privacy_protocol_policies")
     );
-    assert!(!index.fingerprints.contains_key("world.privacy_activations"));
     assert!(index.fingerprints.contains_key("world.runtime_change_sets"));
+    assert!(
+        index
+            .fingerprints
+            .contains_key("world.runtime_containments")
+    );
     assert!(!index.fingerprints.contains_key("world.runtime_upgrades"));
 }

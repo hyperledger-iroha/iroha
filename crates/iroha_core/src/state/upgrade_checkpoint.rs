@@ -7,12 +7,11 @@
 //!
 //! The certified root binds the World registry of the release that computed it (`S` of
 //! [`super::world_projection::WorldStateAccumulator`]). The predecessor this release accepts is
-//! iroha f24908b4b3, the Taira release of 2026-10-25. Its canonical World held the cell
-//! `privacy_exact12_qualification` and the tables `privacy_activations` and `runtime_upgrades`,
-//! which this release retired, and lacked the tables `privacy_protocol_policies`,
-//! `runtime_change_sets` and `runtime_containments` ([`ADDED_WORLD_FIELDS`]). An import accepts
-//! a predecessor World only when every retired field holds its empty value, so nothing is
-//! dropped, and starts the added tables empty.
+//! iroha f31b64d8c5, the Taira release of 2026-10-29 (itself the successor of f24908b4b3 at
+//! checkpoint 5519). Its canonical World held the table `runtime_upgrades`, which this release
+//! retired, and lacked the tables `runtime_change_sets` and `runtime_containments`
+//! ([`ADDED_WORLD_FIELDS`]). An import accepts a predecessor World only when every retired field
+//! holds its empty value, so nothing is dropped, and starts the added tables empty.
 //!
 //! The predecessor also predates the live-upgrade foundation (`specs/live_runtime_upgrades.md`
 //! §13): it has no runtime definitions or selection. The import founds them on this release's
@@ -76,7 +75,7 @@ pub(super) struct AddedWorldField {
 }
 
 /// Every table this release added, in this release's World order.
-pub(super) const ADDED_WORLD_FIELDS: [AddedWorldField; 3] = [
+pub(super) const ADDED_WORLD_FIELDS: [AddedWorldField; 2] = [
     AddedWorldField {
         id: "world.runtime_change_sets",
         name: "runtime_change_sets",
@@ -92,26 +91,6 @@ pub(super) const ADDED_WORLD_FIELDS: [AddedWorldField; 3] = [
         id: "world.runtime_containments",
         name: "runtime_containments",
         retired: &[],
-    },
-    AddedWorldField {
-        id: "world.privacy_protocol_policies",
-        name: "privacy_protocol_policies",
-        retired: &[
-            PredecessorField {
-                id: "world.privacy_exact12_qualification",
-                name: "privacy_exact12_qualification",
-                key: None,
-                value: "core::option::Option<iroha_data_model::privacy::release_manifest::PrivacyExact12QualificationRecordV1>",
-                empty_json: r#"{"revert":null,"blocks":null}"#,
-            },
-            PredecessorField {
-                id: "world.privacy_activations",
-                name: "privacy_activations",
-                key: Some("iroha_core::privacy_state::PrivacyActivationKeyV1"),
-                value: "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1",
-                empty_json: r#"{"revert":{},"blocks":{}}"#,
-            },
-        ],
     },
 ];
 
@@ -180,8 +159,7 @@ mod tests {
                 "poseidon_params",
                 "runtime_upgrades",
                 "privacy_consensus_policy",
-                "privacy_exact12_qualification",
-                "privacy_activations",
+                "privacy_protocol_policies",
                 "kagemusha_wallet_ledger",
             ]
         );

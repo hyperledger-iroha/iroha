@@ -571,10 +571,9 @@ impl<'a> SnapshotJsonMap<'a> {
     /// checkpoint, rewritten as this release's World object (`state::upgrade_checkpoint`).
     ///
     /// `Ok(None)`: `input` does not have the predecessor's World fields, so it is this release's
-    /// World. The predecessor's retired fields must hold exactly their empty values, the field
-    /// this release added starts empty, the runtime fields are founded on this release's
-    /// baseline, and every value whose shape this release changed is rewritten in this
-    /// release's canonical serialization; every other value passes unchanged.
+    /// World. The predecessor's retired fields must hold exactly their empty values, the tables
+    /// this release added start empty and the runtime fields are founded on this release's
+    /// baseline; every other value passes unchanged.
     fn predecessor_world_json(
         input: &str,
         budget: &iroha_allocation::AllocationBudget,
@@ -628,12 +627,7 @@ impl<'a> SnapshotJsonMap<'a> {
             let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(key) else {
                 return Err(json::Error::missing_field(format!("world.{key}")).into());
             };
-            match *key {
-                "privacy_consensus_policy" => {
-                    world.push_str(&predecessor_privacy_consensus_policy(raw)?);
-                }
-                _ => world.push_str(raw),
-            }
+            world.push_str(raw);
         }
         world.push('}');
         Ok(Some(world))
@@ -894,10 +888,6 @@ fn founded_world_field_json(name: &str) -> Result<String, json::Error> {
 fn empty_added_world_field_json(name: &str) -> Result<String, json::Error> {
     let field = format!("world.{name}");
     match name {
-        "privacy_protocol_policies" => json::to_json(&Storage::<
-            crate::privacy_state::PrivacyProtocolPolicyKeyV1,
-            iroha_data_model::privacy::PrivacyProtocolPolicyV1,
-        >::new()),
         "runtime_change_sets" => json::to_json(&Storage::<
             iroha_data_model::runtime::lifecycle::ChangeSetId,
             iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
@@ -917,34 +907,6 @@ fn empty_added_world_field_json(name: &str) -> Result<String, json::Error> {
         field,
         message: error.to_string(),
     })
-}
-/// The predecessor's `privacy_consensus_policy` Cell in this release's canonical serialization.
-///
-/// The predecessor named the scheduled change `pending_tightening`; this release names it
-/// `pending_update`. Only a policy without a scheduled change crosses an upgrade checkpoint, and
-/// its bare encoding, hence its World element, is the same in both releases.
-fn predecessor_privacy_consensus_policy(raw: &str) -> Result<String, json::Error> {
-    let refused = |message: &str| json::Error::InvalidField {
-        field: "world.privacy_consensus_policy".to_owned(),
-        message: message.to_owned(),
-    };
-    let mut cell: json::Value = json::from_str(raw)?;
-    let json::Value::Object(slots) = &mut cell else {
-        return Err(refused("expected the policy Cell"));
-    };
-    for slot in ["revert", "blocks"] {
-        let Some(json::Value::Object(policy)) = slots.get_mut(slot) else {
-            continue;
-        };
-        if policy.remove("pending_tightening") != Some(json::Value::Null) {
-            return Err(refused(
-                "an upgrade checkpoint admits the privacy consensus policy only without a scheduled change",
-            ));
-        }
-        policy.insert("pending_update".to_owned(), json::Value::Null);
-    }
-    let cell: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> = json::from_value(cell)?;
-    json::to_json(&cell)
 }
 /// Canonical first-release State envelope fields, in signed source order.
 const STATE_SNAPSHOT_FIELDS: &[&str] = &[
