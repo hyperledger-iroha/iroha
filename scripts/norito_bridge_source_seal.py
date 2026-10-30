@@ -491,6 +491,28 @@ _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/aes/tests/data/aes128.blb",
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",
+    # Original Cargo manifests that crates.io keeps beside the rewritten
+    # Cargo.toml of each patched crate. Cargo does not read them.
+    "vendor/accesskit_atspi_common-0.21.1/Cargo.toml.orig",
+    "vendor/accesskit_unix-0.24.1/Cargo.toml.orig",
+    "vendor/ark-bls12-381-0.5.0/Cargo.toml.orig",
+    "vendor/ark-ff-0.5.0/Cargo.toml.orig",
+    "vendor/atspi-common-0.14.0/Cargo.toml.orig",
+    "vendor/atspi-proxies-0.14.0/Cargo.toml.orig",
+    "vendor/halo2curves-0.10.0/Cargo.toml.orig",
+    "vendor/metal-0.33.0/Cargo.toml.orig",
+    "vendor/zbus-lockstep-0.7.0/Cargo.toml.orig",
+    "vendor/zbus-lockstep-macros-0.7.0/Cargo.toml.orig",
+    # Public BLS12-381 curve points that the ark-bls12-381 tests load
+    # with include_bytes!. The tests do not compile without them.
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g1_compressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g1_uncompressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g2_compressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g2_uncompressed_valid_test_vectors.dat",
+    # Public XML Schema and D-Bus schemas that describe the atspi-common
+    # interface XML files. No Rust code reads them.
+    "vendor/atspi-common-0.14.0/xml/schemas/DBus.xsd",
+    "vendor/atspi-common-0.14.0/xml/schemas/XMLSchema.xsd",
     # Public Apple privacy declaration: no tracking/data collection, file timestamp
     # access reason C617.1. The provider verifier separately pins its source bytes.
     "vendor/boringssl-swiftpm/PrivacyInfo.xcprivacy",
