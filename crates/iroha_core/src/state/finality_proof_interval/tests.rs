@@ -143,6 +143,7 @@ fn interval_original_hash_generation_allows_actual_stable_tip_publication() {
             &owner,
             &limits(4),
             &AtomicBool::new(false),
+            None,
             || {
                 // Real signed commit executes/publishes while the original versioned hash
                 // generation is retained. There is no enclosing World or writer guard.
@@ -183,6 +184,7 @@ fn interval_post_read_writer_refusal_retires_response_and_preserves_original_rel
             &owner,
             &limits(4),
             &AtomicBool::new(false),
+            None,
             || {
                 request_tx.send(()).unwrap();
                 expected = Some(held_rx.recv_timeout(Duration::from_secs(5)).unwrap());
@@ -209,6 +211,197 @@ fn interval_post_read_writer_refusal_retires_response_and_preserves_original_rel
         .unwrap();
     drop(retained);
     assert_eq!(pool.reserved_bytes(), reserved);
+}
+
+fn waiter(pool: &iroha_allocation::AllocationBudget) -> StateViewWaiter {
+    let mut reservation = pool
+        .try_reserve(StateViewWaiter::allocation_layout())
+        .unwrap();
+    StateViewWaiter::for_current_thread(&mut reservation).unwrap()
+}
+fn limits_until(height: u64, deadline: Instant) -> NativeFinalityProofIntervalLimits {
+    NativeFinalityProofIntervalLimits::new(
+        NonZeroU64::new(2).unwrap(),
+        NonZeroU64::new(height).unwrap(),
+        NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
+        NonZeroUsize::new(usize::MAX).unwrap(),
+        deadline,
+    )
+    .unwrap()
+}
+
+#[test]
+fn waiting_interval_captures_again_once_a_busy_publication_completes_within_its_deadline() {
+    let chain = chain();
+    let state = chain.state();
+    let frames = iroha_allocation::AllocationBudget::new(2_562_487);
+    let owner = test_budget(frames.clone());
+    let waiters = iroha_allocation::AllocationBudget::new(4096);
+    chain.kura().reset_canonical_query_reads_for_test();
+    let (result, waiting, reads_while_held) = std::thread::scope(|scope| {
+        let (reader, waiting, reads_while_held) =
+            state.with_held_view_publication_for_reader_test(|_| {
+                // The reader starts while this publication is held: its capture refuses.
+                let reader = scope.spawn(|| {
+                    let mut waiter = waiter(&waiters);
+                    state
+                        .read_finality_proof_interval_waiting(
+                            &owner,
+                            &limits_until(4, Instant::now() + Duration::from_secs(60)),
+                            &AtomicBool::new(false),
+                            &mut waiter,
+                        )
+                        .map(|interval| interval.proof(2).unwrap().block_header.hash())
+                        .map_err(|error| error.to_string())
+                });
+                std::thread::sleep(Duration::from_millis(100));
+                let waiting = !reader.is_finished();
+                (
+                    reader,
+                    waiting,
+                    chain.kura().canonical_query_reads_for_test(),
+                )
+            });
+        (reader.join().unwrap(), waiting, reads_while_held)
+    });
+    assert!(
+        waiting,
+        "a held publication is waited out instead of refused"
+    );
+    assert_eq!(
+        reads_while_held,
+        (0, 0),
+        "no proof work starts while it is held"
+    );
+    assert_eq!(result, Ok(chain.committed(4).block_hash()));
+    assert_eq!(state.finality_prefix_checkpoints.heights(), [4]);
+    assert_eq!(frames.reserved_bytes(), 0);
+    assert_eq!(waiters.reserved_bytes(), 0);
+}
+
+#[test]
+fn waiting_interval_keeps_the_original_busy_release_once_its_deadline_passes() {
+    let chain = chain();
+    let state = chain.state();
+    let frames = iroha_allocation::AllocationBudget::new(2_562_487);
+    let owner = test_budget(frames.clone());
+    let waiters = iroha_allocation::AllocationBudget::new(4096);
+    let mut waiter = waiter(&waiters);
+    let wait = Duration::from_millis(150);
+    chain.kura().reset_canonical_query_reads_for_test();
+    let (result, expected, waited) = state.with_held_view_publication_for_reader_test(|expected| {
+        // This thread holds the publication, so only the deadline can end the wait.
+        let started = Instant::now();
+        let result = state.read_finality_proof_interval_waiting(
+            &owner,
+            &limits_until(4, started + wait),
+            &AtomicBool::new(false),
+            &mut waiter,
+        );
+        (result, expected, started.elapsed())
+    });
+    let Err(FinalityProofIntervalReadError::StateView(StateViewError::Busy(original))) = result
+    else {
+        panic!("an expired wait must keep the publisher's original Busy release");
+    };
+    assert_eq!(original, expected);
+    assert!(waited >= wait, "the reader waited out its whole deadline");
+    assert_eq!(chain.kura().canonical_query_reads_for_test(), (0, 0));
+    assert!(state.finality_prefix_checkpoints.heights().is_empty());
+    assert_eq!(frames.reserved_bytes(), 0);
+    assert!(waiters.reserved_bytes() > 0);
+    drop(waiter);
+    assert_eq!(waiters.reserved_bytes(), 0);
+}
+
+#[test]
+fn waiting_interval_repeats_only_a_busy_recheck_and_keeps_its_single_walk() {
+    let chain = chain();
+    let state = Arc::clone(chain.state());
+    let frames = iroha_allocation::AllocationBudget::new(2_562_487);
+    let owner = test_budget(frames.clone());
+    let waiters = iroha_allocation::AllocationBudget::new(4096);
+    let mut waiter = waiter(&waiters);
+    let (request_tx, request_rx) = std::sync::mpsc::sync_channel(1);
+    let (held_tx, held_rx) = std::sync::mpsc::sync_channel(1);
+    let (result, counts) = std::thread::scope(|scope| {
+        let holder = {
+            let state = Arc::clone(&state);
+            scope.spawn(move || {
+                if request_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                    return;
+                }
+                state.with_held_view_publication_for_reader_test(|_| {
+                    held_tx.send(()).unwrap();
+                    // Retire after the reader's recheck has met this publication.
+                    std::thread::sleep(Duration::from_millis(100));
+                });
+            })
+        };
+        let read = relation_counts::measure(|| {
+            state.read_finality_proof_interval_after_read(
+                &owner,
+                &limits_until(4, Instant::now() + Duration::from_secs(60)),
+                &AtomicBool::new(false),
+                Some(&mut waiter),
+                || {
+                    request_tx.send(()).unwrap();
+                    held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                },
+            )
+        });
+        holder.join().unwrap();
+        read
+    });
+    let retained = result.expect("the verified interval returns once its recheck completes");
+    assert_eq!(
+        counts.qcs,
+        [2, 3, 4],
+        "the walk ran once; only its recheck repeated"
+    );
+    assert_eq!(
+        retained.proof(2).unwrap().block_header.hash(),
+        chain.committed(4).block_hash()
+    );
+    drop(retained);
+    assert_eq!(frames.reserved_bytes(), 0);
+}
+
+#[test]
+fn waiting_interval_stops_when_its_request_stops_and_unparks_the_worker() {
+    let chain = chain();
+    let state = chain.state();
+    let owner = test_budget(iroha_allocation::AllocationBudget::new(2_562_487));
+    let waiters = iroha_allocation::AllocationBudget::new(4096);
+    let stop = AtomicBool::new(false);
+    let stopped = std::thread::scope(|scope| {
+        state.with_held_view_publication_for_reader_test(|_| {
+            let reader = scope.spawn(|| {
+                let mut waiter = waiter(&waiters);
+                matches!(
+                    state.read_finality_proof_interval_waiting(
+                        &owner,
+                        &limits_until(4, Instant::now() + Duration::from_secs(60)),
+                        &stop,
+                        &mut waiter,
+                    ),
+                    Err(FinalityProofIntervalReadError::Proof(
+                        NativeFinalityProofIntervalError::Cancelled
+                    ))
+                )
+            });
+            std::thread::sleep(Duration::from_millis(50));
+            stop.store(true, Ordering::Release);
+            reader.thread().unpark();
+            // The publication is still held: only the stop can end this wait.
+            reader.join().unwrap()
+        })
+    });
+    assert!(
+        stopped,
+        "a stopped request ends its wait with its stop policy"
+    );
+    assert_eq!(waiters.reserved_bytes(), 0);
 }
 
 fn single(height: u64) -> NativeFinalityProofIntervalLimits {
@@ -518,4 +711,197 @@ fn ladder_same_tip_reverifies_the_gap_below_its_strict_checkpoint() {
     let (receipt, counts) = relation_counts::measure(|| ladder(state, &owner, 6, 2));
     assert_eq!(counts.qcs, [6]);
     assert_eq!(receipt.unwrap().as_ref().id(), chain.committed(6).id());
+}
+
+fn interval(from: u64, to: u64) -> NativeFinalityProofIntervalLimits {
+    NativeFinalityProofIntervalLimits::new(
+        NonZeroU64::new(from).unwrap(),
+        NonZeroU64::new(to).unwrap(),
+        NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
+        NonZeroUsize::new(usize::MAX).unwrap(),
+        Instant::now() + Duration::from_secs(900),
+    )
+    .unwrap()
+}
+
+#[test]
+fn cold_interval_climbs_in_retained_ladder_steps_and_a_warm_read_verifies_only_its_gap() {
+    let chain = chain_of(2 * LADDER_STEP + 12);
+    let state = chain.state();
+    let tip = chain.height();
+    let owner = test_budget(iroha_allocation::AllocationBudget::new(2_562_487));
+    let read = |from: u64, to: u64| {
+        state.read_finality_proof_interval(&owner, &interval(from, to), &AtomicBool::new(false))
+    };
+    // A height this State has not committed refuses before any ladder work.
+    let (refused, _) = relation_counts::measure(|| read(10 * tip, 10 * tip));
+    assert!(refused.is_err());
+    assert!(state.finality_prefix_checkpoints.heights().is_empty());
+    // A restarted node retains no prefix: its first read near the tip climbs from
+    // signed genesis, one retained step at a time, and verifies each height once.
+    let started = Instant::now();
+    let (cold, counts) = relation_counts::measure(|| read(tip - 9, tip));
+    let cold_elapsed = started.elapsed();
+    let cold = cold.unwrap();
+    assert_eq!(counts.qcs, (2..=tip).collect::<Vec<_>>());
+    assert_eq!(
+        state.finality_prefix_checkpoints.heights(),
+        [1 + LADDER_STEP, 1 + 2 * LADDER_STEP, tip]
+    );
+    for (index, height) in (tip - 9..=tip).enumerate() {
+        assert_eq!(
+            cold.proof(index).unwrap().block_header.hash(),
+            chain.committed(height).block_hash()
+        );
+    }
+    drop(cold);
+    // Once warm, a read verifies only the frames above its nearest retained prefix.
+    let started = Instant::now();
+    let (warm, counts) = relation_counts::measure(|| read(tip - 1, tip));
+    let warm_elapsed = started.elapsed();
+    assert_eq!(counts.qcs, (2 * LADDER_STEP + 2..=tip).collect::<Vec<_>>());
+    assert_eq!(
+        warm.unwrap().proof(1).unwrap().block_header.hash(),
+        chain.committed(tip).block_hash()
+    );
+    eprintln!(
+        "finality ladder at height {tip}: cold read verified {} heights in {cold_elapsed:?}, \
+         warm read {} heights in {warm_elapsed:?}",
+        tip - 1,
+        tip - 2 * LADDER_STEP - 1,
+    );
+}
+
+#[test]
+fn interval_climb_keeps_its_completed_steps_when_stopped() {
+    let chain = chain_of(9);
+    let state = chain.state();
+    let owner = test_budget(iroha_allocation::AllocationBudget::new(2_562_487));
+    let cancelled = AtomicBool::new(false);
+    // A withdrawn request or an expired deadline stops between the climb's steps.
+    let result = state.climb_finality_ladder(&owner, &single(9), &cancelled, 3, None, || {
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+    });
+    assert!(matches!(
+        result,
+        Err(FinalityProofIntervalReadError::Proof(
+            NativeFinalityProofIntervalError::Cancelled
+        ))
+    ));
+    assert_eq!(state.finality_prefix_checkpoints.heights(), [4]);
+    // The next read resumes above the kept step instead of at signed genesis.
+    let (proofs, counts) = relation_counts::measure(|| {
+        state.read_finality_proof_interval(&owner, &single(9), &AtomicBool::new(false))
+    });
+    assert_eq!(counts.qcs, [5, 6, 7, 8, 9]);
+    assert_eq!(
+        proofs.unwrap().proof(0).unwrap().block_header.hash(),
+        chain.committed(9).block_hash()
+    );
+}
+
+#[test]
+fn interval_climb_keeps_its_completed_steps_through_a_busy_publication() {
+    let chain = chain_of(9);
+    let state = Arc::clone(chain.state());
+    let owner = test_budget(iroha_allocation::AllocationBudget::new(2_562_487));
+    let (request_tx, request_rx) = std::sync::mpsc::sync_channel(1);
+    let (held_tx, held_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (result, expected) = std::thread::scope(|scope| {
+        let publisher = Arc::clone(&state);
+        let worker = scope.spawn(move || {
+            if request_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                return;
+            }
+            publisher.with_held_view_publication_for_reader_test(|wait| {
+                held_tx.send(wait).unwrap();
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            });
+        });
+        let mut expected = None;
+        // The first step's walk retains its prefix; then an actual publication
+        // makes that step's final capture Busy.
+        let result = state.climb_finality_ladder(
+            &owner,
+            &single(9),
+            &AtomicBool::new(false),
+            3,
+            None,
+            || {
+                if expected.is_none() {
+                    request_tx.send(()).unwrap();
+                    expected = Some(held_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+                }
+            },
+        );
+        let _ = release_tx.send(());
+        worker.join().unwrap();
+        (result, expected)
+    });
+    let Err(FinalityProofIntervalReadError::StateView(StateViewError::Busy(original))) = result
+    else {
+        panic!("a busy step must return the actual publisher's release");
+    };
+    assert_eq!(Some(original), expected);
+    assert_eq!(state.finality_prefix_checkpoints.heights(), [4]);
+    // After that release the retry resumes above the step the busy read completed.
+    let (proofs, counts) = relation_counts::measure(|| {
+        state.read_finality_proof_interval(&owner, &single(9), &AtomicBool::new(false))
+    });
+    assert_eq!(counts.qcs, [5, 6, 7, 8, 9]);
+    assert_eq!(
+        proofs.unwrap().proof(0).unwrap().block_header.hash(),
+        chain.committed(9).block_hash()
+    );
+}
+
+#[test]
+fn waiting_climb_waits_out_a_busy_step_and_verifies_each_height_once() {
+    let chain = chain_of(9);
+    let state = Arc::clone(chain.state());
+    let owner = test_budget(iroha_allocation::AllocationBudget::new(2_562_487));
+    let waiters = iroha_allocation::AllocationBudget::new(4096);
+    let mut waiter = waiter(&waiters);
+    let (request_tx, request_rx) = std::sync::mpsc::sync_channel(1);
+    let (held_tx, held_rx) = std::sync::mpsc::sync_channel(1);
+    let (result, counts) = std::thread::scope(|scope| {
+        let holder = {
+            let state = Arc::clone(&state);
+            scope.spawn(move || {
+                if request_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                    return;
+                }
+                state.with_held_view_publication_for_reader_test(|_| {
+                    held_tx.send(()).unwrap();
+                    // Retire after the first step's recheck has met this publication.
+                    std::thread::sleep(Duration::from_millis(100));
+                });
+            })
+        };
+        let mut first = true;
+        let climbed = relation_counts::measure(|| {
+            state.climb_finality_ladder(
+                &owner,
+                &single(9),
+                &AtomicBool::new(false),
+                3,
+                Some(&mut waiter),
+                || {
+                    if std::mem::take(&mut first) {
+                        request_tx.send(()).unwrap();
+                        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    }
+                },
+            )
+        });
+        holder.join().unwrap();
+        climbed
+    });
+    result.expect("a waiting climb outlasts a busy step within its deadline");
+    // Steps to 4 and 7; the busy step repeated only its recheck, never its walk.
+    assert_eq!(counts.qcs, [2, 3, 4, 5, 6, 7]);
+    assert_eq!(state.finality_prefix_checkpoints.heights(), [4, 7]);
+    drop(waiter);
+    assert_eq!(waiters.reserved_bytes(), 0);
 }

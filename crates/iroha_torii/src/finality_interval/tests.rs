@@ -558,3 +558,290 @@ async fn failed_and_timed_out_workers_keep_original_credit_until_unpolled_stop_c
         );
     }
 }
+
+// Hold the actual State publication on its own thread until released.
+fn hold_publication(
+    state: Arc<CoreState>,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<()>,
+) {
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        state.with_held_view_publication_for_reader_test(|_| {
+            held_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+    });
+    (held_rx, release_tx, holder)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interval_waits_out_a_busy_state_publication_that_completes_within_its_deadline() {
+    let chain = chain();
+    let expected = (1..=4)
+        .map(|height| build_proof(&chain.state().view(), height).unwrap())
+        .collect::<Vec<_>>();
+    let (admission, pool, query) = admission();
+    let owner = history_producer::HistoryProducerOwner::from_admission(&admission).unwrap();
+    let limit = owner.response_bytes();
+    drop(owner);
+    let (held, release, holder) = hold_publication(Arc::clone(chain.state()));
+    held.await.unwrap();
+    let request = tokio::spawn(prepare(
+        Arc::clone(chain.state()),
+        Selection::Interval { from: 1, to: 4 },
+        ResponseFormat::Norito,
+        admission,
+        limit,
+        deadline(),
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let waiting = !request.is_finished();
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    let prepared = request.await.unwrap().unwrap();
+    assert!(
+        waiting,
+        "a held publication is waited out instead of refused"
+    );
+    assert_eq!(prepared.response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(prepared.response.into_body(), limit)
+        .await
+        .unwrap();
+    assert_eq!(
+        norito::decode_canonical::<Vec<SumeragiFinalityProof>>(&bytes).unwrap(),
+        expected
+    );
+    drop(bytes);
+    assert_eq!(query.available_permits(), 1);
+    assert!(pool.try_acquire_parts([48_000_000]).is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interval_refuses_as_busy_only_when_a_held_publication_outlasts_its_deadline() {
+    let chain = chain();
+    let (admission, pool, query) = admission();
+    let owner = history_producer::HistoryProducerOwner::from_admission(&admission).unwrap();
+    let limit = owner.response_bytes();
+    let metadata = owner.response_metadata().clone();
+    drop(owner);
+    let (held, release, holder) = hold_publication(Arc::clone(chain.state()));
+    held.await.unwrap();
+    let wait = std::time::Duration::from_millis(200);
+    let started = Instant::now();
+    let result = prepare(
+        Arc::clone(chain.state()),
+        Selection::Interval { from: 1, to: 4 },
+        ResponseFormat::Norito,
+        admission,
+        limit,
+        started + wait,
+    )
+    .await;
+    let waited = started.elapsed();
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    let Err(Error::AppServiceUnavailable { code, .. }) = result else {
+        panic!("a publication held past the deadline keeps its busy refusal");
+    };
+    assert_eq!(code, "finality_history_busy");
+    assert!(waited >= wait, "the worker waited out its whole deadline");
+    assert_eq!(query.available_permits(), 1);
+    assert_eq!(metadata.reserved_bytes(), 0);
+    assert!(pool.try_acquire_parts([48_000_000]).is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopped_interval_request_unparks_its_worker_from_a_busy_state_wait() {
+    let chain = chain();
+    let (admission, pool, query) = admission();
+    let owner = history_producer::HistoryProducerOwner::from_admission(&admission).unwrap();
+    let limit = owner.response_bytes();
+    drop(owner);
+    let (held, release, holder) = hold_publication(Arc::clone(chain.state()));
+    held.await.unwrap();
+    let request = tokio::spawn(prepare(
+        Arc::clone(chain.state()),
+        Selection::Interval { from: 1, to: 4 },
+        ResponseFormat::Norito,
+        admission,
+        limit,
+        deadline(),
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    request.abort(); // Cancel only the HTTP future; its native worker observes the stop.
+    let cancelled = request.await.is_err_and(|error| error.is_cancelled());
+    // The publication is still held, so only the stop control's unpark ends the wait.
+    let retired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while query.available_permits() != 1 || pool.available_bytes() != 48_000_000 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .is_ok();
+    release.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(cancelled);
+    assert!(
+        retired,
+        "a stopped request's worker must retire while the publication is still held"
+    );
+}
+
+#[inline(never)]
+fn chain_of(height: u64) -> CertifiedTestChain {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+    while chain.height() < height {
+        chain.commit(Vec::new());
+    }
+    chain
+}
+
+// One route-shaped read under its own admission, decoded from its exact Norito body.
+async fn read_proofs(
+    state: Arc<CoreState>,
+    selection: Selection,
+) -> Result<Vec<SumeragiFinalityProof>, Error> {
+    let (admission, _pool, _query) = admission();
+    let owner = history_producer::HistoryProducerOwner::from_admission(&admission).unwrap();
+    let limit = owner.response_bytes();
+    drop(owner);
+    let prepared = prepare(
+        state,
+        selection,
+        ResponseFormat::Norito,
+        admission,
+        limit,
+        deadline(),
+    )
+    .await?;
+    assert_eq!(prepared.response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(prepared.response.into_body(), limit)
+        .await
+        .unwrap();
+    Ok(match selection {
+        Selection::Single(_) => {
+            vec![norito::decode_canonical::<SumeragiFinalityProof>(&bytes).unwrap()]
+        }
+        Selection::Interval { .. } => {
+            norito::decode_canonical::<Vec<SumeragiFinalityProof>>(&bytes).unwrap()
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_reads_wait_for_an_active_publication_and_both_succeed() {
+    let chain = chain();
+    let state = Arc::clone(chain.state());
+    let expected = (1..=4)
+        .map(|height| build_proof(&state.view(), height).unwrap())
+        .collect::<Vec<_>>();
+    let (held, release, publisher) = hold_publication(Arc::clone(&state));
+    held.await.unwrap();
+    // Both selections meet the actual publisher. Each used to answer 503
+    // finality_history_busy at once; now each waits for that publication's release.
+    let interval = tokio::spawn(read_proofs(
+        Arc::clone(&state),
+        Selection::Interval { from: 1, to: 4 },
+    ));
+    let single = tokio::spawn(read_proofs(Arc::clone(&state), Selection::Single(4)));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let waited = !interval.is_finished() && !single.is_finished();
+    release.send(()).unwrap();
+    publisher.join().unwrap();
+    let interval = interval.await.unwrap();
+    let single = single.await.unwrap();
+    assert!(
+        waited,
+        "busy reads must wait for the publication's release instead of answering busy"
+    );
+    assert_eq!(interval.unwrap(), expected);
+    assert_eq!(single.unwrap(), expected[3..]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_interval_reads_all_succeed_while_publications_repeat() {
+    let chain = chain();
+    let state = Arc::clone(chain.state());
+    let expected = (1..=4)
+        .map(|height| build_proof(&state.view(), height).unwrap())
+        .collect::<Vec<_>>();
+    let stop = Arc::new(AtomicBool::new(false));
+    // Actual State publications keep starting and completing under both readers,
+    // so their first and final captures meet active publications at random.
+    let publisher = std::thread::spawn({
+        let (state, stop) = (Arc::clone(&state), Arc::clone(&stop));
+        move || {
+            let mut publications = 0_u32;
+            while !stop.load(Ordering::Acquire) {
+                state.with_held_view_publication_for_reader_test(|_| {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                });
+                publications += 1;
+                std::thread::sleep(std::time::Duration::from_millis(3));
+            }
+            publications
+        }
+    });
+    let mut results = Vec::new();
+    for _ in 0..8 {
+        let (whole, tail) = tokio::join!(
+            read_proofs(Arc::clone(&state), Selection::Interval { from: 1, to: 4 }),
+            read_proofs(Arc::clone(&state), Selection::Interval { from: 3, to: 4 }),
+        );
+        results.push((whole, tail));
+    }
+    stop.store(true, Ordering::Release);
+    let publications = publisher.join().unwrap();
+    assert!(publications > 0);
+    for (whole, tail) in results {
+        assert_eq!(whole.unwrap(), expected);
+        assert_eq!(tail.unwrap(), expected[2..]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefix_ladder_worker_climbs_from_genesis_follows_the_tip_and_stops_at_shutdown() {
+    let mut chain = chain_of(10);
+    let state = Arc::clone(chain.state());
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    let fixture = Arc::get_mut(&mut app).unwrap();
+    fixture.state = Arc::clone(&state);
+    fixture.kura = Arc::clone(chain.kura());
+    // Retained prefixes are process-local: a started node's floor is signed genesis.
+    assert_eq!(state.finality_ladder_floor(10), 1);
+    let shutdown = ShutdownSignal::new();
+    let worker = tokio::spawn(keep_prefix_ladder_warm_in_steps(
+        Arc::clone(&app),
+        shutdown.clone(),
+        3,
+    ));
+    let reaches = |height: u64, floor: u64| {
+        let state = Arc::clone(&state);
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                while state.finality_ladder_floor(height) < floor {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_ok()
+        }
+    };
+    // Steps to 4 and 7 bring the ladder within one step of the tip; it then waits.
+    assert!(reaches(10, 7).await);
+    assert_eq!(state.finality_ladder_floor(10), 7);
+    // Once the tip moves more than one step above the ladder, the worker follows it.
+    for _ in 0..3 {
+        chain.commit(Vec::new());
+    }
+    assert!(reaches(13, 10).await);
+    shutdown.send();
+    assert_eq!(
+        worker.await.unwrap(),
+        ToriiCriticalWorkerExit::StoppedByShutdown
+    );
+}

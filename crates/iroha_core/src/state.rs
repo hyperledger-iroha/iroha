@@ -12903,7 +12903,7 @@ mod history_reader_releases;
 pub(crate) use history_reader_releases::StateViewReleases;
 #[path = "state/view_acquisition.rs"]
 pub(crate) mod view_acquisition;
-pub use view_acquisition::StateViewError;
+pub use view_acquisition::{StateViewError, StateViewWaiter};
 
 /// Original executing State fields, jointly retired by their enclosing owner.
 #[expect(
