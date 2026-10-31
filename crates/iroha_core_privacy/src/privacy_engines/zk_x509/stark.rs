@@ -7862,6 +7862,7 @@ impl<'a> MainP256Log16ProverConstraintSourceV1<'a> {
         }
         Ok(binding)
     }
+    #[cfg(test)]
     fn stream_fixed_polynomials_v1(
         &self,
         mut consume: impl FnMut(
@@ -8638,6 +8639,9 @@ struct MainLog19ProverConstraintSourceV1<'a, 'source> {
     source: &'source MainLog19BoundTraceGroupSourceV1<'a>,
     der_public: ZkX509DerStarkPublicTerminalsV1,
     p256_challenges: P256AggregateChallengesV1,
+    sha_fold_powers: super::sha_word_stark::wide_fold::ShaWordFoldPowersV1,
+    composition_challenges:
+        super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'source>,
 }
 impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
     fn for_main_v1(
@@ -8657,6 +8661,16 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
             )
             .map_err(ZkX509StarkErrorV1::from)?,
             p256_challenges: p256_aggregate_challenges_from_post_base_v1(&source.post_base)?,
+            sha_fold_powers: super::sha_word_stark::wide_fold::ShaWordFoldPowersV1::new_v1(
+                source.post_base.sha_word(),
+            )
+            .map_err(super::sha_call_bus_stark::ZkX509ShaCallBusStarkErrorV1::from)
+            .map_err(map_main_sha_source_error_v1)?,
+            composition_challenges:
+                super::credential_pre_aux::ValidatedMainCompositionChallengesV1::new_v1(
+                    &source.post_base,
+                )
+                .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?,
         })
     }
     fn stream_fixed_polynomials_v1(
@@ -8681,33 +8695,34 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         }
         Ok(())
     }
-    #[cfg(test)]
-    fn constraint_residues_v1(
+    fn validate_constraint_opening_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
         opening: RegisteredOpenedRowsV1<'_>,
         fixed_current: &[F],
         fixed_next: &[F],
-    ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-        let mut residues = Vec::new();
-        self.emit_constraint_residues_v1(
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let registration_index = self.source.registration_index_v1(registration)?;
+        self.validate_constraint_opening_at_v1(
             registration,
+            registration_index,
             opening,
             fixed_current,
             fixed_next,
-            &mut residues,
         )?;
-        Ok(residues)
+        Ok(registration_index)
     }
-    fn emit_constraint_residues_v1(
+    fn validate_constraint_opening_at_v1(
         &self,
         registration: RegisteredSegmentLayoutV1,
+        registration_index: usize,
         opening: RegisteredOpenedRowsV1<'_>,
         fixed_current: &[F],
         fixed_next: &[F],
-        residues: &mut impl super::sha_residue_output::ShaResidueSinkV1<F>,
     ) -> Result<(), ZkX509StarkErrorV1> {
-        let registration_index = self.source.registration_index_v1(registration)?;
+        if self.source.registrations.get(registration_index) != Some(&registration) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
         if fixed_current.len() != registration.segment.fixed_width
             || fixed_next.len() != registration.segment.fixed_width
             || opening.base_current.len() != registration.segment.base_width
@@ -8726,6 +8741,55 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn constraint_residues_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+    ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
+        let mut residues = Vec::new();
+        self.emit_constraint_residues_v1(
+            registration,
+            opening,
+            fixed_current,
+            fixed_next,
+            &mut residues,
+            None,
+        )?;
+        Ok(residues)
+    }
+    fn emit_constraint_residues_v1(
+        &self,
+        registration: RegisteredSegmentLayoutV1,
+        opening: RegisteredOpenedRowsV1<'_>,
+        fixed_current: &[F],
+        fixed_next: &[F],
+        residues: &mut impl super::sha_residue_output::ShaResidueSinkV1<F>,
+        context: Option<&main_aggregate::MainLog19CompositionRegistrationV1<'_, '_, '_>>,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        let registration_index = match context {
+            Some(context) => {
+                context.validate_owner_v1(self, registration)?;
+                self.validate_constraint_opening_at_v1(
+                    registration,
+                    context.index,
+                    opening,
+                    fixed_current,
+                    fixed_next,
+                )?;
+                context.index
+            }
+            None => self.validate_constraint_opening_v1(
+                registration,
+                opening,
+                fixed_current,
+                fixed_next,
+            )?,
+        };
         match registration_index {
             0 => residues.extend_residues(
                 super::der_stark::evaluate_zk_x509_der_stark_local_residues_v1(
@@ -8756,32 +8820,58 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                 )
                 .map_err(ZkX509StarkErrorV1::from)?,
             ),
-            1 => residues.extend_residues(
-                evaluate_zk_x509_rfc5280_local_residues_v1(
-                    opening
-                        .base_current
-                        .try_into()
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    opening
-                        .base_next
-                        .try_into()
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    opening
-                        .aux_current
-                        .try_into()
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    opening
-                        .aux_next
-                        .try_into()
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    fixed_current
-                        .try_into()
-                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    &self.source.post_base.der(),
-                    self.source.post_base.rfc5280(),
-                )
-                .map_err(map_main_rfc_source_error_v1)?,
-            ),
+            1 => residues.extend_residues({
+                if context.is_some() {
+                    super::rfc5280_stark::evaluate_rfc5280_local_with_bound_context_v1(
+                        opening
+                            .base_current
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        opening
+                            .base_next
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        opening
+                            .aux_current
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        opening
+                            .aux_next
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        fixed_current
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        self.composition_challenges,
+                    )
+                    .map_err(map_main_rfc_source_error_v1)?
+                } else {
+                    evaluate_zk_x509_rfc5280_local_residues_v1(
+                        opening
+                            .base_current
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        opening
+                            .base_next
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        opening
+                            .aux_current
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        opening
+                            .aux_next
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        fixed_current
+                            .try_into()
+                            .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                        &self.source.post_base.der(),
+                        self.source.post_base.rfc5280(),
+                    )
+                    .map_err(map_main_rfc_source_error_v1)?
+                }
+            }),
             2..=5 => {
                 let segment = registration_index - 2;
                 let current = ZkX509ShaBatchRowV1 {
@@ -8800,20 +8890,20 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     fixed: *<&[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]>::try_from(fixed_next)
                         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
                 };
-                super::sha_call_bus_stark::emit_sha_batch_relation_v1(
+                super::sha_call_bus_stark::evaluate_sha_batch_local_with_bound_context_into_v1(
                     &current,
                     &next,
-                    self.source.post_base.sha_word(),
-                    self.source.post_base.sha(),
-                    self.source.post_base.rfc5280(),
+                    self.composition_challenges,
                     u8::try_from(segment).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
-                    None,
                     residues,
+                    &self.sha_fold_powers,
                 )
                 .map_err(map_main_sha_source_error_v1)?
             }
             _ => {
-                let _binding = self.source.p256_binding_v1(registration)?;
+                if context.is_none() {
+                    let _binding = self.source.p256_binding_v1(registration)?;
+                }
                 residues.extend_residues(p256_opened_residues_v1(
                     registration,
                     opening,

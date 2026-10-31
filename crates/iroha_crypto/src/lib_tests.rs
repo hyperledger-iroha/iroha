@@ -45,6 +45,7 @@ mod tests {
     #[cfg(feature = "pqc")]
     #[derive(Debug)]
     struct FailingTryRngError;
+    #[cfg(feature = "pqc")]
     impl std::error::Error for FailingTryRngError {}
     #[cfg(feature = "pqc")]
     impl core::fmt::Display for FailingTryRngError {

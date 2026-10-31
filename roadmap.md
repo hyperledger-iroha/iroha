@@ -30,11 +30,12 @@ ordinary refund controls.
    signing inputs. This handoff task owns the outcomes in the
    [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
    and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
-5. Qualify the implemented native fixture and release-owner corrections through
-   a fresh library build, affected-owner runtimes, workspace checks and genuine
-   fixture and native SDK artifacts on one source candidate. Qualify the
-   joint X509 relation and transcript privacy, and resolve proving time and
-   process observation under unchanged memory and address-space limits;
+5. Qualify the combined fixture/runtime and native release-owner corrections
+   through a fresh library build, affected-owner runtimes, workspace checks and
+   genuine fixture and native SDK artifacts on one source candidate. Qualify the
+   joint X509 relation and transcript privacy, meet the unchanged proving-time
+   limit while preserving the RSS limit, and complete process observation and
+   hardware-specific address-space qualification;
    produce current q77 maximum proofs without widening resource limits.
 
 The [Windows and Intel completion goals](specs/windows_intel_completion_goals.md)
@@ -251,7 +252,7 @@ with no node-schema key.
 | C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; qualify integrated trigger-action relations, complete Musubi and membership/frontier capture and State/Kura publication, then native execution/private invocation/AXT; identical gas/traps/state/proofs, complete cache/index/control and host/native scratch allocation custody, retained observation recovery and authenticated calibration. |
 | C3 | Signature audit | Crypto/consumers | ML-DSA/SM2/GOST/FHE feature/lint/custody, mixed-torsion Ed25519, PoP and threshold-BLS beacon/side-channel review; Musubi State-reader prerequisites. |
 | C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/77-query SHA3/SHAKE DEEP ordinary/AXT relations and bounded work/RSS; preserve current maximum ordinary/AXT component proof passes while completing finalized-source admission, AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
-| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and complete its maximum proof within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
+| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and qualify maximum proofs across supported platforms within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Automatic target-appropriate daemon defaults, ten reproducible signed embedded CUDA PTX families, driverless daemon startup, actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
 | C8 | Kaigi sessions | Model/crypto/Core/SDKs | Release-profile evidence for the passing [four-validator gate](specs/kaigi_four_validator_lifecycle_v1.md); private proving in the Kotlin, Swift, Python and C# SDKs; a governed path to enable private calls on a running network, because verifying keys can only be registered at genesis; a decision on whether a stale-roster rejection keeps paying the full fee, since people joining at once pay for every lost race; [SoraNet relay routing](specs/soranet/kaigi_over_soranet.md#outstanding-work), which needs an owner trust-model decision. |

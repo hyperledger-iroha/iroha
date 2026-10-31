@@ -585,6 +585,10 @@ pub mod observation {
             });
             Self
         }
+        #[expect(
+            clippy::unused_self,
+            reason = "the receiver proves the guard that owns this thread-local observation is still alive"
+        )]
         pub(crate) fn release_and_refuse_replacement(&self) {
             CURRENT.with(|current| {
                 let mut current = current.borrow_mut();
@@ -593,6 +597,10 @@ pub mod observation {
                 drop(original.held.take());
             });
         }
+        #[expect(
+            clippy::unused_self,
+            reason = "the receiver proves the guard that owns this thread-local observation is still alive"
+        )]
         pub(crate) fn snapshot(&self) -> (usize, bool) {
             CURRENT.with(|current| {
                 let current = current.borrow();

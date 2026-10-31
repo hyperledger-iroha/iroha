@@ -536,7 +536,7 @@ impl QueryCertifiedChain<'_> {
             )
         })?;
         #[cfg(test)]
-        workspace.note_target_cost(&target);
+        crate::sumeragi::finality::FinalityDecodeWorkspace::note_target_cost(&target);
         progress()?;
         let wire = (raw.len() as u64, Hash::new(raw.as_slice()));
         let mut staged = StagedQueryFrame::new(committed, payload, Some(raw), wire, self.budget())?;

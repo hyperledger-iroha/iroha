@@ -138,7 +138,7 @@ fn initial_fixed_inverse_validates_every_column_and_exact_root_before_mutation()
     assert_eq!(columns, before);
 }
 
-fn with_maximum_fixed_source_v1(
+pub(super) fn with_maximum_fixed_source_v1(
     consume: impl FnOnce(
         &AggregateProofLayoutV1,
         &MainLog19BoundTraceGroupSourceV1<'_>,
@@ -211,17 +211,26 @@ fn maximum_arithmetic_fixed_sets_preserve_every_coefficient_and_registration() {
                 continue;
             }
             let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
-            let actual = main_log19_fixed_polynomial_set_v1(&prover, registration, policy).unwrap();
+            let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)
+                .unwrap()
+                .quotient_cache_plan_v1(layout, registration)
+                .unwrap();
+            let mut actual =
+                main_log19_fixed_polynomial_set_v1(&prover, registration, policy, cache_plan)
+                    .unwrap();
             assert_eq!(actual.registration, registration);
-            assert_eq!(actual.columns.len(), registration.segment.fixed_width);
-            for (column, coefficients) in actual.columns.iter().enumerate() {
+            let actual_columns = actual.full_coefficients_for_test_v1().unwrap();
+            assert_eq!(actual_columns.len(), registration.segment.fixed_width);
+            for (column, coefficients) in actual_columns.iter().enumerate() {
                 let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
                 goldilocks_ifft_v1(&mut expected, root).unwrap();
                 assert_eq!(coefficients.as_slice(), &*expected);
             }
             let mut invalid = registration;
             invalid.segment.fixed_width -= 1;
-            assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid, policy).is_err());
+            assert!(
+                main_log19_fixed_polynomial_set_v1(&prover, invalid, policy, cache_plan).is_err()
+            );
             checked += 1;
         }
         assert_eq!(checked, 5);
@@ -251,11 +260,18 @@ fn maximum_sha_fixed_sets_preserve_every_coefficient_and_registration() {
                 continue;
             }
             let root = goldilocks_primitive_root_v1(registration.segment.trace_log2).unwrap();
-            let actual = main_log19_fixed_polynomial_set_v1(&prover, registration, policy).unwrap();
+            let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(layout)
+                .unwrap()
+                .quotient_cache_plan_v1(layout, registration)
+                .unwrap();
+            let mut actual =
+                main_log19_fixed_polynomial_set_v1(&prover, registration, policy, cache_plan)
+                    .unwrap();
             assert_eq!(actual.registration, registration);
-            assert_eq!(actual.columns.len(), registration.segment.fixed_width);
-            assert_eq!(actual.columns.len(), 137);
-            for (column, coefficients) in actual.columns.iter().enumerate() {
+            let actual_columns = actual.full_coefficients_for_test_v1().unwrap();
+            assert_eq!(actual_columns.len(), registration.segment.fixed_width);
+            assert_eq!(actual_columns.len(), 137);
+            for (column, coefficients) in actual_columns.iter().enumerate() {
                 // Exact previous production path; retain every native coefficient.
                 let mut expected = source.native_fixed_column_v1(registration, column).unwrap();
                 goldilocks_ifft_v1(&mut expected, root).unwrap();
@@ -263,7 +279,9 @@ fn maximum_sha_fixed_sets_preserve_every_coefficient_and_registration() {
             }
             let mut invalid = registration;
             invalid.segment.fixed_width -= 1;
-            assert!(main_log19_fixed_polynomial_set_v1(&prover, invalid, policy).is_err());
+            assert!(
+                main_log19_fixed_polynomial_set_v1(&prover, invalid, policy, cache_plan).is_err()
+            );
             checked += 1;
         }
         assert_eq!(checked, 4);
@@ -331,4 +349,27 @@ fn initial_sha_fixed_inverse_cost_preserves_every_native_coefficient() {
             policy.columns_v1(rows)
         );
     }
+}
+
+#[test]
+fn arithmetic_fixed_owner_kind_mismatch_cannot_borrow_dense_coefficients() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let registration = *layout
+        .registered_segments
+        .iter()
+        .find(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .unwrap();
+    let cache_plan = main_resources::MainProverBufferPlanV1::new_v1(&layout)
+        .unwrap()
+        .quotient_cache_plan_v1(&layout, registration)
+        .unwrap();
+    let invalid = ZeroizingMainFixedPolynomialSetV1 {
+        registration,
+        cache_plan,
+        owner: MainFixedCoefficientOwnerV1::Dense(ZeroizingBaseColumnsV1(Vec::new())),
+    };
+    assert!(matches!(
+        invalid.cache_columns_v1(),
+        Err(ZkX509StarkErrorV1::ProfileMismatch)
+    ));
 }

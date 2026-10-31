@@ -342,7 +342,7 @@ fn contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_
             for instruction in &instructions {
                 assert!(
                     executor
-                        .execute_instruction(&mut tx, &authority, &instruction)
+                        .execute_instruction(&mut tx, &authority, instruction)
                         .is_err(),
                     "scenario {scenario} accepted an owned permission mutation: {instruction:?}"
                 );

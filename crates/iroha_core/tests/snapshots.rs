@@ -62,12 +62,11 @@ pub fn assert_events(name: &str, events: &[EventBox]) {
     let path = fixture_path(name);
     if let Ok(expected) = fs::read_to_string(&path) {
         if expected != actual {
-            if write_if_update_requested(&path, &actual) {
-                panic!(
-                    "fixture updated: {}. Re-run tests without UPDATE_FIXTURES to verify.",
-                    path.display()
-                );
-            }
+            assert!(
+                !write_if_update_requested(&path, &actual),
+                "fixture updated: {}. Re-run tests without UPDATE_FIXTURES to verify.",
+                path.display()
+            );
             panic!(
                 "event snapshot mismatch for {}. Run with UPDATE_FIXTURES=1 to update.\nPath: {}",
                 name,
@@ -75,12 +74,11 @@ pub fn assert_events(name: &str, events: &[EventBox]) {
             );
         }
     } else {
-        if write_if_update_requested(&path, &actual) {
-            panic!(
-                "fixture created: {}. Re-run tests without UPDATE_FIXTURES to verify.",
-                path.display()
-            );
-        }
+        assert!(
+            !write_if_update_requested(&path, &actual),
+            "fixture created: {}. Re-run tests without UPDATE_FIXTURES to verify.",
+            path.display()
+        );
         panic!(
             "missing fixture for {}. Run with UPDATE_FIXTURES=1 to create.\nPath: {}",
             name,

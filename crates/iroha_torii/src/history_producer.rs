@@ -568,9 +568,9 @@ mod tests {
                 )
             })
             .unwrap();
-        let second =
-            usize::try_from(measured.allocation_context().consumed_allocated_bytes()).unwrap()
-                - first;
+        let second = usize::try_from(measured.allocation_context().consumed_allocated_bytes())
+            .unwrap()
+            - first;
         assert!(first > 0 && second > 0);
 
         let request = owner(48_000_000);

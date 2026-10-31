@@ -10,11 +10,70 @@ use super::*;
 use crate::privacy_engines::transparent_stark::{
     goldilocks_fft_coarse_v1, goldilocks_ifft_coarse_v1,
 };
+use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
+#[cfg(test)]
 use fastpq_prover::goldilocks_transform::{
     GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
-    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
-    transform_goldilocks_columns_v1,
+    GoldilocksTransformErrorV1 as TransformError, transform_goldilocks_columns_v1,
 };
+
+/// Closed fixed transition seam: exact prepared publication in production,
+/// with the original word transaction retained only by test implementations.
+trait MainFixedTransformV1 {
+    fn columns_v1(&self, policy: MainBoundedTransformPolicyV1, rows: usize) -> usize;
+    fn apply_v1(
+        &mut self,
+        policy: MainBoundedTransformPolicyV1,
+        columns: &mut [Vec<F>],
+        root: F,
+        diagonal: F,
+        recovery: bool,
+        uncertain: &mut dyn FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1>;
+}
+
+struct ExactFixedTransformV1;
+impl MainFixedTransformV1 for ExactFixedTransformV1 {
+    fn columns_v1(&self, policy: MainBoundedTransformPolicyV1, rows: usize) -> usize {
+        policy.forward_columns_v1(rows)
+    }
+
+    fn apply_v1(
+        &mut self,
+        policy: MainBoundedTransformPolicyV1,
+        columns: &mut [Vec<F>],
+        root: F,
+        diagonal: F,
+        recovery: bool,
+        uncertain: &mut dyn FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        policy.apply_exact_v1(columns, root, diagonal, recovery, uncertain)
+    }
+}
+
+#[cfg(test)]
+struct WordFixedTransformV1<T>(T);
+#[cfg(test)]
+impl<T> MainFixedTransformV1 for WordFixedTransformV1<T>
+where
+    T: FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+{
+    fn columns_v1(&self, policy: MainBoundedTransformPolicyV1, rows: usize) -> usize {
+        policy.columns_v1(rows)
+    }
+
+    fn apply_v1(
+        &mut self,
+        policy: MainBoundedTransformPolicyV1,
+        columns: &mut [Vec<F>],
+        root: F,
+        diagonal: F,
+        recovery: bool,
+        uncertain: &mut dyn FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        policy.apply_with_v1(columns, root, diagonal, recovery, &mut self.0, uncertain)
+    }
+}
 
 pub(super) struct MainFixedCosetV1<'a> {
     columns: ZeroizingBaseColumnsV1,
@@ -140,16 +199,9 @@ impl<'a> MainFixedCosetV1<'a> {
         &mut self,
         stripe: main_quotient_stripes::MainQuotientStripeV1,
     ) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
-        let result = self.evaluate_with_v1(
+        let result = self.evaluate_transform_v1(
             stripe,
-            |words, root, direction| {
-                transform_goldilocks_columns_v1(
-                    words,
-                    root,
-                    direction,
-                    fastpq_prover::ExecutionMode::Auto,
-                )
-            },
+            &mut ExactFixedTransformV1,
             goldilocks_transform_completion_uncertain_v1,
         );
         #[cfg(test)]
@@ -159,10 +211,20 @@ impl<'a> MainFixedCosetV1<'a> {
         result
     }
 
+    #[cfg(test)]
     fn evaluate_with_v1(
         &mut self,
         stripe: main_quotient_stripes::MainQuotientStripeV1,
-        mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
+        self.evaluate_transform_v1(stripe, &mut WordFixedTransformV1(transform), uncertain)
+    }
+
+    fn evaluate_transform_v1(
+        &mut self,
+        stripe: main_quotient_stripes::MainQuotientStripeV1,
+        transform: &mut impl MainFixedTransformV1,
         mut uncertain: impl FnMut() -> bool,
     ) -> Result<&[Vec<F>], ZkX509StarkErrorV1> {
         let valid = self.validate_stripe_v1(stripe);
@@ -194,7 +256,7 @@ impl<'a> MainFixedCosetV1<'a> {
                 column.resize(stripe.rows, F::ZERO);
             }
         }
-        let device_columns = self.transform_policy.columns_v1(stripe.rows);
+        let device_columns = transform.columns_v1(self.transform_policy, stripe.rows);
         let batch_columns = if device_columns == 0 {
             aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
         } else {
@@ -256,12 +318,12 @@ impl<'a> MainFixedCosetV1<'a> {
                         }
                     }
                 } else {
-                    self.transform_policy.apply_with_v1(
+                    transform.apply_v1(
+                        self.transform_policy,
                         batch,
                         stripe.root,
                         diagonal,
                         recovery,
-                        &mut transform,
                         &mut uncertain,
                     )?;
                 }
@@ -285,6 +347,10 @@ impl Drop for MainFixedCosetV1<'_> {
         for column in &mut self.columns.0 {
             super::super::super::private_table::zeroize_fields_v1(column);
         }
+        // Release the already-cleared allocations now. The nested clearing
+        // owner remains the unwind fallback if any earlier cleanup fails, but
+        // its normal Drop must not erase this same complete matrix twice.
+        self.columns.0.clear();
     }
 }
 
@@ -293,5 +359,16 @@ impl Drop for MainFixedCosetV1<'_> {
 mod tests;
 
 #[cfg(test)]
+#[path = "main_fixed_basis_tests.rs"]
+mod basis_tests;
+
+#[cfg(test)]
 #[path = "main_fixed_coset_device_tests.rs"]
 mod device_tests;
+
+#[cfg(test)]
+#[path = "main_fixed_prepared_tests.rs"]
+mod prepared_tests;
+
+#[path = "main_arithmetic_fixed_basis.rs"]
+pub(super) mod arithmetic_basis;

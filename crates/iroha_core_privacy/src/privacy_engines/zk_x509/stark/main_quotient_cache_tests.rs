@@ -711,3 +711,603 @@ fn arithmetic_priority_clears_auxiliary_cache_on_success_error_and_unwind() {
         assert!(erased.iter().all(|item| item.nonzero_after == 0));
     }
 }
+
+fn retained_columns(
+    kind: MainTraceColumnKindV1,
+    width: usize,
+    coefficients: usize,
+) -> Vec<PrivateTableV1<F>> {
+    replay(kind, 0..width, coefficients)
+        .into_iter()
+        .map(|column| PrivateTableV1::new(column.into_vec_v1(), zeroize_fields_v1))
+        .collect()
+}
+
+#[test]
+fn borrowed_registration_coefficients_preserve_every_coset_without_private_copies() {
+    const COEFFICIENTS: usize = 37;
+    let base = retained_columns(MainTraceColumnKindV1::Base, 10, COEFFICIENTS);
+    let aux = retained_columns(MainTraceColumnKindV1::Aux, 7, COEFFICIENTS);
+    let original_pointers = base
+        .iter()
+        .chain(&aux)
+        .map(|column| column.as_ptr())
+        .collect::<Vec<_>>();
+    let plan =
+        MainQuotientCachePlanV1::from_budget_v1(10, 7, COEFFICIENTS, 4, budget(9, COEFFICIENTS))
+            .unwrap();
+    let cache = MainQuotientReplayCacheV1::from_retained_v1(plan, &base, &aux).unwrap();
+    assert!(cache.columns.is_empty());
+    assert_eq!(cache.columns.capacity(), 0);
+    assert_eq!(
+        cache.allocated_payload_v1().unwrap(),
+        core::mem::size_of::<MainQuotientReplayCacheV1>()
+    );
+    for ordinal in 0..4 {
+        let full_root = goldilocks_primitive_root_v1(6).unwrap();
+        let stripe = main_quotient_stripes::MainQuotientStripeV1 {
+            rows: 16,
+            count: 4,
+            ordinal,
+            next_stride: 4,
+            root: full_root.pow(4),
+            shift: F(GOLDILOCKS_GENERATOR_V1).mul(full_root.pow(ordinal as u128)),
+        };
+        for (kind, retained) in [
+            (MainTraceColumnKindV1::Base, &base),
+            (MainTraceColumnKindV1::Aux, &aux),
+        ] {
+            let values = cache
+                .evaluate_retained_v1(
+                    kind,
+                    retained.len(),
+                    stripe,
+                    MainBoundedTransformPolicyV1::cpu_v1(),
+                    retained,
+                )
+                .unwrap();
+            let mut calls = Vec::new();
+            let staged = cache
+                .evaluate_sources_with_v1(
+                    kind,
+                    retained.len(),
+                    stripe,
+                    MainBoundedTransformPolicyV1::for_test_v1(stripe.rows, 8),
+                    Some(retained),
+                    |_| panic!("borrowed originals may not replay"),
+                    |words, root, direction| {
+                        calls.push(words.len());
+                        transform_goldilocks_columns_v1(
+                            words,
+                            root,
+                            direction,
+                            fastpq_prover::ExecutionMode::Cpu,
+                        )
+                    },
+                    || false,
+                )
+                .unwrap();
+            assert_eq!(values.0, staged.0);
+            assert!(calls.iter().all(|&width| width <= 8));
+            assert_eq!(calls.iter().sum::<usize>(), retained.len());
+            for (column, values) in values.iter().enumerate() {
+                for (row, value) in values.iter().enumerate() {
+                    let x = stripe.shift.mul(stripe.root.pow(row as u128));
+                    let expected = (0..COEFFICIENTS).rev().fold(F::ZERO, |sum, degree| {
+                        sum.mul(x).add(coefficient(kind, column, degree))
+                    });
+                    assert_eq!(*value, expected);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        original_pointers,
+        base.iter()
+            .chain(&aux)
+            .map(|column| column.as_ptr())
+            .collect::<Vec<_>>()
+    );
+    for (kind, columns) in [
+        (MainTraceColumnKindV1::Base, &base),
+        (MainTraceColumnKindV1::Aux, &aux),
+    ] {
+        for (column, values) in columns.iter().enumerate() {
+            for (degree, value) in values.iter().enumerate() {
+                assert_eq!(*value, coefficient(kind, column, degree));
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_private_cache_reassigns_only_existing_bytes_to_fixed_prefix() {
+    const COEFFICIENTS: usize = 37;
+    let base = retained_columns(MainTraceColumnKindV1::Base, 10, COEFFICIENTS);
+    let aux = retained_columns(MainTraceColumnKindV1::Aux, 7, COEFFICIENTS);
+    let fixed = vec![vec![F(19); 8]; 40];
+    let allowance = budget(9, COEFFICIENTS);
+    let plan = MainQuotientCachePlanV1::from_budget_v1(10, 7, COEFFICIENTS, 4, allowance).unwrap();
+    let original = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, columns| {
+        Ok(replay(kind, columns, COEFFICIENTS))
+    })
+    .unwrap()
+    .with_fixed_coefficients_v1(&fixed, 8, 4)
+    .unwrap();
+    let borrowed = MainQuotientReplayCacheV1::from_retained_v1(plan, &base, &aux)
+        .unwrap()
+        .with_fixed_coefficients_v1(&fixed, 8, 4)
+        .unwrap();
+    assert!(borrowed.columns.is_empty());
+    assert_eq!(borrowed.payload_limit, original.payload_limit);
+    assert!(borrowed.allocated_payload_v1().unwrap() <= allowance);
+    assert!(borrowed.fixed_coefficients_v1().len() > original.fixed_coefficients_v1().len());
+    let per_fixed = 8 * core::mem::size_of::<F>() + core::mem::size_of::<PrivateTableV1<F>>();
+    assert_eq!(
+        borrowed.fixed_coefficients_v1().len(),
+        (allowance - core::mem::size_of::<MainQuotientReplayCacheV1>()) / per_fixed
+    );
+}
+
+#[test]
+fn borrowed_quotient_failure_clears_only_outputs_and_preserves_original_custody() {
+    const COEFFICIENTS: usize = 37;
+    let base = retained_columns(MainTraceColumnKindV1::Base, 9, COEFFICIENTS);
+    let aux = retained_columns(MainTraceColumnKindV1::Aux, 1, COEFFICIENTS);
+    let plan =
+        MainQuotientCachePlanV1::from_budget_v1(9, 1, COEFFICIENTS, 4, budget(9, COEFFICIENTS))
+            .unwrap();
+    let cache = MainQuotientReplayCacheV1::from_retained_v1(plan, &base, &aux).unwrap();
+    let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(2, 4, 0).unwrap();
+    for failure in 0..3 {
+        let (result, cleared) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut calls = 0;
+                cache.evaluate_sources_with_v1(
+                    MainTraceColumnKindV1::Base,
+                    9,
+                    stripe,
+                    MainBoundedTransformPolicyV1::for_test_v1(16, 8),
+                    Some(&base),
+                    |_| panic!("borrowed originals may not replay"),
+                    |words, root, direction| {
+                        calls += 1;
+                        if calls == 2 {
+                            match failure {
+                                0 => return Err(TransformError::DeviceUnavailable),
+                                1 => return Err(TransformError::CompletionUncertain),
+                                _ => panic!("borrowed forward failure"),
+                            }
+                        }
+                        transform_goldilocks_columns_v1(
+                            words,
+                            root,
+                            direction,
+                            fastpq_prover::ExecutionMode::Cpu,
+                        )
+                    },
+                    || false,
+                )
+            }))
+        });
+        if failure == 2 {
+            assert!(result.is_err());
+        } else {
+            assert!(result.unwrap().is_err());
+        }
+        assert_eq!(
+            cleared.iter().map(|item| item.cells).sum::<usize>(),
+            9 * (16 + 16)
+        );
+        assert!(cleared.iter().all(|item| item.nonzero_after == 0));
+        for (column, values) in base.iter().enumerate() {
+            for (degree, value) in values.iter().enumerate() {
+                assert_eq!(
+                    *value,
+                    coefficient(MainTraceColumnKindV1::Base, column, degree)
+                );
+            }
+        }
+    }
+    let (_, cleared) = inspection::observe_v1(|| {
+        drop(base);
+        drop(aux);
+    });
+    assert_eq!(
+        cleared.iter().map(|item| item.cells).sum::<usize>(),
+        10 * COEFFICIENTS
+    );
+    assert!(cleared.iter().all(|item| item.nonzero_after == 0));
+}
+
+#[test]
+fn borrowed_quotient_rejects_wrong_shapes_local_copies_and_noncanonical_originals() {
+    const COEFFICIENTS: usize = 37;
+    let mut base = retained_columns(MainTraceColumnKindV1::Base, 2, COEFFICIENTS);
+    let aux = retained_columns(MainTraceColumnKindV1::Aux, 1, COEFFICIENTS);
+    let plan =
+        MainQuotientCachePlanV1::from_budget_v1(2, 1, COEFFICIENTS, 4, budget(3, COEFFICIENTS))
+            .unwrap();
+    assert!(MainQuotientReplayCacheV1::from_retained_v1(plan, &[], &aux).is_err());
+    assert!(MainQuotientReplayCacheV1::from_retained_v1(plan, &base[..1], &aux).is_err());
+    let cache = MainQuotientReplayCacheV1::from_retained_v1(plan, &base, &aux).unwrap();
+    let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(2, 4, 0).unwrap();
+    assert!(
+        cache
+            .evaluate_retained_v1(
+                MainTraceColumnKindV1::Base,
+                1,
+                stripe,
+                MainBoundedTransformPolicyV1::cpu_v1(),
+                &base
+            )
+            .is_err()
+    );
+    let owned = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, columns| {
+        Ok(replay(kind, columns, COEFFICIENTS))
+    })
+    .unwrap();
+    assert!(
+        owned
+            .evaluate_retained_v1(
+                MainTraceColumnKindV1::Base,
+                2,
+                stripe,
+                MainBoundedTransformPolicyV1::cpu_v1(),
+                &base
+            )
+            .is_err()
+    );
+    base[1][0] = F(u64::MAX);
+    assert!(
+        cache
+            .evaluate_retained_v1(
+                MainTraceColumnKindV1::Base,
+                2,
+                stripe,
+                MainBoundedTransformPolicyV1::cpu_v1(),
+                &base
+            )
+            .is_err()
+    );
+    base[1].pop();
+    assert!(MainQuotientReplayCacheV1::from_retained_v1(plan, &base, &aux).is_err());
+    assert!(
+        cache
+            .evaluate_retained_v1(
+                MainTraceColumnKindV1::Base,
+                2,
+                stripe,
+                MainBoundedTransformPolicyV1::cpu_v1(),
+                &base
+            )
+            .is_err()
+    );
+    assert!(matches!(
+        cache.evaluate_sources_with_v1(
+            MainTraceColumnKindV1::Base,
+            2,
+            stripe,
+            MainBoundedTransformPolicyV1::cpu_v1(),
+            Some(&base),
+            |_| panic!("uncertain source"),
+            |_, _, _| panic!("uncertain transform"),
+            || true
+        ),
+        Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+    ));
+}
+
+#[test]
+fn prepared_forward_grouping_preserves_full_mask_tails_source_order_and_every_output() {
+    const ROWS: usize = 8;
+    const COEFFICIENTS: usize = ROWS + MASK_DEGREE + 1;
+    let full_root = goldilocks_primitive_root_v1(5).unwrap();
+    let stripe = main_quotient_stripes::MainQuotientStripeV1 {
+        rows: ROWS,
+        count: 4,
+        ordinal: 3,
+        next_stride: 1,
+        root: full_root.pow(4),
+        shift: F(GOLDILOCKS_GENERATOR_V1).mul(full_root.pow(3)),
+    };
+    let kind = MainTraceColumnKindV1::Base;
+    for width in [1usize, 8, 15, 16, 17, 33] {
+        let expected = (0..width)
+            .map(|column| {
+                (0..ROWS)
+                    .map(|row| {
+                        let x = stripe.shift.mul(stripe.root.pow(row as u128));
+                        (0..COEFFICIENTS).rev().fold(F::ZERO, |sum, degree| {
+                            sum.mul(x).add(coefficient(kind, column, degree))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut prefixes = vec![0, 1, 7, 8, 9, 15, 16, width];
+        prefixes.retain(|&prefix| prefix <= width);
+        prefixes.sort_unstable();
+        prefixes.dedup();
+        for cached in prefixes {
+            let plan = MainQuotientCachePlanV1::from_budget_v1(
+                width,
+                0,
+                COEFFICIENTS,
+                4,
+                budget(cached, COEFFICIENTS),
+            )
+            .unwrap();
+            let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+                Ok(replay(kind, range, COEFFICIENTS))
+            })
+            .unwrap();
+            for group in [8, 16] {
+                let mut source_ranges = Vec::new();
+                let mut dispatches = Vec::new();
+                let values = cache
+                    .evaluate_sources_using_v1(
+                        kind,
+                        width,
+                        stripe,
+                        None,
+                        |range| {
+                            source_ranges.push(range.clone());
+                            Ok(replay(kind, range, COEFFICIENTS))
+                        },
+                        group,
+                        |columns, root, uncertain| {
+                            dispatches.push(columns.len());
+                            MainBoundedTransformPolicyV1::cpu_v1()
+                                .forward_exact_v1(columns, root, uncertain)
+                        },
+                        || false,
+                    )
+                    .unwrap();
+                assert_eq!(values.0, expected);
+                assert_eq!(
+                    source_ranges,
+                    (cached..width)
+                        .step_by(8)
+                        .map(|first| first..width.min(first + 8))
+                        .collect::<Vec<_>>()
+                );
+                assert!(dispatches.iter().all(|&count| count > 0 && count <= group));
+                assert_eq!(dispatches.iter().sum::<usize>(), width);
+                if group == 16 {
+                    assert_eq!(dispatches.len(), width.div_ceil(group));
+                } else {
+                    assert_eq!(
+                        dispatches.len(),
+                        cached.div_ceil(8) + (width - cached).div_ceil(8)
+                    );
+                }
+                assert!(values.iter().all(|column| column.capacity() == ROWS));
+                assert_eq!(values.0.capacity(), width);
+            }
+        }
+    }
+    // Selected worker counts exercise the same independently ordered folding.
+    for workers in [1, 4, 20] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let plan = MainQuotientCachePlanV1::from_budget_v1(
+                    17,
+                    0,
+                    COEFFICIENTS,
+                    4,
+                    budget(7, COEFFICIENTS),
+                )
+                .unwrap();
+                let cache = MainQuotientReplayCacheV1::from_replay_v1(plan, |kind, range| {
+                    Ok(replay(kind, range, COEFFICIENTS))
+                })
+                .unwrap();
+                let run = |group| {
+                    cache
+                        .evaluate_sources_using_v1(
+                            kind,
+                            17,
+                            stripe,
+                            None,
+                            |range| Ok(replay(kind, range, COEFFICIENTS)),
+                            group,
+                            |columns, root, uncertain| {
+                                MainBoundedTransformPolicyV1::cpu_v1()
+                                    .forward_exact_v1(columns, root, uncertain)
+                            },
+                            || false,
+                        )
+                        .unwrap()
+                };
+                assert_eq!(run(8).0, run(16).0);
+            });
+    }
+}
+
+#[test]
+fn prepared_forward_grouping_preserves_source_refusal_order_quarantine_and_full_rollback() {
+    use core::cell::Cell;
+    const ROWS: usize = 8;
+    const COEFFICIENTS: usize = ROWS + MASK_DEGREE + 1;
+    let plan =
+        MainQuotientCachePlanV1::from_budget_v1(33, 0, COEFFICIENTS, 4, budget(0, COEFFICIENTS))
+            .unwrap();
+    let cache =
+        MainQuotientReplayCacheV1::from_replay_v1(plan, |_, _| panic!("empty prefix")).unwrap();
+    let stripe = main_quotient_stripes::MainQuotientStripeV1::new_v1(2, 3, 0).unwrap();
+    for group in [8, 16] {
+        for quarantine in [false, true] {
+            let latched = Cell::new(false);
+            let mut dispatched = 0;
+            let (result, erased) = inspection::observe_v1(|| {
+                cache.evaluate_sources_using_v1(
+                    MainTraceColumnKindV1::Base,
+                    16,
+                    stripe,
+                    None,
+                    |range| {
+                        if range.start == 8 {
+                            latched.set(quarantine);
+                            return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                        }
+                        Ok(replay(MainTraceColumnKindV1::Base, range, COEFFICIENTS))
+                    },
+                    group,
+                    |_, _, _| {
+                        dispatched += 1;
+                        Err(ZkX509StarkErrorV1::ProfileMismatch)
+                    },
+                    || latched.get(),
+                )
+            });
+            assert_eq!(dispatched, usize::from(group == 8));
+            let expected = if group == 8 {
+                ZkX509StarkErrorV1::ProfileMismatch
+            } else if quarantine {
+                ZkX509StarkErrorV1::AcceleratorCompletionUncertain
+            } else {
+                ZkX509StarkErrorV1::ProofTooLarge
+            };
+            assert!(matches!(result, Err(error) if error == expected));
+            assert_eq!(
+                erased.iter().map(|item| item.cells).sum::<usize>(),
+                8 * (COEFFICIENTS + ROWS)
+            );
+            assert!(erased.iter().all(|item| item.nonzero_after == 0));
+        }
+    }
+    // A later replay or device failure/unwind clears both published and pending
+    // final columns; no completed prefix or original replay allocation escapes.
+    for failure in 0..4 {
+        let mut dispatches = 0;
+        let (result, erased) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cache.evaluate_sources_using_v1(
+                    MainTraceColumnKindV1::Base,
+                    33,
+                    stripe,
+                    None,
+                    |range| {
+                        if failure < 2 && range.start == 24 {
+                            if failure == 0 {
+                                return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                            }
+                            std::panic::resume_unwind(Box::new(()));
+                        }
+                        Ok(replay(MainTraceColumnKindV1::Base, range, COEFFICIENTS))
+                    },
+                    16,
+                    |columns, root, uncertain| {
+                        dispatches += 1;
+                        if failure >= 2 && dispatches == 2 {
+                            if failure == 2 {
+                                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                            }
+                            std::panic::resume_unwind(Box::new(()));
+                        }
+                        MainBoundedTransformPolicyV1::cpu_v1()
+                            .forward_exact_v1(columns, root, uncertain)
+                    },
+                    || false,
+                )
+            }))
+        });
+        if failure % 2 == 0 {
+            assert!(result.unwrap().is_err());
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(dispatches, if failure < 2 { 1 } else { 2 });
+        let initialized = if failure < 2 { 24 } else { 32 };
+        assert_eq!(
+            erased.iter().map(|item| item.cells).sum::<usize>(),
+            initialized * (COEFFICIENTS + ROWS)
+        );
+        assert!(erased.iter().all(|item| item.nonzero_after == 0));
+    }
+    for group in [0, 1, 7, 9, 17] {
+        assert!(
+            cache
+                .evaluate_sources_using_v1(
+                    MainTraceColumnKindV1::Base,
+                    1,
+                    stripe,
+                    None,
+                    |_| panic!("bad public group before source"),
+                    group,
+                    |_, _, _| panic!("bad public group before dispatch"),
+                    || false
+                )
+                .is_err()
+        );
+    }
+    let mut output = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1::<Vec<F>>);
+    assert_eq!(
+        append_folded_batch_v1(&mut output, &[], stripe),
+        Err(ZkX509StarkErrorV1::ProfileMismatch)
+    );
+    assert_eq!(
+        append_folded_batch_v1(&mut output, &[&[F::ONE]], stripe),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
+}
+
+#[test]
+fn fixed_owner_reservation_keeps_private_columns_and_charges_actual_fixed_prefix() {
+    const ROWS: usize = 8;
+    let per_column = ROWS * core::mem::size_of::<F>() + core::mem::size_of::<PrivateTableV1<F>>();
+    let private = 5 * per_column + core::mem::size_of::<MainQuotientReplayCacheV1>();
+    let original = MainQuotientCachePlanV1 {
+        base_columns: 2,
+        aux_columns: 3,
+        coefficient_count: ROWS,
+        payload_limit: private + 2 * per_column,
+    };
+    let narrowed = original.reserve_fixed_owner_v1(per_column).unwrap();
+    assert_eq!((narrowed.base_columns, narrowed.aux_columns), (2, 3));
+    assert_eq!(narrowed.payload_limit + per_column, original.payload_limit);
+    assert_eq!(original.fixed_prefix_columns_v1(ROWS, 10, 4).unwrap(), 2);
+    assert_eq!(narrowed.fixed_prefix_columns_v1(ROWS, 10, 4).unwrap(), 1);
+    let fixed = vec![vec![F(7); ROWS]; 10];
+    let cache = MainQuotientReplayCacheV1::from_replay_v1(narrowed, |_, columns| {
+        Ok(columns
+            .map(|_| ZeroizingMainTraceColumnV1(vec![F(3); ROWS]))
+            .collect())
+    })
+    .unwrap()
+    .with_fixed_coefficients_v1(&fixed, ROWS, 4)
+    .unwrap();
+    assert_eq!(cache.fixed_coefficients_v1().len(), 1);
+    assert_eq!(
+        cache.allocated_payload_v1().unwrap() + per_column,
+        original.payload_limit
+    );
+    let exact = MainQuotientCachePlanV1 {
+        payload_limit: private + per_column,
+        ..original
+    };
+    assert_eq!(
+        exact
+            .reserve_fixed_owner_v1(per_column)
+            .unwrap()
+            .fixed_prefix_columns_v1(ROWS, 10, 4)
+            .unwrap(),
+        0
+    );
+    let insufficient = MainQuotientCachePlanV1 {
+        payload_limit: private + per_column - 1,
+        ..original
+    };
+    assert!(matches!(
+        insufficient.reserve_fixed_owner_v1(per_column),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
+    assert!(matches!(
+        original.reserve_fixed_owner_v1(usize::MAX),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    ));
+}

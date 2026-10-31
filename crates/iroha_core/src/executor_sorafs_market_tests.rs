@@ -106,7 +106,7 @@ mod sorafs_market_admission {
     fn reject_unchanged(
         transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         marker: &str,
     ) {
         let snapshot = |transaction: &StateTransaction<'_, '_>| {
@@ -119,7 +119,7 @@ mod sorafs_market_admission {
         };
         let before = snapshot(transaction);
         let error = Executor::Initial
-            .execute_instruction(transaction, authority, &instruction)
+            .execute_instruction(transaction, authority, instruction)
             .expect_err("native market handler must reject unauthorized or invalid action");
         assert!(
             matches!(error, ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message))) if message.contains(marker)),
@@ -186,7 +186,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            activation.clone(),
+            &activation.clone(),
             "CanSetSorafsPricing",
         );
         Executor::Initial
@@ -196,20 +196,20 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            matching.clone(),
+            &matching.clone(),
             "governed authority",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            matching,
+            &matching,
             "exhaustive match scan",
         );
         let maintenance: InstructionBox = MaintainSorafsOrderbook::new(digest, 0, 1).into();
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            maintenance.clone(),
+            &maintenance.clone(),
             "governed authority",
         );
         Executor::Initial
@@ -238,7 +238,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            SubmitSorafsOrderbookOrder::new(
+            &SubmitSorafsOrderbookOrder::new(
                 norito::to_bytes(&order).expect("signed order"),
                 digest,
             )
@@ -258,7 +258,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            CancelSorafsOrderbookOrder::new(
+            &CancelSorafsOrderbookOrder::new(
                 norito::to_bytes(&cancel).expect("signed cancellation"),
                 digest,
             )
@@ -287,7 +287,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            RecordSorafsOrderbookSettlementReceipt::new(
+            &RecordSorafsOrderbookSettlementReceipt::new(
                 norito::to_bytes(&receipt).expect("signed receipt"),
                 digest,
             )
@@ -298,7 +298,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            RecordSorafsOrderbookSettlementReceipt::new(
+            &RecordSorafsOrderbookSettlementReceipt::new(
                 norito::to_bytes(&receipt).expect("forged receipt"),
                 digest,
             )
@@ -319,7 +319,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            activation.clone(),
+            &activation.clone(),
             "CanSetSorafsReservePolicy",
         );
         Executor::Initial
@@ -347,7 +347,7 @@ mod sorafs_market_admission {
             reject_unchanged(
                 &mut transaction,
                 &BOB_ID,
-                instruction,
+                &instruction,
                 "governed operations account",
             );
         }
@@ -384,7 +384,7 @@ mod sorafs_market_admission {
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                instruction,
+                &instruction,
                 "not the provider account",
             );
         }
@@ -408,14 +408,14 @@ mod sorafs_market_admission {
             reject_unchanged(
                 &mut transaction,
                 &BOB_ID,
-                instruction,
+                &instruction,
                 "governed decision account",
             );
         }
         Executor::Initial
             .execute_instruction(&mut transaction, &BOB_ID, &movement)
             .expect("provider submits native reserve request");
-        reject_unchanged(&mut transaction, &BOB_ID, movement, "already recorded");
+        reject_unchanged(&mut transaction, &BOB_ID, &movement, "already recorded");
         Executor::Initial
             .execute_instruction(&mut transaction, &ALICE_ID, &movement_decision)
             .expect("governed decision resolves the request");
@@ -428,7 +428,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            appeal_decision,
+            &appeal_decision,
             "already decided",
         );
         transaction.apply();

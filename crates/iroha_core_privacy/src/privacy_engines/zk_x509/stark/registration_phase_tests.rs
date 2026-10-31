@@ -2547,7 +2547,7 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
     let source = include_str!("main_aggregate.rs");
     let replay_source = include_str!("main_trace_replay.rs");
     let helper_start = replay_source
-        .find("fn sample_and_replay_batch_with_v1<")
+        .find("fn sample_and_replay_batch_native_with_v1<")
         .expect("bounded first-pass sampler");
     let helper_end = replay_source[helper_start..]
         .find("fn replay_v1(")
@@ -2583,17 +2583,21 @@ fn main_phase_source_retains_original_masks_and_authenticates_replay() {
         .map(|offset| replay_start + offset)
         .expect("mask replay end");
     let replay = &replay_source[replay_start..replay_end];
-    assert!(replay.contains("policy.inverse_with_v1(&mut batch, root"));
+    assert!(replay.contains("policy.inverse_native_with_v1(&mut batch, root"));
     let adapter = include_str!("main_bounded_transform.rs");
     let inverse_start = adapter
-        .find("fn inverse_with_v1(")
-        .expect("bounded inverse");
+        .find("fn inverse_native_exact_v1(")
+        .expect("bounded native transaction");
     let inverse_end = adapter[inverse_start..]
         .find("fn private_with_v1(")
         .map(|offset| inverse_start + offset)
         .expect("shared private adapter");
     assert!(adapter[inverse_start..inverse_end].contains("Direction::Inverse"));
-    let inverse = replay.find("policy.inverse_with_v1").unwrap();
+    let native = include_str!("main_native_transform.rs");
+    assert!(native.contains("prepare_goldilocks_columns_v1("));
+    assert!(native.contains(".publish_into_v1("));
+    assert!(native.contains("Direction::Inverse"));
+    let inverse = replay.find("policy.inverse_native_with_v1").unwrap();
     let masking = replay
         .find("for (native, mask) in batch.iter_mut().zip(masks)")
         .unwrap();

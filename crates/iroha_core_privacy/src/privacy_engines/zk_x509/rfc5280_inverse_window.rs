@@ -17,23 +17,25 @@ const ZERO: usize = 7;
 
 /// Each gate, denominator, normalized factor, prefix and result has one owner.
 /// The four working cells own product, inverse product, temporary inverse and mask.
-pub(super) struct InverseWindowV1 {
-    pub(super) pairs: [[F; 8]; PAIRS],
+pub(super) struct BoundedInverseWindowV1<const CAPACITY: usize> {
+    pub(super) pairs: [[F; 8]; CAPACITY],
     work: [F; 4],
     pub(super) count: usize,
     pub(super) cursor: usize,
 }
-impl InverseWindowV1 {
+pub(super) type InverseWindowV1 = BoundedInverseWindowV1<PAIRS>;
+
+impl<const CAPACITY: usize> BoundedInverseWindowV1<CAPACITY> {
     pub(super) fn new_v1() -> Self {
         Self {
-            pairs: [[F::ZERO; 8]; PAIRS],
+            pairs: [[F::ZERO; 8]; CAPACITY],
             work: [F::ZERO; 4],
             count: 0,
             cursor: 0,
         }
     }
     pub(super) fn collect_v1(&mut self, gate: F, denominator: F) -> (F, F) {
-        assert!(self.count < PAIRS, "public inverse window capacity");
+        assert!(self.count < CAPACITY, "public inverse window capacity");
         let pair = &mut self.pairs[self.count];
         pair[GATE] = gate;
         pair[DENOMINATOR] = denominator;
@@ -93,7 +95,7 @@ impl InverseWindowV1 {
         assert_eq!(self.cursor, self.count);
     }
 }
-impl Drop for InverseWindowV1 {
+impl<const CAPACITY: usize> Drop for BoundedInverseWindowV1<CAPACITY> {
     fn drop(&mut self) {
         for pair in &mut self.pairs {
             zeroize_fields_v1(pair);
@@ -137,7 +139,34 @@ pub(super) fn step_window_v1(
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     centers: &ZkX509ShaUnionCentersV1,
 ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
-    let mut window = InverseWindowV1::new_v1();
+    step_window_with_capacity_v1::<PAIRS>(
+        states, first, outputs, index, context, last, der, challenges, centers,
+    )
+}
+
+/// Use an explicitly admitted public window over an already owned output matrix.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn step_window_with_capacity_v1<const CAPACITY: usize>(
+    states: &mut [ColumnStateV1],
+    first: usize,
+    outputs: &mut [&mut [F]],
+    index: usize,
+    context: &RowContextV1,
+    last: bool,
+    der: &ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509Rfc5280StarkChallengesV1,
+    centers: &ZkX509ShaUnionCentersV1,
+) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+    if states.len() < outputs.len()
+        || outputs.is_empty()
+        || outputs.len() > CAPACITY / 3
+        || first
+            .checked_add(outputs.len())
+            .is_none_or(|end| end > ZK_X509_RFC5280_STARK_AUX_WIDTH_V1)
+    {
+        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+    }
+    let mut window = BoundedInverseWindowV1::<CAPACITY>::new_v1();
     for (offset, (state, target)) in states.iter_mut().zip(outputs.iter_mut()).enumerate() {
         let column = first + offset;
         if pairs_for_column_v1(column) != 0 {

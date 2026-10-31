@@ -8,7 +8,7 @@ use iroha_fhe::bgv::{
 use zeroize::Zeroizing;
 
 fn profile() -> BgvProfile {
-    BgvProfile::new(BgvParameters::derive(8, 257, (40, 3), (41, 2), 2).expect("parameters"))
+    BgvProfile::new(BgvParameters::derive(8, 257, 1, (40, 3), (41, 2), 2).expect("parameters"))
         .expect("profile")
 }
 
@@ -34,7 +34,7 @@ fn is_input(encoding: &SlotEncoding, plaintext: &Plaintext) -> bool {
 #[test]
 fn empty_and_maximum_byte_inputs_bind_all_slots_and_fresh_encryption() {
     let p = profile();
-    let encoding = SlotEncoding::new(&p).expect("encoding");
+    let encoding = SlotEncoding::new(&p, p.master_plaintext()).expect("encoding");
     assert_eq!(encoding.slots(), 128);
     assert_eq!(encoding.stride(), 2);
     let secret = fixtures::secret_key(&p, &mut FixtureEntropy::new([11; 64])).expect("secret");
@@ -66,7 +66,10 @@ fn empty_and_maximum_byte_inputs_bind_all_slots_and_fresh_encryption() {
         assert_eq!(&*encoding.decode(&opened).expect("opened slots"), &*slots);
         // Decryption returns the conservative whole-ring bound. The original
         // sparse encoding's tighter public bound is not ciphertext plaintext.
-        assert_eq!(opened.bound(), Plaintext::worst_case_bound(&p));
+        assert_eq!(
+            opened.bound(),
+            Plaintext::worst_case_bound(&p, p.master_plaintext())
+        );
         assert_eq!(plaintext.bound(), encoding.vector_bound());
     }
 }
@@ -74,7 +77,7 @@ fn empty_and_maximum_byte_inputs_bind_all_slots_and_fresh_encryption() {
 #[test]
 fn input_relation_rejects_invalid_length_bytes_padding_and_extension_coefficients() {
     let p = profile();
-    let encoding = SlotEncoding::new(&p).expect("encoding");
+    let encoding = SlotEncoding::new(&p, p.master_plaintext()).expect("encoding");
     assert!(RamLfeReferenceInputV1::from_bytes(&[0; 64]).is_err());
     for (length, index, value) in [
         (1, 1, 256),
@@ -95,7 +98,8 @@ fn input_relation_rejects_invalid_length_bytes_padding_and_extension_coefficient
     }
     let mut coefficients = vec![0; 256];
     coefficients[1] = 1;
-    let extension = Plaintext::new(&p, coefficients).expect("valid ring element");
+    let extension =
+        Plaintext::new(&p, p.master_plaintext(), coefficients).expect("valid ring element");
     assert!(!is_input(&encoding, &extension));
     let mut noncanonical = Zeroizing::new([0_u64; 128]);
     noncanonical[1] = 257;

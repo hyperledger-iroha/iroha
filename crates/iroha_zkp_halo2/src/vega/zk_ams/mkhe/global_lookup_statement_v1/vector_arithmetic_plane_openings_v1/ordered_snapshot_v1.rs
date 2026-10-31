@@ -39,9 +39,8 @@ use super::{
     SNAPSHOT_SLOT_TAG_BYTES_V1, SNAPSHOT_SLOTS_PER_PLANE_V1, VALUE_SLOTS_PER_PLANE_V1,
 };
 
-#[cfg(test)]
 #[path = "ordered_snapshot_v1/resource_budget_v1.rs"]
-mod resource_budget_v1;
+pub(in crate::vega::zk_ams::mkhe) mod resource_budget_v1;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use resource_budget_v1::OrderedStorageSessionBudgetV1;
 #[cfg(test)]

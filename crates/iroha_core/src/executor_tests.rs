@@ -4421,7 +4421,7 @@ fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorizati
     );
     for (instruction, permission_name, _) in &probes {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, &instruction)
+            .execute_instruction(&mut state_transaction, &authority, instruction)
             .expect_err("an adjacent governance scope must fail closed");
         assert!(
             format!("{error:?}").contains(&format!("exact {permission_name} target"))

@@ -4231,8 +4231,8 @@ impl Kura {
         }
         Self::sync_bound_progress_mutation_directories_result(namespace, kind)
     }
-    // Windows native sidecar transactions call this; other targets only test it.
-    #[cfg(any(windows, test))]
+    // Only Windows native sidecar transactions (and their tests) call this.
+    #[cfg(windows)]
     fn sync_bound_progress_mutation_directories(
         namespace: &BoundProgressNamespace,
         kind: &str,

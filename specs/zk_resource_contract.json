@@ -13027,9 +13027,9 @@
         "candidates": {
           "source": "specs/fhe_bgv_cost_summary.json",
           "values": {
-            "bgv.f257.n14.q6x50.p2x60": 1572940,
-            "bgv.f257.n16.q22x50.p2x60": 23068844,
-            "bgv.f257.n16.q32x50.p2x60": 33554668
+            "bgv.f257.n14.q6x50.p2x60": 1228876,
+            "bgv.f257.n16.q22x50.p2x60": 18022572,
+            "bgv.f257.n16.q32x50.p2x60": 26214636
           }
         }
       },
@@ -29203,15 +29203,9 @@
               "sites": {
                 "text.len() > 255": 1
               }
-            },
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
-              "sites": {
-                "entrypoint.len() > 255": 1
-              }
             }
           ],
-          "reason": "Closed Action-frame scanner and bounded trigger-source producer field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1; the producer refuses unsupported sources without replacing invocation/schema authentication. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
+          "reason": "Closed Action-frame scanner field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
         },
         {
           "files": [
@@ -29243,26 +29237,9 @@
               "sites": {
                 "text.len() > 20": 1
               }
-            },
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
-              "sites": {
-                "raw.len() > 20": 1
-              }
             }
           ],
-          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner and producer additionally reject non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
-              "sites": {
-                "entries.len() > 3": 1
-              }
-            }
-          ],
-          "reason": "The bounded trigger-source producer admits only its audited registration metadata grammar: the paired u64 registration fields and the fixed canonical runtime-consent digest. Three is that closed field set's cardinality, not the general trigger metadata quota. Unknown fields still refuse this source path; invocation, scope authorization and lifecycle coverage remain separate."
+          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner additionally rejects non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
         },
         {
           "files": [

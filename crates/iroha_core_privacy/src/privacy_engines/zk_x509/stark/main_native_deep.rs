@@ -239,22 +239,20 @@ impl MainNativeDeepPointsV1 {
         mask: &[F],
     ) -> Result<[E; 2], ZkX509StarkErrorV1> {
         self.validate_column_v1(native, mask)?;
-        let mut values = [E::ZERO; 2];
-        for (index, &value) in native.iter().enumerate() {
-            values[0] = values[0].add(self.weights[index].mul_base(value));
-            // L_i(omega*z) = L_(i-1 mod N)(z), including subgroup points.
-            values[1] = values[1].add(
-                self.weights[(index + self.native_rows - 1) & (self.native_rows - 1)]
-                    .mul_base(value),
-            );
-        }
+        // Use the same exact widened field reduction as composition. Splitting
+        // the cyclic shift avoids copying a second weight table:
+        // L_i(omega*z) = L_(i-1 mod N)(z), including subgroup points.
+        let mut values = [
+            main_composition_mix::mix_residues_v1(native, &self.weights),
+            self.weights[self.native_rows - 1].mul_base(native[0]).add(
+                main_composition_mix::mix_residues_v1(
+                    &native[1..],
+                    &self.weights[..self.native_rows - 1],
+                ),
+            ),
+        ];
         for (value, powers) in values.iter_mut().zip(&self.mask_powers) {
-            let mask_value = mask
-                .iter()
-                .zip(powers.iter())
-                .fold(E::ZERO, |sum, (&coefficient, power)| {
-                    sum.add(power.mul_base(coefficient))
-                });
+            let mask_value = main_composition_mix::mix_residues_v1(mask, powers);
             *value = value.add(mask_value.mul(self.vanishing));
         }
         Ok(values)
@@ -350,19 +348,40 @@ impl MainNativeDeepQuotientV1 {
     fn accumulate_validated_batch_v1(&mut self, columns: &[NativeColumnV1<'_>], count: usize) {
         let n = self.native_rows;
         for (side, target) in self.coefficients.iter_mut().enumerate() {
+            // Measured eight-column batches amortize widened carry scratch.
+            // Partial public batches retain the original scalar reduction.
+            if columns.len() < BATCH {
+                target
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(index, target)| {
+                        for (native, mask, _, scales) in columns {
+                            let source = if index < n {
+                                native[index]
+                            } else {
+                                mask[index - n]
+                            };
+                            *target = target.add(scales[side].mul_base(source));
+                        }
+                    });
+                continue;
+            }
             target
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(index, target)| {
                     // Each output index has one owner; exact column order is fixed.
-                    for (native, mask, _, scales) in columns {
-                        let source = if index < n {
-                            native[index]
-                        } else {
-                            mask[index - n]
-                        };
-                        *target = target.add(scales[side].mul_base(source));
-                    }
+                    let weighted =
+                        main_composition_mix::mix_indexed_residues_v1(columns.len(), |column| {
+                            let (native, mask, _, scales) = columns[column];
+                            let source = if index < n {
+                                native[index]
+                            } else {
+                                mask[index - n]
+                            };
+                            (source, scales[side])
+                        });
+                    *target = target.add(weighted);
                 });
         }
         for (_, _, values, scales) in columns {

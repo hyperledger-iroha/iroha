@@ -12138,7 +12138,6 @@
      "site": "race.source_hash_profile"
     },
     {"token": "inline_key", "path": "crates/iroha_data_model/src/proof.rs", "count": 1, "site": "generic.verify_proof_registry_key"},
-    {"token": "kaigi_policy_key", "path": "crates/iroha_core/src/pipeline_gas_policy/retained.rs", "count": 6, "site": "kaigi.policy_named_key"},
     {
      "token": "kaigi_policy_key",
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",

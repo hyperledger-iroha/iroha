@@ -19,6 +19,7 @@ fn inputs(width: usize) -> Vec<Column> {
 fn owner(device_columns: usize) -> MainTraceCosetEvaluatorV1 {
     MainTraceCosetEvaluatorV1 {
         coset_powers: (device_columns != 0).then(|| PublicCosetPowersV1::new_v1(64).unwrap()),
+        selected_scratch: selected_coset::SelectedScratchV1::default(),
         evaluation_rows: 64,
         device_columns,
         receipt: MainTransformReceiptV1 {

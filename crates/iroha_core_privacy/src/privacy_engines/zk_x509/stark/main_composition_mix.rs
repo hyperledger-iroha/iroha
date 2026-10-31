@@ -1,4 +1,4 @@
-//! Bounded streaming widened accumulation for the scalar-residue/Fp4 AIR mixture.
+//! Bounded streaming widened accumulation for AIR mixtures and DEEP dot products.
 //!
 //! Public block lengths bound the carry counter. For the Goldilocks prime,
 //! `2^128 = -2^32 (mod p)`, so overflow of an unsigned 128-bit sum is accounted
@@ -74,6 +74,28 @@ impl Drop for MainResidueMixV1 {
         zeroize_words_v1(&mut self.sums);
         zeroize_words_v1(&mut self.carries);
     }
+}
+
+/// Mix canonical scalar values and their exact, equally sized Fp4 weights.
+/// The caller validates both public widths before producing any private values.
+pub(super) fn mix_residues_v1(residues: &[F], alphas: &[E]) -> E {
+    debug_assert_eq!(residues.len(), alphas.len());
+    mix_indexed_residues_v1(residues.len(), |index| (residues[index], alphas[index]))
+}
+
+/// Mix validated canonical terms without gathering private scalar arrays.
+#[inline]
+pub(super) fn mix_indexed_residues_v1(length: usize, mut term: impl FnMut(usize) -> (F, E)) -> E {
+    if length == 1 {
+        let (residue, alpha) = term(0);
+        return alpha.mul_base(residue);
+    }
+    let mut mix = MainResidueMixV1::new_v1();
+    for index in 0..length {
+        let (residue, alpha) = term(index);
+        mix.push_v1(residue, &alpha);
+    }
+    mix.finish_v1()
 }
 
 #[cfg(test)]

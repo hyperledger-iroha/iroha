@@ -27,10 +27,11 @@
 //! while a buffer holds data is an allocation failure. Scalars the compiler
 //! copies while folding are not covered.
 //!
-//! TODO(R.3): this is a cleartext oracle. No encrypted normalizer, no fixed
-//! public schedule and no proof of the lowering exist. R.3 builds them for
-//! `affine.v1` and compares them with this oracle; R.7 and R.9 extend them to
-//! the multiplication, selection and refresh gates.
+//! The sibling `bgv_affine` module consumes affine forms with genuine RNS-BGV
+//! arithmetic under a fixed padded 64-output schedule and public noise plan.
+//! TODO(R.3, R.11): prove normalization and the encrypted relation, authenticate
+//! client inputs and keys, sanitize outputs and qualify privacy/resources.
+//! R.7 and R.9 must extend encrypted evaluation to nonlinear and refresh gates.
 
 use super::{
     HiddenRamFheInstruction, HiddenRamFheProgram, RamLfeError,
@@ -794,9 +795,9 @@ impl Drop for Folding {
     }
 }
 
-// TODO(R.3): only tests call this oracle. No encrypted evaluator follows a normal
-// form and no relation proves one. R.3 compares its normalized affine evaluation
-// with it; R.7 and R.9 extend the comparison to the gates.
+// TODO: R.3 must prove that the encrypted affine evaluation uses the committed
+// tape's normal form. Owner-side normalization supplies coefficients but is not
+// that proof. R.7 and R.9 extend encrypted evaluation and its proof to the gates.
 /// Normalize a hidden program of a declared class on plaintext.
 ///
 /// The program must be a member of `class`; the class is decided on the tape

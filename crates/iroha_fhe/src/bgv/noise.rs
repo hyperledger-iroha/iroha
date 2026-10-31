@@ -2,13 +2,16 @@
 //!
 //! For a ciphertext at level `l`, let `v` be the centered representative of
 //! `c0 + c1*s` modulo `Q_l` (plus `c2*s^2` for an unrelinearized product).
-//! While the invariant below holds, `v = m + t*e` over the integers with `m`
-//! the centered plaintext, so `v mod t` is the plaintext. Every ciphertext
+//! Fresh encryption uses master error scale `t = p^E` and an effective
+//! plaintext modulus `p^k`, with `1 <= k <= E`. Its phase is `m + t*e`, where
+//! `m` is a centered representative modulo `p^k`. Arithmetic preserves the
+//! plaintext modulo `p^k`; key switching and modulus switching keep master
+//! scale `t`. No ordinary operation lowers plaintext precision. Every ciphertext
 //! carries a [`NoiseBound`] `V` with `||v||_inf <= V`.
 //!
 //! # What the bound is computed from
 //!
-//! Only public quantities: the ring degree `N`, the plaintext modulus `t`,
+//! Only public quantities: the ring degree `N`, the effective modulus `p^k` and master error scale `t = p^E`,
 //! the error bound `B` (the centered binomial parameter), the primes, and the
 //! sequence of operations. The secret key enters through the worst case
 //! `||s||_1 <= N` only; plaintext operands enter through a declared public
@@ -22,11 +25,11 @@
 //!
 //! | Operation | Bound of the result |
 //! | --- | --- |
-//! | fresh public-key encryption | `(t-1)/2 + t*B*(2N + 1)` ([`fresh_noise`]) |
-//! | noiseless embedding of a plaintext | `(t-1)/2` ([`plaintext_noise`]) |
+//! | fresh public-key encryption | `(p^k-1)/2 + t*B*(2N + 1)` ([`fresh_noise`]) |
+//! | noiseless embedding of a plaintext | `(p^k-1)/2` ([`plaintext_noise`]) |
 //! | addition, subtraction | `V_a + V_b` |
 //! | negation | `V` |
-//! | plaintext addition, subtraction | `V + (t-1)/2` |
+//! | plaintext addition, subtraction | `V + (p^k-1)/2` |
 //! | plaintext multiplication by `p` | `V * W`, `W >= ||p||_1` declared |
 //! | tensor product | `N * V_a * V_b` ([`product_noise`]) |
 //! | relinearization, automorphism | `V + E_ks(l)` ([`key_switch_noise`]) |
@@ -51,10 +54,10 @@
 //!
 //! An operation is admitted only when the bound of every ciphertext it
 //! produces is at most the capacity `(Q_l - 1) / 2` of its level. Decryption
-//! is correct exactly when `||v||_inf <= (Q_l - 1) / 2`: then the centered
-//! reduction modulo `Q_l` returns `v` itself. It fails when a coefficient of
-//! the true `m + t*e` exceeds the capacity, because the reduction then adds a
-//! multiple of `Q_l = 1 (mod t)` and shifts the plaintext.
+//! is guaranteed correct when `||v||_inf <= (Q_l - 1) / 2`: then the centered
+//! reduction modulo `Q_l` returns the unwrapped phase `v` itself. Exceeding
+//! capacity loses this guarantee: reduction adds a multiple of
+//! `Q_l = 1 (mod t)`, which may shift the effective plaintext.
 //!
 //! # Failure probability
 //!
@@ -105,13 +108,19 @@ pub fn plaintext_noise(plaintext_modulus: u64) -> Natural {
     Natural::from_u64((plaintext_modulus.max(1) - 1) / 2)
 }
 
-/// Bound of a fresh public-key encryption: `(t-1)/2 + t*B*(2N + 1)`.
+/// Bound of a fresh encryption at effective precision `k` under master precision `E`:
+/// `(p^k-1)/2 + p^E*B*(2N + 1)`. Keys and all sampled errors keep the master scale.
 #[must_use]
-pub fn fresh_noise(degree: usize, plaintext_modulus: u64, error_bound: u64) -> Natural {
-    Natural::from_u64(plaintext_modulus)
+pub fn fresh_noise(
+    degree: usize,
+    master_plaintext_modulus: u64,
+    effective_plaintext_modulus: u64,
+    error_bound: u64,
+) -> Natural {
+    Natural::from_u64(master_plaintext_modulus)
         .mul_u64(error_bound)
         .mul(&Natural::from_u64(degree_word(degree)).mul_u64(2).add_u64(1))
-        .add(&plaintext_noise(plaintext_modulus))
+        .add(&plaintext_noise(effective_plaintext_modulus))
 }
 
 /// Bound of a tensor product: `N * V_a * V_b`.
@@ -182,11 +191,15 @@ mod tests {
         assert_eq!(plaintext_noise(3), Natural::from_u64(1));
         assert_eq!(plaintext_noise(0), Natural::zero());
         // N = 16: 128 + 257 * 21 * 33.
-        assert_eq!(fresh_noise(16, 257, 21), Natural::from_u64(178_229));
+        assert_eq!(fresh_noise(16, 257, 257, 21), Natural::from_u64(178_229));
         // N = 2^16: 128 + 257 * 21 * 131073.
         assert_eq!(
-            fresh_noise(1 << 16, 257, 21),
+            fresh_noise(1 << 16, 257, 257, 21),
             Natural::from_u64(128 + 257 * 21 * 131_073)
+        );
+        assert_eq!(
+            fresh_noise(16, 125, 5, 21),
+            Natural::from_u64(2 + 125 * 21 * 33)
         );
         let bound = NoiseBound::new(Natural::from_u64(178_229));
         assert_eq!(bound.as_natural(), &Natural::from_u64(178_229));

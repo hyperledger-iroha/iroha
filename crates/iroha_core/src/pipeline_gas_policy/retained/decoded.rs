@@ -4,10 +4,7 @@
 //! that same canonical source. No raw graph clone, Value tree, text serialization,
 //! second parameter cell, or replacement pool is used by this transition.
 
-use super::{
-    ParameterGraph, ParameterGraphCustody, ParameterRetentionError, RetainedStateParameters,
-    StateParameters,
-};
+use super::{ParameterGraph, ParameterRetentionError, RetainedStateParameters, StateParameters};
 use crate::pipeline_gas_policy::gas_admission::{AdmittedGas, GasCustody};
 use iroha_allocation::{
     AllocationBudget, AllocationCharge, ChargedBuffer, ChargedShared, ReservedChargedShared,
@@ -173,7 +170,7 @@ impl ReservedParameterGraph {
                     crypto,
                     staking,
                 },
-                custody: ParameterGraphCustody::Decoded(DecodedCustody {
+                custody: DecodedCustody {
                     parameters: parameter_custody,
                     gas: gas_custody,
                     fraud: fraud_custody,
@@ -181,7 +178,7 @@ impl ReservedParameterGraph {
                     root_fees: root_fee_custody,
                     crypto: crypto_custody,
                     staking: staking_custody,
-                }),
+                },
             }
         };
         Ok(RetainedStateParameters(self.0.initialize(graph)))

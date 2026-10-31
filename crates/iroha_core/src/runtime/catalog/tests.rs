@@ -56,9 +56,9 @@ fn inventory(catalog: &ReleaseCatalog) -> String {
     .expect("writing to a String cannot fail");
     for (index, (_, kind, name, id)) in rows.iter().enumerate() {
         let comma = if index + 1 == rows.len() { "" } else { "," };
-        write!(
+        writeln!(
             out,
-            "    {{\"kind\": \"{kind}\", \"name\": {}, \"id\": \"{id}\"}}{comma}\n",
+            "    {{\"kind\": \"{kind}\", \"name\": {}, \"id\": \"{id}\"}}{comma}",
             norito::json::to_json(name).expect("a name is JSON")
         )
         .expect("writing to a String cannot fail");

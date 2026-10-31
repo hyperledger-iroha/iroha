@@ -2388,11 +2388,15 @@ pub mod extractors {
         T: JsonDeserializeOwned + Send,
     {
         type Rejection = Response;
-        fn from_request_parts(
+        #[expect(
+            clippy::unused_async_trait_impl,
+            reason = "Rejections read the task-local response format, so decoding must run when the extractor future is polled."
+        )]
+        async fn from_request_parts(
             parts: &mut axum::http::request::Parts,
             _state: &S,
-        ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-            std::future::ready(decode_request_query::<T>(parts.uri.query(), true).map(NoritoQuery))
+        ) -> Result<Self, Self::Rejection> {
+            decode_request_query::<T>(parts.uri.query(), true).map(NoritoQuery)
         }
     }
     /// Extractor for canonical form-encoded URL queries decoded into
@@ -2405,13 +2409,15 @@ pub mod extractors {
         T: JsonDeserializeOwned + Send,
     {
         type Rejection = Response;
-        fn from_request_parts(
+        #[expect(
+            clippy::unused_async_trait_impl,
+            reason = "Rejections read the task-local response format, so decoding must run when the extractor future is polled."
+        )]
+        async fn from_request_parts(
             parts: &mut axum::http::request::Parts,
             _state: &S,
-        ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-            std::future::ready(
-                decode_request_query::<T>(parts.uri.query(), false).map(NoritoStringQuery),
-            )
+        ) -> Result<Self, Self::Rejection> {
+            decode_request_query::<T>(parts.uri.query(), false).map(NoritoStringQuery)
         }
     }
     /// Decode a request URL query for [`NoritoQuery`] (`coerce_scalars`) or

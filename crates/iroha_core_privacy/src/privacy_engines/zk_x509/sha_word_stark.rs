@@ -2730,7 +2730,7 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
     fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<A>, ZkX509ShaWordStarkErrorV1> {
-    let mut residues = Vec::new();
+    let mut residues = Vec::with_capacity(SHA_WORD_STARK_CONSTRAINT_COUNT_V1);
     emit_zk_x509_sha_word_stark_residues_over_field_v1(
         current,
         next,
@@ -2743,8 +2743,9 @@ pub fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFi
     Ok(residues)
 }
 
-/// Emit the unchanged ordered relation into its caller-owned output.
-#[allow(clippy::too_many_lines)]
+/// Emit the ordered relation into caller-owned output without retaining residues.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[cfg(test)]
 pub(super) fn emit_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &[A; SHA_WORD_BASE_WIDTH_V1],
     next: &[A; SHA_WORD_BASE_WIDTH_V1],
@@ -2754,7 +2755,89 @@ pub(super) fn emit_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAi
     challenges: ZkX509ShaWordStarkChallengesV1,
     residues: &mut impl ShaResidueSinkV1<A>,
 ) -> Result<(), ZkX509ShaWordStarkErrorV1> {
-    validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
+    evaluate_sha_word_residues_with_context_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        ShaWordEvaluationChallengesV1::Raw(&challenges),
+        residues,
+        ShaWordHornerFoldV1::new_v1(challenges.base_folding),
+    )
+}
+
+/// One ordered fold of all original base errors; ordinary callers use Horner.
+pub(super) trait ShaWordBaseErrorFoldV1<A: PolynomialAirFieldV1> {
+    fn challenges_v1(&self) -> [F; SHA_WORD_COPY_LANES_V1];
+    fn push_v1(&mut self, error: A);
+    fn finish_v1(self) -> [A; SHA_WORD_COPY_LANES_V1];
+}
+
+/// The original four Horner recurrences used by generic AIR callers.
+pub(super) struct ShaWordHornerFoldV1<A: PolynomialAirFieldV1> {
+    challenges: [F; SHA_WORD_COPY_LANES_V1],
+    values: [A; SHA_WORD_COPY_LANES_V1],
+}
+
+impl<A: PolynomialAirFieldV1> ShaWordHornerFoldV1<A> {
+    pub(super) fn new_v1(challenges: [F; SHA_WORD_COPY_LANES_V1]) -> Self {
+        Self {
+            challenges,
+            values: [A::ZERO; SHA_WORD_COPY_LANES_V1],
+        }
+    }
+}
+
+impl<A: PolynomialAirFieldV1> ShaWordBaseErrorFoldV1<A> for ShaWordHornerFoldV1<A> {
+    fn challenges_v1(&self) -> [F; SHA_WORD_COPY_LANES_V1] {
+        self.challenges
+    }
+    #[inline]
+    fn push_v1(&mut self, error: A) {
+        for (folded, challenge) in self.values.iter_mut().zip(self.challenges) {
+            *folded = folded.mul_base(challenge).add(error);
+        }
+    }
+    fn finish_v1(self) -> [A; SHA_WORD_COPY_LANES_V1] {
+        self.values
+    }
+}
+
+#[path = "sha_word_wide_fold.rs"]
+pub(super) mod wide_fold;
+
+/// The native capability can only borrow an already checked immutable phase.
+/// Ordinary AIR entry points always retain their original challenge validation.
+#[derive(Clone, Copy)]
+pub(super) enum ShaWordEvaluationChallengesV1<'a> {
+    Raw(&'a ZkX509ShaWordStarkChallengesV1),
+    Bound(super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'a>),
+}
+impl ShaWordEvaluationChallengesV1<'_> {
+    fn checked_v1(self) -> Result<ZkX509ShaWordStarkChallengesV1, ZkX509ShaWordStarkErrorV1> {
+        match self {
+            Self::Raw(challenges) => {
+                validate_zk_x509_sha_word_stark_challenges_v1(*challenges)?;
+                Ok(*challenges)
+            }
+            Self::Bound(capability) => Ok(capability.phase_v1().sha_word()),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn evaluate_sha_word_residues_with_context_v1<A: PolynomialAirFieldV1>(
+    current: &[A; SHA_WORD_BASE_WIDTH_V1],
+    next: &[A; SHA_WORD_BASE_WIDTH_V1],
+    current_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
+    next_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
+    fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
+    challenge_context: ShaWordEvaluationChallengesV1<'_>,
+    residues: &mut impl ShaResidueSinkV1<A>,
+    mut fold: impl ShaWordBaseErrorFoldV1<A>,
+) -> Result<(), ZkX509ShaWordStarkErrorV1> {
+    let challenges = challenge_context.checked_v1()?;
     if current
         .iter()
         .chain(next)
@@ -2764,6 +2847,9 @@ pub(super) fn emit_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAi
         .any(|value| !value.is_canonical())
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
+    }
+    if fold.challenges_v1() != challenges.base_folding {
+        return Err(ZkX509ShaWordStarkErrorV1::LocalConstraint);
     }
     let word = fixed[FIX_WORD];
     let sigma_small_zero = fixed[FIX_SIGMA_SMALL_ZERO];
@@ -2788,12 +2874,9 @@ pub(super) fn emit_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAi
     let add_any = fixed[FIX_ADD_ARITY_TWO].add(fixed[FIX_ADD_ARITY_FOUR]);
     let word_or_digest = word.add(digest);
     let local = word_or_digest.add(sigma_any).add(boolean_any).add(add_any);
-    let mut folded_base = [A::ZERO; SHA_WORD_COPY_LANES_V1];
     let mut base_error_count = 0_usize;
     let mut push_base_error = |error: A| {
-        for (folded, challenge) in folded_base.iter_mut().zip(challenges.base_folding) {
-            *folded = folded.mul_base(challenge).add(error);
-        }
+        fold.push_v1(error);
         base_error_count += 1;
     };
     for value in &current[33..SHA_WORD_BASE_WIDTH_V1] {
@@ -2940,7 +3023,7 @@ pub(super) fn emit_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAi
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
     residues.reserve(SHA_WORD_STARK_CONSTRAINT_COUNT_V1);
-    residues.extend_residues(folded_base);
+    residues.extend_residues(fold.finish_v1());
     for lane in 0..SHA_WORD_COPY_LANES_V1 {
         let challenge = challenges.memory.lanes[lane];
         let packed_input = pack_bits(&current[..32]);
@@ -3176,7 +3259,7 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
     fixed: &[A; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<A>, ZkX509ShaWordStarkErrorV1> {
-    let mut residues = Vec::new();
+    let mut residues = Vec::with_capacity(SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1);
     emit_zk_x509_sha_word_capacity_residues_over_field_v1(
         current,
         next,
@@ -3189,8 +3272,9 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAi
     Ok(residues)
 }
 
-/// Emit the unchanged ordered relation into its caller-owned output.
-#[allow(clippy::too_many_lines)]
+/// Emit the ordered relation into caller-owned output without retaining residues.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[cfg(test)]
 pub(super) fn emit_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
     next: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
@@ -3200,7 +3284,30 @@ pub(super) fn emit_zk_x509_sha_word_capacity_residues_over_field_v1<A: Polynomia
     challenges: ZkX509ShaWordStarkChallengesV1,
     residues: &mut impl ShaResidueSinkV1<A>,
 ) -> Result<(), ZkX509ShaWordStarkErrorV1> {
-    validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
+    evaluate_sha_word_capacity_residues_with_context_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        ShaWordEvaluationChallengesV1::Raw(&challenges),
+        residues,
+        ShaWordHornerFoldV1::new_v1(challenges.base_folding),
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(super) fn evaluate_sha_word_capacity_residues_with_context_v1<A: PolynomialAirFieldV1>(
+    current: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+    next: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+    current_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1],
+    next_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1],
+    fixed: &[A; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
+    challenge_context: ShaWordEvaluationChallengesV1<'_>,
+    residues: &mut impl ShaResidueSinkV1<A>,
+    fold: impl ShaWordBaseErrorFoldV1<A>,
+) -> Result<(), ZkX509ShaWordStarkErrorV1> {
+    let challenges = challenge_context.checked_v1()?;
     if current
         .iter()
         .chain(next)
@@ -3293,14 +3400,15 @@ pub(super) fn emit_zk_x509_sha_word_capacity_residues_over_field_v1<A: Polynomia
     let next_aux_raw: &[A; SHA_WORD_AUX_WIDTH_V1] = next_aux[..SHA_WORD_AUX_WIDTH_V1]
         .try_into()
         .expect("raw aux prefix");
-    emit_zk_x509_sha_word_stark_residues_over_field_v1(
+    evaluate_sha_word_residues_with_context_v1(
         current_raw,
         next_raw,
         current_aux_raw,
         next_aux_raw,
         &effective_fixed,
-        challenges,
+        challenge_context,
         residues,
+        fold,
     )?;
     let boolean_error = |value: A| value.mul(value.sub(A::ONE));
     residues.push(boolean_error(row_active));

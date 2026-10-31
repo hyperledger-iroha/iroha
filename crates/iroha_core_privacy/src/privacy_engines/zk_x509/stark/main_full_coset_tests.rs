@@ -230,6 +230,7 @@ fn full_prefix_cpu_batch_keeps_original_columns_and_device_boundary() {
         .collect::<Vec<_>>();
     let mut evaluator = MainTraceCosetEvaluatorV1 {
         coset_powers: None,
+        selected_scratch: selected_coset::SelectedScratchV1::default(),
         evaluation_rows: 64,
         device_columns: 0,
         receipt: MainTransformReceiptV1::default(),

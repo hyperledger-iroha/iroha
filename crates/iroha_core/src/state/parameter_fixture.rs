@@ -305,8 +305,10 @@ mod tests {
         block.commit();
         let mut next = parameter_cell_block_for_testing(&world).unwrap();
         let first = next.get().clone();
-        let mut consensus = SumeragiParameters::default();
-        consensus.max_clock_drift_ms = 97;
+        let consensus = SumeragiParameters {
+            max_clock_drift_ms: 97,
+            ..SumeragiParameters::default()
+        };
         set_sumeragi_cell_for_testing(&mut next, consensus, budget).unwrap();
         assert!(first.same_version(next.get_before_block()));
         assert_eq!(next.get().sumeragi.max_clock_drift_ms, 97);
@@ -398,8 +400,8 @@ mod tests {
             let original_layout = match error {
                 ParameterFixtureError::Generations(
                     mv::cell::CellGenerationBackingError::Allocator { layout },
-                ) => layout,
-                ParameterFixtureError::Successor(
+                )
+                | ParameterFixtureError::Successor(
                     mv::cell::CellPublicationSuccessorError::Allocator { layout },
                 ) => layout,
                 other => panic!("unexpected refusal {other}"),

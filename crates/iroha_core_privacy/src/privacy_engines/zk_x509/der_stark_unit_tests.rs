@@ -3,6 +3,7 @@
 use super::*;
 use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use sha2::{Digest as _, Sha256};
+include!("der_residue_scratch_tests.rs");
 #[test]
 fn parser_private_inverse_cells_preserve_byte_and_zero_boundaries() {
     let mut state = ParserStateV1::for_document(0, 1).expect("parser state");

@@ -9,12 +9,16 @@ use super::super::super::private_table::{
 #[cfg(test)]
 use super::super::super::prover_observation::{PhaseTimerV1, PhaseV1};
 use super::main_bounded_transform::{MainBoundedTransformPolicyV1, check_completion_v1};
+#[cfg(test)]
+use super::main_native_transform::WordInjectionV1;
+use super::main_native_transform::{ExactNativeTransformV1, MainNativeTransformV1};
 use super::*;
 use crate::privacy_engines::transparent_stark::{ReplayableTraceMaskV1, sample_trace_mask_v1};
+use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
+#[cfg(test)]
 use fastpq_prover::goldilocks_transform::{
     GoldilocksTransformBackendV1 as Backend, GoldilocksTransformDirectionV1 as Direction,
-    GoldilocksTransformErrorV1 as TransformError, goldilocks_transform_completion_uncertain_v1,
-    transform_goldilocks_columns_v1,
+    GoldilocksTransformErrorV1 as TransformError, transform_goldilocks_columns_v1,
 };
 
 #[cfg(test)]
@@ -134,14 +138,35 @@ impl MainTraceMaskGroupV1 {
     /// A failed transform returns immediately, so later columns consume no entropy.
     /// Successful calls preserve the sampler's exact RNG sequence. Failed calls
     /// deliberately do not promise the old all-masks-before-commit RNG position.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn sample_and_replay_batch_with_v1<R: TryRng>(
         &mut self,
         columns: core::ops::Range<usize>,
         policy: MainBoundedTransformPolicyV1,
         rng: &mut R,
-        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+        source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
         transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        self.sample_and_replay_batch_native_with_v1(
+            columns,
+            policy,
+            rng,
+            source,
+            &mut WordInjectionV1(transform),
+            uncertain,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sample_and_replay_batch_native_with_v1<R: TryRng>(
+        &mut self,
+        columns: core::ops::Range<usize>,
+        policy: MainBoundedTransformPolicyV1,
+        rng: &mut R,
+        mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+        transform: &mut impl MainNativeTransformV1,
         mut uncertain: impl FnMut() -> bool,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
         check_completion_v1(uncertain())?;
@@ -190,7 +215,7 @@ impl MainTraceMaskGroupV1 {
         // charged by for_native_replay_v1, never two simultaneous source arrays.
         drop(source);
         let mut resident = resident.into_iter();
-        self.replay_batch_with_v1(
+        self.replay_batch_native_with_v1(
             columns,
             policy,
             |_| resident.next().ok_or(ZkX509StarkErrorV1::InternalInvariant),
@@ -222,28 +247,39 @@ impl MainTraceMaskGroupV1 {
         policy: MainBoundedTransformPolicyV1,
         source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
-        self.replay_batch_with_v1(
+        self.replay_batch_native_with_v1(
             columns,
             policy,
             source,
-            |words, root, direction| {
-                transform_goldilocks_columns_v1(
-                    words,
-                    root,
-                    direction,
-                    fastpq_prover::ExecutionMode::Auto,
-                )
-            },
+            &mut ExactNativeTransformV1,
             goldilocks_transform_completion_uncertain_v1,
         )
     }
 
+    #[cfg(test)]
     fn replay_batch_with_v1(
         &self,
         columns: core::ops::Range<usize>,
         policy: MainBoundedTransformPolicyV1,
+        source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
+        transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        uncertain: impl FnMut() -> bool,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        self.replay_batch_native_with_v1(
+            columns,
+            policy,
+            source,
+            &mut WordInjectionV1(transform),
+            uncertain,
+        )
+    }
+
+    fn replay_batch_native_with_v1(
+        &self,
+        columns: core::ops::Range<usize>,
+        policy: MainBoundedTransformPolicyV1,
         mut source: impl FnMut(usize) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>,
-        mut transform: impl FnMut(&mut [Vec<u64>], u64, Direction) -> Result<Backend, TransformError>,
+        transform: &mut impl MainNativeTransformV1,
         mut uncertain: impl FnMut() -> bool,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
         check_completion_v1(uncertain())?;
@@ -273,8 +309,8 @@ impl MainTraceMaskGroupV1 {
         let coefficient_count = native_rows
             .checked_add(MASK_DEGREE + 1)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        // One matrix owner guards the original native allocations. This allows
-        // the exact same shared word staging as private quotient forward FFTs.
+        // One matrix owner guards the original native allocations. The prepared
+        // native transaction publishes into these exact field slices.
         let mut batch = PrivateTableV1::new(Vec::new(), zeroize_field_rows_v1::<Vec<F>>);
         batch
             .try_reserve_exact(width)
@@ -295,8 +331,8 @@ impl MainTraceMaskGroupV1 {
             }
             batch.push(native.into_vec());
         }
-        // The clearing word/device batch is gone before mask replacement starts.
-        policy.inverse_with_v1(&mut batch, root, &mut transform, &mut uncertain)?;
+        // The prepared device batch is gone before mask replacement starts.
+        policy.inverse_native_with_v1(&mut batch, root, transform, &mut uncertain)?;
         for (native, mask) in batch.iter_mut().zip(masks) {
             check_completion_v1(uncertain())?;
             let mut coefficients = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
@@ -431,6 +467,33 @@ impl MainTracePolynomialSetV1 {
             RetainedRfcV1::Original(cache) => cache.allocated_payload_v1(),
             #[cfg(test)]
             RetainedRfcV1::ReplayOracle => 0,
+        }
+    }
+
+    /// Reuse the already charged original RFC owners throughout quotient folding.
+    /// Other registrations and the independent replay test oracle have no hit.
+    pub(super) fn retained_registration_coefficients_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<Option<&[super::super::super::private_table::PrivateTableV1<F>]>, ZkX509StarkErrorV1>
+    {
+        canonical_main_registration_index_v1(layout, registration)?;
+        if registration.segment.adapter != SegmentAdapterIdV1::Rfc5280 {
+            return Ok(None);
+        }
+        self.validate_v1(layout, kind)?;
+        let range = match kind {
+            MainTraceColumnKindV1::Base => registration.base_start..registration.base_end()?,
+            MainTraceColumnKindV1::Aux => registration.aux_start..registration.aux_end()?,
+        };
+        match &self.retained_rfc {
+            RetainedRfcV1::Original(cache) => cache
+                .registration_columns_v1(registration.trace_group, range)
+                .map(Some),
+            #[cfg(test)]
+            RetainedRfcV1::ReplayOracle => Ok(None),
         }
     }
 
@@ -668,6 +731,17 @@ impl MainTracePolynomialSetV1 {
             assembly_payload,
             (&plan, None),
             |group, columns| {
+                let cache = match &mut set.retained_rfc {
+                    RetainedRfcV1::Original(cache) => cache,
+                    #[cfg(test)]
+                    RetainedRfcV1::ReplayOracle => {
+                        return Err(ZkX509StarkErrorV1::InternalInvariant);
+                    }
+                };
+                cache.prepare_native_if_needed_v1(group, columns.clone(), |targets| {
+                    sources.fill_rfc_native_matrix_v1(layout, kind, targets)
+                })?;
+                let retained_native = &*cache;
                 let mut pending = Vec::new().into_iter();
                 let mut next_column = columns.start;
                 let range = columns.clone();
@@ -676,7 +750,7 @@ impl MainTracePolynomialSetV1 {
                     .groups
                     .get_mut(group)
                     .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
-                    .sample_and_replay_batch_with_v1(
+                    .sample_and_replay_batch_native_with_v1(
                         columns,
                         policy,
                         rng,
@@ -693,11 +767,12 @@ impl MainTracePolynomialSetV1 {
                                 return sources.native_column_v1(layout, kind, registration, local);
                             }
                             if column == range.start {
-                                let batch = sources.native_columns_v1(
+                                let batch = sources.native_columns_with_rfc_v1(
                                     layout,
                                     kind,
                                     group,
                                     range.clone(),
+                                    Some(retained_native),
                                 )?;
                                 let actual_columns = batch.len();
                                 let requested_columns = range.len();
@@ -710,14 +785,7 @@ impl MainTracePolynomialSetV1 {
                             }
                             pending.next().ok_or(ZkX509StarkErrorV1::InternalInvariant)
                         },
-                        |words, root, direction| {
-                            transform_goldilocks_columns_v1(
-                                words,
-                                root,
-                                direction,
-                                fastpq_prover::ExecutionMode::Auto,
-                            )
-                        },
+                        &mut ExactNativeTransformV1,
                         goldilocks_transform_completion_uncertain_v1,
                     )?;
                 match &mut set.retained_rfc {
@@ -817,10 +885,9 @@ impl MainTracePolynomialSetV1 {
                     PhaseV1::InitialJoinedTransform
                 });
                 let evaluated = match selected {
-                    Some(indices) => {
-                        evaluator.evaluate_selected_v1(columns, native, common, indices)?
-                    }
-                    None => evaluator.evaluate_v1(columns, native, common)?,
+                    Some(indices) => evaluator.evaluate_selected_v1(columns, native, common, indices)?
+                        .into_iter().map(aggregate::initial_evaluated_column::InitialEvaluatedColumnV1::from_field_v1).collect(),
+                    None => evaluator.evaluate_initial_v1(columns, native, common)?,
                 };
                 #[cfg(test)]
                 transform_timer.complete_v1();
@@ -1253,6 +1320,56 @@ pub(super) enum MainTraceReplaySourcesV1<'phase, 'assembly> {
 }
 
 impl MainTraceReplaySourcesV1<'_, '_> {
+    /// Populate exactly the final RFC registration allocation before masking.
+    /// This borrows closed source owners and consumes no entropy.
+    fn fill_rfc_native_matrix_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        let registration = layout.registered_segment(SegmentAdapterIdV1::Rfc5280, 0)?;
+        let expected = match kind {
+            MainTraceColumnKindV1::Base => registration.segment.base_width,
+            MainTraceColumnKindV1::Aux => registration.segment.aux_width,
+        };
+        if outputs.len() != expected
+            || outputs
+                .iter()
+                .any(|column| column.len() != registration.segment.trace_size())
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        #[cfg(test)]
+        let timer = PhaseTimerV1::start_v1(match kind {
+            MainTraceColumnKindV1::Base => PhaseV1::SourceRfc5280Base,
+            MainTraceColumnKindV1::Aux => PhaseV1::SourceRfc5280Aux,
+        });
+        match (self, kind) {
+            (Self::Base { assembly, .. }, MainTraceColumnKindV1::Base) => {
+                assembly.rfc_base.fill_base_matrix_v1(outputs)
+            }
+            (Self::Bound { log19, .. }, MainTraceColumnKindV1::Base) => {
+                if log19.registration_index_v1(registration)? != 1 {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                log19.rfc.fill_base_matrix_v1(outputs)
+            }
+            (Self::Bound { log19, .. }, MainTraceColumnKindV1::Aux) => {
+                if log19.registration_index_v1(registration)? != 1 {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                log19.rfc.fill_aux_matrix_v1(outputs)
+            }
+            (Self::Base { .. }, MainTraceColumnKindV1::Aux) => {
+                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
+            }
+        }
+        .map_err(map_main_rfc_source_error_v1)?;
+        #[cfg(test)]
+        timer.complete_v1();
+        Ok(())
+    }
     /// Extract each grouped native run once, including P-256 arithmetic/value
     /// and window/sink auxiliary batches, preserving public registration order
     /// and the closed base/bound phase.
@@ -1262,6 +1379,19 @@ impl MainTraceReplaySourcesV1<'_, '_> {
         kind: MainTraceColumnKindV1,
         group: usize,
         columns: core::ops::Range<usize>,
+    ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
+        self.native_columns_with_rfc_v1(layout, kind, group, columns, None)
+    }
+
+    /// Initial RFC rows already occupy their final retained coefficient owner.
+    /// Other roles retain their original bounded native-source traversal.
+    fn native_columns_with_rfc_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        group: usize,
+        columns: core::ops::Range<usize>,
+        retained_rfc: Option<&super::main_retained_rfc::MainRetainedRfcV1>,
     ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1> {
         let width = columns
             .end
@@ -1354,6 +1484,19 @@ impl MainTraceReplaySourcesV1<'_, '_> {
                     PhaseV1::SourceP256ScalarBitBusAux
                 }
             });
+            if registration.segment.adapter == SegmentAdapterIdV1::Rfc5280
+                && let Some(retained) = retained_rfc
+            {
+                let end = columns.end.min(match kind {
+                    MainTraceColumnKindV1::Base => registration.base_end()?,
+                    MainTraceColumnKindV1::Aux => registration.aux_end()?,
+                });
+                output.extend(retained.copy_native_columns_v1(group, first..end)?);
+                first = end;
+                #[cfg(test)]
+                source_timer.complete_v1();
+                continue;
+            }
             if registration.segment.adapter == SegmentAdapterIdV1::StrictDer {
                 let end = columns.end.min(match kind {
                     MainTraceColumnKindV1::Base => registration.base_end()?,
@@ -1815,6 +1958,28 @@ mod native_mask_borrow_tests {
             MainTracePolynomialSetV1::from_ordered_v1(&layout, MainTraceColumnKindV1::Base, groups)
                 .unwrap();
         let mut unchanged_rng = rng.clone();
+        for registration in &layout.registered_segments {
+            assert!(
+                set.retained_registration_coefficients_v1(
+                    &layout,
+                    MainTraceColumnKindV1::Base,
+                    *registration
+                )
+                .unwrap()
+                .is_none(),
+                "the independent replay oracle must not borrow production originals"
+            );
+        }
+        let mut foreign = layout.registered_segments[0];
+        foreign.base_start += 1;
+        assert!(
+            set.retained_registration_coefficients_v1(
+                &layout,
+                MainTraceColumnKindV1::Base,
+                foreign
+            )
+            .is_err()
+        );
         for (index, group) in layout.trace_groups.iter().enumerate() {
             let end = group
                 .base_width
@@ -1880,3 +2045,76 @@ mod inverse_tests;
 #[cfg(test)]
 #[path = "main_sample_commit_tests.rs"]
 mod sample_commit_tests;
+
+#[cfg(test)]
+mod retained_native_sampling_tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha12Rng;
+
+    #[test]
+    fn prepared_rfc_native_rows_preserve_original_masks_coefficients_and_rng_position() {
+        let native_log = 4;
+        let rows = 1usize << native_log;
+        let width = 3;
+        let native = |column: usize| {
+            ZeroizingMainTraceColumnV1(
+                (0..rows)
+                    .map(|row| F((3 + row * row + column * 17) as u64))
+                    .collect(),
+            )
+        };
+        let mut cache =
+            super::super::main_retained_rfc::MainRetainedRfcV1::for_original_mask_test_v1(
+                0, width, native_log,
+            );
+        cache
+            .prepare_native_if_needed_v1(0, 0..width, |targets| {
+                for (column, target) in targets.iter_mut().enumerate() {
+                    target.copy_from_slice(&native(column));
+                }
+                Ok(())
+            })
+            .unwrap();
+        let mut expected_rng = ChaCha12Rng::from_seed([0x85; 32]);
+        let mut actual_rng = expected_rng.clone();
+        let mut expected_group = MainTraceMaskGroupV1::empty_v1(native_log, 13, width).unwrap();
+        let mut actual_group = MainTraceMaskGroupV1::empty_v1(native_log, 13, width).unwrap();
+        let policy = MainBoundedTransformPolicyV1::cpu_v1();
+        let expected = expected_group
+            .sample_and_replay_batch_with_v1(
+                0..width,
+                policy,
+                &mut expected_rng,
+                |column| Ok(native(column)),
+                |_, _, _| panic!("CPU fixture dispatched"),
+                || false,
+            )
+            .unwrap();
+        let mut pending = cache
+            .copy_native_columns_v1(0, 0..width)
+            .unwrap()
+            .into_iter();
+        let mut actual = actual_group
+            .sample_and_replay_batch_with_v1(
+                0..width,
+                policy,
+                &mut actual_rng,
+                |_| pending.next().ok_or(ZkX509StarkErrorV1::InternalInvariant),
+                |_, _, _| panic!("CPU fixture dispatched"),
+                || false,
+            )
+            .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual_rng.try_next_u64().unwrap(),
+            expected_rng.try_next_u64().unwrap()
+        );
+        cache.retain_batch_v1(0, 0..width, &mut actual).unwrap();
+        assert_eq!(cache.copy_columns_v1(0, 0..width).unwrap(), expected);
+        assert!(cache.copy_native_columns_v1(0, 0..1).is_err());
+        for (actual, expected) in actual_group.masks.iter().zip(&expected_group.masks) {
+            assert_eq!(actual.coefficients(), expected.coefficients());
+        }
+    }
+}
