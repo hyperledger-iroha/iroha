@@ -152,10 +152,13 @@ same construction for other Rust clients. JavaScript exposes
 A proof binds the exact pre-action roster root, so roster changes serialize per
 call: of several joins proved against one root, only the first to execute succeeds,
 and the rest are rejected with `KAIGI_STALE_ROSTER_ROOT_ERROR_V1`. That rejection
-changes no state, and a client recovers by reading its standing and proving again.
+leaves the call unchanged but is charged like any failed transaction, at the same fee
+as a success, so losing a race costs money: if N clients all retry at once, N joins can
+cost about N²/2 fees. A client should read its standing again after proving, submit only
+if it has not moved, and wait a random moment before proving again after a loss.
 The public status route carries no rejection reason: the signer reads it through the
 signed transaction-details route, or sees that the standing's root moved. The CLI
-reads the reason and retries automatically. Usage proofs recover the same way from
+does all of this and stops after three paid attempts. Usage proofs recover the same way from
 `KAIGI_STALE_USAGE_CONTEXT_ERROR_V1`.
 
 ## Bounds and accounting
@@ -178,6 +181,16 @@ sequence growth and end timestamp/status. Usage duration, billed gas and segment
 totals use checked arithmetic. Governance must consider retained active state
 when changing storage limits; price policy and externally attested billing are
 separate qualification requirements.
+
+Each Kaigi instruction decodes the whole record from domain metadata, validates it and
+encodes it again, so its cost grows with the roster. On an Apple silicon development
+machine (`cargo bench -p iroha_core --features bench --bench kaigi`), a transparent join
+and leave together take about 1.4 ms with 64 participants, 37 ms with 1,024 and 290 ms
+with 4,096. Those figures rely on a per-thread memo of validated Ed25519 keys, which never
+changes a decode result; the first read on each thread still validates every key. What
+remains is mostly JSON decoding and encoding of the record, which only typed state would
+remove. A native authorization proof is 5,306 bytes and takes about 24 ms to verify the
+first time; proving took 250 ms on a quiet machine and about 850 ms on a heavily loaded one.
 
 ## Relay scope and remaining qualification
 

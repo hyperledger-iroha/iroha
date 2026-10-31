@@ -31,7 +31,7 @@ use iroha_data_model::{
     },
     isi::{InstructionBox, register::RegisterBox},
     smart_contract::{ContractAddress, ContractAlias},
-    transaction::{FeePaymentIntent, SignedTransaction, error::TransactionRejectionReason},
+    transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_torii_shared::{
@@ -359,7 +359,8 @@ impl Client {
     /// # Errors
     /// Returns compatibility, transport, rejection, expiry, timeout, ambiguity,
     /// or [`BlockingCallError`] failures. A rejection downcasts to its authenticated
-    /// [`TransactionRejectionReason`] and to its [`TransactionFinalityFailure`] evidence.
+    /// [`TransactionRejectionReason`](iroha_data_model::transaction::error::TransactionRejectionReason)
+    /// and to its [`TransactionFinalityFailure`] evidence.
     pub fn submit_transaction_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -1295,6 +1296,7 @@ mod tests {
 
     #[test]
     fn rejected_submission_keeps_its_evidence_when_the_reason_is_unreadable() {
+        use iroha_data_model::transaction::error::TransactionRejectionReason;
         let error = rejected_submission(|_| Err(http::StatusCode::FORBIDDEN));
         assert!(error.downcast_ref::<TransactionRejectionReason>().is_none());
         assert!(

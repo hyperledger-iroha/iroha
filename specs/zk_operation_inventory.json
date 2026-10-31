@@ -3488,7 +3488,9 @@
      {"path": "IrohaSwift/Sources/IrohaSwift/KaigiInstructionsV1.swift", "via": ["type_name", "wire_id"]}
     ],
     "javascript": [
+     {"path": "javascript/iroha_js/index.d.ts", "via": ["type_name"]},
      {"path": "javascript/iroha_js/src/instructionBuilders.js", "via": ["type_name"]},
+     {"path": "javascript/iroha_js/src/kaigiScalarV1.js", "via": ["type_name"]},
      {"path": "javascript/iroha_js/src/norito.js", "via": ["type_name"]},
      {"path": "javascript/iroha_js/src/transaction.js", "via": ["type_name"]}
     ],
@@ -3981,6 +3983,10 @@
       "via": ["type_name"]
      },
      {
+      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KaigiWirePayloadEncoderV1.kt",
+      "via": ["type_name"]
+     },
+     {
       "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/SetKaigiRelayManifestInstruction.kt",
       "via": ["type_name"]
      },
@@ -3997,7 +4003,10 @@
     "python": [
      {"path": "python/iroha_python/src/iroha_python/kaigi.py", "via": ["type_name", "wire_id"]}
     ],
-    "csharp": []
+    "csharp": [
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KaigiInstructionsV1.cs", "via": ["type_name", "wire_id"]},
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs", "via": ["type_name"]}
+    ]
    },
    "status": {
     "presence": "registered",
@@ -4039,6 +4048,10 @@
       "via": ["type_name"]
      },
      {
+      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KaigiWirePayloadEncoderV1.kt",
+      "via": ["type_name"]
+     },
+     {
       "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterKaigiRelayInstruction.kt",
       "via": ["type_name"]
      },
@@ -4055,7 +4068,10 @@
     "python": [
      {"path": "python/iroha_python/src/iroha_python/kaigi.py", "via": ["type_name", "wire_id"]}
     ],
-    "csharp": []
+    "csharp": [
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KaigiInstructionsV1.cs", "via": ["type_name", "wire_id"]},
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs", "via": ["type_name"]}
+    ]
    },
    "status": {
     "presence": "registered",
@@ -4101,6 +4117,10 @@
       "via": ["type_name"]
      },
      {
+      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KaigiWirePayloadEncoderV1.kt",
+      "via": ["type_name"]
+     },
+     {
       "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/UnregisterKaigiRelayInstruction.kt",
       "via": ["type_name"]
      },
@@ -4117,7 +4137,10 @@
     "python": [
      {"path": "python/iroha_python/src/iroha_python/kaigi.py", "via": ["type_name", "wire_id"]}
     ],
-    "csharp": []
+    "csharp": [
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KaigiInstructionsV1.cs", "via": ["type_name", "wire_id"]},
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs", "via": ["type_name"]}
+    ]
    },
    "status": {
     "presence": "registered",
@@ -4178,6 +4201,10 @@
       "via": ["type_name"]
      },
      {
+      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/KaigiWirePayloadEncoderV1.kt",
+      "via": ["type_name"]
+     },
+     {
       "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ReportKaigiRelayHealthInstruction.kt",
       "via": ["type_name"]
      },
@@ -4194,7 +4221,10 @@
     "python": [
      {"path": "python/iroha_python/src/iroha_python/kaigi.py", "via": ["type_name", "wire_id"]}
     ],
-    "csharp": []
+    "csharp": [
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KaigiInstructionsV1.cs", "via": ["type_name", "wire_id"]},
+     {"path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs", "via": ["type_name"]}
+    ]
    },
    "status": {
     "presence": "registered",
@@ -7405,7 +7435,10 @@
      "prefix": "/v1/da/",
      "reason": "Data-availability commitments and pin intents; signed RS16 availability of specs/sumeragi.md, not a relation of this plan."
     },
-    {"prefix": "/v1/runtime/upgrades/", "reason": "Operator attestation of a runtime upgrade; owned by the live-upgrade contract, not a zero-knowledge operation."},
+    {
+     "prefix": "/v1/runtime/upgrades/",
+     "reason": "Operator attestation of a runtime upgrade; owned by the live-upgrade contract, not a zero-knowledge operation."
+    },
     {"prefix": "/v1/bridge/", "reason": "Bridge finality attestations and proofs read from consensus records."},
     {
      "prefix": "/v1/sccp/",
@@ -7598,7 +7631,9 @@
     "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_kaigi_call_events_sse("},
     "sdk_literal": "/v1/kaigi/calls/",
     "sdk_files": {
-     "rust": [],
+     "rust": [
+      {"path": "crates/iroha/src/client.rs", "via": ["route_path"]}
+     ],
      "kotlin_java_android": [],
      "swift": [],
      "javascript": [
@@ -7621,7 +7656,9 @@
     "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_kaigi_call("},
     "sdk_literal": "/v1/kaigi/calls/",
     "sdk_files": {
-     "rust": [],
+     "rust": [
+      {"path": "crates/iroha/src/client.rs", "via": ["route_path"]}
+     ],
      "kotlin_java_android": [],
      "swift": [],
      "javascript": [
@@ -7644,10 +7681,14 @@
     "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_kaigi_call_participation("},
     "sdk_literal": "/v1/kaigi/calls/",
     "sdk_files": {
-     "rust": [],
+     "rust": [
+      {"path": "crates/iroha/src/client.rs", "via": ["route_path"]}
+     ],
      "kotlin_java_android": [],
      "swift": [],
-     "javascript": [],
+     "javascript": [
+      {"path": "javascript/iroha_js/src/toriiClient.js", "via": ["route_path"]}
+     ],
      "python": [],
      "csharp": []
     }
@@ -7665,7 +7706,9 @@
     "handler": {"path": "crates/iroha_torii/src/lib.rs", "symbol": "fn handler_kaigi_call_signals("},
     "sdk_literal": "/v1/kaigi/calls/",
     "sdk_files": {
-     "rust": [],
+     "rust": [
+      {"path": "crates/iroha/src/client.rs", "via": ["route_path"]}
+     ],
      "kotlin_java_android": [],
      "swift": [],
      "javascript": [
@@ -12434,6 +12477,12 @@
    {
     "family": "rust",
     "path": "crates/iroha/src/client.rs",
+    "product": "kaigi",
+    "symbols": ["get_kaigi_call_json", "get_kaigi_call_participation_json"]
+   },
+   {
+    "family": "rust",
+    "path": "crates/iroha/src/client.rs",
     "product": "out_of_plan",
     "symbols": ["get_sorafs_moderation_ballot", "get_sorafs_moderation_ballot_no_show_plan"]
    },
@@ -13378,6 +13427,7 @@
      "buildJoinKaigiInstruction",
      "buildJoinKaigiTransaction",
      "buildKaigiAuthorizationProofV1",
+     "buildKaigiRelayHpkeKeyV1",
      "buildKaigiUsageProofV1",
      "buildLeaveKaigiInstruction",
      "buildLeaveKaigiTransaction",
@@ -13391,7 +13441,9 @@
      "buildSetKaigiRelayManifestTransaction",
      "buildUnregisterKaigiRelayInstruction",
      "buildUnregisterKaigiRelayTransaction",
+     "generateKaigiBlindingV1",
      "getKaigiCall",
+     "getKaigiCallParticipation",
      "getKaigiRelay",
      "getKaigiRelaysHealth",
      "listKaigiCallSignals",
@@ -13523,7 +13575,7 @@
     "family": "javascript",
     "path": "javascript/iroha_js/src/crypto.browser.js",
     "product": "kaigi",
-    "symbols": ["buildKaigiAuthorizationProofV1", "buildKaigiUsageProofV1"]
+    "symbols": ["buildKaigiAuthorizationProofV1", "buildKaigiUsageProofV1", "generateKaigiBlindingV1"]
    },
    {
     "family": "javascript",
@@ -13586,6 +13638,7 @@
      "buildKaigiAuthorizationProofV1WithRuntime",
      "buildKaigiUsageProofV1",
      "buildKaigiUsageProofV1WithRuntime",
+     "generateKaigiBlindingV1",
      "kaigiBytesV1",
      "kaigiScalarV1"
     ]
@@ -13636,6 +13689,7 @@
      "buildCreateKaigiInstruction",
      "buildEndKaigiInstruction",
      "buildJoinKaigiInstruction",
+     "buildKaigiRelayHpkeKeyV1",
      "buildLeaveKaigiInstruction",
      "buildRecordKaigiUsageInstruction",
      "buildRegisterKaigiRelayInstruction",
@@ -13674,7 +13728,12 @@
      "normalizeZkBallotPublicInputs"
     ]
    },
-   {"family": "javascript", "path": "javascript/iroha_js/src/kaigiScalarV1.js", "product": "kaigi", "symbols": ["kaigiScalarBytesV1"]},
+   {
+    "family": "javascript",
+    "path": "javascript/iroha_js/src/kaigiScalarV1.js",
+    "product": "kaigi",
+    "symbols": ["kaigiScalarBytesV1", "sampleKaigiBlindingV1"]
+   },
    {
     "family": "javascript",
     "path": "javascript/iroha_js/src/norito.js",
@@ -13895,6 +13954,7 @@
      "buildKaigiCallSignalsQuery",
      "buildKaigiRelayEventParams",
      "getKaigiCall",
+     "getKaigiCallParticipation",
      "getKaigiRelay",
      "getKaigiRelaysHealth",
      "listKaigiCallSignals",
@@ -13904,6 +13964,7 @@
      "normalizeKaigiCallEventData",
      "normalizeKaigiCallEventRef",
      "normalizeKaigiCallIdentityFields",
+     "normalizeKaigiCallParticipation",
      "normalizeKaigiCallSignal",
      "normalizeKaigiCallSignalsCursor",
      "normalizeKaigiCallSignalsList",
@@ -14315,6 +14376,7 @@
      "encode_create_kaigi_instruction_v1",
      "encode_end_kaigi_instruction_v1",
      "encode_join_kaigi_instruction_v1",
+     "encode_kaigi_relay_hpke_key_v1",
      "encode_leave_kaigi_instruction_v1",
      "encode_record_kaigi_usage_instruction_v1",
      "encode_register_kaigi_relay_instruction_v1",
@@ -14591,7 +14653,17 @@
     "family": "csharp",
     "path": "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
     "product": "kaigi",
-    "symbols": ["CreateKaigi", "EndKaigi", "JoinKaigi", "LeaveKaigi", "RecordKaigiUsage"]
+    "symbols": [
+     "CreateKaigi",
+     "EndKaigi",
+     "JoinKaigi",
+     "LeaveKaigi",
+     "RecordKaigiUsage",
+     "RegisterKaigiRelay",
+     "ReportKaigiRelayHealth",
+     "SetKaigiRelayManifest",
+     "UnregisterKaigiRelay"
+    ]
    }
   ]
  }
