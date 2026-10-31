@@ -2801,9 +2801,18 @@ def check_sections(summary: dict[str, Any], repository: Path, errors: list[str])
             run_names.add(name)
         if run.get("verdict") != "accepted" or run.get("reasons"):
             errors.append(f"{where}: the harness did not accept the run")
-        for key in ("manifest_sha256", "executable_sha256", "source_dirty_digest"):
+        for key in ("manifest_sha256", "executable_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", str(run.get(key))):
                 errors.append(f"{where}.{key} is not a SHA-256 digest")
+        # The harness digests a checkout's local changes, so a clean one records none.
+        dirty = run.get("source_dirty")
+        if dirty is False:
+            if run.get("source_dirty_digest") is not None:
+                errors.append(f"{where}.source_dirty_digest is recorded for a clean checkout")
+        elif dirty is not True:
+            errors.append(f"{where}.source_dirty is not recorded")
+        elif not re.fullmatch(r"[0-9a-f]{64}", str(run.get("source_dirty_digest"))):
+            errors.append(f"{where}.source_dirty_digest is not a SHA-256 digest")
         pin = run.get("manifest_sha256")
         if isinstance(pin, str):
             if pin in manifest_pins:

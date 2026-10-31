@@ -1508,16 +1508,18 @@
    "owner": null,
    "path": "crates/iroha_test_network/src/lib.rs",
    "symbol": "IROHA_TEST_SKIP_BUILD_ENV",
-   "gates": "Environment variables read by tools that are not a validator: the command line locating its client configuration (HOME, USERPROFILE), the deployment tool locating its workspace and build directory (XDG_STATE_HOME, LOCALAPPDATA, CARGO_TARGET_DIR) and the test network harness (which binary to build and with which Cargo features, where to keep temporary directories, how many networks run in parallel, whether bind checks are skipped).",
+   "gates": "Environment variables read by tools that are not a validator: the command line locating its client configuration (HOME, USERPROFILE), the deployment tool locating its workspace and build directory (XDG_STATE_HOME, LOCALAPPDATA, CARGO_TARGET_DIR), kagami naming the source revision in its version text (VERGEN_GIT_SHA, read when it is compiled) and the test network harness (which binary to build and with which Cargo features, where to keep temporary directories, how many networks run in parallel, whether bind checks are skipped).",
    "decided_by": "Stays local to the tool. None of these values reaches a node's validation: the harness passes its choices to the daemons it starts through their configuration files and command lines.",
    "attribution": "read",
    "note": "AGENTS.md keeps environment toggles for developer convenience in tests only. PROGRAM_IROHAD_FEATURES_ENV selects the Cargo features of the daemon binary the harness builds; the feature gates themselves are the feature.* entries.",
    "sites": [
     ["crates/iroha_cli/src/client_config.rs", "env_read", "HOME", 1],
     ["crates/iroha_cli/src/client_config.rs", "env_read", "USERPROFILE", 1],
+    ["crates/iroha_deploy/src/localnet/bundle.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_deploy/src/sora_network.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "LOCALAPPDATA", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "XDG_STATE_HOME", 1],
+    ["crates/iroha_kagami/src/main.rs", "env_read", "VERGEN_GIT_SHA", 1],
     ["crates/iroha_test_network/src/config.rs", "env_read", "IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR", 1],
     ["crates/iroha_test_network/src/disposable_runtime_provider_broker.rs", "env_read", "TEMPDIR_IN_ENV", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "<expression>", 1],
@@ -6708,7 +6710,7 @@
  },
  "summary": {
   "entries": 234,
-  "sites": 1503,
+  "sites": 1505,
   "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 117, "open": 40, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 138, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

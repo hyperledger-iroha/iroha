@@ -549,7 +549,7 @@
       "symbol": "WorldStateAccumulator|world_state_element_v1|world_state_root_from_accumulator_v1",
       "owner": {
        "path": "crates/iroha_core/src/state/world_state_accumulator.rs",
-       "symbol": "pub(crate) struct WorldStateAccumulator"
+       "symbol": "pub struct WorldStateAccumulator"
       },
       "note": "LtHash16 accumulator of the World State and its element and root helpers."
      }
@@ -558,7 +558,7 @@
    "owners": [
     {
      "path": "crates/iroha_core/src/state/world_state_accumulator.rs",
-     "symbol": "pub(crate) struct WorldStateAccumulator {"
+     "symbol": "pub struct WorldStateAccumulator {"
     }
    ],
    "in_use": true
@@ -603,8 +603,14 @@
    "token": {
     "pattern": "ripemd"
    },
-   "owners": [],
-   "in_use": false
+   "owners": [
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/base.h",
+     "symbol": "typedef struct RIPEMD160state_st RIPEMD160_CTX;"
+    }
+   ],
+   "in_use": true,
+   "note": "Only the decrepit RIPEMD-160 of vendored BoringSSL; no Iroha source calls it."
   },
   {
    "id": "rescue",
@@ -735,8 +741,14 @@
     "not_preceded_by": "abcdefghijklmnopqrstuvwxyz",
     "camel_case": true
    },
-   "owners": [],
-   "in_use": false
+   "owners": [
+    {
+     "path": "vendor/nearby/internal/platform/connection_info.h",
+     "symbol": "inline constexpr int kMacAddressLength = 6;"
+    }
+   ],
+   "in_use": true,
+   "note": "A false match of the token: vendored Nearby names MAC-address constants kMac...; nothing implements KMAC."
   },
   {
    "id": "cshake",
@@ -746,8 +758,14 @@
    "token": {
     "pattern": "cshake"
    },
-   "owners": [],
-   "in_use": false
+   "owners": [
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/keccak/internal.h",
+     "symbol": "boringssl_cshake128,"
+    }
+   ],
+   "in_use": true,
+   "note": "Only the Keccak internals of vendored BoringSSL; no Iroha source calls it."
   },
   {
    "id": "merlin",
@@ -833,7 +851,7 @@
       {
        "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
        "symbol": "exact12_catalog_commitment_bytes_v1()",
-       "literals": ["pub(crate) fn catalog_v1(self) -> [u8; 32] {"]
+       "literals": ["pub(crate) fn catalog_v1() -> [u8; 32] {"]
       },
       {
        "path": "crates/iroha_core_zk/src/stark.rs",
@@ -871,23 +889,8 @@
       "sdk": "kotlin"
      },
      {
-      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt",
-      "symbol": "@JvmField val catalogCommitment: PrivacyExact12CatalogCommitmentV1,",
-      "sdk": "kotlin"
-     },
-     {
       "path": "javascript/iroha_js/src/norito.js",
       "symbol": "const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(",
-      "sdk": "javascript"
-     },
-     {
-      "path": "javascript/iroha_js/src/privacyCapabilities.js",
-      "symbol": "\"catalog_commitment\",",
-      "sdk": "javascript"
-     },
-     {
-      "path": "javascript/iroha_js/privacy-capabilities.d.ts",
-      "symbol": "readonly catalog_commitment: PrivacyFixed32BytesV1;",
       "sdk": "javascript"
      },
      {
@@ -896,8 +899,8 @@
       "sdk": "python"
      },
      {
-      "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs",
-      "symbol": "private static readonly byte[] Exact12CatalogCommitment = Convert.FromHexString(",
+      "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.X509.cs",
+      "symbol": "X509Equal(envelope[1], Convert.FromHexString(",
       "sdk": "csharp"
      }
     ],
@@ -2097,7 +2100,7 @@
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
      "symbol": "sha2::Sha384::digest(",
-     "literals": ["b\"iroha:execution:catalog:v1:goldilocks-poseidon-x7-six-lane\"", "fn catalog_v1(self) -> [u8; 48] {"],
+     "literals": ["b\"iroha:execution:catalog:v1:goldilocks-poseidon-x7-six-lane\"", "fn catalog_v1() -> [u8; 48] {"],
      "compiled": "production"
     }
    ],
@@ -2112,7 +2115,7 @@
      "sites": [
       {
        "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
-       "symbol": "let catalog = context.catalog_v1();",
+       "symbol": "let catalog = TransparentStarkDigestContextV1::catalog_v1();",
        "literals": ["pub fn goldilocks_digest384_frame_v1("]
       }
      ],
@@ -2128,7 +2131,7 @@
     "sdk_owners": [
      {
       "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
-      "symbol": "fn catalog_v1(self) -> [u8; 48] {",
+      "symbol": "fn catalog_v1() -> [u8; 48] {",
       "sdk": "rust"
      }
     ],
@@ -2251,8 +2254,8 @@
    "sites": [
     {
      "path": "crates/iroha_core/src/state/world_state_accumulator.rs",
-     "symbol": "pub(crate) struct WorldStateAccumulator {",
-     "literals": ["pub(crate) const LANES: usize = 1024;"],
+     "symbol": "pub struct WorldStateAccumulator {",
+     "literals": ["pub const LANES: usize = 1024;"],
      "compiled": "production"
     }
    ],
@@ -2942,7 +2945,7 @@
     {
      "path": "crates/iroha_plonk/src/transcript/pipa_r.rs",
      "symbol": "pub struct BasePoseidonHash",
-     "literals": ["Self::with_domain(*b\"pipa-rb1\")", "pub fn absorb_prelude_v2", "pub fn scalar_elements"],
+     "literals": ["Self::with_domain(crate::contract::PIPA_R_PROOF_DOMAIN)", "pub fn absorb_prelude_v2", "pub fn scalar_elements"],
      "compiled": "production"
     },
     {
@@ -2970,6 +2973,11 @@
      "path": "crates/iroha_plonk/src/transcript/mod.rs",
      "symbol": "pub const INSTANCE_FRAME_TAG: [u8; 8] = *b\"pipainst\";",
      "compiled": "production"
+    },
+    {
+     "path": "crates/iroha_plonk/src/contract.rs",
+     "symbol": "pub const PIPA_R_PROOF_DOMAIN: [u8; 8] = *b\"pipa-rb1\";",
+     "compiled": "production"
     }
    ],
    "canonical_native": {
@@ -2990,13 +2998,18 @@
     {
      "path": "crates/iroha_plonk/src/transcript/pipa_r.rs",
      "symbol": "pub fn derive(",
-     "literals": ["b\"Iroha-PlonkVK-v2\"", "blake2b_personal::<64>(persona, &[digest, vk])", "Self::Base(C::Base::from_uniform_bytes(&wide))"],
+     "literals": ["crate::contract::VK_TRANSCRIPT_DOMAIN", "blake2b_personal::<64>(persona, &[digest, vk])", "Self::Base(C::Base::from_uniform_bytes(&wide))"],
      "compiled": "production"
     },
     {
      "path": "crates/iroha_plonk/src/transcript/pipa_r.rs",
      "symbol": "pub fn derive_cancellable(",
      "literals": ["Blake2bPersonal::<64>::new(persona)", "hasher.update(digest);"],
+     "compiled": "production"
+    },
+    {
+     "path": "crates/iroha_plonk/src/contract.rs",
+     "symbol": "pub(crate) const VK_TRANSCRIPT_DOMAIN: &[u8; 16] = b\"Iroha-PlonkVK-v2\";",
      "compiled": "production"
     }
    ],
@@ -3599,6 +3612,11 @@
   "x509": {
    "description": "ZK-X509 relation, aggregate adapter and release evidence.",
    "uses": {
+    "blake3": {
+     "class": "role",
+     "note": "The SDK X509 transaction builders frame the statement, ordered-intent, action and request digests and the proof attachment hash with BLAKE3. The Rust engine sources only name the native catalog in comments.",
+     "roles": ["privacy.statement-digest-blake3", "catalog.exact12-commitment"]
+    },
     "digest384": {
      "class": "role",
      "note": "Statement and test digests.",

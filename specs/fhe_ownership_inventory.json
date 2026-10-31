@@ -1598,10 +1598,10 @@
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::sub", "ProofPolynomialV1::multiply_by_monomial", "ProofPolynomialV1::sub"],
       "crates/iroha_fhe/src/bgv/keys.rs": ["masked_error"],
       "crates/iroha_fhe/src/bgv/poly.rs": ["RnsPoly::negate", "RnsPoly::sub_assign"],
+      "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"],
       "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::canonicalize_i64", "FixedModulus::sub"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::forward", "NegacyclicPlan::inverse"],
-      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"],
-      "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"]
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"]
      }
     },
     {
@@ -1634,7 +1634,7 @@
      "symbol": "FixedModulus::power",
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"], "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"]}
+     "callers": {"crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"], "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"]}
     },
     {
      "path": "crates/iroha_fhe/src/constant_time.rs",
@@ -11851,6 +11851,68 @@
     {
      "path": "docs/validation/parliament_ballot_node_representation/resume-20261020/node-check-initial.log.txt",
      "purpose": "Historical Cargo compile/check transcript naming the hkdf dependency; it contains no executable HKDF call and is not a RAM-LFE backend."
+    },
+    {"path": "vendor/boringssl-swiftpm/UPSTREAM.json", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/ec/ec_derive.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/ec/hash_to_curve.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/err/err.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/evp_ctx.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/internal.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/p_hkdf.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/bcm.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/hkdf/hkdf.cc.inc",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
+    },
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/self_check/self_check.cc.inc",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
+    },
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/internal.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/kdf.cc.inc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/hpke/hpke.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/obj/obj_dat.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/spake2plus/internal.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/crypto/spake2plus/spake2plus.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/gen/crypto/err_data.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/gen/sources.json", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/curve25519.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/ec.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/ec_key.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/err.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/evp.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/hkdf.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/hpke.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/kdf.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/nid.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/prefix_symbols.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/ssl/encrypted_client_hello.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/ssl/internal.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/ssl/ssl_credential.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/ssl/tls13_both.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/boringssl-swiftpm/ssl/tls13_enc.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/nearby/UPSTREAM.json", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {
+     "path": "vendor/nearby/connections/implementation/mediums/advertisements/dct_advertisement.cc",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
+    },
+    {"path": "vendor/nearby/internal/crypto_cros/hkdf.cc", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {"path": "vendor/nearby/internal/crypto_cros/hkdf.h", "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."},
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/d2d_crypto_ops.cc",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/ukey2_handshake.cc",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/include/securemessage/crypto_ops.h",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
+    },
+    {
+     "path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/src/securemessage/crypto_ops.cc",
+     "purpose": "Vendored third-party HKDF (BoringSSL or Nearby); not RAM-LFE."
     }
    ]
   },
@@ -12091,6 +12153,11 @@
    "kind": "route_inventory",
    "registered": true,
    "evidence": {"path": "generated-files.toml", "literal": "specs/sdk_operation_inventory.tsv"}
+  },
+  {
+   "path": "specs/runtime_baseline_catalog.json",
+   "kind": "generated_inventory",
+   "evidence": {"path": "crates/iroha_core/src/runtime/catalog/tests.rs", "literal": "/../../specs/runtime_baseline_catalog.json"}
   },
   {
    "path": "specs/state_table_inventory.json",
@@ -14601,7 +14668,7 @@
    "component": "specs",
    "role": "generated_artifact",
    "tasks": ["V.1"],
-   "summary": "Generated inventories that list RAM-LFE and FHE routes, environment toggles and panic boundaries.",
+   "summary": "Generated inventories that list RAM-LFE and FHE routes and runtime definitions, environment toggles and panic boundaries.",
    "files": [
     {"path": "fixtures/sorafs/source_contracts/open_work.tsv", "patterns": ["mkhe"], "test_only": true},
     {"path": "scripts/panic_recovery_boundaries.inventory", "patterns": ["bfv", "ram_lfe", "rns"]},
@@ -14611,6 +14678,7 @@
      "patterns": [],
      "pinned": "Markdown twin of env_var_inventory.json, written by the same generator run."
     },
+    {"path": "specs/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"]},
     {"path": "specs/sdk_operation_inventory.tsv", "patterns": ["fhe", "ram_lfe"]}
    ]
   },
@@ -14899,6 +14967,7 @@
     {"path": "scripts/check_zk_primitive_workloads.py", "patterns": ["mkhe"]},
     {"path": "scripts/check_zk_resource_contract.py", "patterns": ["ram_lfe"]},
     {"path": "scripts/check_zk_runtime_validity.py", "patterns": ["bfv", "bgv", "fhe", "mkhe"]},
+    {"path": "scripts/run_guards.py", "patterns": ["bgv", "fhe"]},
     {
      "path": "scripts/tests/check_zk_operation_inventory_test.py",
      "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "mkhe", "ram_lfe"],
@@ -15776,6 +15845,63 @@
    "tasks": ["C.5", "F.5"],
    "summary": "Canonical unkeyed raw32 BLAKE3 native commitment framing, role/domain descriptors and distinct SHA3 descriptor identities. Its MKHE and RNS mentions are protocol-domain references; this file implements neither FHE arithmetic nor a cryptographic qualification decision.",
    "files": [{"path": "crates/iroha_crypto/src/native_commitment.rs", "patterns": ["mkhe", "rns"]}]
+  },
+  {
+   "id": "vendor.third_party_hkdf",
+   "role": "unrelated_hkdf",
+   "summary": "Vendored BoringSSL and Nearby sources that implement HKDF or call it for their own TLS, QUIC, HPKE and handshake protocols. Third-party code unrelated to the RAM-LFE backend.",
+   "files": [
+    {"path": "vendor/boringssl-swiftpm/UPSTREAM.json", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/ec/ec_derive.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/ec/hash_to_curve.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/err/err.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/evp_ctx.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/evp/p_hkdf.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/bcm.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/hkdf/hkdf.cc.inc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/self_check/self_check.cc.inc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/tls/kdf.cc.inc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/hpke/hpke.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/obj/obj_dat.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/spake2plus/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/spake2plus/spake2plus.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/gen/crypto/err_data.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/gen/sources.json", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/curve25519.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/ec.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/ec_key.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/err.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/evp.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/hkdf.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/hpke.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/kdf.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/nid.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/include/openssl/prefix_symbols.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/encrypted_client_hello.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/internal.h", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/ssl_credential.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/tls13_both.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/boringssl-swiftpm/ssl/tls13_enc.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/UPSTREAM.json", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/connections/implementation/mediums/advertisements/dct_advertisement.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/internal/crypto_cros/hkdf.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/internal/crypto_cros/hkdf.h", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/d2d_crypto_ops.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/main/cpp/src/securegcm/ukey2_handshake.cc", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/include/securemessage/crypto_ops.h", "patterns": ["hkdf"]},
+    {"path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/src/securemessage/crypto_ops.cc", "patterns": ["hkdf"]}
+   ]
+  },
+  {
+   "id": "vendor.boringssl_pq",
+   "role": "distinct_arithmetic",
+   "summary": "Vendored BoringSSL ML-KEM and ML-DSA polynomial arithmetic. Third-party and algorithm-specific; not consolidated.",
+   "files": [
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/mldsa/mldsa.cc.inc", "patterns": ["ntt"]},
+    {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/mlkem/mlkem.cc.inc", "patterns": ["ntt"]}
+   ]
   }
  ]
 }

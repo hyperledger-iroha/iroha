@@ -66,7 +66,9 @@ Validator summaries retain complete activation heights and tenure bounds.
 Space Directory and ZK JSON inputs use Norito's shared JSON nesting limit
 (`MAX_JSON_VALUE_NESTING_DEPTH`, currently 33 including the root value).
 Local contract durable-state fixtures require exact NFC path spelling and
-reject duplicate decoded JSON keys.
+reject duplicate decoded JSON keys. `contract debug-call` and
+`contract debug-view` print their whole report on stdout and exit 1 when the
+run fails.
 
 `iroha offline registration-package` verifies and packages a successful Global
 KAGEMUSHA token registration without submitting or signing a transaction. Supply

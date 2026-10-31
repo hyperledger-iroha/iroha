@@ -12026,15 +12026,24 @@
    },
    {
     "id": "settlement.pool_activation",
-    "selector": "node_configuration",
-    "chooses_guarantee": true,
-    "what": "Atomic private settlement has no node enable or activation prerequisite. The native IVM private-note implementation and current committed protocol limits are enforced, but the remaining node-configured profile-policy version selection and settlement bounds still affect admission.",
-    "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "let config = &self.nexus.atomic_private_settlement;"},
+    "selector": "catalog_membership",
+    "chooses_guarantee": false,
+    "what": "Atomic private settlement has no node enable or activation prerequisite. Committed policy must admit the native IVM private-note protocol with limits covering its maximum input and output counts. Node configuration holds only the custody limits of a local sidecar store, which do not reach admission.",
+    "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_admitted_v1("},
+    "guards": [
+     {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_continuation_v1("}
+    ],
     "operations": ["private_settlement::RegisterAtomicPrivateSettlementPrepareV1", "private_settlement::FinalizeAtomicPrivateSettlementV1"],
-    "open_defect": {
-     "owner_task": "F.4",
-     "what": "Migrate remaining node-configured profile-policy selection, windows and settlement bounds into their committed owner; the retired enable flag and activation height are absent."
-    },
+    "rejection_tests": [
+     {
+      "path": "crates/iroha_core/src/private_settlement/global_state.rs",
+      "test": "state_transaction_applies_all_legs_only_at_atomic_commit_boundaries",
+      "reaches": [
+       {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_prepare_locks_v1("}
+      ]
+     }
+    ],
+    "test_evidence": "default",
     "references": [
      {"inventory": "runtime_validity", "key": "entries/cfg.nexus.settlement_activation"}
     ]
