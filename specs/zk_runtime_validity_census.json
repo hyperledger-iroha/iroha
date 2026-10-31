@@ -5895,7 +5895,7 @@
    "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline. Native-frame destinations check the same deadline before moving charged wire ownership and while filling the committee. A busy State capture waits on its original release through StateViewWaiter under that deadline and cancellation flag; expiration retains the original local refusal rather than certifying a result.",
    "sites": [
     ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 5],
-    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 18],
+    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 16],
     ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "wall_clock", "instant", 1]
    ]
   },

@@ -20915,7 +20915,7 @@
               "PUSH_STORAGE_LIMITS"
             ],
             "exprs": {
-              "MAX_BACKOFF": "Duration::from_secs(60 * 60)",
+              "MAX_BACKOFF": "Duration::from_hours(1)",
               "MAX_PUSH_DEVICES": "4 * 1024",
               "MAX_PUSH_QUEUE_JOBS": "4 * MAX_PUSH_DEVICES",
               "MAX_PUSH_DEVICE_RECORD_BYTES": "64 * 1024",
@@ -22146,8 +22146,8 @@
               "default_lane_epoch_capacity"
             ],
             "exprs": {
-              "default_capacity": "NonZeroUsize::new(Self::DEFAULT_CAPACITY).map_or(NonZeroUsize::MIN, |capacity| capacity)",
-              "default_lane_epoch_capacity": "NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY) .map_or(NonZeroUsize::MIN, |capacity| capacity)"
+              "default_capacity": "NonZeroUsize::new(Self::DEFAULT_CAPACITY).unwrap_or(NonZeroUsize::MIN)",
+              "default_lane_epoch_capacity": "NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY).unwrap_or(NonZeroUsize::MIN)"
             }
           },
           {
@@ -26157,12 +26157,6 @@
           "reason": "Minimums. A decoder that needs at least so many bytes before it reads a header or a magic number; a list that needs at least two or three entries (inputs, signers, endpoints, lineage steps, tally options, carriers); a configured value that must reach a least size. A minimum refuses too little: it is no byte, count or work ceiling. Where the minimum is the start of a tested range (`(2..=MAX).contains(..)`) or a sum of fixed widths (`37 + 16 + 2`), the whole comparison is recorded; a named ceiling at the end of such a range has its own entry (one is the listed rs16.max_chunk_count, read back from a stored certificate).",
           "files": [
             {
-              "path": "crates/iroha_core/src/fastpq/mod.rs",
-              "sites": {
-                "bytes.len() >= 8": 1
-              }
-            },
-            {
               "path": "crates/iroha_core/src/kura.rs",
               "sites": {
                 "stage.marker.count < 2": 1
@@ -26643,8 +26637,7 @@
             {
               "path": "crates/iroha_torii/src/sorafs/pop_api.rs",
               "sites": {
-                "self.worker_interval > Duration::from_secs(60 * 60)": 1,
-                "self.max_finalized_time_skew > Duration::from_secs(5 * 60)": 1
+                "self.max_finalized_time_skew > Duration::from_mins(5)": 1
               }
             },
             {
@@ -27337,7 +27330,7 @@
             {
               "path": "crates/iroha_torii/src/contract_sources.rs",
               "sites": {
-                "&code_hash.chars().take(8)": 1,
+                "code_hash.chars().take(8)": 1,
                 "..code_hash.len().min(8)": 1
               }
             },
