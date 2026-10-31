@@ -60,7 +60,7 @@ mod tests {
         let Some(item) = items.next() else {
             panic!("original instruction disappeared")
         };
-        assert!(std::ptr::eq(item, &original[0]));
+        assert!(std::ptr::eq(item, &raw const original[0]));
         assert!(items.next().is_none());
     }
 

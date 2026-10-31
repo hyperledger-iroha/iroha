@@ -655,7 +655,7 @@ where
                 }
                 (Ok(value), false) => {
                     if self.value.is_none() {
-                        log::trace!("parameter `{}`: found `{var}` env var", self.id,);
+                        log::trace!("parameter `{}`: found `{var}` env var", self.id);
                     } else {
                         log::trace!(
                             "parameter `{}`: found `{var}` env var, overwriting previous value",

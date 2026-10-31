@@ -255,7 +255,7 @@ impl NativePaymentLedger {
         let height =
             NonZeroU64::new(height).ok_or(NativePaymentObservationError::CandidateMismatch)?;
         self.reads_remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .map_err(|_| NativePaymentObservationError::ReadBudgetExhausted)?;
         self.source.proof(height).await
     }

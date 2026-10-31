@@ -317,7 +317,7 @@ impl<'a> FrameWindows<'a> {
         bound: Span,
         lead: usize,
     ) -> Result<crate::kura::NativeFrameBytes, ReadError> {
-        let remaining = bound.end()?.checked_sub(offset).unwrap_or_default();
+        let remaining = bound.end()?.saturating_sub(offset);
         let wanted = u64::try_from(lead.saturating_add(longest_compact_len_prefix()))
             .map_err(|_| invalid("frame probe exceeds the addressable range"))?;
         let len = remaining.min(wanted);
@@ -674,10 +674,7 @@ impl<'a> FrameWindows<'a> {
             // `[len][TransactionPayload]` exactly as `ExternalEntrypointRef` writes it.
             let framed_payload = signed.within(
                 signature.end()?,
-                payload
-                    .end()?
-                    .checked_sub(signature.end()?)
-                    .unwrap_or_default(),
+                payload.end()?.saturating_sub(signature.end()?),
             )?;
             let (whole, alias) =
                 self.hash_with_part(element, &EntrypointTag::External.wire(), framed_payload)?;
@@ -772,9 +769,7 @@ impl<'a> FrameWindows<'a> {
     ) -> Result<HashOf<ExecutionOutputV1>, ReadError> {
         let element = self.prefixed(*at, outputs)?;
         *at = element.end()?;
-        let selected = u32::try_from(index)
-            .ok()
-            .is_some_and(|index| matches.contains(&index));
+        let selected = u32::try_from(index).is_ok_and(|index| matches.contains(&index));
         if !selected {
             return Ok(HashOf::from_untyped_unchecked(self.hash(&[], element)?));
         }

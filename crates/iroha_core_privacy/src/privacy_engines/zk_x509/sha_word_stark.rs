@@ -1332,7 +1332,7 @@ pub fn build_sha_word_capacity_base_source_v1(
 /// Exact message admission and the independent actual-message zero-shape check
 /// remain in the sole capacity implementation. A schedule for another capacity
 /// or exact-length policy is rejected before constructing any private source.
-pub(crate) fn build_sha_word_capacity_base_with_fixed_v1(
+pub fn build_sha_word_capacity_base_with_fixed_v1(
     message: &[u8],
     maximum_message_len: usize,
     exact_length: bool,

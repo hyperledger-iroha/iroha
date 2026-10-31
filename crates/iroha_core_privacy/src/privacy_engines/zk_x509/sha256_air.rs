@@ -192,7 +192,7 @@ impl ZkX509Sha256CircuitV1 {
         padded
             .try_reserve_exact(padded_len)
             .map_err(|_| ZkX509Sha256AirErrorV1::InputTooLarge)?;
-        for word_wires in self.input_wires.chunks_exact(32) {
+        for word_wires in self.input_wires.as_chunks::<32>().0 {
             let mut word = 0_u32;
             for (bit, wire) in word_wires.iter().copied().enumerate() {
                 if self.wires[wire] == F::ONE {
@@ -442,7 +442,9 @@ fn build_sha256_circuit_unchecked_v1(
     let mut builder = CircuitBuilderV1::new();
     let mut state = SHA256_INITIAL_STATE_V1.map(CircuitBuilderV1::constant_word);
     let input_words: Vec<_> = padded
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|bytes| {
             builder.input_word(u32::from_be_bytes(
                 bytes
@@ -451,7 +453,7 @@ fn build_sha256_circuit_unchecked_v1(
             ))
         })
         .collect();
-    for block in input_words.chunks_exact(16) {
+    for block in input_words.as_chunks::<16>().0 {
         let mut schedule = Vec::with_capacity(64);
         schedule.extend_from_slice(block);
         for index in 16..64 {

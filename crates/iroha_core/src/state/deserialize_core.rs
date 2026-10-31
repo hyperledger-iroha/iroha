@@ -13,7 +13,7 @@ std::thread_local! {
 
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum StateRestoreError {
+pub enum StateRestoreError {
     /// Original complete parameter graph/control custody refused restoration.
     #[error(transparent)]
     Parameters(parameter_cell::ParameterCellRestoreError),
@@ -572,19 +572,28 @@ impl<'a> SnapshotJsonMap<'a> {
         })
     }
     /// The World object of a snapshot written by the predecessor release of an upgrade
-    /// checkpoint, rewritten as this release's World object (`state::upgrade_checkpoint`).
+    /// checkpoint, rewritten as this release's World object, and the adoption authorizations the
+    /// predecessor's retired `runtime_upgrades` table held (`state::upgrade_checkpoint`).
     ///
     /// `Ok(None)`: `input` does not have the predecessor's World fields, so it is this release's
-    /// World. The predecessor's retired fields must hold exactly their empty values, the tables
-    /// this release added start empty and the runtime fields are founded on this release's
-    /// baseline; every other value passes unchanged.
+    /// World. The predecessor's other retired fields must hold exactly their empty values, the
+    /// tables this release added start empty and the runtime fields are founded on this
+    /// release's baseline; every other value passes unchanged. The authorizations leave the World
+    /// with their table; the caller proves them against the certified root and checks that one
+    /// authorizes this adoption.
     fn predecessor_world_json(
         input: &str,
         budget: &iroha_allocation::AllocationBudget,
-    ) -> Result<Option<String>, StateRestoreError> {
+    ) -> Result<
+        Option<(
+            String,
+            Vec<crate::state::upgrade_checkpoint::adoption::PredecessorRecord>,
+        )>,
+        StateRestoreError,
+    > {
         use crate::state::upgrade_checkpoint::{
-            added_world_field, is_founded_world_field, predecessor_world_field_order,
-            retired_world_fields,
+            AUTHORIZATION_FIELD, added_world_field, adoption, is_founded_world_field,
+            predecessor_world_field_order, retired_world_fields,
         };
         let current = canonical_world_field_order();
         let predecessor = predecessor_world_field_order(current);
@@ -595,11 +604,21 @@ impl<'a> SnapshotJsonMap<'a> {
         if map.require_source_order(&predecessor, "world").is_err() {
             return Ok(None);
         }
+        let mut authorizations = Vec::new();
         for retired in retired_world_fields() {
             let field = format!("world.{}", retired.name);
             let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(retired.name) else {
                 return Err(json::Error::missing_field(field).into());
             };
+            if retired.name == AUTHORIZATION_FIELD {
+                authorizations = adoption::parse_runtime_upgrades(raw).map_err(|error| {
+                    json::Error::InvalidField {
+                        field: field.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+                continue;
+            }
             let found: json::Value = json::from_str(raw)?;
             let empty: json::Value = json::from_str(retired.empty_json)?;
             if found != empty {
@@ -634,7 +653,7 @@ impl<'a> SnapshotJsonMap<'a> {
             world.push_str(raw);
         }
         world.push('}');
-        Ok(Some(world))
+        Ok(Some((world, authorizations)))
     }
     /// Test fixture over the production index, funded by a large private pool so
     /// fixture maps exercise the admitted entries rather than a separate parser.
@@ -1504,11 +1523,14 @@ impl KuraSeed {
         let checkpoint = self.kura.upgrade_checkpoint().cloned();
         // Under an upgrade checkpoint the World may be the predecessor release's. Its key set
         // differs from this release's, so at most one of the two shapes parses.
-        let predecessor_world = match (&checkpoint, &world_value) {
+        let (predecessor_world, adoption_authorizations) = match (&checkpoint, &world_value) {
             (Some(_), SnapshotJsonField::Borrowed { raw }) => {
-                SnapshotJsonMap::predecessor_world_json(raw, &self.execution_budget)?
+                match SnapshotJsonMap::predecessor_world_json(raw, &self.execution_budget)? {
+                    Some((world, authorizations)) => (Some(world), authorizations),
+                    None => (None, Vec::new()),
+                }
             }
-            _ => None,
+            _ => (None, Vec::new()),
         };
         let is_predecessor_world = predecessor_world.is_some();
         let world_map = match &predecessor_world {
@@ -1877,15 +1899,48 @@ impl KuraSeed {
         // The World is final here; authenticate it before State construction loads or
         // recovers any durable journal on its behalf.
         if is_predecessor_world {
-            // The checkpoint block's own certified result binds the predecessor's World root.
+            // The checkpoint block's own certified result binds the predecessor's World root,
+            // and with it the governance records that authorize the adoption.
             let certified = checkpoint_world_root.ok_or_else(|| json::Error::InvalidField {
                 field: "world".to_owned(),
                 message: "a predecessor release's World is admitted only at the upgrade checkpoint"
                     .to_owned(),
             })?;
-            world
-                .adopt_checkpoint_accumulator(&self.execution_budget, certified)
+            let imported_root = world
+                .adopt_checkpoint_accumulator(
+                    &self.execution_budget,
+                    certified,
+                    &adoption_authorizations,
+                )
                 .map_err(restored_world_verification_error)?;
+            let record = crate::state::upgrade_checkpoint::adoption::anchor(
+                &adoption_authorizations,
+                crate::state::upgrade_checkpoint::adoption::AnchorInputs {
+                    network: network_id,
+                    height: committed_height,
+                    block_hash: checkpoint
+                        .as_ref()
+                        .map(|checkpoint| checkpoint.block_hash)
+                        .ok_or_else(|| json::Error::InvalidField {
+                            field: "world".to_owned(),
+                            message: "a predecessor World needs its upgrade checkpoint".to_owned(),
+                        })?,
+                    predecessor_world_root: certified,
+                    imported_state_root: imported_root,
+                    committee: commit_topology.view().get(),
+                },
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.runtime_upgrades".to_owned(),
+                message,
+            })?;
+            iroha_logger::info!(
+                height = record.height,
+                selection = %record.selection,
+                authorization = %hex::encode(record.authorization),
+                imported_state_root = %hex::encode(record.imported_state_root),
+                "adopting the predecessor's World under its governed authorization"
+            );
         }
         match certified_world_root {
             Some(certified) => {
@@ -3819,7 +3874,7 @@ mod predecessor_snapshot_tests {
         let Some(SnapshotJsonField::Borrowed { raw }) = state.remove("world") else {
             panic!("State envelope has no World");
         };
-        let world_json = SnapshotJsonMap::predecessor_world_json(raw, &budget)
+        let (world_json, authorizations) = SnapshotJsonMap::predecessor_world_json(raw, &budget)
             .expect("admissible predecessor World")
             .expect("predecessor World shape");
         let world_map = SnapshotJsonMap::parse_admitted(
@@ -3929,8 +3984,11 @@ mod predecessor_snapshot_tests {
             .expect("capture");
         drop(block);
         let (predecessor, root) =
-            super::super::world_projection::world_state_accumulator::predecessor_root(&captured)
-                .expect("predecessor root");
+            super::super::world_projection::world_state_accumulator::predecessor_root(
+                &captured,
+                &authorizations,
+            )
+            .expect("predecessor root");
         eprintln!(
             "entries: stored {} predecessor {} current {}; predecessor root {root}",
             stored.entries(),
@@ -3944,7 +4002,7 @@ mod predecessor_snapshot_tests {
         // Restore then takes the World over under this release's registry; every later check of
         // the World (State construction, Sumeragi startup) sees only this release's accumulator.
         let current = world
-            .adopt_checkpoint_accumulator(&budget, root)
+            .adopt_checkpoint_accumulator(&budget, root, &authorizations)
             .expect("adopt the checkpoint World");
         assert_eq!(
             world

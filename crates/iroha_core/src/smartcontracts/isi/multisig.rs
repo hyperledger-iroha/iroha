@@ -430,7 +430,7 @@ fn multisig_role_for(
     let suffix = account_role_suffix(account);
     let literal = home_domain.map_or_else(
         || format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}"),
-        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",),
+        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}"),
     );
     literal.parse().expect("multisig role name must be valid")
 }

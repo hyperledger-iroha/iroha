@@ -171,7 +171,9 @@ fn frame_fields(row: &Value) -> Value {
 fn unhex(text: &str) -> Vec<u8> {
     assert_eq!(text.len() % 2, 0);
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).expect("fixture hex UTF8"), 16)
                 .expect("fixture hex byte")

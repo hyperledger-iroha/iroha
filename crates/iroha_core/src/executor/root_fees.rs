@@ -61,7 +61,7 @@ pub(super) fn effective<'a>(
 ///
 /// # Errors
 /// Initial genesis must install its explicit root fee policy before using monetary custody.
-pub(crate) fn execution_custody_policy<'a>(
+pub fn execution_custody_policy<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
 ) -> Result<&'a RootFeePolicy, InstructionExecutionError> {
     let policy = if is_initial_genesis_context(state_transaction) {

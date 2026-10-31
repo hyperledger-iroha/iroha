@@ -47,7 +47,7 @@ fn protected(wire_id: &str) -> bool {
 ///
 /// # Errors
 /// No panel is committed or it is malformed; there is no default (§7.1).
-pub(crate) fn committed_panel(
+pub fn committed_panel(
     parameters: &iroha_data_model::parameter::Parameters,
 ) -> Result<RuntimeEmergencyPanelV1, Error> {
     let custom = parameters
@@ -164,7 +164,7 @@ where
 /// threshold in both panels, it is already recorded, a target may not be contained, every target
 /// is already restricted at least as much, or a renewal does not match the containment it
 /// renews or comes before renewal opens.
-pub(crate) fn contain(
+pub fn contain(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     instruction: ContainRuntimeV1,
 ) -> Result<(), Error> {
@@ -245,9 +245,9 @@ pub(crate) fn contain(
         if now_ms < renewed.renewal_opens_ms() {
             return Err(invalid("renewal opens halfway through the lease"));
         }
-        if !renewed
+        if renewed
             .review
-            .is_some_and(|review| review.height >= renewed.authorized_height)
+            .is_none_or(|review| review.height < renewed.authorized_height)
         {
             return Err(invalid(
                 "a renewal needs review progress: governance has proposed or approved no change set \
@@ -371,7 +371,7 @@ fn addressed(change_set: &ChangeSetV1, selection: &RootSelectionV1) -> BTreeSet<
 /// Record review progress (§7.1, "Review"): governance proposed or approved, at `height`, the
 /// change set `id`, which addresses a definition an active containment restricted. A renewal
 /// needs progress recorded since the containment it renews.
-pub(crate) fn record_review(
+pub fn record_review(
     world: &mut crate::state::WorldTransaction<'_, '_>,
     id: ChangeSetId,
     change_set: &ChangeSetV1,
@@ -420,7 +420,7 @@ fn holds(record: &ContainmentRecordV1, selection: &RootSelectionV1) -> bool {
 }
 
 /// The active containments that hold at least one restriction they imposed.
-pub(crate) fn holding(world: &crate::state::WorldTransaction<'_, '_>) -> Vec<[u8; 32]> {
+pub fn holding(world: &crate::state::WorldTransaction<'_, '_>) -> Vec<[u8; 32]> {
     let selection = world.runtime_selection.get();
     world
         .runtime_containments
@@ -435,7 +435,7 @@ pub(crate) fn holding(world: &crate::state::WorldTransaction<'_, '_>) -> Vec<[u8
 /// Resolve each containment of `holding_before` that, after the change sets of `height`
 /// activated, holds nothing any more: ordinary governance ratified, repaired or lifted it
 /// (§7.1, "Review").
-pub(crate) fn resolve_taken_over(
+pub fn resolve_taken_over(
     world: &mut crate::state::WorldTransaction<'_, '_>,
     height: u64,
     holding_before: &[[u8; 32]],
@@ -463,11 +463,7 @@ pub(crate) fn resolve_taken_over(
 
 /// Expire every active containment whose lease ended by the block's committed time `now_ms`,
 /// restoring each restriction it still holds (§7.1, "Expiry").
-pub(crate) fn expire_due(
-    wtx: &mut crate::state::WorldTransaction<'_, '_>,
-    height: u64,
-    now_ms: u64,
-) {
+pub fn expire_due(wtx: &mut crate::state::WorldTransaction<'_, '_>, height: u64, now_ms: u64) {
     use iroha_data_model::events::data::runtime_upgrade::{
         RuntimeUpgradeContainmentExpired, RuntimeUpgradeEvent,
     };

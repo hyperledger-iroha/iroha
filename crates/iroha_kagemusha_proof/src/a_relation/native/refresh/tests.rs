@@ -181,7 +181,7 @@ fn refresh_q_sigma_normalization_rejects_wrong_selector_source_or_scalar_alias()
         0x4000_0000_0000_0000,
     ];
     let mut repr = [0; 32];
-    for (to, word) in repr.chunks_exact_mut(8).zip(p) {
+    for (to, word) in repr.as_chunks_mut::<8>().0.iter_mut().zip(p) {
         to.copy_from_slice(&word.to_le_bytes());
     }
     let mut alias = input;

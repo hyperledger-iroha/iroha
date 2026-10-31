@@ -34,7 +34,7 @@ use iroha_data_model::{
 use mv::storage::StorageReadOnly;
 
 /// The definitions a World has published, as a [`DefinitionLookup`].
-pub(crate) struct PublishedDefinitions<'a, S>(pub(crate) &'a S);
+pub struct PublishedDefinitions<'a, S>(pub(crate) &'a S);
 
 impl<S> DefinitionLookup for PublishedDefinitions<'_, S>
 where
@@ -47,7 +47,7 @@ where
 
 /// Whether `change_set` restricts or removes anything, which takes the longer disable notice.
 #[must_use]
-pub(crate) fn needs_disable_notice(change_set: &ChangeSetV1) -> bool {
+pub fn needs_disable_notice(change_set: &ChangeSetV1) -> bool {
     change_set.transitions.iter().any(|transition| {
         matches!(
             transition,
@@ -61,10 +61,7 @@ pub(crate) fn needs_disable_notice(change_set: &ChangeSetV1) -> bool {
 
 /// The notice `change_set` must give under `policy`.
 #[must_use]
-pub(crate) fn notice_for(
-    policy: &RuntimeUpgradePolicyV1,
-    change_set: &ChangeSetV1,
-) -> RuntimeNoticeV1 {
+pub fn notice_for(policy: &RuntimeUpgradePolicyV1, change_set: &ChangeSetV1) -> RuntimeNoticeV1 {
     if needs_disable_notice(change_set) {
         policy.disable
     } else {
@@ -77,7 +74,7 @@ pub(crate) fn notice_for(
 ///
 /// # Errors
 /// A scheduled change set no longer applies to the selection it would meet.
-pub(crate) fn projected_selection<S>(
+pub fn projected_selection<S>(
     current: &RootSelectionV1,
     scheduled: &BTreeMap<ChangeSetId, ChangeSetRecordV1>,
     height: u64,
@@ -146,7 +143,7 @@ where
 ///
 /// # Errors
 /// The first rule the change set violates.
-pub(crate) fn admit<S>(
+pub fn admit<S>(
     change_set: &ChangeSetV1,
     network: &iroha_data_model::NetworkId,
     height: u64,
@@ -191,7 +188,7 @@ where
 ///
 /// # Errors
 /// A scheduled change set or `change_set` itself no longer applies.
-pub(crate) fn successor<S>(
+pub fn successor<S>(
     change_set: &ChangeSetV1,
     id: ChangeSetId,
     current: &RootSelectionV1,
@@ -306,7 +303,7 @@ fn install_cells(
 /// The record is not scheduled, the attestation names another change set, selection, network
 /// or root, its validator is not a current committee member, it is bound to another committee,
 /// it no longer counts at the effective height, or its signature does not verify.
-pub(crate) fn check_attestation(
+pub fn check_attestation(
     record: &ChangeSetRecordV1,
     id: ChangeSetId,
     signed: &SignedSupportAttestationV1,
@@ -343,10 +340,7 @@ pub(crate) fn check_attestation(
 
 /// Record `signed`, replacing an earlier attestation of the same validator; attestations stay
 /// sorted by validator key.
-pub(crate) fn record_attestation(
-    record: &mut ChangeSetRecordV1,
-    signed: SignedSupportAttestationV1,
-) {
+pub fn record_attestation(record: &mut ChangeSetRecordV1, signed: SignedSupportAttestationV1) {
     let validator = signed.attestation.validator.clone();
     match record
         .attestations
@@ -360,7 +354,7 @@ pub(crate) fn record_attestation(
 /// Whether a scheduled change set activates at `height`: every committee member attested for
 /// this committee, and the frozen notice elapsed by the block's committed time `now_ms`.
 #[must_use]
-pub(crate) fn ready(
+pub fn ready(
     record: &ChangeSetRecordV1,
     id: ChangeSetId,
     height: u64,
@@ -383,7 +377,7 @@ pub(crate) fn ready(
 /// # Errors
 /// This release cannot execute the resulting selection. The node stops before executing the
 /// block instead of judging it (§6, "Stop the unsupported").
-pub(crate) fn activate_due(
+pub fn activate_due(
     wtx: &mut crate::state::WorldTransaction<'_, '_>,
     height: u64,
     now_ms: u64,
@@ -490,7 +484,7 @@ pub(crate) fn activate_due(
 }
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -498,7 +492,7 @@ mod tests;
 ///
 /// # Errors
 /// The policy is not committed or is malformed; there is no default (§6, "Notice").
-pub(crate) fn committed_policy(
+pub fn committed_policy(
     parameters: &iroha_data_model::parameter::Parameters,
 ) -> Result<RuntimeUpgradePolicyV1, Error> {
     let custom = parameters
@@ -518,7 +512,7 @@ pub(crate) fn committed_policy(
 ///
 /// # Errors
 /// The committed policy is malformed; it never falls back to no requirement.
-pub(crate) fn committed_provenance(
+pub fn committed_provenance(
     parameters: &iroha_data_model::parameter::Parameters,
 ) -> Result<Option<RuntimeProvenancePolicyV1>, Error> {
     parameters
@@ -540,7 +534,7 @@ pub(crate) fn committed_provenance(
 /// # Errors
 /// The policy is malformed, the proposal carries endorsements nothing judges or more than the
 /// policy trusts signers, the change set has no identity, or the endorsements fall short.
-pub(crate) fn check_provenance(
+pub fn check_provenance(
     action: &RuntimeUpgradeActionV1,
     provenance: &[ChangeSetEndorsementV1],
     parameters: &iroha_data_model::parameter::Parameters,
@@ -602,7 +596,7 @@ fn scheduled_records(
 /// # Errors
 /// The policy is not committed, a change set to schedule fails admission or its provenance
 /// falls short, or a change set to cancel is not scheduled.
-pub(crate) fn admit_proposal(
+pub fn admit_proposal(
     action: &RuntimeUpgradeActionV1,
     provenance: &[ChangeSetEndorsementV1],
     state_transaction: &crate::state::StateTransaction<'_, '_>,
@@ -656,7 +650,7 @@ fn scheduled(
 /// The change set no longer applies to the selection it will meet, its effective height is not
 /// after the approving block, it is already recorded, or the change set to cancel is not
 /// scheduled.
-pub(crate) fn enact(
+pub fn enact(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     proposal: &iroha_data_model::governance::types::RuntimeUpgradeProposal,
 ) -> Result<(), Error> {
@@ -726,7 +720,7 @@ pub(crate) fn enact(
 ///
 /// # Errors
 /// See [`check_attestation`].
-pub(crate) fn attest(
+pub fn attest(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     signed: SignedSupportAttestationV1,
 ) -> Result<(), Error> {

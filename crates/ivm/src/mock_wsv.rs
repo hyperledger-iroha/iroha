@@ -3978,15 +3978,15 @@ impl IVMHost for WsvHost {
                 // r10 = &AssetDefinitionId, r11 = &Blob UTF-8 display name,
                 // r12 = numeric-spec word, r13 = mintability word, r14 = &DomainId, decoded by the
                 // data-model `ivm_registration` decoder shared with CoreHost.
-                let id = match vm.validate_tlv(vm.register(10)) {
-                    Ok(tlv) => match tlv.type_id {
+                let id = {
+                    let tlv = vm.validate_tlv(vm.register(10))?;
+                    match tlv.type_id {
                         PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
                         PointerType::Name | PointerType::Blob => {
                             return Err(VMError::DecodeError);
                         }
                         _ => return Err(VMError::NoritoInvalid),
-                    },
-                    Err(error) => return Err(error),
+                    }
                 };
                 let name_tlv = vm.validate_tlv(vm.register(11))?;
                 if name_tlv.type_id != PointerType::Blob {

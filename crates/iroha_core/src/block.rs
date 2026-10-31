@@ -2587,11 +2587,8 @@ mod input_clock_tests {
             Some(Duration::from_millis(1))
         );
         assert_eq!(
-            creation_time_after_inputs(
-                Duration::from_millis(20_000),
-                [&external, &reveal, &sealed]
-            ),
-            Some(Duration::from_millis(20_000))
+            creation_time_after_inputs(Duration::from_secs(20), [&external, &reveal, &sealed]),
+            Some(Duration::from_secs(20))
         );
     }
 

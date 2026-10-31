@@ -354,7 +354,9 @@ fn naive_blacklist_root(entries: &[KagemushaWalletBlacklistEntryV1]) -> [u8; 32]
         .collect();
     while level.len() > 1 {
         level = level
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| kagemusha_wallet_blacklist_node_v1(&pair[0], &pair[1]).expect("node"))
             .collect();
     }
@@ -996,7 +998,9 @@ fn kagemusha_wallet_v1_quota_windows_root_and_share_rules() {
         .collect();
     for _ in 0..KAGEMUSHA_WALLET_QUOTA_TREE_DEPTH_V1 {
         level = level
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| kagemusha_wallet_quota_node_v1(&pair[0], &pair[1]).expect("node"))
             .collect();
     }

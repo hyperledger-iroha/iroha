@@ -1910,14 +1910,13 @@ fn validate_zk_x509_crl_freshness_v1(
     }
     // Keep useful diagnostics after the canonical rejection. These branches
     // cannot admit a record or extend the RFC 5280 calendar.
-    if block_unix_seconds < record.next_update_unix_seconds {
-        if let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds) {
-            if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
-                return Err(invalid_privacy_parameter(format!(
-                    "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
-                )));
-            }
-        }
+    if block_unix_seconds < record.next_update_unix_seconds
+        && let Some(age) = block_unix_seconds.checked_sub(record.this_update_unix_seconds)
+        && age > ZK_X509_MAX_CRL_AGE_SECONDS_V1
+    {
+        return Err(invalid_privacy_parameter(format!(
+            "X.509 signed CRL age {age}s exceeds the {ZK_X509_MAX_CRL_AGE_SECONDS_V1}s freshness limit"
+        )));
     }
     Err(invalid_privacy_parameter(
         "X.509 signed CRL is not current at the executing block timestamp",
@@ -9124,7 +9123,7 @@ mod tests {
             norito::encode_canonical(original).unwrap(),
             norito::encode_canonical(&clone).unwrap()
         );
-        assert!(!core::ptr::eq(original, &clone));
+        assert!(!core::ptr::eq(original, &raw const clone));
         let mut custody = AttachmentCustody::new(&source).unwrap();
         let error = Executor::Initial
             .execute_original_direct_instruction(

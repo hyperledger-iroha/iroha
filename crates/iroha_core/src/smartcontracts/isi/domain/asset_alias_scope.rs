@@ -3156,7 +3156,7 @@ impl Execute for Transfer<Account, DomainId, Account> {
             let domain = state_transaction.world.domain_mut(&object)?;
             if domain.owned_by() != &source {
                 return Err(Error::InvariantViolation(
-                    format!("Can't transfer domain {domain} since {source} doesn't own it",).into(),
+                    format!("Can't transfer domain {domain} since {source} doesn't own it").into(),
                 ));
             }
             domain.set_owned_by(destination.clone());

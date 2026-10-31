@@ -403,10 +403,10 @@ impl Journal {
             iroha_fs::fence_custody_transaction()?;
             parent.join_custody_transaction()?;
             let opened = Self::open_optional_child(parent, name);
-            let result = match &opened {
-                Ok(journal) => Some(read(journal.as_ref().map(Self::native_inspection))),
-                Err(_) => None,
-            };
+            let result = opened
+                .as_ref()
+                .ok()
+                .map(|journal| read(journal.as_ref().map(Self::native_inspection)));
             #[cfg(test)]
             inventory_scope_tests::before_child_exit();
             // Keep opened (and its exclusive lock) in the returned tuple, including when this

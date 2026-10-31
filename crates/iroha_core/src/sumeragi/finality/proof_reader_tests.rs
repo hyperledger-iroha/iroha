@@ -787,7 +787,7 @@ fn check_finite_finality_interval(chain: &CertifiedTestChain) {
                 )
                 .unwrap(),
                 std::num::NonZeroUsize::new(bytes).unwrap(),
-                std::time::Instant::now() + std::time::Duration::from_secs(900),
+                std::time::Instant::now() + std::time::Duration::from_mins(15),
             )
             .unwrap();
             let retained = chain

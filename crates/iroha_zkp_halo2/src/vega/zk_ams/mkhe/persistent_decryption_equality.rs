@@ -1047,12 +1047,11 @@ where
         }
         native_hash.update(&buffer[..read]);
         wire_hash.update(&buffer[..read]);
-        for encoded in buffer[..read].chunks_exact(core::mem::size_of::<u64>()) {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            );
+        for encoded in buffer[..read]
+            .as_chunks::<{ core::mem::size_of::<u64>() }>()
+            .0
+        {
+            let residue = u64::from_be_bytes(*encoded);
             let limb = coefficient_index / profile.ring_degree;
             let modulus = *profile
                 .moduli
@@ -1139,7 +1138,9 @@ where
                 .checked_mul(core::mem::size_of::<u64>())
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             for (encoded, residue) in buffer[..bytes]
-                .chunks_exact_mut(core::mem::size_of::<u64>())
+                .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+                .0
+                .iter_mut()
                 .zip(residues)
             {
                 encoded.copy_from_slice(&residue.to_be_bytes());

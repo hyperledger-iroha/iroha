@@ -146,7 +146,7 @@ const INDEXED_SIDECAR_BASE_HEADER_SIZE_U64: u64 = INDEXED_SIDECAR_BASE_HEADER_SI
 const INDEXED_SIDECAR_BASE_CHECK_MASK: u64 = 0x6B75_7261_2D69_6478;
 /// Keep a single sparse append bounded even when its height came from untrusted metadata.
 const MAX_INDEXED_SIDECAR_GAP_ENTRIES: u64 = 4_096;
-const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_hours(1);
 const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = MAX_EXECUTED_BLOCK_WIRE_BYTES;
@@ -2168,7 +2168,7 @@ impl Kura {
     fn add_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(delta))
             });
         self.add_total_disk_usage_bytes_locked(delta);
@@ -2183,7 +2183,7 @@ impl Kura {
     fn sub_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(delta))
             });
         self.sub_total_disk_usage_bytes_locked(delta);
@@ -2196,11 +2196,11 @@ impl Kura {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
-        let _ =
-            self.disk_usage_total
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_add(delta))
-                });
+        let _ = self
+            .disk_usage_total
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(delta))
+            });
     }
     fn sub_total_disk_usage_bytes(&self, delta: u64) {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
@@ -2210,11 +2210,11 @@ impl Kura {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
-        let _ =
-            self.disk_usage_total
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_sub(delta))
-                });
+        let _ = self
+            .disk_usage_total
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(delta))
+            });
     }
     #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn invalidate_pending_budget_cache(&self) {
@@ -7117,8 +7117,7 @@ impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|dur| dur.as_secs())
-            .unwrap_or(0)
+            .map_or(0, |dur| dur.as_secs())
     }
     /// Return the path to the block storage directory, if configured.
     /// For in-memory test Kura, returns `None`.
@@ -7647,7 +7646,7 @@ impl BlockStore {
         #[cfg(test)]
         if self
             .fail_eviction_stage_syncs_remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

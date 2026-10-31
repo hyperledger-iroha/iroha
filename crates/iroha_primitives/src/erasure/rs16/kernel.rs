@@ -555,7 +555,7 @@ mod tests {
     fn row(seed: u64, symbols: usize) -> Vec<u8> {
         let mut bytes = reference::bytes(seed, 2 * symbols);
         // Every fifth symbol is zero and every seventh all-ones: table and lane edge cases.
-        for (index, pair) in bytes.chunks_exact_mut(2).enumerate() {
+        for (index, pair) in bytes.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             if index % 5 == 0 {
                 pair.fill(0);
             } else if index % 7 == 0 {

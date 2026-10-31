@@ -90,7 +90,7 @@ retired_keys = ["{OTHER_KEY_A}", "{OTHER_KEY_B}"]
     let config = parse_inline(&toml).expect("overrides parse");
     let local = config.sumeragi.local;
     assert_eq!(local.t_base, Some(Duration::from_millis(2_500)));
-    assert_eq!(local.t_max, Some(Duration::from_millis(40_000)));
+    assert_eq!(local.t_max, Some(Duration::from_secs(40)));
     assert_eq!(local.start_cap, Some(3));
     assert_eq!(local.decay_after, Some(6));
     assert_eq!(local.rebroadcast_interval, Some(Duration::from_millis(700)));

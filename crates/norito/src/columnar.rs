@@ -223,7 +223,7 @@ fn decode_ids_column<'a>(
             Ok(IdsRep::Slice(body))
         } else {
             let mut v = Vec::with_capacity(n);
-            for chunk in ids_bytes.chunks_exact(8) {
+            for chunk in ids_bytes.as_chunks::<8>().0 {
                 let mut lb = [0u8; 8];
                 lb.copy_from_slice(chunk);
                 v.push(u64::from_le_bytes(lb));

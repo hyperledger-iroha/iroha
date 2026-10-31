@@ -105,6 +105,9 @@ pub struct BoundedActionFrameScannerV1<'pool> {
 
 impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// Fund one cumulative account decoder control before any nested decode.
+    ///
+    /// # Errors
+    /// Returns the pool refusal when the account decoder control cannot be funded.
     pub fn try_new(
         pool: &'pool AllocationBudget,
         limits: ActionScannerLimitsV1,
@@ -123,6 +126,10 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// A refusal permanently closes this scanner. Subsequent calls return the
     /// same first original failure without parsing, allocating or resetting work.
     /// Success authenticates no ledger state and does not establish frame custody.
+    ///
+    /// # Errors
+    /// Returns this scanner's first retained refusal for a non-canonical, unsupported
+    /// or over-limit frame.
     pub fn scan(
         &mut self,
         frame: &[u8],
@@ -145,6 +152,9 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// This does not authenticate its schema hash, pointer payloads, callable or ledger source.
     /// It consumes this scanner's cumulative frame/work/field/element limits. Refusal closes
     /// the same range and retains its first original error; there is no independent reset.
+    ///
+    /// # Errors
+    /// Returns this scanner's first retained refusal for a non-canonical or over-limit record.
     pub fn validate_argument_record_wire<'frame>(
         &mut self,
         frame: &'frame [u8],
@@ -164,6 +174,9 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// Scan a completed producer owner without recapture or early charge release.
     /// A failure retains the same allocation and first scanner refusal. Success
     /// remains restricted to this scanner's supported subset.
+    ///
+    /// # Errors
+    /// Returns the same owner together with this scanner's first retained refusal.
     pub fn scan_owned(
         &mut self,
         frame: RetainedActionFrameBytesV1,
@@ -185,6 +198,10 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// cumulative limit, and counts as another frame. Both success and refusal
     /// retain the exact original owner and pool charge. This still authenticates
     /// no callable schema, pointer semantics, registration or lifecycle mutation.
+    ///
+    /// # Errors
+    /// Returns the same owner together with this scanner's first retained refusal,
+    /// including a non-canonical inner argument record.
     pub fn scan_owned_with_canonical_arguments(
         &mut self,
         frame: RetainedActionFrameBytesV1,
@@ -247,6 +264,10 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// a globally validated Action or authenticate supplied bytes, their producer,
     /// lifecycle state, journal, retry semantics or an output ceiling. The source
     /// bytes must already have their own acquisition/serialization custody.
+    ///
+    /// # Errors
+    /// Returns the admission refusal without a byte owner, or the captured owner together
+    /// with this scanner's first retained refusal.
     pub fn capture_and_scan(
         &mut self,
         source: &[u8],

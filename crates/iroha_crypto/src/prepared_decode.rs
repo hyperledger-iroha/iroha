@@ -332,7 +332,7 @@ impl PreparedPublicKeyDecode {
         let mut backing = ChargedBuffer::new(exact_bytes, budget)
             .map_err(PublicKeyDecodeAdmissionError::Allocation)?;
         backing.push_reserved(PublicKeyCompact::algorithm_tag(decoded.algorithm));
-        for pair in decoded.payload_hex.as_bytes().chunks_exact(2) {
+        for pair in decoded.payload_hex.as_bytes().as_chunks::<2>().0 {
             let byte = crate::multihash::decode_public_key_payload_byte(pair).ok_or(
                 Error::InvalidValue {
                     context: "public key",

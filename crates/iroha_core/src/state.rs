@@ -11679,9 +11679,7 @@ const PIPELINE_AUTO_WORKER_MIN: usize = 2;
 const PIPELINE_AUTO_WORKER_MAX: usize = 8;
 fn resolve_pipeline_worker_threads(configured: usize) -> usize {
     if configured == 0 {
-        let detected = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let detected = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         detected.clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX)
     } else {
         configured.max(1)
@@ -14925,7 +14923,7 @@ pub struct StateView<'state> {
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
     /// Lifetime diagnostic owner; keep last so snapshot fields release first.
-    created_at: StateViewLifetimeDiagnostic,
+    _lifetime_diagnostic: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
@@ -26527,10 +26525,7 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
-    #[expect(
-        dead_code,
-        reason = "TODO: connect nonblocking native publication admission to the lifecycle fence and its exact ReleaseWait observation"
-    )]
+    #[cfg(test)]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
     ) -> Result<PublicationGuard<'_>, iroha_allocation::release::ReleaseWait> {
@@ -27167,10 +27162,6 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -27267,10 +27258,6 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -31982,7 +31969,7 @@ impl State {
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
-                created_at: Instant::now().into(),
+                _lifetime_diagnostic: Instant::now().into(),
             })
         }
     }

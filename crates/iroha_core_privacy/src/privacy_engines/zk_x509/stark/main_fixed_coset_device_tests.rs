@@ -221,7 +221,7 @@ fn retained_prefix_mixed_device_batches_keep_values_poison_failures_and_clear_ow
     let original = coefficients(3, 5);
     for failing in [None, Some(0), Some(1), Some(2), Some(3)] {
         for unwind in [false, true] {
-            let (_, erased) = inspection::observe_v1(|| {
+            let ((), erased) = inspection::observe_v1(|| {
                 let prefix = original[..3]
                     .iter()
                     .map(|column| PrivateTableV1::new(column.clone(), zeroize_fields_v1))

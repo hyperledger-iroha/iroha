@@ -84,7 +84,7 @@ impl InverseWindowV1 {
         // Invariant check only: the same immutable row and public descriptor
         // must reproduce both inputs. Never print private fields on a failure.
         assert!(
-            (pair[GATE] == gate) & (pair[DENOMINATOR] == denominator),
+            (pair[GATE] == gate) && (pair[DENOMINATOR] == denominator),
             "inverse replay inputs changed"
         );
         (pair[ZERO], pair[INVERSE])

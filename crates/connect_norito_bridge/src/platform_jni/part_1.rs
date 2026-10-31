@@ -28,16 +28,10 @@ pub(super) fn read_java_byte_array(
     array: &jni::objects::JByteArray<'_>,
     context: &str,
 ) -> Option<Vec<u8>> {
-    let _len = match env.get_array_length(array) {
-        Ok(value) => value,
-        Err(err) => {
-            throw_java_illegal_argument(
-                env,
-                format!("{context} failed to read array length: {err}"),
-            );
-            return None;
-        }
-    } as usize;
+    if let Err(err) = array.len(env) {
+        throw_java_illegal_argument(env, format!("{context} failed to read array length: {err}"));
+        return None;
+    }
     env.convert_byte_array(array).map_or_else(
         |err| {
             throw_java_illegal_state(
@@ -55,8 +49,8 @@ pub(super) fn read_java_byte_array_bounded(
     context: &str,
     maximum: usize,
 ) -> Option<Vec<u8>> {
-    let len = match env.get_array_length(array) {
-        Ok(value) => usize::try_from(value).ok(),
+    let len = match array.len(env) {
+        Ok(value) => value,
         Err(err) => {
             throw_java_illegal_argument(
                 env,
@@ -64,7 +58,7 @@ pub(super) fn read_java_byte_array_bounded(
             );
             return None;
         }
-    }?;
+    };
     if len == 0 || len > maximum {
         throw_java_illegal_argument(env, format!("{context} must contain 1..{maximum} bytes"));
         return None;
@@ -192,8 +186,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
     _class: jni::objects::JClass<'_>,
     trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        java_native_validation_fee_current_policy_proof_request_v1(&mut env, trusted_checkpoint)
+    crate::platform_jni::with_java_env(env, |env| {
+        java_native_validation_fee_current_policy_proof_request_v1(env, trusted_checkpoint)
     })
 }
 /// JNI verifier returning the projection JSON and promoted canonical checkpoint as two arrays.
@@ -206,9 +200,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Valid
     policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
     trusted_checkpoint: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_native_validation_fee_current_policy_proof_verify_v1(
-            &mut env,
+            env,
             proof_norito,
             network_id,
             policy_chain_genesis_hash,
@@ -258,9 +252,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Retai
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_retail_fee_assessment_operation(
-            &mut env,
+            env,
             input,
             RETAIL_FEE_BRIDGE_MAX_INPUT_BYTES,
             retail_fee_intent_hash_v1,
@@ -274,9 +268,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Retai
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_retail_fee_assessment_operation(
-            &mut env,
+            env,
             input,
             RETAIL_FEE_ASSESSMENT_MAX_BYTES,
             retail_fee_assessment_marker_v1,
@@ -290,9 +284,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_Retai
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         java_retail_fee_assessment_operation(
-            &mut env,
+            env,
             input,
             RETAIL_FEE_MARKER_MAX_BYTES,
             retail_fee_assessment_decode_v1,
@@ -310,10 +304,9 @@ pub(super) fn read_java_sorafs_reference_byte_array(
     field: &str,
     maximum: usize,
 ) -> Result<Vec<u8>, String> {
-    let length = env
-        .get_array_length(array)
+    let length = array
+        .len(env)
         .map_err(|error| format!("failed to read {field} length: {error}"))?;
-    let length = usize::try_from(length).map_err(|_| format!("{field} length is invalid"))?;
     if length > maximum {
         return Err(format!("{field} must be at most {maximum} bytes"));
     }
@@ -328,10 +321,9 @@ pub(super) fn read_java_sorafs_reference_byte_array_vector(
     maximum_count: usize,
     maximum_bytes: usize,
 ) -> Result<Vec<Vec<u8>>, String> {
-    let count = env
-        .get_array_length(values)
+    let count = values
+        .len(env)
         .map_err(|error| format!("failed to read {field} count: {error}"))?;
-    let count = usize::try_from(count).map_err(|_| format!("{field} count is invalid"))?;
     if count == 0 || count > maximum_count {
         return Err(format!("{field} must contain 1..{maximum_count} entries"));
     }
@@ -344,8 +336,8 @@ pub(super) fn read_java_sorafs_reference_byte_array_vector(
     }
     let mut result = Vec::with_capacity(count);
     for index in 0..count {
-        let object = env
-            .get_object_array_element(values, index)
+        let object = values
+            .get_element(env, index)
             .map_err(|error| format!("failed to read {field}[{index}]: {error}"))?;
         if object.is_null() {
             return Err(format!("{field}[{index}] must be a byte array"));
@@ -1450,9 +1442,11 @@ pub(super) fn java_native_keypair_from_seed(
         let array = env
             .new_object_array(2, byte_array_class, jni::objects::JObject::null())
             .map_err(|err| err.to_string())?;
-        env.set_object_array_element(&array, 0, &private_array)
+        array
+            .set_element(env, 0, &private_array)
             .map_err(|err| err.to_string())?;
-        env.set_object_array_element(&array, 1, &public_array)
+        array
+            .set_element(env, 1, &public_array)
             .map_err(|err| err.to_string())?;
         Ok(array.into_raw())
     })();
@@ -1627,9 +1621,11 @@ pub(super) fn java_byte_array_pair(
     let array = env
         .new_object_array(2, byte_array_class, jni::objects::JObject::null())
         .map_err(|err| err.to_string())?;
-    env.set_object_array_element(&array, 0, &signed_array)
+    array
+        .set_element(env, 0, &signed_array)
         .map_err(|err| err.to_string())?;
-    env.set_object_array_element(&array, 1, &hash_array)
+    array
+        .set_element(env, 1, &hash_array)
         .map_err(|err| err.to_string())?;
     Ok(array.into_raw())
 }
@@ -1861,9 +1857,9 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let bytes = read_java_byte_array_bounded(&mut env, &input, "multisig occurrence", 4096)
+            let bytes = read_java_byte_array_bounded(env, &input, "multisig occurrence", 4096)
                 .ok_or_else(|| "bounded multisig occurrence input required".to_owned())?;
             let output = multisig_proposal_id_from_json(&bytes)
                 .map_err(|_| "invalid native multisig occurrence".to_owned())?;
@@ -1874,11 +1870,11 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
         match result {
             Ok(Ok(array)) => array,
             Ok(Err(message)) => {
-                throw_java_illegal_argument(&mut env, message);
+                throw_java_illegal_argument(env, message);
                 std::ptr::null_mut()
             }
             Err(_) => {
-                throw_java_illegal_state(&mut env, "multisig occurrence codec panicked".to_owned());
+                throw_java_illegal_state(env, "multisig occurrence codec panicked".to_owned());
                 std::ptr::null_mut()
             }
         }

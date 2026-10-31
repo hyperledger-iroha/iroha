@@ -720,7 +720,7 @@ impl HijiriFeePolicy {
         mut bands: Vec<FeeMultiplierBand>,
         penalty_cap: Q16,
     ) -> Result<Self, FeePolicyError> {
-        bands.sort_by(|a, b| a.max_risk.cmp(&b.max_risk));
+        bands.sort_by_key(|a| a.max_risk);
         let policy = Self { bands, penalty_cap };
         policy.validate()?;
         Ok(policy)

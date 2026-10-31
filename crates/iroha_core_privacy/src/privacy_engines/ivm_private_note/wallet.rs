@@ -315,7 +315,7 @@ fn encrypt_note_material_v1(
 /// # Errors
 /// Rejects invalid note/key bindings, unhealthy randomness, encoding failures, or authenticated-encryption failures.
 pub fn encrypt_ivm_private_wallet_note_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
     note: &PrivateNotePlaintextV1,
@@ -361,7 +361,7 @@ pub fn encrypt_ivm_private_wallet_note_v1(
 /// profile. The supplied ephemeral secret is retained only in restricted audit
 /// material; a fresh authenticated nonce is obtained from `rng`.
 pub fn encrypt_ivm_private_wallet_note_for_commitment_with_opening_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     pool_id: PrivacyPoolIdV1,
     program_id: PrivacyProgramIdV1,
     note: &PrivateNotePlaintextV1,

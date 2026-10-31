@@ -469,7 +469,7 @@ fn ipip_499_chacha20_bytes(seed: &[u8], length: usize) -> Vec<u8> {
             *word = word.wrapping_add(original);
         }
         let mut encoded = [0_u8; 64];
-        for (slot, word) in encoded.chunks_exact_mut(4).zip(state) {
+        for (slot, word) in encoded.as_chunks_mut::<4>().0.iter_mut().zip(state) {
             slot.copy_from_slice(&word.to_le_bytes());
         }
         output_block.copy_from_slice(&encoded[..output_block.len()]);

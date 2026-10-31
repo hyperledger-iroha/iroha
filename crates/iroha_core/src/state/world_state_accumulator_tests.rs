@@ -1136,7 +1136,7 @@ fn predecessor_root_restores_the_retired_registry() {
     )
     .unwrap()
         + 1;
-    let (predecessor, root) = predecessor_root(&current).unwrap();
+    let (predecessor, root) = predecessor_root(&current, &[]).unwrap();
     // The founded definitions and selection leave; the retired and the added tables are empty.
     assert_eq!(predecessor.entries(), current.entries() - founded);
     assert_ne!(root, current.baseline_root().unwrap());
@@ -1153,4 +1153,54 @@ fn predecessor_root_restores_the_retired_registry() {
             .contains_key("world.runtime_containments")
     );
     assert!(!index.fingerprints.contains_key("world.runtime_upgrades"));
+}
+
+#[test]
+fn adoption_authorizations_enter_the_predecessor_root_as_entries_of_their_table() {
+    use crate::state::upgrade_checkpoint::adoption::{
+        ADOPTION_MANIFEST_NAME, ADOPTION_SELECTION_DIGEST, PredecessorRecord,
+        PredecessorSbomDigest, PredecessorUpgradeId, PredecessorUpgradeManifest,
+        PredecessorUpgradeRecord, PredecessorUpgradeStatus,
+    };
+    let world = crate::state::World::default();
+    let current = WorldStateAccumulator::capture(&world.block()).unwrap();
+    let (without, root_without) = predecessor_root(&current, &[]).unwrap();
+    let authorization = PredecessorRecord {
+        id: PredecessorUpgradeId([3; 32]),
+        record: PredecessorUpgradeRecord {
+            manifest: PredecessorUpgradeManifest {
+                name: ADOPTION_MANIFEST_NAME.into(),
+                description: String::new(),
+                abi_version: 1,
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: 10,
+                end_height: 20,
+                sbom_digests: vec![PredecessorSbomDigest {
+                    algorithm: ADOPTION_SELECTION_DIGEST.into(),
+                    digest: baseline_selection().id().unwrap().0.to_vec(),
+                }],
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            },
+            status: PredecessorUpgradeStatus::ActivatedAt(10),
+            proposer: iroha_test_samples::ALICE_ID.clone(),
+            created_height: 5,
+        },
+    };
+    let (with, root_with) =
+        predecessor_root(&current, std::slice::from_ref(&authorization)).unwrap();
+    assert_eq!(with.entries(), without.entries() + 1);
+    assert_ne!(
+        root_with, root_without,
+        "the certified root binds the authorization"
+    );
+    let mut altered = authorization;
+    altered.record.status = PredecessorUpgradeStatus::Canceled;
+    let (_, root_altered) = predecessor_root(&current, &[altered]).unwrap();
+    assert_ne!(
+        root_altered, root_with,
+        "an altered record is a different root"
+    );
 }

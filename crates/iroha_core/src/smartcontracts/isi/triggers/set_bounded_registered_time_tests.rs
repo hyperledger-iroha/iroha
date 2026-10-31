@@ -216,7 +216,7 @@ fn scheduled_batch_refuses_multiple_calls_absent_empty_arguments_and_bad_entrypo
         ])));
     }
     for entrypoint in [
-        "".to_owned(),
+        String::new(),
         " padded".to_owned(),
         "padded ".to_owned(),
         "a".repeat(256),

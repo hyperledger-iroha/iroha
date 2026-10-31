@@ -348,6 +348,10 @@ impl Flr {
     // Round this value to the nearest integer; the source must be in the
     // [-(2^63-1), +(2^63-1)] range.
     #[inline]
+    #[expect(
+        clippy::manual_midpoint,
+        reason = "the sticky-bit fold mirrors the Falcon reference rounding, not an average"
+    )]
     pub(crate) fn rint(self) -> i64 {
         // Shifted mantissa to be in the [2^62,2^63-1] range (with the top
         // bit set).

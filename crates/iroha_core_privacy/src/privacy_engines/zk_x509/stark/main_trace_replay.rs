@@ -959,7 +959,7 @@ impl MainTracePolynomialSetV1 {
                     );
                     Ok::<(), ZkX509StarkErrorV1>(())
                 })?;
-            for pair in values.as_slice_v1()[..2 * batch.length].chunks_exact(2) {
+            for pair in values.as_slice_v1()[..2 * batch.length].as_chunks::<2>().0 {
                 current_values.0.push(pair[0]);
                 next_values.0.push(pair[1]);
             }

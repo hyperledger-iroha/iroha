@@ -872,8 +872,10 @@ fn emit_load64_uses_bounded_indexed_offset() {
         ivm_abi::metadata::LiteralKindV1::I64,
     );
     let words = code
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
         .collect::<Vec<_>>();
     assert_eq!(words.len(), 3);
     assert_eq!(
@@ -905,8 +907,10 @@ fn emit_store64_uses_bounded_indexed_offset() {
         ivm_abi::metadata::LiteralKindV1::I64,
     );
     let words = code
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
         .collect::<Vec<_>>();
     assert_eq!(words.len(), 3);
     assert_eq!(
@@ -1107,9 +1111,9 @@ fn deferred_far_jump_uses_sparse_direct_trampoline_chain() {
         instruction::wide::opcode(halt),
         instruction::wide::control::HALT
     );
-    assert!(relaxed.chunks_exact(4).all(|word| {
+    assert!(relaxed.as_chunks::<4>().0.iter().all(|word| {
         !matches!(
-            instruction::wide::opcode(u32::from_le_bytes(word.try_into().unwrap())),
+            instruction::wide::opcode(u32::from_le_bytes(*word)),
             instruction::wide::control::JR | instruction::wide::control::JALR
         )
     }));
@@ -1176,8 +1180,10 @@ fn literal_and_call_heavy_minimal_program_has_no_stub_padding() {
     );
     let code = &bytes[parsed.code_offset..];
     let words = code
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     assert!(
         words
@@ -1203,8 +1209,10 @@ fn parameterized_entrypoint_uses_the_host_prepared_argument_table() {
         .expect("compile parameterized entrypoint");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse argument program metadata");
     let words = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     let record_decodes = words
         .iter()
@@ -1242,8 +1250,10 @@ fn sum_type_join_fallbacks_do_not_become_false_constant_facts() {
         .expect("compile sum-type join fixture");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse sum-type join metadata");
     let add_count = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .filter(|word| {
             instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
                 && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_ADD
@@ -1337,8 +1347,10 @@ fn mint_trigger_takes_amount_from_one_typed_argument_record() {
         )]
     ));
     let words = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     let record_decodes = words
         .iter()
@@ -1396,8 +1408,8 @@ fn bool_state_map_keys_do_not_emit_public_int_codec_syscalls() {
         encoding::wide::encode_sys(instruction::wide::system::SCALL, 0x55_u8),
     ];
     let executable = &artifact[metadata.code_offset..];
-    assert!(executable.chunks_exact(4).all(|chunk| {
-        let word = u32::from_le_bytes(chunk.try_into().expect("word"));
+    assert!(executable.as_chunks::<4>().0.iter().all(|chunk| {
+        let word = u32::from_le_bytes(*chunk);
         !retired_bool_codec_words.contains(&word)
     }));
 }
@@ -1645,8 +1657,8 @@ fn parallel_abi_moves_preserve_cycles_and_are_deterministic() {
     registers[12] = 12;
     registers[13] = 13;
     registers[14] = 14;
-    for word in code.chunks_exact(4) {
-        let word = u32::from_le_bytes(word.try_into().expect("instruction word"));
+    for word in code.as_chunks::<4>().0 {
+        let word = u32::from_le_bytes(*word);
         let (opcode, destination, source, immediate) = encoding::wide::decode_ri(word);
         assert_eq!(opcode, instruction::wide::arithmetic::ADDI);
         assert_eq!(immediate, 0);
@@ -1665,10 +1677,9 @@ fn private_numeric_valcom_staging_preserves_cross_aliased_operands() {
     let mut registers = [0u64; 32];
     registers[10] = 101;
     registers[11] = 202;
-    for word in code.chunks_exact(4) {
-        let (opcode, destination, source, immediate) = encoding::wide::decode_ri(
-            u32::from_le_bytes(word.try_into().expect("instruction word")),
-        );
+    for word in code.as_chunks::<4>().0 {
+        let (opcode, destination, source, immediate) =
+            encoding::wide::decode_ri(u32::from_le_bytes(*word));
         assert_eq!(opcode, instruction::wide::arithmetic::ADDI);
         assert_eq!(immediate, 0);
         registers[usize::from(destination)] = registers[usize::from(source)];
@@ -1688,10 +1699,9 @@ fn get_private_input_staging_preserves_index_aliased_with_kind_register() {
             .expect("stage private-input index and kind");
         let mut registers = [0u64; 32];
         registers[11] = 37;
-        for word in code.chunks_exact(4) {
-            let (opcode, destination, source, immediate) = encoding::wide::decode_ri(
-                u32::from_le_bytes(word.try_into().expect("instruction word")),
-            );
+        for word in code.as_chunks::<4>().0 {
+            let (opcode, destination, source, immediate) =
+                encoding::wide::decode_ri(u32::from_le_bytes(*word));
             assert_eq!(opcode, instruction::wide::arithmetic::ADDI);
             registers[usize::from(destination)] =
                 registers[usize::from(source)].wrapping_add_signed(i64::from(immediate));
@@ -1767,8 +1777,8 @@ fn unary_neg_emits_exact_int_syscall() {
     let bytes = compiler.compile_source(src).expect("compile neg");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let mut found = false;
-    for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
-        let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
+        let word = u32::from_le_bytes(*chunk);
         if instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
             && encoding::wide::decode_syscallx(word) == syscalls::SYSCALL_INT_NEG
         {
@@ -1827,8 +1837,10 @@ fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
         .expect("compile signed comparisons");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let words = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     for syscall in [
         syscalls::SYSCALL_INT_LT,
@@ -1867,7 +1879,9 @@ fn logical_operators_emit_control_flow_instead_of_eager_bitwise_ops() {
         .expect("compile short-circuit expressions");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
     let opcodes = bytes[parsed.code_offset..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| {
             instruction::wide::opcode(u32::from_le_bytes(
                 chunk.try_into().expect("instruction word"),
@@ -2448,7 +2462,9 @@ kotoage fn main() authorize(FixtureAccess) {{
         .collect::<Vec<_>>();
     assert_eq!(quantity_literal_indices.len(), 2, "amounts 1 and 2");
     let quantity_loads = code
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|word| {
             let word = u32::from_le_bytes((*word).try_into().expect("instruction word"));
             instruction::wide::opcode(word) == instruction::wide::memory::LDLIT
@@ -3027,9 +3043,11 @@ fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
     )
     .to_le_bytes();
     let logging_codec_calls: Vec<_> = code
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|word| *word == needle || *word == pointer_codec || *word == publish_needle)
-        .map(|word| <[u8; 4]>::try_from(word).expect("one complete instruction"))
+        .map(|word| *word)
         .collect();
     // The synchronous pointer codec validates the original owned public TLV.
     // String logging needs no conversion; numeric logging must encode the full
@@ -3634,9 +3652,11 @@ fn vrf_builtins_emit_vrf_syscalls() {
         "single and batch VRF verification each publish exactly one request envelope"
     );
     let syscall_words = code
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter_map(|chunk| {
-            let word = u32::from_le_bytes(chunk.try_into().expect("four-byte instruction"));
+            let word = u32::from_le_bytes(*chunk);
             match instruction::wide::opcode(word) {
                 instruction::wide::system::SCALL => {
                     Some(u32::from(encoding::wide::decode_sys(word).1))
@@ -4915,8 +4935,8 @@ fn require_exports_nominal_error_type_and_uses_contract_abort_syscall() {
     assert_eq!(payment_error.variants[0].code, 1001);
     let mut found_abort = false;
     let mut found_zk_assert = false;
-    for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
-        let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
+        let word = u32::from_le_bytes(*chunk);
         let op = instruction::wide::opcode(word);
         if op == instruction::wide::system::SCALL {
             let (_op, imm8) = encoding::wide::decode_sys(word);
@@ -4950,8 +4970,8 @@ fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
     );
     let mut found_abort = false;
     let mut found_zk_assert = false;
-    for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
-        let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
+        let word = u32::from_le_bytes(*chunk);
         let op = instruction::wide::opcode(word);
         if op == instruction::wide::system::SCALL {
             let (_op, imm8) = encoding::wide::decode_sys(word);
@@ -4982,8 +5002,8 @@ fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
     );
     let mut found_abort = false;
     let mut found_zk_assert = false;
-    for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
-        let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+    for chunk in bytes[parsed.code_offset..].as_chunks::<4>().0 {
+        let word = u32::from_le_bytes(*chunk);
         let op = instruction::wide::opcode(word);
         if op == instruction::wide::system::SCALL {
             let (_op, imm8) = encoding::wide::decode_sys(word);
@@ -5481,8 +5501,10 @@ fn native_json_construction_emits_one_extended_build_syscall() {
         .expect("compile native JSON construction");
     let parsed = ProgramMetadata::parse(&bytes).expect("parse native JSON metadata");
     let words = bytes[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     assert_eq!(
         words
@@ -6870,9 +6892,11 @@ fn production_contract_import_emits_typed_a9_and_exact_access_kind() {
         let parsed = ProgramMetadata::parse(&output.artifact).unwrap();
         assert!(
             output.artifact[parsed.code_offset..]
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|chunk| {
-                    let word = u32::from_le_bytes(chunk.try_into().unwrap());
+                    let word = u32::from_le_bytes(*chunk);
                     word == encoding::wide::encode_sys(
                         instruction::wide::system::SCALL,
                         ivm_abi::syscalls::SYSCALL_CALL_CONTRACT as u8,
@@ -7378,9 +7402,11 @@ fn entry_spills_use_stack_frame() {
 fn emitted_syscalls(bytes: &[u8]) -> Vec<u32> {
     let parsed = ProgramMetadata::parse(bytes).expect("parse metadata");
     bytes[parsed.code_offset..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter_map(|word| {
-            let word = u32::from_le_bytes(word.try_into().expect("four-byte word"));
+            let word = u32::from_le_bytes(*word);
             match instruction::wide::opcode(word) {
                 instruction::wide::system::SCALL => {
                     Some(u32::from(encoding::wide::decode_sys(word).1))
@@ -8333,7 +8359,9 @@ fn literal_scalar_and_tuple_map_keys_keep_exact_canonical_child_hints() {
         matches!(directory.get(*index), Some(ivm_abi::metadata::ValidatedLiteral::Pointer { type_id: PointerType::NoritoBytes, payload, .. }) if payload == encoded_record)
     }).expect("literal tuple key record");
     let positions = output.artifact[parsed.code_offset..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter_map(|(index, bytes)| {
             let word = u32::from_le_bytes(bytes.try_into().unwrap());

@@ -377,8 +377,7 @@ fn canonical_base64_url_matches_v1(encoded: &str, decoded: &[u8]) -> bool {
     let mut canonical = vec![0_u8; encoded_bytes];
     let matches = URL_SAFE_NO_PAD
         .encode_slice(decoded, &mut canonical)
-        .ok()
-        .is_some_and(|written| {
+        .is_ok_and(|written| {
             canonical.truncate(written);
             canonical.as_slice() == encoded.as_bytes()
         });

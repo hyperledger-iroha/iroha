@@ -7,7 +7,7 @@
 
 use super::*;
 
-pub(crate) mod finality_custody;
+pub mod finality_custody;
 mod operation;
 mod verified;
 mod verified_abort;

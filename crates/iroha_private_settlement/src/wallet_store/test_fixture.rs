@@ -28,7 +28,7 @@ use iroha_data_model::{
 };
 use std::{collections::BTreeMap, time::Duration};
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub intent: PrivateSettlementProofIntentV1,
     pub terms: Vec<PrivateSettlementBusinessTerms>,
     pub openings: Vec<PrivateSettlementRestrictedOpening>,
@@ -82,7 +82,7 @@ fn phase(
     }
 }
 
-pub(crate) fn complete() -> Fixture {
+pub fn complete() -> Fixture {
     complete_for("private-wallet-all-leg-cleanup")
 }
 
@@ -430,7 +430,7 @@ pub(super) fn complete_for(label: &str) -> Fixture {
     }
 }
 
-pub(crate) fn verified_abort(fixture: &Fixture, label: &str) -> VerifiedPrivateSettlementAbort {
+pub fn verified_abort(fixture: &Fixture, label: &str) -> VerifiedPrivateSettlementAbort {
     // Alternative fixture branch at the same independently pinned genesis, not an Abort
     // after a successful settlement. The synthetic outputs do not claim World execution.
     let mut chain = NativeFinalityFixture::start_with_genesis_extension(

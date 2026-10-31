@@ -25,7 +25,7 @@ use super::{
 
 /// Cumulative source admission for one enclosing operation; no clone or reset.
 /// These are conservative local work units, not gas, allocation or CPU time.
-pub(crate) struct ApplyingTimeSourceWork {
+pub struct ApplyingTimeSourceWork {
     work: Work,
     refused: bool,
     #[cfg(test)]
@@ -63,7 +63,7 @@ impl ApplyingTimeSourceWork {
 
 /// Original refusal owners remain inspectable; no formatted diagnostic copy.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ApplyingTimeSourceError {
+pub enum ApplyingTimeSourceError {
     #[error("applying Time source work refused")]
     Work(#[source] TriggerContractError),
     #[error("applying Time source work is closed after its earlier refusal")]
@@ -91,7 +91,7 @@ pub(crate) enum ApplyingTimeSourceError {
 /// The frame is deliberately unvalidated. In particular, capture does not prove
 /// inner record validity, authenticated callable schema, mutation ordering,
 /// transaction commit, or absence in any of the other trigger tables.
-pub(crate) struct CapturedApplyingTimeSource {
+pub struct CapturedApplyingTimeSource {
     id: ChargedBuffer<u8>,
     frame: RetainedActionFrameBytesV1,
     retry: Option<(u32, u64)>,
@@ -138,7 +138,7 @@ impl CapturedApplyingTimeSource {
 
 /// Actual applying source plus supported canonical Action/argument wire checks.
 /// No callable schema, registration authorization or lifecycle effect is implied.
-pub(crate) struct CanonicalApplyingTimeSource {
+pub struct CanonicalApplyingTimeSource {
     source: CapturedApplyingTimeSource,
     semantics: TriggerLifecycleActionSemanticsV1,
 }
@@ -155,7 +155,7 @@ impl CanonicalApplyingTimeSource {
 
 /// A rejected scan keeps the same ID, retry tuple, Action backing and borrowed
 /// first original scanner error. No refund/recapture or reconstructed error.
-pub(crate) struct ApplyingTimeSourceScanFailure<'range> {
+pub struct ApplyingTimeSourceScanFailure<'range> {
     id: ChargedBuffer<u8>,
     retry: Option<(u32, u64)>,
     original: ActionFrameCaptureFailureV1<'range>,

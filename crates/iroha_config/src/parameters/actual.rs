@@ -1898,7 +1898,7 @@ impl SoranetPow {
             outbound_mint_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             inbound_verify_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             revocation_store_capacity: 8_192,
-            revocation_max_ttl: Duration::from_secs(900),
+            revocation_max_ttl: Duration::from_mins(15),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
             puzzle: SoranetPuzzle::default_const(),
         }

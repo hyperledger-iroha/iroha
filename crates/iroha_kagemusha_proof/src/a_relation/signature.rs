@@ -250,7 +250,7 @@ fn signature_slots(
             GlueChip::assert_constant(region, valid.word(), Fp::ONE)?;
         }
         if let SignatureKey::Fixed(key) = slot.key {
-            for (words, coordinate) in words[1..5].chunks_exact(2).zip([key.x, key.y]) {
+            for (words, coordinate) in words[1..5].as_chunks::<2>().0.iter().zip([key.x, key.y]) {
                 let coordinate = Nat::from_words(coordinate);
                 for (word, integer) in words
                     .iter()

@@ -176,7 +176,7 @@ fn provisional_emergency_manifest_install_is_empty_and_one_shot() {
         );
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &provisional));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &privacy
         ));
     });

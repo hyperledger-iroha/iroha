@@ -1401,11 +1401,11 @@ state_test! { sync insert_domain_for_testing_moves_owner_membership_row
             .cloned()
             .collect::<BTreeSet<_>>()
     };
-    assert_eq!(owned(&world, &*ALICE_ID), BTreeSet::from([domain_id.clone()]));
+    assert_eq!(owned(&world, &ALICE_ID), BTreeSet::from([domain_id.clone()]));
     let_row! { previous = world .insert_domain_for_testing( domain_id.clone(), Domain::new(domain_id.clone()).build(&BOB_ID), ) .expect("existing fixture domain is replaced") };
     assert_eq!(previous.owned_by(), &*ALICE_ID);
-    assert!(owned(&world, &*ALICE_ID).is_empty());
-    assert_eq!(owned(&world, &*BOB_ID), BTreeSet::from([domain_id]));
+    assert!(owned(&world, &ALICE_ID).is_empty());
+    assert_eq!(owned(&world, &BOB_ID), BTreeSet::from([domain_id]));
 }
 state_test! { sync trigger_batch_gas_budget_is_shared_across_items
     assert_eq!(

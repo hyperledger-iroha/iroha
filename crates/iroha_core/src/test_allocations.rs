@@ -9,7 +9,7 @@ use std::{
 };
 
 mod live_census;
-pub(crate) use live_census::{LiveAllocationStats, live_allocations_during};
+pub use live_census::{LiveAllocationStats, live_allocations_during};
 
 thread_local! {
     static TRACK_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };

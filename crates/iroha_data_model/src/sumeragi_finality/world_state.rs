@@ -197,7 +197,7 @@ pub fn world_state_root_from_accumulator_v1(
     lanes: &[u16; WORLD_STATE_ACCUMULATOR_LANES_V1],
 ) -> Hash {
     let mut bytes = [0; 2 * WORLD_STATE_ACCUMULATOR_LANES_V1];
-    for (encoded, lane) in bytes.chunks_exact_mut(2).zip(lanes) {
+    for (encoded, lane) in bytes.as_chunks_mut::<2>().0.iter_mut().zip(lanes) {
         encoded.copy_from_slice(&lane.to_le_bytes());
     }
     Hash::new_from_chunks(&[ROOT, schema.as_ref(), &entries.to_le_bytes(), &bytes])
@@ -275,8 +275,8 @@ impl WorldStateSnapshotV1 {
             previous = Some(identity);
             let path = world_state_path_hash_v1(&entry.field_id, entry.kind)?;
             let element = world_state_element_v1(&path, entry.key_hash.as_ref(), &entry.value_hash);
-            for (lane, bytes) in lanes.iter_mut().zip(element.chunks_exact(2)) {
-                *lane = lane.wrapping_add(u16::from_le_bytes([bytes[0], bytes[1]]));
+            for (lane, bytes) in lanes.iter_mut().zip(element.as_chunks::<2>().0) {
+                *lane = lane.wrapping_add(u16::from_le_bytes(*bytes));
             }
         }
         Ok(world_state_root_from_accumulator_v1(

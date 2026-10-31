@@ -381,12 +381,6 @@ mod json_support {
             }),
         }
     }
-    pub(super) fn ensure_no_extra(map: Map) -> Result<(), json::Error> {
-        if let Some((field, _)) = map.into_iter().next() {
-            return Err(json::Error::UnknownField { field });
-        }
-        Ok(())
-    }
     pub(super) fn expect_u64(value: &json::Value, field: &str) -> Result<u64, json::Error> {
         match value {
             json::Value::Number(num) => num.as_u64().ok_or_else(|| json::Error::InvalidField {

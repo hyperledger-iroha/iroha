@@ -6827,7 +6827,7 @@ mod tests {
         assert!(
             used.iter().all(|provider| provider == "alpha"),
             "expected only the highest-ranked provider to be used, got: {:?}",
-            &*used
+            *used
         );
         assert_eq!(session.policy_report.status, PolicyStatus::Met);
         assert_eq!(session.policy_report.selected_soranet_total, 1);

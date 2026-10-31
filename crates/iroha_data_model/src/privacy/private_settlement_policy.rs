@@ -189,7 +189,7 @@ impl PrivateSettlementPolicyV1 {
         let value: Self = norito::core::classify_decode_attempt(|| {
             norito::json::from_str(payload.get()).map_err(norito::json::Error::into_core_error)
         })?;
-        let canonical = norito::core::classify_decode_attempt(|| Json::try_new(&value))?;
+        let canonical = norito::core::classify_decode_attempt(|| Json::try_new(value))?;
         if &canonical != payload {
             return Err(PrivateSettlementPolicyParameterErrorV1::CustomParameter(
                 "payload is not canonical JSON",
@@ -438,7 +438,7 @@ pub struct PrivateSettlementValidityLimitsV1 {
     pub prepare_timeout_blocks: u64,
     /// Maximum additional duration for all Commit certificates.
     pub commit_timeout_blocks: u64,
-    /// Nonzero mask of the fixed KiB4, KiB16, KiB64 and KiB256 classes, in bit order.
+    /// Nonzero mask of the fixed `KiB4`, `KiB16`, `KiB64` and `KiB256` classes, in bit order.
     pub capsule_padding_classes: u8,
     /// Maximum proof payload bytes per leg, excluding sidecar framing.
     pub max_proof_bytes: u64,
@@ -506,7 +506,12 @@ pub enum PrivateSettlementValidityErrorV1 {
 impl PrivateSettlementValidityLimitsV1 {
     /// Canonical first-release contract, identical on every node.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the const assertion below keeps the protocol leg limit within u16"
+    )]
     pub const fn protocol_default() -> Self {
+        const { assert!(ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1 <= u16::MAX as usize) };
         Self {
             max_participants: ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1 as u16,
             max_expiry_blocks: 7_200,
@@ -821,7 +826,7 @@ mod tests {
 
         let wrong = CustomParameter::new(
             "unrelated_policy".parse().unwrap(),
-            Json::try_new(&baseline).unwrap(),
+            Json::try_new(baseline).unwrap(),
         );
         assert!(PrivateSettlementPolicyV1::from_custom_parameter(&wrong).is_err());
         for raw in [
@@ -840,7 +845,7 @@ mod tests {
         invalid.current_limits.max_expiry_blocks = 0;
         parameters.custom.insert(CustomParameter::new(
             PrivateSettlementPolicyV1::parameter_id().clone(),
-            Json::try_new(&invalid).unwrap(),
+            Json::try_new(invalid).unwrap(),
         ));
         assert!(PrivateSettlementPolicyV1::from_parameters(&parameters).is_err());
         assert!(invalid.to_custom_parameter().is_err());
@@ -995,7 +1000,10 @@ mod tests {
             PrivateSettlementCapsulePaddingV1::KiB64,
             PrivateSettlementCapsulePaddingV1::KiB256,
         ] {
-            for auditors in [1, PRIVATE_SETTLEMENT_MAX_AUDITORS_V1 as u16] {
+            for auditors in [
+                1,
+                u16::try_from(PRIVATE_SETTLEMENT_MAX_AUDITORS_V1).unwrap(),
+            ] {
                 let mut policy = PrivateSettlementValidityLimitsV1::protocol_default();
                 policy.capsule_padding_classes = match padding {
                     PrivateSettlementCapsulePaddingV1::KiB4 => 1,
@@ -1017,7 +1025,8 @@ mod tests {
             }
         }
         let mut policy = PrivateSettlementValidityLimitsV1::protocol_default();
-        policy.min_auditor_approvals = PRIVATE_SETTLEMENT_MAX_AUDITORS_V1 as u16 + 1;
+        policy.min_auditor_approvals =
+            u16::try_from(PRIVATE_SETTLEMENT_MAX_AUDITORS_V1).unwrap() + 1;
         assert_eq!(
             policy.validate(),
             Err(PrivateSettlementValidityErrorV1::NativeBound(
@@ -1087,7 +1096,7 @@ mod tests {
     #[test]
     fn native_policy_ranges_accept_exact_and_refuse_first_over() {
         let exact = PrivateSettlementValidityLimitsV1 {
-            max_participants: ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1 as u16,
+            max_participants: u16::try_from(ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1).unwrap(),
             max_capsule_bytes: PRIVATE_SETTLEMENT_MAX_CAPSULE_BYTES_V1,
             max_carrier_bytes: PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64,
             ..PrivateSettlementValidityLimitsV1::protocol_default()
@@ -1127,7 +1136,8 @@ mod tests {
                 ..original
             },
             PrivateSettlementValidityLimitsV1 {
-                min_auditor_approvals: PRIVATE_SETTLEMENT_MAX_AUDITORS_V1 as u16 + 1,
+                min_auditor_approvals: u16::try_from(PRIVATE_SETTLEMENT_MAX_AUDITORS_V1).unwrap()
+                    + 1,
                 ..original
             },
             PrivateSettlementValidityLimitsV1 {
@@ -1241,7 +1251,10 @@ mod tests {
         use iroha_crypto::{Algorithm, KeyPair};
         let members: Vec<_> = (0..=PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1)
             .map(|index| {
-                let key = KeyPair::from_seed(vec![index as u8 + 1; 32], Algorithm::Ed25519);
+                let key = KeyPair::from_seed(
+                    vec![u8::try_from(index + 1).unwrap(); 32],
+                    Algorithm::Ed25519,
+                );
                 MultisigMember::new(key.public_key().clone(), 1).unwrap()
             })
             .collect();
@@ -1249,12 +1262,12 @@ mod tests {
             AccountId::new_multisig(MultisigPolicy::new(threshold, members.clone()).unwrap())
         };
         validate_private_settlement_sponsor_v1(&sponsor(
-            PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u16,
+            u16::try_from(PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1).unwrap(),
         ))
         .unwrap();
         assert_eq!(
             validate_private_settlement_sponsor_v1(&sponsor(
-                PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u16 + 1
+                u16::try_from(PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1).unwrap() + 1
             )),
             Err(PrivateSettlementValidityErrorV1::SponsorQuorum)
         );

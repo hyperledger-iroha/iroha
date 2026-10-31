@@ -1,6 +1,6 @@
 //! Engineering enrollment fixture: an explicit test issuer under scheme root `signing_key(17)`
 //! and enrollment signer `signing_key(79)`, opaque platform evidence and Ed25519 account keys.
-//! Shared by this crate's enrollment tests and iroha_core's in-process monetary acceptance;
+//! Shared by this crate's enrollment tests and `iroha_core`'s in-process monetary acceptance;
 //! no attestation verifier admits its evidence and it is never a production issuer.
 
 use super::test_support::{public_key, signing_key};

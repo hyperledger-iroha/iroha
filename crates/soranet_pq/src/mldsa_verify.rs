@@ -1,4 +1,4 @@
-//! Fixed-storage ML-DSA verification using the maintained RustCrypto implementation.
+//! Fixed-storage ML-DSA verification using the maintained `RustCrypto` implementation.
 //!
 //! Default allocation features remain disabled: decoding and the verification
 //! relation use inline arrays on every target, preserving borrowed admission.

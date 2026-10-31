@@ -13,6 +13,9 @@ pub enum Command {
     /// Emergency containment by the runtime emergency panel
     #[command(subcommand)]
     Contain(ContainCommand),
+    /// Governed adoption of a running network by this release
+    #[command(subcommand)]
+    Adoption(AdoptionCommand),
     /// Show this node's release and whether it executes the committed selection and the
     /// successor of each scheduled change set
     Release,
@@ -27,6 +30,7 @@ impl Run for Command {
             Command::Abi(cmd) => cmd.run(context),
             Command::Upgrade(cmd) => cmd.run(context),
             Command::Contain(cmd) => cmd.run(context),
+            Command::Adoption(cmd) => cmd.run(context),
             Command::Release => {
                 let client = context.client_from_config()?;
                 let value = client.get_runtime_release_json()?;
@@ -94,6 +98,46 @@ impl Run for Command {
             }
         }
     }
+}
+#[derive(clap::Subcommand, Debug)]
+pub enum AdoptionCommand {
+    /// Print the predecessor runtime-upgrade manifest that authorizes this release to adopt the
+    /// network at a checkpoint inside its window (`specs/live_runtime_upgrades.md` §13). The
+    /// holder of `CanManageRuntimeUpgrades` submits it with the predecessor release's
+    /// `iroha runtime upgrade propose --file`
+    Manifest(AdoptionManifestArgs),
+}
+impl Run for AdoptionCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            AdoptionCommand::Manifest(args) => context.print_data(&adoption_manifest(&args)?),
+        }
+    }
+}
+#[derive(clap::Args, Debug)]
+pub struct AdoptionManifestArgs {
+    /// Height at which the predecessor activates the authorization; the checkpoint lies after it
+    #[arg(long, value_name = "HEIGHT")]
+    start_height: u64,
+    /// End of the window (exclusive); the checkpoint lies before it
+    #[arg(long, value_name = "HEIGHT")]
+    end_height: u64,
+    /// Description recorded with the manifest
+    #[arg(long, default_value = "Adopt the live-upgrade foundation")]
+    description: String,
+}
+/// The adoption authorization of this release's baseline for the window of `args`.
+fn adoption_manifest(args: &AdoptionManifestArgs) -> Result<norito::json::Value> {
+    let catalog = iroha_core::runtime::release_catalog()
+        .map_err(|error| eyre!("release catalog: {error}"))?;
+    let manifest = iroha_core::state::upgrade_checkpoint::adoption::authorization_manifest_json(
+        catalog.baseline_id,
+        args.start_height,
+        args.end_height,
+        &args.description,
+    )
+    .map_err(|error| eyre!("adoption manifest: {error}"))?;
+    norito::json::from_str(&manifest).wrap_err("adoption manifest JSON")
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum AbiCommand {
@@ -459,6 +503,60 @@ mod tests {
             transitions: Vec::new(),
             qualification: [0x03; 32],
         }
+    }
+
+    #[test]
+    fn adoption_manifest_names_this_release_and_its_window() {
+        let mut context = Captured::default();
+        AdoptionCommand::Manifest(AdoptionManifestArgs {
+            start_height: 100,
+            end_height: 200,
+            description: "adopt".into(),
+        })
+        .run(&mut context)
+        .expect("print the manifest");
+        let printed: norito::json::Value =
+            norito::json::from_str(&context.printed.expect("the manifest is printed"))
+                .expect("manifest JSON");
+        assert_eq!(
+            printed.get("name").and_then(norito::json::Value::as_str),
+            Some(iroha_core::state::upgrade_checkpoint::adoption::ADOPTION_MANIFEST_NAME)
+        );
+        assert_eq!(
+            printed
+                .get("start_height")
+                .and_then(norito::json::Value::as_u64),
+            Some(100)
+        );
+        assert_eq!(
+            printed
+                .get("end_height")
+                .and_then(norito::json::Value::as_u64),
+            Some(200)
+        );
+        let baseline = iroha_core::runtime::release_catalog()
+            .expect("release catalog")
+            .baseline_id;
+        let digest = printed
+            .get("sbom_digests")
+            .and_then(|digests| digests.get(0))
+            .and_then(|digest| digest.get("digest"))
+            .and_then(norito::json::Value::as_str)
+            .expect("the selection digest");
+        assert_eq!(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, digest)
+                .expect("base64"),
+            baseline.0.to_vec()
+        );
+        assert!(
+            adoption_manifest(&AdoptionManifestArgs {
+                start_height: 100,
+                end_height: 101,
+                description: String::new(),
+            })
+            .is_err(),
+            "a window leaves room for a checkpoint"
+        );
     }
 
     #[test]

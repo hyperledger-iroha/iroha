@@ -84,9 +84,7 @@ fn public_fixed_matrix_refuses_geometry_before_writing_and_clears_late_failures(
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fill_sha_public_fixed_matrix_with_v1(ROWS, &mut columns, |row| {
                 if row == ROWS - 1 {
-                    if unwind {
-                        panic!("synthetic late fixed-row interruption");
-                    }
+                    assert!(!unwind, "synthetic late fixed-row interruption");
                     return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
                 }
                 Ok([F((row + 1) as u64); ZK_X509_SHA_BATCH_FIXED_WIDTH_V1])

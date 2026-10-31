@@ -457,9 +457,9 @@ pub fn try_dataspace_catalog_hash(catalog: &DataSpaceCatalog) -> Result<Hash, st
             norito::core::write_element_sequence::<DataSpaceMetadata, _>(out, self.0.iter())
         }
     }
-    Hash::new_from_writer(|out| {
+    Hash::new_from_writer(|mut out| {
         out.write_all(b"iroha:nexus:dataspace-catalog:v1\0")?;
-        norito::codec::encode_adaptive_into(&Entries(catalog.entries()), &mut &mut *out)
+        norito::codec::encode_adaptive_into(&Entries(catalog.entries()), &mut out)
             .map_err(std::io::Error::other)?;
         Ok(())
     })
@@ -642,10 +642,10 @@ fn write_catalog_frame<T: norito::core::NoritoSerialize>(
             Ok(())
         },
     );
-    match bound {
-        Some(original) => Err(original),
-        None => result.map_err(norito::core::BoundedEncodeError::Serialization),
-    }
+    bound.map_or_else(
+        || result.map_err(norito::core::BoundedEncodeError::Serialization),
+        Err,
+    )
 }
 
 fn streamed_catalog_hash<T: norito::core::NoritoSerialize>(
@@ -1534,7 +1534,7 @@ mod tests {
 
     #[test]
     fn catalog_streaming_keeps_original_serializer_refusals_and_rejects_drift() {
-        use std::{cell::Cell, io::Write};
+        use std::cell::Cell;
 
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model.test.CatalogAllocatingSerializer")]
@@ -1559,6 +1559,27 @@ mod tests {
                         }
                     })?;
                 output.write_all(&bytes)?;
+                Ok(())
+            }
+        }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model.test.CatalogDriftingSerializer")]
+        struct Drifting {
+            visits: Cell<usize>,
+            length_changes: bool,
+        }
+        impl norito::SerializePayload for Drifting {
+            fn serialize(
+                &self,
+                output: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::Error> {
+                let visit = self.visits.get();
+                self.visits.set(visit + 1);
+                if self.length_changes && visit != 0 {
+                    output.write_all(&[1, 2])?;
+                } else {
+                    output.write_all(&[u8::from(visit != 0)])?;
+                }
                 Ok(())
             }
         }
@@ -1587,27 +1608,6 @@ mod tests {
             Hash::new_from_chunks(&[RUNTIME_CATALOG_DOMAIN, &bytes])
         );
 
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(name = "iroha_data_model.test.CatalogDriftingSerializer")]
-        struct Drifting {
-            visits: Cell<usize>,
-            length_changes: bool,
-        }
-        impl norito::SerializePayload for Drifting {
-            fn serialize(
-                &self,
-                output: &mut norito::core::Encoder<'_>,
-            ) -> Result<(), norito::Error> {
-                let visit = self.visits.get();
-                self.visits.set(visit + 1);
-                if self.length_changes && visit != 0 {
-                    output.write_all(&[1, 2])?;
-                } else {
-                    output.write_all(&[u8::from(visit != 0)])?;
-                }
-                Ok(())
-            }
-        }
         for length_changes in [false, true] {
             let value = Drifting {
                 visits: Cell::new(0),
@@ -1828,7 +1828,7 @@ mod tests {
         use crate::amx_prepare_streaming_allocations::measured;
         let lanes: Vec<_> = (0..MAX_NEXUS_RUNTIME_CATALOG_ENTRIES)
             .map(|index| LaneConfig {
-                id: LaneId::new((index * 3 + 7) as u32),
+                id: LaneId::new(u32::try_from(index * 3 + 7).unwrap()),
                 alias: format!("{}-{index:04}", "a".repeat(MAX_ALIAS_BYTES - 5)),
                 description: Some("d".repeat(MAX_DESCRIPTION_BYTES)),
                 dataspace_id: DataSpaceId::new(9),

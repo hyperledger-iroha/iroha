@@ -95,7 +95,9 @@ impl Rgb {
     pub fn to_luma(&self) -> Luma {
         let data = self
             .data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|px| {
                 ((299 * u32::from(px[0]) + 587 * u32::from(px[1]) + 114 * u32::from(px[2]) + 500)
                     / 1000) as u8

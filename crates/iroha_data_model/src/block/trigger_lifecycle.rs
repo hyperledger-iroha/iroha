@@ -49,7 +49,7 @@ use crate::{
 pub enum TriggerLifecycleStateKindV1 {
     /// Trigger matched by a data event.
     Data,
-    /// Trigger explicitly invoked by an ExecuteTrigger instruction.
+    /// Trigger explicitly invoked by an `ExecuteTrigger` instruction.
     ByCall,
     /// Trigger matched by a pipeline event.
     Pipeline,
@@ -234,7 +234,7 @@ pub struct TriggerLifecycleActionSemanticsV1 {
 /// with bounded byte/work/depth and physically owned scratch, prove exact canonical
 /// consumption/normalization and Action constructor invariants, and derive this
 /// projection from those bytes. Header/schema/CRC validation alone is insufficient.
-/// Neither eager unbudgeted Action decode nor PreparedCanonicalDecode (which funds
+/// Neither eager unbudgeted Action decode nor `PreparedCanonicalDecode` (which funds
 /// only counter controls) fulfills this contract. The original frame and its
 /// borrowed envelope payload are supplied together without an owned graph.
 ///
@@ -243,6 +243,9 @@ pub struct TriggerLifecycleActionSemanticsV1 {
 pub trait TriggerLifecycleActionValidatorV1 {
     /// Validate every payload byte, including executable, authority, repeats,
     /// filter, retry policy and metadata. Refuse unsupported nested kinds.
+    ///
+    /// # Errors
+    /// Returns a description of the first non-canonical or unsupported payload field.
     fn validate_canonical_action(
         &mut self,
         frame: &[u8],
@@ -844,12 +847,8 @@ fn validate_policy(
                 && matches!(owner, TriggerLifecycleOwnerV1::Time(_))
                 && before.kind == Kind::Time
         }
-        (Policy::AdvanceTimeRetry, Update { before, .. }) => {
-            rejected
-                && matches!(owner, TriggerLifecycleOwnerV1::Time(_))
-                && before.kind == Kind::Time
-        }
-        (Policy::ExhaustTimeRetry, Remove { before }) => {
+        (Policy::AdvanceTimeRetry, Update { before, .. })
+        | (Policy::ExhaustTimeRetry, Remove { before }) => {
             rejected
                 && matches!(owner, TriggerLifecycleOwnerV1::Time(_))
                 && before.kind == Kind::Time

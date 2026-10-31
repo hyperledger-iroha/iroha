@@ -199,9 +199,7 @@ impl Topology {
             }
         }
         signatures.into_iter().filter(move |signature| {
-            usize::try_from(signature.index())
-                .ok()
-                .is_some_and(|idx| filtered.contains(&idx))
+            usize::try_from(signature.index()).is_ok_and(|idx| filtered.contains(&idx))
         })
     }
     /// What role does this peer have in the topology.

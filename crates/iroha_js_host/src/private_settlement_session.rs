@@ -23,7 +23,12 @@ use tokio::sync::Semaphore;
 
 /// Complete source descriptor limit, checked natively before its first retained copy.
 #[napi(js_name = "privateSettlementDescriptorMaxBytes")]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the assertion below keeps the native descriptor limit within u32"
+)]
 pub const DESCRIPTOR_MAX_BYTES: u32 = NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES as u32;
+const _: () = assert!(NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES <= u32::MAX as usize);
 
 /// Canonical native local observation defaults. These never change committed validity.
 #[napi(object)]
@@ -63,6 +68,11 @@ fn invalid() -> napi::Error {
 }
 // N-API integer conversions truncate and wrap JavaScript numbers. Keep the original
 // double until every finite/integral/range check has completed, then convert once.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is a finite integer within [minimum, maximum] before the single conversion"
+)]
 fn exact_u32(value: f64, minimum: u32, maximum: u32) -> napi::Result<u32> {
     if !value.is_finite()
         || value.fract() != 0.0
@@ -101,16 +111,16 @@ fn with_descriptor<R>(
         if napi::sys::napi_get_typedarray_info(
             env.raw(),
             value.raw(),
-            &mut kind,
-            &mut length,
+            &raw mut kind,
+            &raw mut length,
             std::ptr::null_mut(),
-            &mut backing,
-            &mut offset,
+            &raw mut backing,
+            &raw mut offset,
         ) != napi::sys::Status::napi_ok
-            || kind != napi::sys::TypedarrayType::uint8_array as i32
+            || kind != napi::sys::TypedarrayType::uint8_array
             || length == 0
             || length > NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES
-            || napi::sys::napi_is_arraybuffer(env.raw(), backing, &mut ordinary)
+            || napi::sys::napi_is_arraybuffer(env.raw(), backing, &raw mut ordinary)
                 != napi::sys::Status::napi_ok
             || !ordinary
         {
@@ -121,8 +131,8 @@ fn with_descriptor<R>(
         if napi::sys::napi_get_arraybuffer_info(
             env.raw(),
             backing,
-            &mut pointer,
-            &mut backing_length,
+            &raw mut pointer,
+            &raw mut backing_length,
         ) != napi::sys::Status::napi_ok
             || pointer.is_null()
             || offset
@@ -158,9 +168,10 @@ pub struct JsPrivateSettlementHost {
 }
 
 /// Create a bounded owner on the N-API runtime already supplied by the installed host.
+/// The call runs inside that runtime's context and only spawns the owner's supervisor.
 /// Keep that runtime alive and await shutdown before destroying the JavaScript environment.
-#[napi(js_name = "privateSettlementCreateHost")]
-pub async fn create_host(
+#[napi(js_name = "privateSettlementCreateHost", async_runtime)]
+pub fn create_host(
     maximum_sessions: f64,
     maximum_original_bytes: f64,
     maximum_artifact_bytes: f64,
@@ -195,11 +206,11 @@ impl JsPrivateSettlementHost {
     #[napi(js_name = "openFiles")]
     pub fn open_files(
         &self,
-        env: &Env,
+        env: Env,
         descriptor: Unknown<'_>,
     ) -> napi::Result<JsPrivateSettlementTicket> {
         let admission = self.host.admit().map_err(local)?;
-        let ticket = with_descriptor(env, descriptor, |bytes| {
+        let ticket = with_descriptor(&env, descriptor, |bytes| {
             admission.open_files(bytes).map_err(local)
         })?;
         Ok(JsPrivateSettlementTicket {
@@ -268,8 +279,8 @@ impl JsPrivateSettlementTicket {
     }
     /// Stage exact native reservation bytes and governed openings; never called by Recover.
     #[napi(js_name = "stageFiles")]
-    pub fn stage_files(&self, env: &Env, descriptor: Unknown<'_>) -> napi::Result<Self> {
-        let ticket = with_descriptor(env, descriptor, |bytes| {
+    pub fn stage_files(&self, env: Env, descriptor: Unknown<'_>) -> napi::Result<Self> {
+        let ticket = with_descriptor(&env, descriptor, |bytes| {
             self.host
                 .stage_files(self.ticket.session(), bytes)
                 .map_err(local)
@@ -519,6 +530,43 @@ mod tests {
         }
         assert_eq!(exact_u32(-0.0, 0, u32::MAX).unwrap(), 0);
         assert!(exact_u32(-0.0, 1, u32::MAX).is_err());
+    }
+    #[test]
+    fn create_host_checks_limits_before_binding_the_current_runtime() {
+        let descriptor = f64::from(DESCRIPTOR_MAX_BYTES);
+        assert_eq!(
+            usize::try_from(DESCRIPTOR_MAX_BYTES).unwrap(),
+            NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES
+        );
+        for limits in [
+            (0.0, descriptor, 1024.0, 1024.0),
+            (f64::from(u16::MAX) + 1.0, descriptor, 1024.0, 1024.0),
+            (1.0, 0.0, 1024.0, 1024.0),
+            (1.0, descriptor, 1.5, 1024.0),
+            (1.0, descriptor, 1024.0, f64::NAN),
+        ] {
+            let Err(error) = create_host(limits.0, limits.1, limits.2, limits.3) else {
+                panic!("invalid limits must be refused before a runtime is bound");
+            };
+            assert_eq!(error.status, napi::Status::InvalidArg);
+        }
+        let Err(error) = create_host(1.0, descriptor, 1024.0, 1024.0) else {
+            panic!("valid limits still need the installed runtime");
+        };
+        assert_eq!(error.status, napi::Status::GenericFailure);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let host = runtime
+            .block_on(async { create_host(1.0, descriptor, 1024.0, 1024.0) })
+            .unwrap();
+        assert_eq!(
+            host.maximum_result_bytes,
+            NATIVE_PRIVATE_SETTLEMENT_TERMINAL_ALLOWANCE.max(1024)
+        );
+        runtime.block_on(host.host.shutdown()).unwrap();
     }
     #[test]
     fn default_options_and_redacted_progress_keep_the_native_owner_and_exact_sequence() {

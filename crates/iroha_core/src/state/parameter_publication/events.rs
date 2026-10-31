@@ -1,4 +1,4 @@
-//! Closed original-pool ParameterChanged backing retained by every event reader.
+//! Closed original-pool `ParameterChanged` backing retained by every event reader.
 
 use crate::pipeline_gas_policy::{ParameterIngressError, ParameterRetentionError};
 use iroha_allocation::{

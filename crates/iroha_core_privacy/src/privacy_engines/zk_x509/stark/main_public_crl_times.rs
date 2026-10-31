@@ -56,7 +56,7 @@ impl MainPublicCrlTimePlanV1 {
         if geometry
             .stride_v1()
             .checked_mul(AGGREGATE_PARAMETERS_V1.composition_degree_chunks)
-            .is_none_or(|coverage| (1usize << 19) + MASK_DEGREE - 1 >= coverage)
+            .is_none_or(|coverage| (1usize << 19) + MASK_DEGREE > coverage)
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }

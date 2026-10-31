@@ -14,17 +14,17 @@ use std::cell::Cell;
 
 /// Shared original decoder bank retained by the native signed-source attempt.
 #[derive(Clone)]
-pub(crate) struct BindingPreparations(ChargedShared<BankLock>);
+pub struct BindingPreparations(ChargedShared<BankLock>);
 
 /// One disposable execution pass; its transaction ordinals restart on actual retry.
-pub(crate) struct BindingRun {
+pub struct BindingRun {
     original: BindingPreparations,
     next_transaction: usize,
     generation: usize,
 }
 
 /// Exact occurrence of a read in a fresh transaction of the same execution pass.
-pub(crate) struct BindingInvocation {
+pub struct BindingInvocation {
     original: BindingPreparations,
     transaction: usize,
     next_read: Cell<usize>,
@@ -138,11 +138,11 @@ impl BindingPreparations {
         }
         // No decoder or retirement exists before the first capture. Avoid even
         // initializing thread-local refund notification scratch for this empty pass.
-        if self.0.lock().map_err(|_| invariant())?.current.is_none() {
+        if self.0.lock().map_err(|()| invariant())?.current.is_none() {
             return Ok(());
         }
         pool.with_deferred_refund_notifications(|_| {
-            let mut bank = self.0.lock().map_err(|_| invariant())?;
+            let mut bank = self.0.lock().map_err(|()| invariant())?;
             bank.finish_append(pool)?;
             let Some(current) = bank.current.as_mut() else {
                 return Ok(());
@@ -196,7 +196,7 @@ impl BindingPreparations {
             return Err(invariant());
         }
         pool.with_deferred_refund_notifications(|_| {
-            let mut bank = self.0.lock().map_err(|_| invariant())?;
+            let mut bank = self.0.lock().map_err(|()| invariant())?;
             let generation = bank.generation.checked_add(1).ok_or_else(invariant)?;
             bank.rewind();
             bank.generation = generation;
@@ -246,7 +246,7 @@ impl BindingInvocation {
                 .original
                 .0
                 .lock()
-                .map_err(|_| ExecutionAttemptError::Deferred(invariant()))?;
+                .map_err(|()| ExecutionAttemptError::Deferred(invariant()))?;
             if bank.generation != self.generation
                 || bank.last_read.is_some_and(|previous| identity <= previous)
             {
@@ -558,7 +558,7 @@ mod tests;
 
 /// Test-only physical contention at the actual binding leaf, after source capture.
 #[cfg(test)]
-pub(crate) mod observation {
+pub mod observation {
     use super::*;
     #[derive(Default)]
     struct Observation {
@@ -569,7 +569,7 @@ pub(crate) mod observation {
         replaced: bool,
     }
     thread_local! { static CURRENT: std::cell::RefCell<Option<Observation>> = const { std::cell::RefCell::new(None) }; }
-    pub(crate) struct Observer;
+    pub struct Observer;
     impl Observer {
         pub(crate) fn occupy_after_capture() -> Self {
             CURRENT.with(|current| {

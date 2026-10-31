@@ -157,7 +157,9 @@ fn validate_element(value: GoldilocksFp4V1, context: &'static str, prefix: &[usi
 fn join_lanes(lanes: &[Vec<u64>], rows: usize) -> Vec<Vec<GoldilocksFp4V1>> {
     debug_assert!(lanes.len().is_multiple_of(4));
     lanes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|column| {
             (0..rows)
                 .map(|row| {

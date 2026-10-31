@@ -63,7 +63,7 @@ impl crate::sumeragi::records::Faults for Flaky {
             && n.is_multiple_of(self.every)
             && self
                 .budget
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |b| b.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |b| b.checked_sub(1))
                 .is_ok()
         {
             let k = self.injected.fetch_add(1, Ordering::SeqCst);

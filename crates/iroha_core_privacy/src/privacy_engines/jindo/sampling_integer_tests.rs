@@ -119,7 +119,7 @@ fn fractional_decay_initializes_once_on_a_bounded_native_stack_with_exact_values
             ));
             assert_eq!(values.as_ref(), fraction_decay_table_q256_v1());
             let mut digest = Sha3_256::new();
-            for value in values.iter() {
+            for value in values {
                 digest.update(value.to_be_bytes());
             }
             <[u8; 32]>::from(digest.finalize())

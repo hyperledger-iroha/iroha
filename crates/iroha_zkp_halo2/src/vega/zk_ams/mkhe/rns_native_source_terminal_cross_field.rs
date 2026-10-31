@@ -755,7 +755,12 @@ fn derive_mapping_challenge_v1(
 ) -> Result<Scalar, RnsNativeSourceTerminalCrossFieldErrorV1> {
     for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
         let mut wide = [0_u8; 64];
-        for (half, output) in wide.chunks_exact_mut(DIGEST_BYTES_V1).enumerate() {
+        for (half, output) in wide
+            .as_chunks_mut::<DIGEST_BYTES_V1>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             let mut hash = Keccak256::new();
             hash.update(CHALLENGE_DOMAIN_V1);
             hash.update(&[LINK_VERSION_V1, half as u8]);
@@ -1066,13 +1071,10 @@ fn replay_record_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         }
         for coefficient in chunk
             .as_slice()
-            .chunks_exact(CANONICAL_COEFFICIENT_BYTES_V1)
+            .as_chunks::<CANONICAL_COEFFICIENT_BYTES_V1>()
+            .0
         {
-            coefficients.0.push(
-                coefficient
-                    .try_into()
-                    .map_err(|_| RnsNativeSourceTerminalCrossFieldErrorV1::InvalidSource)?,
-            );
+            coefficients.0.push(*coefficient);
         }
     }
     if coefficients.0.len() != ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 {

@@ -12121,6 +12121,10 @@ pub struct Snapshot {
 /// the predecessor certified. With a checkpoint it restores the World at `height` from the
 /// predecessor's signed snapshot, proves that World against the block's certified World root and
 /// executes from the next block on. Blocks at or below the checkpoint are never re-executed.
+///
+/// The checkpoint only locates the block; it authorizes nothing. The import also requires the
+/// predecessor's certified World to hold the governance record that authorizes this release to
+/// adopt at `height` (`specs/live_runtime_upgrades.md` §13, `iroha runtime adoption manifest`).
 #[derive(Debug, Clone, Default, ReadConfig)]
 pub struct SnapshotUpgradeCheckpoint {
     /// Height of the last block the previous release executed.
@@ -20650,7 +20654,7 @@ impl SorafsAppealFinanceSettlement {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsAppealFinanceSettlement {
         const MAX_ENTRIES: usize = 1_000_000;
         const MAX_RETRY_ATTEMPTS: u32 = 1_024;
-        const MAX_SCAN_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+        const MAX_SCAN_INTERVAL: Duration = Duration::from_hours(24);
         const MIN_CHECKPOINT_BYTES: u64 =
             defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MIN_BYTES_V1;
         const MAX_CHECKPOINT_BYTES: u64 =
@@ -29988,7 +29992,7 @@ mod sorafs_repair_gc_tests {
                 revision: 3,
                 policy_digest_hex: "a6".repeat(32),
             }),
-            worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(30_000)),
+            worker_scan_interval_ms: DurationMs(std::time::Duration::from_secs(30)),
             worker_max_retry_attempts: 3,
             worker_max_pending: 128,
             worker_max_completed: 256,
@@ -30024,7 +30028,7 @@ mod sorafs_repair_gc_tests {
         assert_eq!(checkpoint.policy_digest, [0xA6; 32]);
         assert_eq!(
             actual.worker_scan_interval,
-            std::time::Duration::from_millis(30_000)
+            std::time::Duration::from_secs(30)
         );
         assert_eq!(actual.worker_max_retry_attempts, 3);
     }
@@ -32269,9 +32273,9 @@ impl SorafsGatewayCompliance {
         }
         if self.max_clock_skew > Duration::from_secs(3_600)
             || self.max_feed_age.is_zero()
-            || self.max_feed_age > Duration::from_secs(30 * 24 * 60 * 60)
+            || self.max_feed_age > Duration::from_hours(30 * 24)
             || self.max_catalog_validity.is_zero()
-            || self.max_catalog_validity > Duration::from_secs(30 * 24 * 60 * 60)
+            || self.max_catalog_validity > Duration::from_hours(30 * 24)
             || !(1..=4_096).contains(&self.max_history_entries)
             || [
                 self.max_clock_skew,

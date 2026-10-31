@@ -287,7 +287,9 @@ pub(super) fn constrain_input<'c1, 'c2, T: CircuitTranscript>(
         return Err(FcmpNativeErrorV1::ArithmeticInvariant);
     }
     let branch = leaf_branch
-        .chunks_exact(6)
+        .as_chunks::<6>()
+        .0
+        .iter()
         .map(<[super::bulletproof::Variable]>::to_vec)
         .collect::<Vec<_>>();
     first_layer::<SeleneSuite, _>(

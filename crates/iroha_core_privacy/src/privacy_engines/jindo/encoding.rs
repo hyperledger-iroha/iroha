@@ -112,7 +112,7 @@ mod tests {
             reconstructed,
             JindoFieldElementV1::from_canonical_bytes({
                 let mut bytes = [0_u8; 32];
-                for (chunk, limb) in bytes.chunks_exact_mut(8).zip(original) {
+                for (chunk, limb) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(original) {
                     chunk.copy_from_slice(&limb.to_le_bytes());
                 }
                 bytes

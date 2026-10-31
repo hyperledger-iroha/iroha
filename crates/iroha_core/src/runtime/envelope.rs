@@ -26,7 +26,7 @@ use iroha_data_model::{
 /// It is the rejection execution-time resolution ([`super::resolve`]) produces for the same
 /// envelope. An instruction without a wire ID is never carried by a transaction or contract (it is
 /// a private primitive of native code) and is not refused here, as resolution does not refuse it.
-pub(crate) fn inactive_envelope(
+pub fn inactive_envelope(
     selection: &RootSelectionV1,
     envelope: &InstructionBox,
 ) -> Option<RuntimeRejectionV1> {
@@ -46,7 +46,7 @@ pub(crate) fn inactive_envelope(
 /// active interface, so the frame must be one this release does not accept as that interface's
 /// payload, and the envelope is refused with `malformed_payload` (§5.2). `None` for an instruction
 /// this release decoded.
-pub(crate) fn opaque_rejection(instruction: &InstructionBox) -> Option<RuntimeRejectionV1> {
+pub fn opaque_rejection(instruction: &InstructionBox) -> Option<RuntimeRejectionV1> {
     instruction
         .as_opaque()
         .map(|opaque| RuntimeRejectionV1::MalformedPayload {
@@ -67,7 +67,7 @@ pub(crate) fn opaque_rejection(instruction: &InstructionBox) -> Option<RuntimeRe
 ///
 /// # Errors
 /// The stable rejection the live-upgrade mechanism commits for the instruction.
-pub(crate) fn resolve_envelope(
+pub fn resolve_envelope(
     selection: &RootSelectionV1,
     height: u64,
     instruction: &InstructionBox,
@@ -90,7 +90,7 @@ pub(crate) fn resolve_envelope(
 /// # Errors
 /// Exactly the rejection execution commits for the same envelope, so the committed result does
 /// not depend on which check catches it.
-pub(crate) fn refuse_unexecutable_envelope(
+pub fn refuse_unexecutable_envelope(
     selection: &RootSelectionV1,
     height: u64,
     envelope: &InstructionBox,
@@ -115,7 +115,7 @@ pub(crate) fn refuse_unexecutable_envelope(
 ///
 /// # Errors
 /// The failure execution commits for that envelope ([`refuse_unexecutable_envelope`]).
-pub(crate) fn admit_envelopes(
+pub fn admit_envelopes(
     selection: &RootSelectionV1,
     height: u64,
     executable: &Executable,
@@ -131,7 +131,7 @@ pub(crate) fn admit_envelopes(
 ///
 /// Queue admission uses it so honest proposers never carry such a transaction. Restrictions are
 /// left to execution, where the obligation an instruction acts on is known.
-pub(crate) fn first_unadmitted_envelope(
+pub fn first_unadmitted_envelope(
     selection: &RootSelectionV1,
     executable: &Executable,
 ) -> Option<RuntimeRejectionV1> {

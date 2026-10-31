@@ -123,7 +123,7 @@ fn missing_policy_and_retired_crypto_manifest_have_no_decode_fallback() -> Resul
 #[test]
 fn malformed_or_noncanonical_authored_lists_are_never_normalized() -> Result<()> {
     for list in [
-        r#"[]"#,
+        r"[]",
         r#"["ed25519","ed25519"]"#,
         r#"["secp256k1","ed25519"]"#,
         r#"["unknown"]"#,
@@ -318,7 +318,7 @@ fn policy_field_and_public_manifest_reader_preserve_actual_local_refusal_and_ret
     assert!(
         public_error
             .downcast_ref::<norito::json::Error>()
-            .is_some_and(|error| error.is_decode_resource_limit()),
+            .is_some_and(norito::json::Error::is_decode_resource_limit),
         "the public path context must preserve the original JSON error source: {public_error:?}"
     );
     assert_eq!(

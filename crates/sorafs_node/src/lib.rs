@@ -13939,7 +13939,7 @@ impl NodeHandle {
         let retention_snapshot_hash = reconciliation::hash_snapshot(&retention_snapshot)?;
         let (gc_freed_bytes_total, gc_evictions_total) = storage.gc_counters();
         let mut chunk_refcounts = storage.chunk_refcount_snapshot();
-        chunk_refcounts.sort_by(|left, right| left.digest.cmp(&right.digest));
+        chunk_refcounts.sort_by_key(|left| left.digest);
         let gc_snapshot = reconciliation::GcReconciliationSnapshot {
             version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
             gc_freed_bytes_total,

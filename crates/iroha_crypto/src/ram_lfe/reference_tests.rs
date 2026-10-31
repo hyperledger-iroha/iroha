@@ -451,7 +451,9 @@ fn initializer_is_the_documented_blake3_stream() {
     hasher.finalize_xof().fill(&mut stream);
     // Each lane is its 32 bytes read as an unsigned big-endian integer modulo 257.
     let expected: Vec<u16> = stream
-        .chunks_exact(32)
+        .as_chunks::<32>()
+        .0
+        .iter()
         .map(|lane| {
             lane.iter().fold(0_u32, |residue, &byte| {
                 (residue * 256 + u32::from(byte)) % 257

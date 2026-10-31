@@ -5616,7 +5616,7 @@ fn build_index(sections: &[CarSection]) -> Result<Option<Vec<u8>>, CarWriteError
     for section in sections {
         entries.push((section.digest, section.offset));
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by_key(|a| a.0);
     let entries_capacity = checked_car_usize_mul(entries.len(), 40, "CAR index capacity")?;
     let capacity = checked_car_usize_add(64, entries_capacity, "CAR index capacity")?;
     let mut buf = Vec::new();
@@ -9073,7 +9073,7 @@ mod tests {
         assert_eq!(idx_cursor, bytes.len());
         assert_eq!(indexed_entries.len(), observed_entries.len());
         let mut expected_entries = observed_entries.clone();
-        expected_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        expected_entries.sort_by_key(|a| a.0);
         assert_eq!(indexed_entries, expected_entries);
     }
     #[test]

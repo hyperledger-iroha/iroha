@@ -5918,7 +5918,6 @@ mod proof_query_envelope_tests {
 }
 /// Maximum registered consensus-key records returned by the operator snapshot.
 const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
-#[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_consensus_key_records<'a>(
     records: impl IntoIterator<Item = &'a ConsensusKeyRecord>,
 ) -> Vec<ConsensusKeyRecord> {
@@ -6459,7 +6458,6 @@ mod bridge_finality_attestation_progress_tests {
 
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
 const BLS_KEY_RESPONSE_CAP: usize = iroha_sumeragi::types::MAX_COMMITTEE_SIZE;
-#[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_bls_key_map<'a>(
     peers: impl IntoIterator<Item = &'a PeerId>,
 ) -> std::collections::BTreeMap<String, Option<String>> {

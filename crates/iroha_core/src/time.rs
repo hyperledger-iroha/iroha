@@ -2260,7 +2260,7 @@ mod tests {
         svc.configured_peer_count = 7;
         assert_eq!(
             svc.sample_freshness_window(),
-            Duration::from_secs(5 * 4 * 3) + Duration::from_millis(100)
+            Duration::from_mins(1) + Duration::from_millis(100)
         );
     }
     #[test]

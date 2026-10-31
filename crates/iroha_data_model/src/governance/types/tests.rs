@@ -26,9 +26,9 @@ fn parliament_expected_head_root_keeps_the_length_prefixed_domain_preimage() {
     let predecessor: (u64, [u8; 32]) = (7, [0x51; 32]);
     let head = parliament_expected_head_root_v1(&predecessor);
     let mut hasher = Blake2b::<U32>::new();
-    hasher.update(&u64::try_from(HEAD_DOMAIN.len()).unwrap().to_le_bytes());
+    hasher.update(u64::try_from(HEAD_DOMAIN.len()).unwrap().to_le_bytes());
     hasher.update(HEAD_DOMAIN);
-    hasher.update(&predecessor.encode());
+    hasher.update(predecessor.encode());
     let expected: [u8; 32] = hasher.finalize().into();
     assert_eq!(head, expected);
     assert_ne!(head, [0; 32]);
@@ -927,7 +927,7 @@ fn proposal_fingerprint_matches_manual_derivation() {
         .expect("test domain fits in u64")
         .to_le_bytes();
     let mut hasher = Blake2b::<U32>::new();
-    hasher.update(&domain_len);
+    hasher.update(domain_len);
     hasher.update(domain);
     hasher.update(&manual_bytes);
     let manual_arr: [u8; 32] = hasher.finalize().into();

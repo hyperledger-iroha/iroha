@@ -518,13 +518,10 @@ fn soracloud_fhe_public_key_schema_advertises_proof_input_material() {
     for required in proof_contract_strings(
         "soracloud_fhe_public_key_schema_advertises_proof_input_material.1.1",
     )
-    .chain(
-        [
-            exact_public_key_proof_input_domain,
-            bounded_public_key_proof_input_domain,
-        ]
-        .into_iter(),
-    )
+    .chain([
+        exact_public_key_proof_input_domain,
+        bounded_public_key_proof_input_domain,
+    ])
     .chain(proof_contract_strings(
         "soracloud_fhe_public_key_schema_advertises_proof_input_material.1.2",
     )) {
@@ -712,41 +709,32 @@ fn soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary() {
     );
     for required in
         proof_contract_strings("soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary.1.1")
-            .chain(
-                [
-                    exact_raw_statement_domain,
-                    bounded_raw_statement_domain,
-                    exact_transcript_statement_domain,
-                    bounded_transcript_statement_domain,
-                ]
-                .into_iter(),
-            )
+            .chain([
+                exact_raw_statement_domain,
+                bounded_raw_statement_domain,
+                exact_transcript_statement_domain,
+                bounded_transcript_statement_domain,
+            ])
             .chain(proof_contract_strings(
                 "soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary.1.2",
             ))
-            .chain(
-                [
-                    exact_refresh_transcript_domain,
-                    bounded_refresh_transcript_domain,
-                ]
-                .into_iter(),
-            )
+            .chain([
+                exact_refresh_transcript_domain,
+                bounded_refresh_transcript_domain,
+            ])
             .chain(proof_contract_strings(
                 "soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary.1.3",
             ))
-            .chain(
-                [
-                    exact_rotation_seed_domain,
-                    bounded_rotation_seed_domain,
-                    exact_bootstrap_round_seed_domain,
-                    bounded_bootstrap_round_seed_domain,
-                ]
-                .into_iter(),
-            )
+            .chain([
+                exact_rotation_seed_domain,
+                bounded_rotation_seed_domain,
+                exact_bootstrap_round_seed_domain,
+                bounded_bootstrap_round_seed_domain,
+            ])
             .chain(proof_contract_strings(
                 "soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary.1.4",
             ))
-            .chain([round_refresh_digest_domain, zero_refresh_digest_domain].into_iter())
+            .chain([round_refresh_digest_domain, zero_refresh_digest_domain])
     {
         assert!(
             schema.contains(required),
@@ -1003,66 +991,51 @@ fn soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest() {
     for required in proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.1",
     )
-    .chain([statement_digest_domain].into_iter())
+    .chain([statement_digest_domain])
     .chain(proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.2",
     ))
-    .chain(
-        [
-            proof_input_material_digest_domain,
-            prover_input_material_digest_domain,
-            air_evaluation_material_digest_domain,
-            public_opening_material_digest_domain,
-            trace_material_digest_domain,
-            air_constraint_system_digest_domain,
-        ]
-        .into_iter(),
-    )
+    .chain([
+        proof_input_material_digest_domain,
+        prover_input_material_digest_domain,
+        air_evaluation_material_digest_domain,
+        public_opening_material_digest_domain,
+        trace_material_digest_domain,
+        air_constraint_system_digest_domain,
+    ])
     .chain(proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.3",
     ))
-    .chain(
-        [
-            proof_key_material_commitment_domain,
-            proof_key_pair_commitment_domain,
-        ]
-        .into_iter(),
-    )
+    .chain([
+        proof_key_material_commitment_domain,
+        proof_key_pair_commitment_domain,
+    ])
     .chain(proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.4",
     ))
-    .chain(
-        [
-            proof_input_material_digest_domain,
-            prover_input_material_digest_domain,
-            air_evaluation_material_digest_domain,
-            public_opening_material_digest_domain,
-            trace_material_digest_domain,
-            air_constraint_system_digest_domain,
-        ]
-        .into_iter(),
-    )
+    .chain([
+        proof_input_material_digest_domain,
+        prover_input_material_digest_domain,
+        air_evaluation_material_digest_domain,
+        public_opening_material_digest_domain,
+        trace_material_digest_domain,
+        air_constraint_system_digest_domain,
+    ])
     .chain(proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.5",
     ))
-    .chain(
-        [
-            proof_key_material_commitment_domain,
-            proof_key_pair_commitment_domain,
-        ]
-        .into_iter(),
-    )
+    .chain([
+        proof_key_material_commitment_domain,
+        proof_key_pair_commitment_domain,
+    ])
     .chain(proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.6",
     ))
-    .chain(
-        [
-            circuit_material_digest_domain,
-            evaluator_artifact_set_digest_domain,
-            circuit_artifact_bundle_digest_domain,
-        ]
-        .into_iter(),
-    )
+    .chain([
+        circuit_material_digest_domain,
+        evaluator_artifact_set_digest_domain,
+        circuit_artifact_bundle_digest_domain,
+    ])
     .chain(proof_contract_strings(
         "soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest.2.7",
     )) {

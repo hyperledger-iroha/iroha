@@ -771,12 +771,11 @@ where
                 digit_hasher.update(&buffer[..take]);
                 limb_hasher.update(&buffer[..take]);
                 native_digest.update(&buffer[..take]);
-                for encoded in buffer[..take].chunks_exact(core::mem::size_of::<u64>()) {
-                    let residue = u64::from_be_bytes(
-                        encoded
-                            .try_into()
-                            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-                    );
+                for encoded in buffer[..take]
+                    .as_chunks::<{ core::mem::size_of::<u64>() }>()
+                    .0
+                {
+                    let residue = u64::from_be_bytes(*encoded);
                     if residue >= modulus {
                         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
                     }
@@ -972,12 +971,8 @@ where
         let take = remaining.min(buffer.len());
         seekable_provider_read_exact(provider, expected_state, &mut buffer[..take])?;
         hasher.update(&buffer[..take]);
-        for encoded in buffer[..take].chunks_exact(8) {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            );
+        for encoded in buffer[..take].as_chunks::<8>().0 {
+            let residue = u64::from_be_bytes(*encoded);
             let limb = residues.len() / profile.ring_degree;
             if limb >= profile.moduli.len() || residue >= profile.moduli[limb] {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -2748,7 +2743,7 @@ fn write_canonical_wire_polynomial(
     const RESIDUES_PER_BATCH: usize = 1024;
     let mut bytes = [0_u8; RESIDUES_PER_BATCH * core::mem::size_of::<u64>()];
     for residues in polynomial.residues().chunks(RESIDUES_PER_BATCH) {
-        for (destination, residue) in bytes.chunks_exact_mut(8).zip(residues) {
+        for (destination, residue) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(residues) {
             destination.copy_from_slice(&residue.to_be_bytes());
         }
         writer.write_body(&bytes[..residues.len() * 8])?;
@@ -2986,7 +2981,7 @@ fn update_rns_digest_hasher(hash: &mut Keccak256, residues: &[u64]) {
     const RESIDUES_PER_BATCH: usize = 512;
     let mut bytes = [0_u8; RESIDUES_PER_BATCH * core::mem::size_of::<u64>()];
     for batch in residues.chunks(RESIDUES_PER_BATCH) {
-        for (destination, residue) in bytes.chunks_exact_mut(8).zip(batch) {
+        for (destination, residue) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(batch) {
             destination.copy_from_slice(&residue.to_be_bytes());
         }
         hash.update(&bytes[..batch.len() * 8]);
@@ -3016,12 +3011,8 @@ where
         read_canonical_raw_exact(body, &mut buffer[..take_bytes])?;
         native_hash.update(&buffer[..take_bytes]);
         wire_hash.update(&buffer[..take_bytes]);
-        for encoded in buffer[..take_bytes].chunks_exact(8) {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            );
+        for encoded in buffer[..take_bytes].as_chunks::<8>().0 {
+            let residue = u64::from_be_bytes(*encoded);
             let limb = index / profile.ring_degree;
             if limb >= profile.moduli.len() || residue >= profile.moduli[limb] {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
@@ -3066,12 +3057,8 @@ where
         let take_residues = (profile.ring_degree - residues.len()).min(buffer.len() / 8);
         let take_bytes = take_residues * 8;
         read_canonical_raw_exact(reader, &mut buffer[..take_bytes])?;
-        for encoded in buffer[..take_bytes].chunks_exact(8) {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            );
+        for encoded in buffer[..take_bytes].as_chunks::<8>().0 {
+            let residue = u64::from_be_bytes(*encoded);
             if residue >= modulus {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
             }
@@ -3889,7 +3876,9 @@ where
                 .checked_mul(core::mem::size_of::<u64>())
                 .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
             for (encoded, residue) in buffer[..bytes]
-                .chunks_exact_mut(core::mem::size_of::<u64>())
+                .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+                .0
+                .iter_mut()
                 .zip(residues)
             {
                 encoded.copy_from_slice(&residue.to_be_bytes());
@@ -3971,12 +3960,11 @@ where
                 self.read_exact(&mut buffer[..take])?;
                 payload_hasher.update(&buffer[..take]);
                 digit_hasher.update(&buffer[..take]);
-                for encoded in buffer[..take].chunks_exact(core::mem::size_of::<u64>()) {
-                    let residue = u64::from_be_bytes(
-                        encoded
-                            .try_into()
-                            .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-                    );
+                for encoded in buffer[..take]
+                    .as_chunks::<{ core::mem::size_of::<u64>() }>()
+                    .0
+                {
+                    let residue = u64::from_be_bytes(*encoded);
                     let limb = residue_index / context.profile.ring_degree;
                     if limb >= context.profile.moduli.len()
                         || residue >= context.profile.moduli[limb]

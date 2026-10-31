@@ -524,7 +524,7 @@ fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::E
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     };
-    for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let Some(byte) = nibble(pair[0])
             .zip(nibble(pair[1]))
             .map(|(high, low)| (high << 4) | low)
@@ -536,8 +536,15 @@ fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::E
         // SAFETY: one byte is written to each disjoint in-bounds slot.
         unsafe { allocation.as_ptr().add(index).write(byte) };
     }
-    // SAFETY: every byte is initialized and the allocation has exact capacity.
-    Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr(), bytes, bytes) })
+    // SAFETY: every byte is initialized and `layout` is exactly `[u8; bytes]`, so the
+    // allocation is owned as a boxed slice and becomes a vector without copying.
+    let owned = unsafe {
+        Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            allocation.as_ptr(),
+            bytes,
+        ))
+    };
+    Ok(owned.into_vec())
 }
 const CONTROLLER_SINGLE_KEY_TAG: u8 = 0x00;
 const CONTROLLER_MULTISIG_TAG: u8 = 0x01;
@@ -1296,7 +1303,7 @@ impl fmt::Display for AccountAddress {
         f.write_str(&self.canonical_hex().map_err(|_| fmt::Error)?)
     }
 }
-/// Ordinary AccountId construction from the same original literal grammar.
+/// Ordinary `AccountId` construction from the same original literal grammar.
 pub(super) fn parse_account_literal(input: &str) -> Result<AccountController, AccountAddressError> {
     decode::account_literal(input, &decode::Ordinary)?.to_account_controller()
 }

@@ -45,7 +45,10 @@ fn time_retry_journal_preserves_originals_and_nested_encounter_order_until_drop(
     let records = evidence.records();
     assert_eq!(records.len(), 4);
     assert_eq!(
-        records.iter().map(|row| row.depth()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(super::OwnedTimeRetryTransition::depth)
+            .collect::<Vec<_>>(),
         [0, 1, 2, 0]
     );
     for (index, row) in records.iter().enumerate() {
@@ -372,15 +375,24 @@ fn time_instruction_journal_shares_retry_order_and_retains_actual_mint_burn_remo
     let records = evidence.records();
     assert_eq!(records.len(), 4);
     assert_eq!(
-        records.iter().map(|r| r.ordinal()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(super::OwnedTimeRetryTransition::ordinal)
+            .collect::<Vec<_>>(),
         [0, 1, 2, 3]
     );
     assert_eq!(
-        records.iter().map(|r| r.depth()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(super::OwnedTimeRetryTransition::depth)
+            .collect::<Vec<_>>(),
         [0, 1, 2, 0]
     );
     assert_eq!(
-        records.iter().map(|r| r.kind()).collect::<Vec<_>>(),
+        records
+            .iter()
+            .map(super::OwnedTimeRetryTransition::kind)
+            .collect::<Vec<_>>(),
         [
             TimeJournalMutation::RetryState,
             TimeJournalMutation::MintRepetitions(3),
@@ -798,7 +810,9 @@ fn time_register_journal_retains_actual_metadata_deferred_bytes_and_shared_retry
         let evidence = journal.finish().unwrap();
         let rows = evidence.records();
         assert_eq!(
-            rows.iter().map(|r| r.kind()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(super::OwnedTimeRetryTransition::kind)
+                .collect::<Vec<_>>(),
             [
                 TimeJournalMutation::RetryState,
                 TimeJournalMutation::Register,
@@ -806,11 +820,15 @@ fn time_register_journal_retains_actual_metadata_deferred_bytes_and_shared_retry
             ]
         );
         assert_eq!(
-            rows.iter().map(|r| r.ordinal()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(super::OwnedTimeRetryTransition::ordinal)
+                .collect::<Vec<_>>(),
             [0, 1, 2]
         );
         assert_eq!(
-            rows.iter().map(|r| r.depth()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(super::OwnedTimeRetryTransition::depth)
+                .collect::<Vec<_>>(),
             [0, 1, 0]
         );
         assert!(rows[1].before().is_none());
@@ -896,11 +914,15 @@ fn time_register_journal_remove_readd_preserves_incarnation_sources_cleanup_and_
     let evidence = journal.finish().unwrap();
     let rows = evidence.records();
     assert_eq!(
-        rows.iter().map(|r| r.ordinal()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(super::OwnedTimeRetryTransition::ordinal)
+            .collect::<Vec<_>>(),
         [0, 1, 2]
     );
     assert_eq!(
-        rows.iter().map(|r| r.kind()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(super::OwnedTimeRetryTransition::kind)
+            .collect::<Vec<_>>(),
         [
             TimeJournalMutation::Unregister,
             TimeJournalMutation::Register,

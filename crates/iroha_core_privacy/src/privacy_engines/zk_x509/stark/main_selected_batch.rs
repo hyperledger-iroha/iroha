@@ -136,7 +136,7 @@ fn evaluate_batch_with_v1(
     scratch.resize(cells, F::ZERO);
     let scale = |first: usize, values: &mut [F]| {
         let mut power = shift.pow(first as u128);
-        for (offset, row) in values.chunks_exact_mut(WIDTH_V1).enumerate() {
+        for (offset, row) in values.as_chunks_mut::<WIDTH_V1>().0.iter_mut().enumerate() {
             let degree = first + offset;
             for (destination, column) in row.iter_mut().zip(coefficients) {
                 // Unequal public lengths retain the original zero suffix.
@@ -188,7 +188,9 @@ fn prune_batch_v1(values: &mut [F], offset: usize, destinations: &[F], root: F, 
             F::ONE
         };
         for (even, odd) in even
-            .chunks_exact_mut(WIDTH_V1)
+            .as_chunks_mut::<WIDTH_V1>()
+            .0
+            .iter_mut()
             .zip(odd.chunks_exact_mut(WIDTH_V1))
         {
             for (even, odd) in even.iter_mut().zip(odd) {

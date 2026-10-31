@@ -307,7 +307,7 @@ pub fn mul_scalar_mod(values: &mut [u64], scalar: u64, modulus: u64) {
 ))]
 fn first_stage(values: &mut [u64], modulus: u64) {
     use crate::constant_time::{add_mod_canonical_u64, sub_mod_canonical_u64};
-    for pair in values.chunks_exact_mut(2) {
+    for pair in values.as_chunks_mut::<2>().0 {
         let (left, right) = (pair[0], pair[1]);
         pair[0] = add_mod_canonical_u64(left, right, modulus);
         pair[1] = sub_mod_canonical_u64(left, right, modulus);

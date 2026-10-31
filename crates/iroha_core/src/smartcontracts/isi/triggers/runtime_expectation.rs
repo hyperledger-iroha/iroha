@@ -37,7 +37,7 @@ pub(super) fn capture_trigger_runtime(
 }
 
 /// Refuse changed or restricted semantics before a callback starts doing work.
-pub(crate) fn check_trigger_runtime(
+pub fn check_trigger_runtime(
     metadata: &Metadata,
     executable: &ExecutableRef,
     world: &WorldTransaction<'_, '_>,

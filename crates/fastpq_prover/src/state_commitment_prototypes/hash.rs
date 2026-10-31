@@ -30,7 +30,7 @@ pub const DIGEST_BYTES: usize = 32;
 #[must_use]
 pub fn digest_to_bytes(digest: &Digest) -> [u8; DIGEST_BYTES] {
     let mut bytes = [0_u8; DIGEST_BYTES];
-    for (chunk, word) in bytes.chunks_exact_mut(8).zip(digest) {
+    for (chunk, word) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(digest) {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
     bytes

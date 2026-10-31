@@ -36,7 +36,7 @@ fn root_slot(
     let low = u32::from_le_bytes(iv[..4].try_into().expect("low word"));
     let high = u32::from_le_bytes(iv[12..].try_into().expect("high word"));
     let mut children = [0u8; 64];
-    for (counter, child_block) in children.chunks_exact_mut(16).enumerate() {
+    for (counter, child_block) in children.as_chunks_mut::<16>().0.iter_mut().enumerate() {
         let mut address = iv;
         address[..4].copy_from_slice(
             &low.wrapping_add(u32::try_from(counter).expect("four blocks"))
@@ -62,7 +62,7 @@ fn encrypt(cipher: &aes::soft::Aes256, address: [u8; 16]) -> [u8; 16] {
 /// instead retains the supplied middle bytes and edits just the outer words.
 fn encode_words(words: [u32; 4]) -> [u8; 16] {
     let mut address = [0u8; 16];
-    for (target, word) in address.chunks_exact_mut(4).zip(words) {
+    for (target, word) in address.as_chunks_mut::<4>().0.iter_mut().zip(words) {
         target.copy_from_slice(&word.to_le_bytes());
     }
     address

@@ -722,7 +722,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
     ///
     /// # Errors
     /// Conflicting request, missing native custody, unavailable storage/artifacts, invalid proof
-    /// or uncertain Advance. Only never-selected Receive and ArchiveSent may retire a stale
+    /// or uncertain Advance. Only never-selected Receive and `ArchiveSent` may retire a stale
     /// plan and prepare again from the current source; every other kind returns `NotPerformed`.
     pub fn execute(&mut self, request: OperationRequestV1) -> Result<Completion, Error> {
         self.execute_intent(NativeIntentV1::user(request))
@@ -947,19 +947,18 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             // Unbind the Entry, which no request object, plan or capsule references, so the
             // request reads Unknown and the caller may quarantine the Payment; retrying the
             // same bytes repeats the same refusal.
-            if let Err(Error::Invalid(field)) = &planned {
-                if *field
+            if let Err(Error::Invalid(field)) = &planned
+                && *field
                     == crate::kagemusha_wallet_state_v1::native_worker::RECEIVE_ADMISSION_REFUSAL
-                    && entry.request.is_none()
-                    && entry.plan.is_none()
-                    && entry.capsule.is_none()
-                    && entry.operation.is_none()
-                {
-                    manifest.preparations = manifest
-                        .preparations
-                        .remove(&mut self.archive, &request.request_id())?;
-                    self.publish_manifest(selected, &manifest)?;
-                }
+                && entry.request.is_none()
+                && entry.plan.is_none()
+                && entry.capsule.is_none()
+                && entry.operation.is_none()
+            {
+                manifest.preparations = manifest
+                    .preparations
+                    .remove(&mut self.archive, &request.request_id())?;
+                self.publish_manifest(selected, &manifest)?;
             }
             let Some((plan, prepared)) = planned? else {
                 return Ok(ReviewedExecutionV1::Executed(Completion::NotPerformed(

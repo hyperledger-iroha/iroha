@@ -1226,6 +1226,10 @@ pub struct ExpectationV1 {
 #[norito_schema(name = "iroha_data_model::runtime::lifecycle::RuntimeRejectionV1")]
 #[norito(tag = "kind", content = "content")]
 #[ignore_extra_doc_attributes]
+#[expect(
+    clippy::doc_markdown,
+    reason = "displaydoc renders these doc comments as Display format strings with bare placeholders"
+)]
 pub enum RuntimeRejectionV1 {
     /// No active interface answers wire ID {wire_id}
     ///

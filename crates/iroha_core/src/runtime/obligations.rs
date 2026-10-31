@@ -90,7 +90,7 @@ use mv::storage::StorageReadOnly as _;
 
 /// How an instruction acts on a live obligation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Step {
+pub enum Step {
     /// It advances the obligation and adds a party's exposure, such as a buyer accepting an
     /// offer: work already admitted continues, but completion-only does not run it.
     Continue,
@@ -113,7 +113,7 @@ impl Step {
 
 /// Whether an escrow in `status` is still a live obligation: its custody has not been paid out,
 /// refunded or resolved.
-pub(crate) const fn is_live(status: AssetEscrowStatus) -> bool {
+pub const fn is_live(status: AssetEscrowStatus) -> bool {
     match status {
         AssetEscrowStatus::Open
         | AssetEscrowStatus::Accepted
@@ -130,7 +130,7 @@ pub(crate) const fn is_live(status: AssetEscrowStatus) -> bool {
 
 /// The escrow `instruction` acts on and how. Instructions that open new custody, and every
 /// instruction that is not an escrow instruction, act on no live escrow.
-pub(crate) fn escrow_step(instruction: &InstructionBox) -> Option<(EscrowId, Step)> {
+pub fn escrow_step(instruction: &InstructionBox) -> Option<(EscrowId, Step)> {
     let instruction = instruction.as_any();
     let step = |escrow_id: &EscrowId, step| Some((*escrow_id, step));
     if let Some(accept) = instruction.downcast_ref::<AcceptAssetEscrow>() {
@@ -180,7 +180,7 @@ pub(crate) fn escrow_step(instruction: &InstructionBox) -> Option<(EscrowId, Ste
 
 /// What an AMX instruction acts on (`specs/sumeragi.md` §11).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AmxParticipation {
+pub enum AmxParticipation {
     /// A transaction of the global chain, live until it is decided.
     Decision([u8; 32]),
     /// The transactions of the global chain a dataspace takes part in, live while one of them is
@@ -268,7 +268,7 @@ fn unsettled_escrows(state: &NativeAmxParticipantStateV1) -> usize {
 /// start new work, and every instruction that is not an AMX instruction acts on no participation;
 /// every other AMX instruction completes one. A proof of the wrong record kind acts on nothing:
 /// its execution rejects it.
-pub(crate) fn amx_step(instruction: &InstructionBox) -> Option<(AmxParticipation, Step)> {
+pub fn amx_step(instruction: &InstructionBox) -> Option<(AmxParticipation, Step)> {
     let instruction = instruction.as_any();
     let participation = if let Some(relay) = instruction.downcast_ref::<RelayAmxPreparedV1>() {
         let AmxRecordV1::Prepared(prepared) = &relay.proof.record else {
@@ -287,16 +287,15 @@ pub(crate) fn amx_step(instruction: &InstructionBox) -> Option<(AmxParticipation
             dataspace: settle.dataspace,
             tx: decision.tx,
         }
-    } else if let Some(handoff) = instruction.downcast_ref::<RelayGlobalAmxHandoffV1>() {
-        AmxParticipation::SettlementsOf(handoff.dataspace)
     } else {
-        return None;
+        let handoff = instruction.downcast_ref::<RelayGlobalAmxHandoffV1>()?;
+        AmxParticipation::SettlementsOf(handoff.dataspace)
     };
     Some((participation, Step::Complete))
 }
 
 /// How `instruction` acts on a live obligation of `world`, if it does.
-pub(crate) fn step(
+pub fn step(
     instruction: &InstructionBox,
     world: &crate::state::WorldTransaction<'_, '_>,
 ) -> Option<Step> {
@@ -392,7 +391,7 @@ impl Class {
 
 /// Live obligations of committed State, counted by what their completion needs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct LiveObligations {
+pub struct LiveObligations {
     /// Asset escrows and locks in custody.
     escrows: usize,
     /// AMX transactions this root coordinates and has not decided.
@@ -606,7 +605,7 @@ fn closure_gap(
 ///
 /// TODO(§7.2): pending consent, scheduled triggers and migration cursors do not register as
 /// obligations yet; `LiveObligations::of` counts none.
-pub(crate) fn stranded(
+pub fn stranded(
     predecessor: &RootSelectionV1,
     successor: &RootSelectionV1,
     published: &impl DefinitionLookup,

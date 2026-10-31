@@ -156,7 +156,7 @@ impl NativeRound {
         } else {
             &self.synthetic_completions
         };
-        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+        let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             Some(n.saturating_add(1))
         });
         Some(staged)

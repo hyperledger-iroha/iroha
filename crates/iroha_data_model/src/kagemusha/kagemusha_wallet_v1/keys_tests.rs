@@ -24,7 +24,7 @@ fn low_and_high(signing: &SigningKey) -> ([u8; 64], [u8; 64]) {
     let low = signature.normalize_s();
     let high =
         P256Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes()).expect("high");
-    assert!(high.normalize_s() != high);
+    assert_ne!(high.normalize_s(), high);
     (
         low.to_bytes().as_slice().try_into().expect("64 bytes"),
         high.to_bytes().as_slice().try_into().expect("64 bytes"),

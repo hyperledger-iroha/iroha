@@ -76,7 +76,12 @@ fn prepaid_levels_survive_budget_shrink_without_reacquisition_or_growth() {
                 );
             }
             for (level, pair) in levels.as_slice().windows(2).enumerate() {
-                for (children, parent) in pair[0].as_slice().chunks_exact(2).zip(pair[1].as_slice())
+                for (children, parent) in pair[0]
+                    .as_slice()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(pair[1].as_slice())
                 {
                     assert_eq!(
                         *parent,

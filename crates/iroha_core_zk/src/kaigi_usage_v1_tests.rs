@@ -141,7 +141,7 @@ fn final_usage_rejects_old_single_output_and_all_nonexact_shapes() {
         vec![retired_shape.as_slice()],
         vec![trailing_zero.as_slice()],
         vec![&fixture.instance[..], &fixture.instance[..]],
-        fixture.instance.chunks_exact(1).collect(),
+        fixture.instance.as_chunks::<1>().0.iter().collect(),
     ];
     for columns in shapes {
         let (proof, vk) = envelope(ZK_BACKEND_NATIVE_PIPA_R, fixture.vk_bytes.clone(), &columns);

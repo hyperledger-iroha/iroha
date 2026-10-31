@@ -96,7 +96,7 @@ impl FastpqQuantityUnits {
     #[must_use]
     pub fn to_le_bytes(&self) -> [u8; FASTPQ_QUANTITY_UNIT_BYTES] {
         let mut bytes = [0_u8; FASTPQ_QUANTITY_UNIT_BYTES];
-        for (chunk, limb) in bytes.chunks_exact_mut(4).zip(self.limbs) {
+        for (chunk, limb) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(self.limbs) {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
         bytes

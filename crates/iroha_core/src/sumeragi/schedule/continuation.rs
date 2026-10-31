@@ -22,7 +22,7 @@ type Attempt<T> = Result<T, ExecutionAttemptError<ScheduleError>>;
 
 /// One attempt's bank, allocated before any disposable World owner.
 #[derive(Default)]
-pub(crate) struct ContinuationPreparation {
+pub struct ContinuationPreparation {
     bank: Option<ChargedShared<Bank>>,
 }
 

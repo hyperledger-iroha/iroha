@@ -404,7 +404,7 @@ fn commitments_open_and_reconstruct_with_112_byte_leaf_commitments() {
             let opening = commitment.open(&hidden).expect("within T_open");
             assert_eq!(opening.len(), opening_bytes);
             // The hidden commitments are the full 112 bytes of the hidden leaves.
-            for (vector, com) in opening[..112 * tau].chunks_exact(112).enumerate() {
+            for (vector, com) in opening[..112 * tau].as_chunks::<112>().0.iter().enumerate() {
                 let node = position_in_tree(vole, vector, usize::from(same)).expect("valid leaf");
                 let tweak = u32::try_from(vole.leaves() - 1 + vector).expect("small");
                 let expanded = expand(
@@ -413,7 +413,7 @@ fn commitments_open_and_reconstruct_with_112_byte_leaf_commitments() {
                     tweak,
                 );
                 if vector % 11 == 0 {
-                    assert_eq!(com, independent_leaf(&expanded, &hash_key));
+                    assert_eq!(com.as_slice(), independent_leaf(&expanded, &hash_key));
                 }
             }
             assert!(
@@ -429,7 +429,9 @@ fn commitments_open_and_reconstruct_with_112_byte_leaf_commitments() {
                 let expected = commitment.seeds(vector).expect("vector below tau");
                 let seeds = opened.seeds(vector).expect("vector below tau");
                 for (index, (seed, slot)) in expected
-                    .chunks_exact(32)
+                    .as_chunks::<32>()
+                    .0
+                    .iter()
                     .zip(seeds.chunks_exact(32))
                     .enumerate()
                 {
@@ -497,7 +499,7 @@ fn commitments_open_and_reconstruct_with_112_byte_leaf_commitments() {
             // A FAEST opening stretched to the extended length does not
             // reconstruct the extended commitment either.
             let mut stretched = Vec::new();
-            for com in plain[..96 * tau].chunks_exact(96) {
+            for com in plain[..96 * tau].as_chunks::<96>().0 {
                 stretched.extend_from_slice(com);
                 stretched.extend_from_slice(&[0; 16]);
             }

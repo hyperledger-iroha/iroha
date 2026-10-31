@@ -78,7 +78,7 @@ fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
 }
 #[cfg(test)]
 fn test_ticket_revocation_store() -> Arc<Mutex<TicketRevocationStore>> {
-    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_secs(900))
+    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_mins(15))
         .expect("test replay-store limits must be valid");
     let store = TicketRevocationStore::in_memory(limits)
         .expect("test in-memory replay store must be available");
@@ -6088,9 +6088,10 @@ mod state {
                 );
                 return Err(crate::Error::HandshakeConsensusMismatch { reason });
             }
-            let required = caps
-                .required_host_profiles
-                .map_or_else(crate::HostProfileSet::default, |cell| cell.current());
+            let required = caps.required_host_profiles.map_or_else(
+                crate::HostProfileSet::default,
+                super::super::RequiredHostProfiles::current,
+            );
             if let Some(reason) = host_profile_mismatch(&required, &peer_config.host_profiles) {
                 iroha_logger::warn!(%reason, "peer rejected due to consensus config mismatch");
                 return Err(crate::Error::HandshakeConsensusMismatch { reason });

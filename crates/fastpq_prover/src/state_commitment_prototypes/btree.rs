@@ -519,7 +519,7 @@ impl<H: HashProfile> Engine for MerkleBTree<H> {
                 }
             }
             longest = longest.max(run).max(1);
-            max_depth += usize::BITS - (longest - 1).leading_zeros();
+            max_depth += (longest - 1).bit_width();
         }
         Storage {
             entries,

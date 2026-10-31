@@ -451,8 +451,7 @@ fn fx_output_preparation_refusal_keeps_original_cause_and_rolls_back_dirty_prefi
                 .world
                 .assets
                 .get(&receiver_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero),
+                .map_or_else(Quantity::zero, |value| value.as_ref().clone()),
             Quantity::zero()
         );
         let unchanged_registry = FxCorridorPolicyRegistry::from_custom_parameter(

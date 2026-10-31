@@ -180,7 +180,9 @@ impl Cells {
             self.value(u128::try_from(raw.len()).map_err(|_| Error::BoundsFailure)?),
         )?;
         let messages = raw
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 iroha_plonk_gadgets::bytes::element::LeElement::assign(
                     &mut chip.uint(),
@@ -998,7 +1000,7 @@ fn replay_native_checkpoints(
         session.encode_a_checkpoint(&current, budget).unwrap(),
         *original
     );
-    for (index, pair) in retained[1..].chunks_exact(2).enumerate() {
+    for (index, pair) in retained[1..].as_chunks::<2>().0.iter().enumerate() {
         // D6a: each continuation runs on a session detached and resumed between
         // fold calls; checkpoints restored before detaching keep their source.
         session = prover.resume(session.into_retained()).unwrap();

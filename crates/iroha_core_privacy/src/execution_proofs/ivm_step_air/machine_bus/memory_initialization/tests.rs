@@ -67,7 +67,7 @@ impl Fixture {
                 F(p.length as u64),
                 F::ONE,
             ]);
-            for (limb, pair) in BYTES[..p.length].chunks_exact(2).enumerate() {
+            for (limb, pair) in BYTES[..p.length].as_chunks::<2>().0.iter().enumerate() {
                 f.log[4 + limb] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
             }
         }
@@ -338,7 +338,7 @@ fn initialization_composes_with_the_same_constrained_store_packet_and_log() {
     after[8..].fill(0x5a);
     f.memory[packet::BEFORE_TAG] = F(0x1234);
     f.memory[packet::AFTER_TAG] = F(0x0034);
-    for (i, pair) in after.chunks_exact(2).enumerate() {
+    for (i, pair) in after.as_chunks::<2>().0.iter().enumerate() {
         f.memory[AFTER + i] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
     }
     let mut reads = [[F::ZERO; packet::WIDTH]; 3];

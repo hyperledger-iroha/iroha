@@ -4012,8 +4012,7 @@ fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
 fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|dur| dur.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |dur| dur.as_secs());
     let mut counter = 0u32;
     loop {
         let name = if counter == 0 {

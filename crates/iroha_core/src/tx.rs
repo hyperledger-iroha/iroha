@@ -5972,7 +5972,7 @@ pub mod tests {
     }
     #[test]
     fn future_transaction_rejection_retains_the_exact_admission_clock_boundary() {
-        let (_handle, source) = TimeSource::new_mock(Duration::from_millis(12_000));
+        let (_handle, source) = TimeSource::new_mock(Duration::from_secs(12));
         let tx = TransactionBuilder::new_genesis_with_time_source(
             GENESIS_ACCOUNT.id.clone(),
             &source,
@@ -5981,7 +5981,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::DEBUG, "future clock boundary".to_owned())])
         .sign(&GENESIS_ACCOUNT.key);
         let drift = Duration::from_millis(1_000);
-        AcceptedTransaction::validate_common_envelope(&tx, drift, Duration::from_millis(11_000))
+        AcceptedTransaction::validate_common_envelope(&tx, drift, Duration::from_secs(11))
             .expect("exact maximum future drift remains accepted");
         let error = AcceptedTransaction::validate_common_envelope(
             &tx,

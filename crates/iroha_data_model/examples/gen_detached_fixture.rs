@@ -17,6 +17,12 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_version::codec::EncodeVersioned as _;
 use std::{num::NonZeroU64, str::FromStr as _, time::Duration};
+/// Fixed fixture creation time (2100-01-01T00:00:00Z).
+#[expect(
+    clippy::duration_suboptimal_units,
+    reason = "Unix timestamps stay in whole milliseconds"
+)]
+const CREATION_TIME: Duration = Duration::from_millis(4_102_444_800_000);
 fn main() {
     let authority_keypair =
         KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("authority key");
@@ -28,7 +34,7 @@ fn main() {
             .expect("fixture contract address");
     let merchant = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     let expected_code_hash = Hash::new(b"detached-fixture-contract-code");
-    let payload = format!(r#"{{"amount":"750","merchant_account_id":"{merchant}"}}"#,);
+    let payload = format!(r#"{{"amount":"750","merchant_account_id":"{merchant}"}}"#);
     let mut metadata = Metadata::default();
     for (key, value) in [
         ("contract_address", contract_address.to_string()),
@@ -76,7 +82,7 @@ fn main() {
     .with_fee_payment_intent(fee_payment)
     .with_metadata(metadata)
     .with_executable(Executable::ContractCall(invocation));
-    builder.set_creation_time(Duration::from_millis(4_102_444_800_000));
+    builder.set_creation_time(CREATION_TIME);
     builder.set_ttl(Duration::from_millis(120_000));
     let payload = builder.into_payload().expect("valid exact payload");
     let placeholder_signature = Signature::try_new(

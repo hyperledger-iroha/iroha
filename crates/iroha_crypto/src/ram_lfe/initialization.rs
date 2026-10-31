@@ -130,7 +130,7 @@ fn expand_lanes<T: norito::NoritoSerialize>(
     let mut reader = Zeroizing::new(hasher.finalize_xof());
     let mut bytes = Zeroizing::new([0_u8; LANES * BYTES_PER_LANE]);
     reader.fill(bytes.as_mut());
-    for (result, lane) in lanes.iter_mut().zip(bytes.chunks_exact(BYTES_PER_LANE)) {
+    for (result, lane) in lanes.iter_mut().zip(bytes.as_chunks::<BYTES_PER_LANE>().0) {
         *result = reduce_lane(lane);
     }
     Ok(())

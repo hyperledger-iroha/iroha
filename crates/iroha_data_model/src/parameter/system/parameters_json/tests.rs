@@ -175,6 +175,16 @@ fn malformed_records_scalar_bounds_duplicates_and_unknowns_are_rejected() {
 
 #[test]
 fn every_required_capacity_field_and_nested_record_retains_its_contract() {
+    fn remove(value: &mut json::Value, path: &[&str]) {
+        let json::Value::Object(map) = value else {
+            panic!("test object")
+        };
+        if path.len() == 1 {
+            assert!(map.remove(path[0]).is_some());
+        } else {
+            remove(map.get_mut(path[0]).unwrap(), &path[1..]);
+        }
+    }
     // Mutating a test Value is only fixture authoring; production decode never uses it.
     let original = json::to_value(&Parameters::default()).unwrap();
     let paths: &[&[&str]] = &[
@@ -204,16 +214,6 @@ fn every_required_capacity_field_and_nested_record_retains_its_contract() {
         ],
         &["block", "fastpq_source", "mandatory", "per_obligation"],
     ];
-    fn remove(value: &mut json::Value, path: &[&str]) {
-        let json::Value::Object(map) = value else {
-            panic!("test object")
-        };
-        if path.len() == 1 {
-            assert!(map.remove(path[0]).is_some());
-        } else {
-            remove(map.get_mut(path[0]).unwrap(), &path[1..]);
-        }
-    }
     for path in paths {
         let mut altered = original.clone();
         remove(&mut altered, path);

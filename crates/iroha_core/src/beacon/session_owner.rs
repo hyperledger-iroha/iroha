@@ -292,10 +292,6 @@ impl<'a, 'r> Construction<'a, 'r> {
             signature: self.signature(&source.signature)?,
         })
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "anonymous lifetimes in impl Trait are unstable on the pinned Rust compiler"
-    )]
     fn dealers<'s>(
         &mut self,
         source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgDealerCommitmentV1>,
@@ -306,10 +302,6 @@ impl<'a, 'r> Construction<'a, 'r> {
         }
         self.vector(output)
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "anonymous lifetimes in impl Trait are unstable on the pinned Rust compiler"
-    )]
     fn recipients<'s>(
         &mut self,
         source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgRecipientKeyV1>,
@@ -320,10 +312,6 @@ impl<'a, 'r> Construction<'a, 'r> {
         }
         self.vector(output)
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "anonymous lifetimes in impl Trait are unstable on the pinned Rust compiler"
-    )]
     fn edges<'s>(
         &mut self,
         source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgEncryptedShareV1>,
@@ -334,10 +322,6 @@ impl<'a, 'r> Construction<'a, 'r> {
         }
         self.vector(output)
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "anonymous lifetimes in impl Trait are unstable on the pinned Rust compiler"
-    )]
     fn acceptances<'s>(
         &mut self,
         source: impl ExactSizeIterator<Item = &'s GlobalThresholdBeaconDkgShareAcceptanceV1>,

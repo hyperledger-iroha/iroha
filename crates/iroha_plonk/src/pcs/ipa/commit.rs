@@ -1149,10 +1149,8 @@ fn msm_complete_unsigned<C: PastaCurve>(
         .map(|scalar| {
             let repr = scalar.to_repr();
             let mut limbs = [0_u64; 4];
-            for (limb, chunk) in limbs.iter_mut().zip(repr.as_ref().chunks_exact(8)) {
-                let mut word = [0_u8; 8];
-                word.copy_from_slice(chunk);
-                *limb = u64::from_le_bytes(word);
+            for (limb, chunk) in limbs.iter_mut().zip(repr.as_ref().as_chunks::<8>().0) {
+                *limb = u64::from_le_bytes(*chunk);
             }
             limbs
         })

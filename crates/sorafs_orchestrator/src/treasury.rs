@@ -1798,11 +1798,11 @@ mod tests {
         let filed_before = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["filed"])
-            .get() as u64;
+            .get();
         let resolved_before = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["resolved_credit"])
-            .get() as u64;
+            .get();
         let credit_before = metrics_handle
             .soranet_reward_adjustment_nanos_total
             .with_label_values(&[relay_hex.as_str(), "credit"])
@@ -1840,11 +1840,11 @@ mod tests {
         let filed_after = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["filed"])
-            .get() as u64;
+            .get();
         let resolved_after = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["resolved_credit"])
-            .get() as u64;
+            .get();
         let credit_after = metrics_handle
             .soranet_reward_adjustment_nanos_total
             .with_label_values(&[relay_hex.as_str(), "credit"])
@@ -1871,7 +1871,7 @@ mod tests {
         let rejected_before = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["rejected"])
-            .get() as u64;
+            .get();
         let (mut service, _) = payout_service();
         let bond = bond_entry(1_000);
         let metrics = metrics(19, 1_000);
@@ -1895,7 +1895,7 @@ mod tests {
         let rejected_after = metrics_handle
             .soranet_reward_disputes_total
             .with_label_values(&["rejected"])
-            .get() as u64;
+            .get();
         assert!(
             rejected_after >= rejected_before.saturating_add(1),
             "expected rejected counter to increase (before={rejected_before}, after={rejected_after})"

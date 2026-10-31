@@ -232,7 +232,9 @@ impl RamLfeProgramExecutionTrace {
         }
         let mut target = self.snapshots
             [self.steps * SNAPSHOT_WIDTH..(self.steps + 1) * SNAPSHOT_WIDTH]
-            .chunks_exact_mut(COEFFICIENTS_PER_CIPHERTEXT);
+            .as_chunks_mut::<COEFFICIENTS_PER_CIPHERTEXT>()
+            .0
+            .iter_mut();
         for value in registers.iter().chain(memory) {
             if value.c0.len() != 64 || value.c1.len() != 64 {
                 return Err(invalid_program_error("trace ciphertext shape mismatch"));

@@ -27,7 +27,7 @@ use crate::state::WorldTransaction;
 
 /// One native implementation a release adds after the frozen baseline.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Addition {
+pub struct Addition {
     /// Native module of the implementation; unique in the release.
     pub(crate) module: &'static str,
     /// Wire IDs of the instructions it adds, each a new interface.
@@ -47,7 +47,7 @@ pub(crate) struct Addition {
         reason = "a release declares its World-field additions here; this release declares none"
     )
 )]
-pub(crate) enum StorageAddition {
+pub enum StorageAddition {
     /// A table, installed empty: its registry identity.
     Table(&'static str),
     /// A cell, installed at its initial value.
@@ -66,7 +66,7 @@ impl StorageAddition {
 
 /// A World cell an addition adds, with the value its installation writes.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CellAddition {
+pub struct CellAddition {
     /// Registry identity of the World field.
     pub(crate) field: &'static str,
     /// Canonical Norito bytes of the initial value, published in the storage definition.
@@ -76,33 +76,33 @@ pub(crate) struct CellAddition {
 }
 
 /// Writes a cell's published initial bytes into the World when its storage is installed.
-pub(crate) type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), String>;
+pub type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), String>;
 
 /// What this release adds after its frozen baseline, in activation order.
 ///
 /// TODO(`specs/live_runtime_upgrades.md` §5.5): before the first addition of a World field,
 /// snapshot writers must omit, and readers default, every field the snapshot's selection does not
 /// install, so a previous release keeps reading this release's snapshots until activation.
-pub(crate) const ADDITIONS: &[Addition] = &[];
+pub const ADDITIONS: &[Addition] = &[];
 
 /// Additions of a hypothetical later release, claiming compiled items the real baseline holds.
 #[cfg(test)]
-pub(crate) mod test_additions {
+pub mod test_additions {
     use super::{Addition, CellAddition, StorageAddition};
 
     /// Module of [`LOG`].
-    pub(crate) const LOG_MODULE: &str = "iroha.test.addition.log";
+    pub const LOG_MODULE: &str = "iroha.test.addition.log";
     /// Wire ID [`LOG`] adds.
-    pub(crate) const LOG_WIRE_ID: &str = "iroha.log";
+    pub const LOG_WIRE_ID: &str = "iroha.log";
     /// The table [`LOG`] adds.
-    pub(crate) const TABLE: &str = "world.viral_bonus_paid";
+    pub const TABLE: &str = "world.viral_bonus_paid";
     /// The cell [`LOG`] adds.
-    pub(crate) const CELL: &str = "world.soradns_history_len";
+    pub const CELL: &str = "world.soradns_history_len";
     /// The value the cell [`LOG`] adds starts at.
-    pub(crate) const CELL_INITIAL: u64 = 7;
+    pub const CELL_INITIAL: u64 = 7;
 
     /// A release that adds the `Log` instruction, one table and one cell after its baseline.
-    pub(crate) const LOG: Addition = Addition {
+    pub const LOG: Addition = Addition {
         module: LOG_MODULE,
         instructions: &[LOG_WIRE_ID],
         rebinds: &[],
@@ -121,7 +121,7 @@ pub(crate) mod test_additions {
     };
 
     /// A later addition that rebinds `Log`, which [`LOG`] adds, to its own handler.
-    pub(crate) const REBIND_LOG: Addition = Addition {
+    pub const REBIND_LOG: Addition = Addition {
         module: "iroha.test.addition.log_fix",
         instructions: &[],
         rebinds: &[LOG_WIRE_ID],

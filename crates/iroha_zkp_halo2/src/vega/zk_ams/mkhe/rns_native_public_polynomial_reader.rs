@@ -582,14 +582,16 @@ impl QpcsScheduleIdentityV1 {
         value.validate_base_v1()?;
         let mut points = [0_u8; QPCS_SCHEDULE_POINT_BYTES_V1];
         for (limb, (entry, modulus)) in points
-            .chunks_exact_mut(60)
+            .as_chunks_mut::<60>()
+            .0
+            .iter_mut()
             .zip(ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1)
             .enumerate()
         {
             entry[..2].copy_from_slice(&(limb as u16).to_be_bytes());
             entry[2..10].copy_from_slice(&modulus.to_be_bytes());
             let mut limb_points = [0; REPETITIONS_V1];
-            for (repetition, slot) in entry[10..].chunks_exact_mut(10).enumerate() {
+            for (repetition, slot) in entry[10..].as_chunks_mut::<10>().0.iter_mut().enumerate() {
                 let point = schedule
                     .point(limb, repetition)
                     .ok_or(RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule)?;
@@ -788,12 +790,8 @@ impl FivePointBlockEvaluationV1 {
             return Err(RnsNativePublicPolynomialReaderErrorV1::InvalidCount);
         }
         let mut block_values = [0_u64; REPETITIONS_V1];
-        for coefficient in encoded.chunks_exact(RESIDUE_BYTES_V1).rev() {
-            let coefficient = u64::from_be_bytes(
-                coefficient
-                    .try_into()
-                    .map_err(|_| RnsNativePublicPolynomialReaderErrorV1::InvalidCount)?,
-            );
+        for coefficient in encoded.as_chunks::<RESIDUE_BYTES_V1>().0.iter().rev() {
+            let coefficient = u64::from_be_bytes(*coefficient);
             if coefficient >= self.plan.modulus {
                 return Err(RnsNativePublicPolynomialReaderErrorV1::NonCanonicalCoefficient);
             }

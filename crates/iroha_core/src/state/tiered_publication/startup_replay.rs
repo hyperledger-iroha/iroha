@@ -3,7 +3,7 @@
 use super::*;
 
 /// Startup-only persistence scope. It grants no execution or restoration authority.
-pub(crate) struct StartupTieredReplay {
+pub struct StartupTieredReplay {
     state: Arc<State>,
 }
 
@@ -56,6 +56,19 @@ impl StartupTieredReplay {
         #[cfg(feature = "telemetry")]
         record_tiered_snapshot_metrics(&backend, &self.state.telemetry);
         Ok(())
+    }
+}
+
+impl Drop for StartupTieredReplay {
+    fn drop(&mut self) {
+        // Entry invalidates the baseline; a failed/abandoned startup therefore
+        // forces a complete capture on the next normal publication. Only a
+        // successful complete finish can make incremental snapshots ready again.
+        self.state
+            .tiered_snapshot_worker
+            .inner
+            .startup_replay_active
+            .store(false, Ordering::Release);
     }
 }
 
@@ -216,18 +229,5 @@ mod tests {
         std::fs::remove_file(collision).unwrap();
         mutate(&state, 10);
         assert_final_values(&state, 10);
-    }
-}
-
-impl Drop for StartupTieredReplay {
-    fn drop(&mut self) {
-        // Entry invalidates the baseline; a failed/abandoned startup therefore
-        // forces a complete capture on the next normal publication. Only a
-        // successful complete finish can make incremental snapshots ready again.
-        self.state
-            .tiered_snapshot_worker
-            .inner
-            .startup_replay_active
-            .store(false, Ordering::Release);
     }
 }

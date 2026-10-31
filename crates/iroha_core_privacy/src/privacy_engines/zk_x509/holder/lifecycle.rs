@@ -837,11 +837,11 @@ mod tests {
         let policy = fixture.authoritative_state.certificate_policy().clone();
         let crl = fixture.authoritative_state.crl_record();
         assert_eq!(
-            joined_state(&[anchor], &[policy.clone()], crl).unwrap(),
+            joined_state(&[anchor], std::slice::from_ref(&policy), crl).unwrap(),
             fixture.authoritative_state
         );
         let successor = build_zk_x509_network_release_successor_fixture_v1(
-            fixture.statement.context.clone(),
+            fixture.statement.context,
             start(&fixture) + 1_000,
             fixture.statement.wallet_account.clone(),
             crl,
@@ -850,7 +850,12 @@ mod tests {
         prepare(&successor, budget()).expect("successor has its own authentic native preflight");
         let changed_states = [
             joined_state(&[anchor], &[policy.clone(), successor_policy(&policy)], crl).unwrap(),
-            joined_state(&[anchor, successor_anchor(anchor)], &[policy.clone()], crl).unwrap(),
+            joined_state(
+                &[anchor, successor_anchor(anchor)],
+                std::slice::from_ref(&policy),
+                crl,
+            )
+            .unwrap(),
             successor.authoritative_state,
         ];
         for current in &changed_states {

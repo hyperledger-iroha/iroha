@@ -334,7 +334,9 @@ fn decode_exact_body_v1(
     }
     let mut coefficients = Vec::with_capacity(PROOF_COEFFICIENTS_V1);
     for (index, encoded) in bytes[PROOF_HEADER_BYTES_V1..]
-        .chunks_exact(PROOF_RESIDUE_BYTES_V1)
+        .as_chunks::<PROOF_RESIDUE_BYTES_V1>()
+        .0
+        .iter()
         .enumerate()
     {
         let mut wide = [0_u8; 8];

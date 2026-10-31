@@ -800,18 +800,16 @@ fn opencl_available() -> bool {
 }
 #[cfg(unix)]
 fn has_icd_entries(dir: &str) -> bool {
-    fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .any(|path| {
-                    path.extension()
-                        .and_then(|ext| ext.to_str())
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("icd"))
-                })
-        })
-        .unwrap_or(false)
+    fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .any(|path| {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("icd"))
+            })
+    })
 }
 fn command_success(program: &str, args: &[&str]) -> bool {
     Command::new(program)
@@ -819,8 +817,7 @@ fn command_success(program: &str, args: &[&str]) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .is_ok_and(|status| status.success())
 }
 #[cfg(target_os = "macos")]
 fn run_command_capture(program: &str, args: &[&str]) -> Option<String> {

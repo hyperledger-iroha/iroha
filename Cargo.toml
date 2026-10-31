@@ -297,6 +297,19 @@ clippy.enum_glob_use = "allow"
 clippy.module_name_repetitions = "allow"
 clippy.must_use_candidate = "allow"
 clippy.missing_panics_doc = "allow"
+# Its suggestion for collections without an inferable element type is
+# `assert_eq!(value, [] as [T; 0])`, which `rust.trivial_casts` denies.
+clippy.assert_is_empty = "allow"
+
+# style
+# `rustfmt.toml` enforces field-init shorthand. derive_more's `Constructor`
+# expansion reuses the input field idents, which clippy reports on every field.
+clippy.redundant_field_names = "allow"
+
+# perf
+# Custody and admission failures hand their owned input back inside the error so
+# rejection never allocates; boxing those errors would allocate on failure paths.
+clippy.result_large_err = "allow"
 
 # restriction
 clippy.dbg_macro = "deny"

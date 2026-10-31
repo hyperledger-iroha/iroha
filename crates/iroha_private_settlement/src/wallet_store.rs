@@ -34,7 +34,7 @@ use zeroize::Zeroizing;
 const STATE_NAME: &str = "authorized-inputs.wallet";
 const LOCK_NAME: &str = "authorized-inputs.wallet.lock";
 const STATE_AAD: &[u8] = b"iroha:private-settlement:software-wallet-state:v1\0";
-pub(crate) const OPENING_MAX_BYTES: usize = 1024 * 1024;
+pub const OPENING_MAX_BYTES: usize = 1024 * 1024;
 const AEAD_OVERHEAD: usize = 28;
 
 /// Hard plaintext-index bound including pending inner ciphertexts and consumed markers.
@@ -373,7 +373,7 @@ impl FilePrivateSettlementWallet {
                 &[&norito::encode_canonical(&(
                     abort.transaction_hash(),
                     abort.context_id(),
-                    abort.receipt().clone(),
+                    *abort.receipt(),
                     original.statement.digest()?,
                 ))?],
             );
@@ -534,15 +534,14 @@ impl FilePrivateSettlementWallet {
                     return Err(Error::Binding);
                 }
             }
-            if let Some(pending) = &reservation.pending {
-                if !(AEAD_OVERHEAD..=OPENING_MAX_BYTES + AEAD_OVERHEAD)
+            if let Some(pending) = &reservation.pending
+                && (!(AEAD_OVERHEAD..=OPENING_MAX_BYTES + AEAD_OVERHEAD)
                     .contains(&pending.opening.len())
                     || !(AEAD_OVERHEAD
                         ..=ATOMIC_PRIVATE_SETTLEMENT_RESERVATION_MAX_BYTES_V1 + AEAD_OVERHEAD)
-                        .contains(&pending.authorization.len())
-                {
-                    return Err(Error::Capacity);
-                }
+                        .contains(&pending.authorization.len()))
+            {
+                return Err(Error::Capacity);
             }
         }
         Ok((state, true))
@@ -890,6 +889,6 @@ fn check_opening(
 }
 
 #[cfg(test)]
-pub(crate) mod test_fixture;
+pub mod test_fixture;
 #[cfg(test)]
 mod tests;

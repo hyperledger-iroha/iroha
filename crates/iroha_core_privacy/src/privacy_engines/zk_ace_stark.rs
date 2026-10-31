@@ -1341,7 +1341,9 @@ fn public_output_words(
     let mut words = [F::ZERO; PUBLIC_OUTPUTS];
     for (word_index, chunk) in public_inputs
         .identity_commitment
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .chain(public_inputs.replay_nullifier.chunks_exact(8))
         .enumerate()
     {
@@ -3613,7 +3615,9 @@ mod tests {
         let material = build_trace_material(&public_inputs, &witness).expect("valid trace");
         let expected_public_outputs = public_inputs
             .identity_commitment
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .chain(public_inputs.replay_nullifier.chunks_exact(8))
             .map(|chunk| {
                 F::canonical(u64::from_le_bytes(

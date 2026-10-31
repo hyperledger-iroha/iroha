@@ -809,9 +809,9 @@ fn ed25519_signature_that_only_an_unchecked_verifier_accepts_is_refused() {
     let expanded: [u8; 64] = Sha512::digest(seed).into();
     let mut clamped = [0_u8; 32];
     clamped.copy_from_slice(&expanded[..32]);
-    clamped[0] &= 248;
-    clamped[31] &= 127;
-    clamped[31] |= 64;
+    clamped[0] &= 0b1111_1000;
+    clamped[31] &= 0b0111_1111;
+    clamped[31] |= 0b0100_0000;
     let scalar = Scalar::from_bytes_mod_order(clamped);
     assert_eq!(
         (ED25519_BASEPOINT_POINT * scalar).compress().to_bytes(),

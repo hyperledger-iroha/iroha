@@ -1972,6 +1972,10 @@ mod tests {
             Err(DecodeError::Truncated { .. })
         ));
     }
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Unix timestamps stay in whole seconds"
+    )]
     #[test]
     fn verify_accepts_valid_token() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
@@ -1995,7 +1999,7 @@ mod tests {
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(5),
             replay_store(900),
         )
@@ -2011,7 +2015,7 @@ mod tests {
         let err = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             Vec::new(),
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(5),
             replay_store(900),
         )
@@ -2030,7 +2034,7 @@ mod tests {
         let err = AdmissionTokenVerifier::try_new(
             suite,
             bad_public_key,
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(5),
             replay_store(900),
         )
@@ -2122,7 +2126,7 @@ mod tests {
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(1),
             replay_store(900),
         )
@@ -2145,6 +2149,10 @@ mod tests {
             .expect_err("second use must be rejected");
         assert!(matches!(replay, VerifyError::Replay(_)));
     }
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Unix timestamps stay in whole seconds"
+    )]
     #[test]
     fn verify_rejects_relay_mismatch() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
@@ -2168,7 +2176,7 @@ mod tests {
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(5),
             replay_store(900),
         )
@@ -2202,7 +2210,7 @@ mod tests {
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(5),
             replay_store(900),
         )
@@ -2644,13 +2652,13 @@ mod tests {
         )
         .expect("mint");
         token.signature[0] ^= 0xFF;
-        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let limits = TokenStoreLimits::new(4, Duration::from_mins(15)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
             Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
-            Duration::from_secs(900),
+            Duration::from_mins(15),
             Duration::from_secs(5),
             store.clone(),
         )
@@ -2764,7 +2772,7 @@ mod tests {
     fn persistent_store_durably_observes_rejected_insert_time() {
         let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
         let initial = UNIX_EPOCH + Duration::from_secs(1_000);
-        let observed = UNIX_EPOCH + Duration::from_secs(1_200);
+        let observed = UNIX_EPOCH + Duration::from_mins(20);
         let rollback = UNIX_EPOCH + Duration::from_secs(1_050);
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("rejected-clock-high-water.norito");

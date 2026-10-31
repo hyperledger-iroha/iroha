@@ -114,7 +114,7 @@ impl SynthState {
             right *= MASTER_GAIN;
             let offset = frame_idx * channels;
             match channels {
-                1 => dest[offset] = (left + right) * 0.5,
+                1 => dest[offset] = f32::midpoint(left, right),
                 2 => {
                     dest[offset] = left;
                     dest[offset + 1] = right;
@@ -122,7 +122,7 @@ impl SynthState {
                 _ => {
                     dest[offset] = left;
                     dest[offset + 1] = right;
-                    let fold = (left + right) * 0.5;
+                    let fold = f32::midpoint(left, right);
                     for ch in 2..channels {
                         dest[offset + ch] = fold;
                     }
@@ -651,14 +651,14 @@ impl HichirikiVoice {
                 let dur = self.glide_duration_samples.max(1);
                 let progress = (self.glide_counter as f32 / dur as f32).clamp(0.0, 1.0);
                 let shaped = 1.0 - (-6.0 * progress).exp();
-                cents_mod += self.glide_peak_cents * shaped;
+                cents_mod = self.glide_peak_cents.mul_add(shaped, cents_mod);
             } else if self.glide_release_samples > 0
                 && self.glide_counter <= self.glide_duration_samples + self.glide_release_samples
             {
                 let rel = self.glide_release_samples.max(1);
                 let idx = self.glide_counter - self.glide_duration_samples;
                 let progress = (idx as f32 / rel as f32).clamp(0.0, 1.0);
-                cents_mod += self.glide_peak_cents * (1.0 - progress);
+                cents_mod = self.glide_peak_cents.mul_add(1.0 - progress, cents_mod);
             }
             self.glide_counter = self.glide_counter.saturating_add(1);
         }
@@ -666,7 +666,7 @@ impl HichirikiVoice {
             && self.vibrato_counter >= self.vibrato_delay_samples
             && self.vibrato_depth_cents > 0.0
         {
-            cents_mod += (self.vibrato_phase.sin()) * self.vibrato_depth_cents;
+            cents_mod = (self.vibrato_phase.sin()).mul_add(self.vibrato_depth_cents, cents_mod);
             self.vibrato_phase =
                 (self.vibrato_phase + TAU * self.vibrato_rate / self.sample_rate).rem_euclid(TAU);
         }
@@ -795,13 +795,16 @@ impl RyutekiVoice {
         let mut cents_mod = 0.0;
         self.lip_phase = (self.lip_phase + TAU * self.lip_rate / self.sample_rate).rem_euclid(TAU);
         if !obachi_lock {
-            cents_mod += self.lip_phase.sin() * self.lip_depth_cents;
+            cents_mod = self
+                .lip_phase
+                .sin()
+                .mul_add(self.lip_depth_cents, cents_mod);
         }
         if !obachi_lock
             && self.vibrato_counter >= self.vibrato_delay_samples
             && self.vibrato_depth_cents > 0.0
         {
-            cents_mod += (self.vibrato_phase.sin()) * self.vibrato_depth_cents;
+            cents_mod = (self.vibrato_phase.sin()).mul_add(self.vibrato_depth_cents, cents_mod);
             self.vibrato_phase =
                 (self.vibrato_phase + TAU * self.vibrato_rate / self.sample_rate).rem_euclid(TAU);
         }
@@ -811,7 +814,7 @@ impl RyutekiVoice {
             cents_mod -= 2.0;
         } else if phase > 8.0 && phase < 9.0 {
             let blend = ((phase - 8.0) / 1.0).clamp(0.0, 1.0);
-            cents_mod -= 2.0 * (1.0 - blend);
+            cents_mod = 2.0f32.mul_add(-(1.0 - blend), cents_mod);
         }
         if matches!(self.current_note % 12, 1 | 6) && (7.0..=7.4).contains(&phase) {
             cents_mod -= 1.5;
@@ -900,7 +903,7 @@ impl KotoVoice {
         let base = self.carrier_phase + mod_signal;
         let primary = base.sin();
         let duplex = (base * 2.01).sin() * 0.16;
-        let body = (base * 0.51 + 0.25).sin() * 0.08;
+        let body = base.mul_add(0.51, 0.25).sin() * 0.08;
         let noise_jitter = self.noise.next();
         let freq_step = self
             .carrier_freq
@@ -919,7 +922,7 @@ impl KotoVoice {
         }
         let mut sample = (primary + duplex + body) * self.amplitude;
         if self.noise_burst > 1.0e-3 {
-            sample += self.noise.next() * 0.032 * self.noise_burst;
+            sample = (self.noise.next() * 0.032).mul_add(self.noise_burst, sample);
             self.noise_burst *= 0.82;
         }
         soft_clip(sample)
@@ -1126,7 +1129,7 @@ fn velocity_to_gain(vel: u8) -> f32 {
 fn pan_sample(sample: f32, pan: f32) -> (f32, f32) {
     let pan = pan.clamp(-1.0, 1.0);
     let left = sample * (0.5 * (1.0 - pan));
-    let right = sample * (0.5 * (1.0 + pan));
+    let right = sample * f32::midpoint(1.0, pan);
     (left, right)
 }
 fn step_for(sample_rate: f32, seconds: f32) -> f32 {

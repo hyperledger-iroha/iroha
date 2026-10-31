@@ -567,8 +567,8 @@ fn run() -> Result<(), String> {
         .governance(GovernanceProofs {
             council_signatures: opts.council_signatures.clone(),
         })
-        .extend_aliases(opts.alias_claims.into_iter())
-        .extend_metadata(opts.metadata.into_iter())
+        .extend_aliases(opts.alias_claims)
+        .extend_metadata(opts.metadata)
         .build()
         .map_err(|err| err.to_string())?;
     if let Some(seed) = opts.council_signing_seed.take() {

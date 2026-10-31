@@ -1705,7 +1705,6 @@ impl SortitionRequestV1 {
     /// # Errors
     /// Returns [`SortitionRequestErrorV1`] for every malformed binding other
     /// than an empty candidate snapshot.
-
     pub(crate) fn validate_capacity_intent(
         &self,
         last_consumed_pulse_height: Option<u64>,

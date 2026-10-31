@@ -7617,8 +7617,8 @@ impl<'a> MainP256Log5VerifierConstraintSourceV1<'a> {
         if cache
             .len()
             .checked_add(missing.len())
-            .filter(|count| *count <= VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
-            .is_none()
+            .as_ref()
+            .is_none_or(|count| *count > VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -8040,8 +8040,8 @@ impl<'a> MainP256Log16VerifierConstraintSourceV1<'a> {
         if cache
             .len()
             .checked_add(missing.len())
-            .filter(|count| *count <= VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
-            .is_none()
+            .as_ref()
+            .is_none_or(|count| *count > VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -10081,8 +10081,8 @@ impl<'a> MainP256ScalarVerifierConstraintSourceV1<'a> {
         if cache
             .len()
             .checked_add(missing.len())
-            .filter(|count| *count <= VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
-            .is_none()
+            .as_ref()
+            .is_none_or(|count| *count > VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -10606,8 +10606,8 @@ impl MainIoVerifierConstraintSourceV1 {
             .fixed_openings
             .len()
             .checked_add(missing.len())
-            .filter(|count| *count <= VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
-            .is_none()
+            .as_ref()
+            .is_none_or(|count| *count > VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
@@ -10957,8 +10957,8 @@ impl MainProjectionVerifierConstraintSourceV1 {
             .fixed_openings
             .len()
             .checked_add(missing.len())
-            .filter(|count| *count <= VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
-            .is_none()
+            .as_ref()
+            .is_none_or(|count| *count > VERIFIER_GENERATED_FIXED_MAX_SAMPLED_OPENINGS_V1)
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }

@@ -35,7 +35,9 @@ fn unhex(value: &str) -> Vec<u8> {
     assert_eq!(value.len() % 2, 0, "complete fixture hex bytes");
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| {
             u8::from_str_radix(std::str::from_utf8(chunk).expect("fixture hex UTF8"), 16)
                 .expect("fixture hex byte")

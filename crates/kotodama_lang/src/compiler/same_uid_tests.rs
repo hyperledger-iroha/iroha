@@ -11,8 +11,10 @@ fn same_uid_read_compiles_in_views_and_effectful_entrypoints() {
         let bytes = test_mode_compiler().compile_source(&source).unwrap();
         let parsed = ProgramMetadata::parse(&bytes).unwrap();
         let count = bytes[parsed.code_offset..]
-            .chunks_exact(4)
-            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| u32::from_le_bytes(*v))
             .filter(|w| {
                 instruction::wide::opcode(*w) == instruction::wide::system::SYSTEM
                     && encoding::wide::decode_syscallx(*w) == syscalls::SYSCALL_ASSET_SAME_UID

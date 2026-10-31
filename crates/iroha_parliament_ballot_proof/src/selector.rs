@@ -88,7 +88,7 @@ pub fn multiplex<C: ConstraintSystem>(
     products: &[C::Value],
 ) -> C::Value {
     let mut sum = cs.zero();
-    for (entry, product) in list.chunks_exact(COMMITMENT_BYTES).zip(products) {
+    for (entry, product) in list.as_chunks::<COMMITMENT_BYTES>().0.iter().zip(products) {
         if bit_of(entry, t) {
             sum = cs.add(sum, *product);
         }
@@ -160,7 +160,12 @@ mod tests {
     /// A list whose entry `i` starts with the two bytes of `i + 1`.
     fn list(size: usize) -> Vec<u8> {
         let mut out = vec![0u8; size * COMMITMENT_BYTES];
-        for (i, entry) in out.chunks_exact_mut(COMMITMENT_BYTES).enumerate() {
+        for (i, entry) in out
+            .as_chunks_mut::<COMMITMENT_BYTES>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             entry[..2].copy_from_slice(&u16::try_from(i + 1).expect("small").to_le_bytes());
         }
         out

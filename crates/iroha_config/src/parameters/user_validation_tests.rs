@@ -789,7 +789,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "RAM-LFE program",
                 format!(
                     "{:?}",
-                    &config
+                    config
                         .torii
                         .ram_lfe
                         .as_ref()
@@ -891,8 +891,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "user recipient route",
                 format!(
                     "{:?}",
-                    &user
-                        .torii
+                    user.torii
                         .recipient_lookup
                         .as_ref()
                         .expect("configured recipient lookup")
@@ -942,7 +941,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ),
             (
                 "actual recipient route",
-                format!("{:?}", &actual.torii.recipient_lookup.routes[0]),
+                format!("{:?}", actual.torii.recipient_lookup.routes[0]),
             ),
             ("actual DA ingest", format!("{:?}", actual.torii.da_ingest)),
             ("actual push", format!("{:?}", actual.torii.push)),
@@ -1966,10 +1965,7 @@ policy_digest_hex = "{policy_digest_hex}"
         let auto_renew = onboarding.auto_renew.expect("native auto-renew configured");
         assert_eq!(auto_renew.term_years.get(), 2);
         assert_eq!(auto_renew.max_amount, Quantity::from(25_u32));
-        assert_eq!(
-            auto_renew.renew_before_expiry,
-            Duration::from_millis(86_400_000)
-        );
+        assert_eq!(auto_renew.renew_before_expiry, Duration::from_hours(24));
         assert_eq!(auto_renew.retry_backoff, Duration::from_millis(3_600_000));
         assert_eq!(auto_renew.max_failures.get(), 5);
     }

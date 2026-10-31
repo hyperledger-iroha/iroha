@@ -223,8 +223,10 @@ impl Platform for CallbackPlatform {
             return Err(Unavailable::Platform(0));
         }
         let slots: Vec<_> = bytes
-            .chunks_exact(32)
-            .map(|bytes| Slot(bytes.try_into().expect("exact slot chunk")))
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|bytes| Slot(*bytes))
             .collect();
         if slots.iter().any(|slot| slot.0 == [0; 32])
             || !slots.windows(2).all(|pair| pair[0] < pair[1])

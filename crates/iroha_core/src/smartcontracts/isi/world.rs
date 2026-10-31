@@ -2540,7 +2540,7 @@ pub mod isi {
         let encoded_bytes = context.with(|| {
             norito::canonical_frame_len(&manifest.signature_payload())
                 .map_err(BoundedEncodeError::from)
-                .map_err(&encode_error)
+                .map_err(encode_error)
         })?;
         let _frame = budget
             .try_reserve_bytes(encoded_bytes)
@@ -2548,7 +2548,7 @@ pub mod isi {
         let payload = context.with(|| {
             manifest
                 .signature_payload_bytes(&context, max_frame_bytes)
-                .map_err(&encode_error)
+                .map_err(encode_error)
         })?;
         verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
             |_| {
@@ -7286,19 +7286,16 @@ pub mod isi {
             .collect::<BTreeSet<_>>();
             if protected.contains("*")
                 || protected.contains(contract_address.as_str())
-                || contract_address
-                    .dataspace_id()
-                    .ok()
-                    .is_some_and(|dataspace_id| {
-                        protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
-                            || protected.iter().any(|namespace| {
-                                state_transaction
-                                    .nexus
-                                    .dataspace_catalog
-                                    .by_alias(namespace)
-                                    .is_some_and(|entry| entry.id == dataspace_id)
-                            })
-                    })
+                || contract_address.dataspace_id().is_ok_and(|dataspace_id| {
+                    protected.contains(&format!("dataspace:{}", dataspace_id.as_u64()))
+                        || protected.iter().any(|namespace| {
+                            state_transaction
+                                .nexus
+                                .dataspace_catalog
+                                .by_alias(namespace)
+                                .is_some_and(|entry| entry.id == dataspace_id)
+                        })
+                })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "protected contract namespaces require Parliament deployment".into(),
@@ -12606,7 +12603,7 @@ pub mod isi {
                 id: IdBox::Permission(Permission::new(
                     "Proof".into(),
                     iroha_primitives::json::Json::from(
-                        format!("{}:{:x?}", &pid.backend, &pid.proof_hash[..4]).as_str(),
+                        format!("{}:{:x?}", pid.backend, &pid.proof_hash[..4]).as_str(),
                     ),
                 )),
             }
@@ -15444,7 +15441,7 @@ pub mod isi {
                     );
                 }
                 InstructionExecutionError::InvariantViolation(
-                    format!("verified fee sponsor vault FASTPQ verification failed: {err}",).into(),
+                    format!("verified fee sponsor vault FASTPQ verification failed: {err}").into(),
                 )
             })?;
             let record = VerifiedFeeSponsorVaultAllocation::new(
@@ -17878,7 +17875,7 @@ pub mod isi {
                                 .get(),
                             metadata.block_cadence_ms.get(),
                         )
-                        .map_err(|error| invalid_smart_contract_parameter(&error.to_string()))?;
+                        .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
                     }
                     genesis_cadence = Some(metadata.block_cadence_ms);
                 }
@@ -23115,12 +23112,6 @@ AccountEvent::PermissionRemoved(change))
                 let mut $block = $state.block(header);
                 let mut $stx = $block.transaction();
             };
-            ($state:ident, $block:ident, $stx:ident) => {
-                let $state = blank_test_state();
-                let header = first_test_block_header();
-                let mut $block = $state.block(header);
-                let mut $stx = $block.transaction();
-            };
             (checked $state:ident, $block:ident, $stx:ident) => {
                 let $state = blank_test_state();
                 let header = first_test_block_header_with_checked_height();
@@ -23148,12 +23139,6 @@ AccountEvent::PermissionRemoved(change))
         macro_rules! component_alice_state_transaction {
             ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
                 component_state_transaction!($state, $block, $state_block, $stx);
-                bootstrap_alice_account(&mut $stx);
-            };
-        }
-        macro_rules! alice_state_transaction {
-            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
-                blank_state_transaction!($state, $block, $state_block, $stx);
                 bootstrap_alice_account(&mut $stx);
             };
         }
@@ -24296,7 +24281,7 @@ AccountEvent::PermissionRemoved(change))
                 let encoded = format!(
                     r#"{{"root_hint":"BlAkE2B32:0X{}","owner":"{}","amount":"{}","duration_blocks":{duration_blocks},"direction":"Abstain","nullifier":"0x{}"}}"#,
                     "aa".repeat(32),
-                    &*ALICE_ID,
+                    *ALICE_ID,
                     u128::MAX,
                     "bb".repeat(32),
                 );
@@ -24312,7 +24297,7 @@ AccountEvent::PermissionRemoved(change))
             for amount in ["1.25", "0.0000000000000000000000000001"] {
                 let encoded = format!(
                     r#"{{"owner":"{}","amount":"{amount}","duration_blocks":1}}"#,
-                    &*ALICE_ID,
+                    *ALICE_ID,
                 );
                 let parsed = super::parse_governance_zk_public_inputs_v1(&encoded)
                     .expect("fractional canonical Quantity must remain admissible");
@@ -24869,7 +24854,7 @@ AccountEvent::PermissionRemoved(change))
                 proof_b64: "AA==".to_owned(),
                 public_inputs_json: format!(
                     r#"{{"owner":"{}","amount":"0","duration_blocks":1}}"#,
-                    &*ALICE_ID,
+                    *ALICE_ID,
                 ),
             }
             .expect_execute_err(
@@ -24943,7 +24928,7 @@ AccountEvent::PermissionRemoved(change))
                 proof_b64: "AA==".to_owned(),
                 public_inputs_json: format!(
                     r#"{{"owner":"{}","amount":"0","duration_blocks":{}}}"#,
-                    &*ALICE_ID,
+                    *ALICE_ID,
                     u64::MAX,
                 ),
             }

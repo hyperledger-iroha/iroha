@@ -4960,7 +4960,7 @@ fn ensure_snapshot_commit_evidence(
         state.kura(),
         &state.ivm_execution_budget(),
     )
-    .map_err(&attempt_failure)?;
+    .map_err(attempt_failure)?;
     let certified = chain
         .certified(checkpoint.height)
         .map_err(attempt_failure)?;

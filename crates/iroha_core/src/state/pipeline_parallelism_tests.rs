@@ -2,8 +2,7 @@ use super::{PIPELINE_AUTO_WORKER_MAX, PIPELINE_AUTO_WORKER_MIN, resolve_pipeline
 #[test]
 fn pipeline_parallelism_auto_is_bounded() {
     let expected = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(1)
+        .map_or(1, std::num::NonZero::get)
         .clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX);
     assert_eq!(resolve_pipeline_worker_threads(0), expected);
     assert!(resolve_pipeline_worker_threads(0) <= PIPELINE_AUTO_WORKER_MAX);

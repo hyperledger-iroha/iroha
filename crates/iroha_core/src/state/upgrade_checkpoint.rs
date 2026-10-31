@@ -1,21 +1,32 @@
-//! Network upgrade checkpoint: this release taking over a running network at the last block its
-//! predecessor release executed (`snapshot.upgrade_checkpoint`).
+//! Governed adoption: this release taking over a running network at a checkpoint its
+//! governance authorized (`specs/live_runtime_upgrades.md` §13).
 //!
 //! Blocks at or below the checkpoint are final history. This release never re-executes them: it
 //! restores the World at the checkpoint from the predecessor's signed snapshot, proves that World
 //! against the checkpoint block's certified World root and executes from the next block on.
+//!
+//! Authority comes from the predecessor's certified World, never from node configuration: the
+//! predecessor's `runtime_upgrades` table must hold the governance record that authorizes this
+//! release to adopt at the checkpoint ([`adoption`]). The configuration
+//! (`snapshot.upgrade_checkpoint`) only locates the checkpoint block and its snapshot.
 //!
 //! The certified root binds the World registry of the release that computed it (`S` of
 //! [`super::world_projection::WorldStateAccumulator`]). The predecessor this release accepts is
 //! iroha f31b64d8c5, the Taira release of 2026-10-29 (itself the successor of f24908b4b3 at
 //! checkpoint 5519). Its canonical World held the table `runtime_upgrades`, which this release
 //! retired, and lacked the tables `runtime_change_sets` and `runtime_containments`
-//! ([`ADDED_WORLD_FIELDS`]). An import accepts a predecessor World only when every retired field
-//! holds its empty value, so nothing is dropped, and starts the added tables empty.
+//! ([`ADDED_WORLD_FIELDS`]). An import admits the retired table holding only adoption
+//! authorizations, which it drops after proving them, and starts the added tables empty, so no
+//! other State is dropped.
 //!
-//! The predecessor also predates the live-upgrade foundation (`specs/live_runtime_upgrades.md`
-//! §13): it has no runtime definitions or selection. The import founds them on this release's
-//! baseline, exactly as a new World of this release is founded.
+//! The predecessor also predates the live-upgrade foundation: it has no runtime definitions or
+//! selection. The import founds them on this release's baseline, exactly as a new World of this
+//! release is founded.
+//!
+//! This module, the predecessor's root rule and every other path that reads a predecessor World
+//! are deleted in the release after every validator has adopted.
+
+pub mod adoption;
 
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::block::BlockHeader;
@@ -63,7 +74,8 @@ pub(super) struct PredecessorField {
 }
 
 /// One table this release added, in place of the predecessor fields it retired, if any. An
-/// import admits the retired fields only empty and starts the added table empty.
+/// import admits the retired fields only empty, except the adoption authorizations of
+/// [`AUTHORIZATION_FIELD`], and starts the added table empty.
 pub(super) struct AddedWorldField {
     /// Registry identity of the added field.
     pub(super) id: &'static str,
@@ -93,6 +105,10 @@ pub(super) const ADDED_WORLD_FIELDS: [AddedWorldField; 2] = [
         retired: &[],
     },
 ];
+
+/// The retired predecessor field that holds the governance records authorizing adoption
+/// ([`adoption`]).
+pub(super) const AUTHORIZATION_FIELD: &str = "runtime_upgrades";
 
 /// The predecessor's retired fields, in the predecessor's World order.
 pub(super) fn retired_world_fields() -> impl Iterator<Item = &'static PredecessorField> {
@@ -192,6 +208,21 @@ mod tests {
             assert_eq!(id, format!("world.{name}"));
             assert!(is_founded_world_field(name));
         }
+    }
+
+    #[test]
+    fn adoption_authorizations_live_in_a_retired_table() {
+        let retired: Vec<_> = retired_world_fields()
+            .filter(|retired| retired.name == AUTHORIZATION_FIELD)
+            .collect();
+        let [field] = retired.as_slice() else {
+            panic!("exactly one retired field holds the authorizations");
+        };
+        assert!(field.key.is_some(), "the authorizations are a table");
+        assert_eq!(
+            field.value,
+            "iroha_data_model::runtime::RuntimeUpgradeRecord"
+        );
     }
 
     #[test]

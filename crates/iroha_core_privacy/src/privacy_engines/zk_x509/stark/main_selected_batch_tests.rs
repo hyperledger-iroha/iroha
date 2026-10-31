@@ -264,7 +264,7 @@ fn parallel_batch_eraser_clears_all_chunks_including_partial_last_chunk() {
             .unwrap();
         pool.install(|| {
             let mut fields = vec![F(GOLDILOCKS_MODULUS_V1 - 1); CLEAR_CHUNK_FIELDS_V1 + 3];
-            let (_, erased) = observe_batch_clear_v1(|| erase_batch_v1(&mut fields));
+            let ((), erased) = observe_batch_clear_v1(|| erase_batch_v1(&mut fields));
             assert!(fields.iter().all(|&value| value == F::ZERO));
             assert_eq!(erased.len(), 1);
             assert_eq!(erased[0].cells, fields.len());
@@ -347,7 +347,7 @@ fn selected_interleaved_batch_cost_keeps_every_mask_and_query_coordinate() {
                 let values = (0..1usize << native)
                     .map(|row| F((17 * row + 13 * column + 1) as u64))
                     .collect::<Vec<_>>();
-                let mask = (0..MASK_DEGREE + 1)
+                let mask = (0..=MASK_DEGREE)
                     .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                     .collect::<Vec<_>>();
                 Column::from_vec_v1(

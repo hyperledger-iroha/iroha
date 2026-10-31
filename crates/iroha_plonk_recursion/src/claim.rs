@@ -54,7 +54,12 @@ impl<C: PastaCurve> AccumulatorT<C> {
     pub fn to_bytes(&self) -> [u8; ACCUMULATOR_BYTES] {
         let mut bytes = [0; ACCUMULATOR_BYTES];
         bytes[..32].copy_from_slice(&encode_point::<C>(&self.g));
-        for (chunk, challenge) in bytes[32..].chunks_exact_mut(32).zip(self.challenges) {
+        for (chunk, challenge) in bytes[32..]
+            .as_chunks_mut::<32>()
+            .0
+            .iter_mut()
+            .zip(self.challenges)
+        {
             chunk.copy_from_slice(&challenge.to_repr());
         }
         bytes

@@ -423,7 +423,7 @@ impl Carrier {
             output.extend(foreign_limbs(&coordinate).map(Fp::from_u128));
         }
         output.extend(v.challenges());
-        for message in self.omega[324..proof_end].chunks_exact(32) {
+        for message in self.omega[324..proof_end].as_chunks::<32>().0 {
             let lo = u128::from_le_bytes(message[..16].try_into().unwrap());
             let mut high: [u8; 16] = message[16..].try_into().unwrap();
             let top = high[15] >> 7;

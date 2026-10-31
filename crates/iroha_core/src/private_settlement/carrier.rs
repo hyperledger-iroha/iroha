@@ -443,7 +443,7 @@ mod tests {
                 manifest.clone(),
                 PrivateSettlementAbortReasonV1::Expired,
             )])
-            .sign_multisig(keys[..count].iter().map(|key| key.private_key()));
+            .sign_multisig(keys[..count].iter().map(iroha_crypto::KeyPair::private_key));
             signed.verify_signature().unwrap();
             assert_eq!(signed.signature_count(), count);
             assert_eq!(

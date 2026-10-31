@@ -33,7 +33,7 @@ thread_local! {
 
 /// Expect one exact signed owner at the real executor boundary on this test thread.
 /// This observes input addresses and never replaces validation or execution.
-pub(crate) struct Probe;
+pub struct Probe;
 
 impl Probe {
     /// Start a scoped observation of the original accepted or reveal-inner owner.

@@ -487,20 +487,6 @@ fn exact12_diagnostic_evidence_links_full_manifests_and_all_twelve_profiles() {
     );
 }
 
-/// Reuse the complete signed test evidence for the generated instruction fixture.
-pub fn generated_instruction_qualification() -> PrivacyExact12QualificationRecordV1 {
-    let release_manifest = synthetic_valid_release_manifest();
-    let deployment_qualification = synthetic_valid_deployment(release_manifest.manifest_digest);
-    let qualification = PrivacyExact12QualificationRecordV1 {
-        release_manifest,
-        deployment_qualification,
-    };
-    qualification
-        .validate()
-        .expect("complete synthetic qualification");
-    qualification
-}
-
 #[test]
 fn documentary_evidence_validation_is_separate_from_runtime_capability() {
     let release = synthetic_valid_release_manifest();
@@ -535,11 +521,8 @@ fn documentary_evidence_validation_is_separate_from_runtime_capability() {
     missing_evidence.release_signatures.clear();
     assert!(missing_evidence.validate().is_err());
     let mut hostile = release;
-    hostile.release_signatures[0].signature = Signature::from_bytes(&vec![
-        1;
-        PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1
-            + 1
-    ]);
+    hostile.release_signatures[0].signature =
+        Signature::from_bytes(&[1; PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1 + 1]);
     assert!(hostile.validate().is_err());
     assert_eq!(
         validate_privacy_capability_archive_v1(&archive),

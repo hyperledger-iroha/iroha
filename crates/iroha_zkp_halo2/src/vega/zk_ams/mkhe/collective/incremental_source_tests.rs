@@ -63,8 +63,10 @@ impl TestStreamingCasV1 {
         let bytes = self.published_bytes(pointer);
         let count = u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize;
         let values = bytes[4..]
-            .chunks_exact(8)
-            .map(|encoded| u64::from_be_bytes(encoded.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|encoded| u64::from_be_bytes(*encoded))
             .collect::<Vec<_>>();
         assert_eq!(values.len(), count);
         values

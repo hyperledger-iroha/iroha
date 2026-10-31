@@ -336,7 +336,7 @@ fn validate_slot_v1(global_slot: u64, bytes: &[u8]) -> Result<(), OrderedSnapsho
         return Err(OrderedSnapshotErrorV1::Shape);
     }
     if global_slot % SNAPSHOT_SLOTS_PER_PLANE_V1 < VALUE_SLOTS_PER_PLANE_V1 {
-        for encoded in bytes.chunks_exact(32) {
+        for encoded in bytes.as_chunks::<32>().0 {
             let scalar = ZeroizingT256ScalarCopyV1::new(
                 Scalar::from_be_bytes_exact_ref(
                     encoded

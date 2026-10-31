@@ -698,7 +698,12 @@ fn absorb_sumcheck_message_v1(
     compressed: [Scalar; MESSAGE_SCALARS_PER_ROUND_V1],
 ) -> Result<Scalar, RnsNativeGlobalInverseProductErrorV1> {
     let mut encoded = [0_u8; MESSAGE_SCALARS_PER_ROUND_V1 * SCALAR_BYTES_V1];
-    for (chunk, scalar) in encoded.chunks_exact_mut(SCALAR_BYTES_V1).zip(compressed) {
+    for (chunk, scalar) in encoded
+        .as_chunks_mut::<SCALAR_BYTES_V1>()
+        .0
+        .iter_mut()
+        .zip(compressed)
+    {
         chunk.copy_from_slice(&scalar.to_le_bytes());
     }
     append_frame_v1(
@@ -903,7 +908,12 @@ fn mask_terminal_weights_v1(
         future_scale *= half;
     }
     let mut weights = Vec::with_capacity(reversed.len());
-    for chunk in reversed.chunks_exact(MASK_SCALARS_PER_ROUND_V1).rev() {
+    for chunk in reversed
+        .as_chunks::<MASK_SCALARS_PER_ROUND_V1>()
+        .0
+        .iter()
+        .rev()
+    {
         weights.extend_from_slice(chunk);
     }
     Ok(weights)

@@ -21,7 +21,7 @@ use iroha_data_model::{
 
 /// Caller-selected physical occurrence, with no unverified receipt or remote claim digest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PhysicalTransferLocation {
+pub struct PhysicalTransferLocation {
     /// Expected exact execution-call identity, not the outer sealed-reveal identity.
     pub(crate) source_call: Hash,
     /// Position in the authenticated Network inputs, not a generic output position.
@@ -40,7 +40,7 @@ pub(crate) struct PhysicalTransferLocation {
 
 /// Finite local scan limits for one selection, not consensus or proof admission policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PhysicalTransferScan {
+pub struct PhysicalTransferScan {
     /// Bound on the complete source inventory scanned for unique call identity.
     pub(crate) max_source_entries: u32,
     /// Bound on the selected call's transcript count, checked before traversal.
@@ -51,7 +51,7 @@ pub(crate) struct PhysicalTransferScan {
 
 /// Exact scan whose caller allowance was insufficient.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PhysicalTransferWork {
+pub enum PhysicalTransferWork {
     /// Complete original source entries, including rejected and internal entries.
     SourceEntries,
     /// Selected source's transfer transcripts.
@@ -62,7 +62,7 @@ pub(crate) enum PhysicalTransferWork {
 
 /// Original local work refusal; the borrowed owner and all backing remain unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PhysicalTransferRefusal {
+pub struct PhysicalTransferRefusal {
     /// Work dimension that exceeded its finite caller allowance.
     pub(crate) work: PhysicalTransferWork,
     /// Caller allowance used by this attempt.
@@ -73,7 +73,7 @@ pub(crate) struct PhysicalTransferRefusal {
 
 /// Completed source/location disagreement, separate from local work refusal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PhysicalTransferMismatch {
+pub enum PhysicalTransferMismatch {
     /// The selected source is not an actual Network input/output join.
     NonNetworkSource,
     /// Selected call identity differs from its original execution-owned entry.
@@ -96,7 +96,7 @@ pub(crate) enum PhysicalTransferMismatch {
 
 /// Selection never turns a finite serving limit into invalid execution or source finality.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PhysicalTransferError {
+pub enum PhysicalTransferError {
     /// The exact local scan allowance was insufficient; retry keeps the same source.
     #[error("finalized physical transfer work refused: {0:?}")]
     Refused(PhysicalTransferRefusal),
@@ -119,7 +119,7 @@ pub(crate) enum PhysicalTransferError {
 /// it does not claim all non-quantity State mutations, a proof or a WG State root.
 /// A caller still needs actual per-entry WG receipt authority and current issuer checks
 /// before any remote-spend admission. This value performs no reservation or mutation.
-pub(crate) struct PhysicalTransfer<'a> {
+pub struct PhysicalTransfer<'a> {
     original: &'a FinalizedFastpqSource,
     location: PhysicalTransferLocation,
     input: &'a TransactionEntrypoint,

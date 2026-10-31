@@ -101,7 +101,13 @@ fn x509_host_tag2_queues_original_owner_but_raw_drain_refuses() {
             QueuedEffectPayload::AttachedX509(_)
         ));
         assert!(
-            state.world.privacy_nullifiers.view().iter().next().is_none(),
+            state
+                .world
+                .privacy_nullifiers
+                .view()
+                .iter()
+                .next()
+                .is_none(),
             "queueing grants no nullifier effect"
         );
         assert!(
@@ -255,7 +261,7 @@ fn x509_actual_compiled_child_queues_then_failure_restores_business_state_and_cu
     let child = install_contract(
         &state,
         &authority,
-        r#"
+        r"
         seiyaku CredentialChild {
             state StateMap<int, int> Values;
             kotoage fn main(bytes request) authorize(anyone) -> Result<int, int> {
@@ -264,7 +270,7 @@ fn x509_actual_compiled_child_queues_then_failure_restores_business_state_and_cu
                 return Result::err(7);
             }
         }
-    "#,
+    ",
         1,
     );
     let (source, request) = x509_host_source(&state, &authority, &root, &child, vec![0]);

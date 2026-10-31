@@ -3179,7 +3179,7 @@ fn parse_holder_object_file_name_v1(
         return Err(BootleLanternHolderStoreErrorV1::Corrupt);
     }
     let mut digest = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (hex_nibble_v1(pair[0])? << 4) | hex_nibble_v1(pair[1])?;
     }
     if holder_object_file_name_v1(digest) != name || digest == [0; 32] {

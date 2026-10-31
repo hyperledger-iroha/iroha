@@ -1043,9 +1043,7 @@ fn foreign_privacy_retirement_survives_error_and_unwind_after_both_replacements(
                 assert_eq!(observer.wakes.load(Ordering::SeqCst), 0);
                 assert!(foreign_pool.reserved_bytes() > 0);
                 assert!(state.try_lock_lane_lifecycle_work_admission().is_err());
-                if unwind {
-                    panic!("intentional post-replacement unwind");
-                }
+                assert!(!unwind, "intentional post-replacement unwind");
                 Err::<(), _>("intentional post-replacement error")
             }));
             if unwind {

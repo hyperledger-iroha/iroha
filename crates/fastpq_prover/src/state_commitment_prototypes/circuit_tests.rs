@@ -227,7 +227,7 @@ where
             // evaluation and the key digest of the leaf being hashed.
             let revealed = claimed.len() + 2;
             assert!(
-                program.registers() <= (usize::BITS - revealed.leading_zeros()) as usize + 1,
+                program.registers() <= revealed.bit_width() as usize + 1,
                 "{} registers for {} claimed entries",
                 program.registers(),
                 claimed.len()

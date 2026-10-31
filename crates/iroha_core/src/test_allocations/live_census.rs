@@ -17,7 +17,7 @@ thread_local! {
 
 /// Actual allocation lifetimes observed on the selected test thread.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct LiveAllocationStats {
+pub struct LiveAllocationStats {
     /// Number of successful observed allocation/reallocation events.
     pub events: usize,
     /// Sum of requested sizes over events, explicitly cumulative rather than live.
@@ -160,7 +160,7 @@ pub(super) fn reallocated(original: *mut u8, replacement: *mut u8, bytes: usize)
 ///
 /// # Panics
 /// Rejects nested observation and capacities that are not nonzero powers of two.
-pub(crate) fn live_allocations_during<T>(
+pub fn live_allocations_during<T>(
     capacity: usize,
     work: impl FnOnce() -> T,
 ) -> (T, LiveAllocationStats) {
@@ -221,7 +221,7 @@ mod tests {
     fn live_census_reallocation_tracks_original_lifetime_and_possible_overlap() {
         let original = Layout::from_size_align(19, 1).unwrap();
         let grown = Layout::from_size_align(37, 1).unwrap();
-        let (_, stats) = live_allocations_during(16, || unsafe {
+        let ((), stats) = live_allocations_during(16, || unsafe {
             let pointer = alloc(original);
             assert!(!pointer.is_null());
             let replacement = realloc(pointer, original, grown.size());
@@ -242,7 +242,7 @@ mod tests {
         let grown = Layout::from_size_align(37, 1).unwrap();
         let preexisting = unsafe { alloc(original) };
         assert!(!preexisting.is_null());
-        let (_, stats) = live_allocations_during(16, || unsafe {
+        let ((), stats) = live_allocations_during(16, || unsafe {
             let preexisting = realloc(preexisting, original, grown.size());
             assert!(!preexisting.is_null());
             dealloc(preexisting, grown);
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn live_census_capacity_exhaustion_is_explicit_and_does_not_grow() {
         let layout = Layout::from_size_align(19, 1).unwrap();
-        let (_, stats) = live_allocations_during(1, || unsafe {
+        let ((), stats) = live_allocations_during(1, || unsafe {
             let first = alloc(layout);
             let second = alloc(layout);
             assert!(!first.is_null() && !second.is_null());
@@ -282,7 +282,7 @@ mod tests {
         });
         assert!(failed.is_err());
         assert!(ACTIVE.with(Cell::get).is_null());
-        let (_, stats) = live_allocations_during(16, || ());
+        let ((), stats) = live_allocations_during(16, || ());
         assert_eq!(stats, LiveAllocationStats::default());
     }
 
@@ -309,7 +309,7 @@ mod tests {
             while !ready.load(Ordering::Acquire) {
                 std::thread::yield_now();
             }
-            let (_, stats) = live_allocations_during(16, || {
+            let ((), stats) = live_allocations_during(16, || {
                 start.store(true, Ordering::Release);
                 while !done.load(Ordering::Acquire) {
                     std::thread::yield_now();

@@ -13,10 +13,10 @@ mod gas_admission;
 pub use gas_admission::{AdmittedGas, GasAdmissionError, GasCustody};
 
 mod retained;
-pub(crate) use retained::PreparedParameters;
+pub use retained::PreparedParameters;
 pub use retained::{ParameterRetentionError, RetainedStateParameters};
 mod ingress;
-pub(crate) use ingress::ParameterIngressAttemptError;
+pub use ingress::ParameterIngressAttemptError;
 pub use ingress::ParameterIngressError;
 
 use iroha_config::parameters::actual::{Gas, GasLiquidity, GasRate, GasVolatility};
@@ -443,10 +443,10 @@ const ACCEPTED_ASSETS: &str = "ivm_gas_accepted_assets";
 const RATES: &str = "ivm_gas_units_per_gas";
 
 /// Borrowed identities; classification never constructs owned names.
-pub(crate) const PARAMETER_NAMES: [&str; 3] = [TECH_ACCOUNT, ACCEPTED_ASSETS, RATES];
+pub const PARAMETER_NAMES: [&str; 3] = [TECH_ACCOUNT, ACCEPTED_ASSETS, RATES];
 
 /// The three committed fee fields protected from executor reconciliation.
-pub(crate) fn parameter_ids() -> [CustomParameterId; 3] {
+pub fn parameter_ids() -> [CustomParameterId; 3] {
     PARAMETER_NAMES.map(|name| name.parse().expect("static fee parameter id"))
 }
 

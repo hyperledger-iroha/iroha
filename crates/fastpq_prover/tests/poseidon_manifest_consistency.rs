@@ -81,7 +81,9 @@ fn parse_constant_table(contents: &str, marker: &str) -> Vec<[u64; STATE_WIDTH]>
         values.len()
     );
     values
-        .chunks_exact(STATE_WIDTH)
+        .as_chunks::<STATE_WIDTH>()
+        .0
+        .iter()
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect()
 }

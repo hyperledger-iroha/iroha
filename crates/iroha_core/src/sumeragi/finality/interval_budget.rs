@@ -53,7 +53,7 @@ impl NativeFinalityProofBudget {
 const RESULT_METADATA_GENERATIONS: usize = 5;
 const AUTHORITY_GENERATIONS: usize = 2;
 
-pub(crate) fn metadata_generation_bytes() -> usize {
+pub fn metadata_generation_bytes() -> usize {
     norito::canonical_decode_limits(iroha_data_model::sumeragi_finality::MAX_RESULT_BODY_BYTES)
         .max_total_allocated_bytes()
 }
@@ -219,7 +219,7 @@ pub(super) mod cost_observation {
         static RECORDS: RefCell<Option<Vec<(&'static str, u64)>>> = const { RefCell::new(None) };
     }
 
-    pub(crate) fn record(kind: &'static str, bytes: u64) {
+    pub fn record(kind: &'static str, bytes: u64) {
         RECORDS.with_borrow_mut(|records| {
             if let Some(records) = records {
                 records.push((kind, bytes));
@@ -243,7 +243,7 @@ pub(super) mod cost_observation {
         result
     }
 
-    pub(crate) fn measure<R>(work: impl FnOnce() -> R) -> (R, Vec<(&'static str, u64)>) {
+    pub fn measure<R>(work: impl FnOnce() -> R) -> (R, Vec<(&'static str, u64)>) {
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {

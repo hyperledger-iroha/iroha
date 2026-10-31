@@ -47,7 +47,7 @@ impl Fields {
             (packet::BEFORE, packet.before()),
             (packet::AFTER, packet.after()),
         ] {
-            for (limb, pair) in bytes.chunks_exact(2).enumerate() {
+            for (limb, pair) in bytes.as_chunks::<2>().0.iter().enumerate() {
                 fields[offset + limb] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
             }
         }

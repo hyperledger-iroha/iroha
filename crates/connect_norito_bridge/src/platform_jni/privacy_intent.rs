@@ -39,14 +39,10 @@ pub(super) fn java_native_submit_proof_intent_projection(
     if archive.is_null() {
         return std::ptr::null_mut();
     }
-    let Ok(length) = env.get_array_length(&archive) else {
+    let Ok(length) = archive.len(env) else {
         return std::ptr::null_mut();
     };
-    if length <= 0
-        || usize::try_from(length).map_or(true, |length| {
-            length > SubmitPrivacyProofV1::canonical_frame_byte_limit_v1()
-        })
-    {
+    if length == 0 || length > SubmitPrivacyProofV1::canonical_frame_byte_limit_v1() {
         return std::ptr::null_mut();
     }
     let Ok(mut input) = env.convert_byte_array(&archive) else {

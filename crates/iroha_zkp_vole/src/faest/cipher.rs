@@ -101,7 +101,7 @@ fn sub_bytes_shift_rows(state: &mut [u8; MAX_BLOCK_BYTES], n_st: usize) {
 
 /// `MixColumns` on the first `4 * n_st` bytes of `state`.
 fn mix_columns(state: &mut [u8; MAX_BLOCK_BYTES], n_st: usize) {
-    for column in state.chunks_exact_mut(4).take(n_st) {
+    for column in state.as_chunks_mut::<4>().0.iter_mut().take(n_st) {
         let mut a = [column[0], column[1], column[2], column[3]].map(Gf8::new);
         let mut double = a.map(BinaryField::mul_x);
         for row in 0..4 {

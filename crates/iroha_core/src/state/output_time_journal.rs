@@ -10,7 +10,7 @@
 //! Instruction clones, guard lookups, mutation graphs, permission cleanup and event
 //! backing are not funded by these captured-evidence charges. Calling Execute
 //! preserves its existing guards/events/cleanup but does not authenticate the
-//! enclosing executor/callback scope. The legacy all-table decrease_repeats sweep
+//! enclosing executor/callback scope. The legacy all-table `decrease_repeats` sweep
 //! is not intercepted. Register preserves its original deferred-byte policy; a
 //! captured Action does not become canonical/schema-authorized by being recorded.
 //! Production journal/output-V2 activation remains outside.

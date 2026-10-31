@@ -525,7 +525,7 @@ pub mod queue {
     /// Estimated maximum retained queue memory budget in bytes.
     pub const MAX_RETAINED_BYTES: NonZeroU64 = nonzero!(128_u64 * 1024 * 1024);
     /// Time-to-live for queued transactions before automatic eviction.
-    pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(24 * 60 * 60);
+    pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_hours(24);
     /// Minimum interval between expired-transaction sweeps.
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of entries scanned per expired-transaction sweep.
@@ -1086,7 +1086,7 @@ pub mod network {
     ///
     /// Keep this comfortably above the typical integration-test runtime so peers do not churn
     /// before they exchange their first gossip/status messages.
-    pub const IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+    pub const IDLE_TIMEOUT: Duration = Duration::from_mins(5);
     /// Maximum total tenure for an accepted transport to authenticate.
     pub const PREAUTH_TIMEOUT: Duration = Duration::from_secs(30);
     /// Maximum concurrent pre-authentication transports admitted from one source IP.
@@ -1106,7 +1106,7 @@ pub mod network {
     /// Maximum stream-wire bytes retained by all deferred outbound peer queues together.
     pub const DEFERRED_SEND_MAX_BYTES_TOTAL: usize = 128 * 1024 * 1024;
     /// Idle timeout before expiring accept throttle buckets.
-    pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_secs(10 * 60);
+    pub const ACCEPT_BUCKET_IDLE: Duration = Duration::from_mins(10);
     /// Maximum number of accept throttle buckets to retain.
     pub const MAX_ACCEPT_BUCKETS: NonZeroUsize = nonzero!(4096_usize);
     /// Prefix length used for IPv4 accept prefix buckets.
@@ -1196,7 +1196,7 @@ pub mod network {
     pub const CONSENSUS_INGRESS_PENALTY_COOLDOWN_MS: u64 = 10_000;
     // Optional DNS hostname refresh interval (None disables). Default 5 minutes.
     /// Interval between DNS resolution refreshes for peer hostnames.
-    pub const DNS_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+    pub const DNS_REFRESH_INTERVAL: Duration = Duration::from_mins(5);
     // Disconnect peers when their per-topic bounded post channel overflows
     /// Whether to disconnect peers that overflow their per-topic queues.
     pub const DISCONNECT_ON_POST_OVERFLOW: bool = true;
@@ -1270,7 +1270,7 @@ pub mod snapshot {
     pub const STORE_DIR: &str = "./storage/snapshot";
     // 10 mins
     /// Interval between automatic snapshot creation tasks.
-    pub const CREATE_EVERY: Duration = Duration::from_secs(10 * 60);
+    pub const CREATE_EVERY: Duration = Duration::from_mins(10);
     /// Chunk size used for snapshot Merkle metadata (default: 1 MiB).
     pub const MERKLE_CHUNK_SIZE_BYTES: NonZeroUsize = nonzero!(1_048_576_usize);
     /// Maximum snapshot payload buffered during startup (default: 1 GiB).
@@ -2321,11 +2321,11 @@ pub mod sorafs {
                 None
             }
             /// Renewal window applied before certificate expiry (seconds).
-            pub const RENEWAL_WINDOW: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+            pub const RENEWAL_WINDOW: Duration = Duration::from_hours(30 * 24);
             /// Backoff applied after automation failures (seconds).
-            pub const RETRY_BACKOFF: Duration = Duration::from_secs(30 * 60);
+            pub const RETRY_BACKOFF: Duration = Duration::from_mins(30);
             /// Maximum jitter applied to retry scheduling (seconds).
-            pub const RETRY_JITTER: Duration = Duration::from_secs(5 * 60);
+            pub const RETRY_JITTER: Duration = Duration::from_mins(5);
             /// Solve DNS-01 challenges by default.
             pub const DNS01: bool = true;
             /// Solve TLS-ALPN-01 challenges by default.
@@ -2362,9 +2362,9 @@ pub mod sorafs {
                 sorafs_manifest::gateway_compliance::DEFAULT_GATEWAY_COMPLIANCE_MAX_CLOCK_SKEW_SECS,
             );
             /// Maximum age of one source feed at catalog construction.
-            pub const MAX_FEED_AGE: Duration = Duration::from_secs(60 * 60);
+            pub const MAX_FEED_AGE: Duration = Duration::from_hours(1);
             /// Maximum signed catalog validity interval.
-            pub const MAX_CATALOG_VALIDITY: Duration = Duration::from_secs(2 * 60 * 60);
+            pub const MAX_CATALOG_VALIDITY: Duration = Duration::from_hours(2);
             /// Maximum durable promotion/rollback history.
             pub const MAX_HISTORY_ENTRIES: usize = 256;
         }
@@ -3735,13 +3735,13 @@ pub mod nexus {
             /// Number of audit windows tracked before slashing for insufficient coverage.
             pub const WINDOW_COUNT: u16 = 20;
             /// Interval between audit windows.
-            pub const INTERVAL: Duration = Duration::from_secs(10 * 60);
+            pub const INTERVAL: Duration = Duration::from_mins(10);
         }
         /// Recovery deadline defaults for missing DA proofs.
         pub mod recovery {
             use std::time::Duration;
             /// Deadline for supplying recovery proofs once requested.
-            pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+            pub const REQUEST_TIMEOUT: Duration = Duration::from_hours(24);
         }
         /// Temporal diversity defaults for attester rotation.
         pub mod rotation {
@@ -3774,9 +3774,9 @@ pub mod connect {
     /// Maximum buffered payload per session (bytes) for pending delivery.
     pub const SESSION_BUFFER_MAX_BYTES: usize = 262_144; // 256 KiB
     /// Heartbeat ping interval (milliseconds).
-    pub const PING_INTERVAL: Duration = Duration::from_millis(30_000);
+    pub const PING_INTERVAL: Duration = Duration::from_secs(30);
     /// Minimum heartbeat interval allowed for browser transports (milliseconds).
-    pub const PING_MIN_INTERVAL: Duration = Duration::from_millis(15_000);
+    pub const PING_MIN_INTERVAL: Duration = Duration::from_secs(15);
     /// Number of consecutive missed heartbeats tolerated before disconnect.
     pub const PING_MISS_TOLERANCE: u32 = 3;
     /// Dedupe cache TTL (milliseconds) for (sid,dir,seq).
@@ -4687,9 +4687,9 @@ pub mod soranet {
         /// Padding budget advertised in headers (milliseconds).
         pub const PADDING_BUDGET_MS: u16 = 15;
         /// Guard/exit refresh cadence (seconds).
-        pub const GUARD_REFRESH_SECS: Duration = Duration::from_secs(60 * 60);
+        pub const GUARD_REFRESH_SECS: Duration = Duration::from_hours(1);
         /// Control-plane lease duration (seconds).
-        pub const LEASE_SECS: Duration = Duration::from_secs(10 * 60);
+        pub const LEASE_SECS: Duration = Duration::from_mins(10);
         /// DNS push interval (seconds).
         pub const DNS_PUSH_INTERVAL_SECS: Duration = Duration::from_secs(90);
         /// Default exit class label for billing/telemetry.

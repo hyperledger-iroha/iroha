@@ -657,7 +657,7 @@ fn malformed_key_and_signature_encodings_are_custody_errors_before_soft_predicat
     let signature = original.send.receipt.signature.as_raw_bytes();
     let low = Signature::from_slice(signature).unwrap();
     let high = Signature::from_scalars(low.r().to_bytes(), (-*low.s()).to_bytes()).unwrap();
-    assert!(high.normalize_s() != high);
+    assert_ne!(high.normalize_s(), high);
     let mut zero_r = *signature;
     zero_r[..32].fill(0);
     let mut zero_s = *signature;

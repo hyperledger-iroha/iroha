@@ -20,7 +20,7 @@ use crate::{
 
 /// Monetary staking rules authored in signed genesis and changed by committed parameters.
 ///
-/// The same mandatory policy is available on permissioned and NPoS roots. Validator
+/// The same mandatory policy is available on permissioned and `NPoS` roots. Validator
 /// modes and committee capacity retain their separate committed owners. Exact account
 /// and asset identities are part of this policy; no node-local selector supplies them.
 ///

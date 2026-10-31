@@ -127,9 +127,11 @@ impl<C: PastaCurve> FoldCircuit<C> {
         // instance layout is not the private production fold interface.
         let mut values = self
             .bytes()
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .flat_map(|bytes| {
-                let bytes: [u8; 32] = bytes.try_into().unwrap();
+                let bytes: [u8; 32] = *bytes;
                 bytes_to_limbs(&bytes).map(C::Base::from_u128)
             })
             .collect::<Vec<_>>();

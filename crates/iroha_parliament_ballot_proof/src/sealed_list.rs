@@ -87,7 +87,9 @@ pub fn split(bytes: &[u8]) -> Result<Vec<Commitment>, ListError> {
         });
     }
     Ok(bytes
-        .chunks_exact(COMMITMENT_BYTES)
+        .as_chunks::<COMMITMENT_BYTES>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut entry = [0u8; COMMITMENT_BYTES];
             entry.copy_from_slice(chunk);

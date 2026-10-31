@@ -3157,14 +3157,12 @@ impl BundleStreamRecorder {
     fn pop_slot(&mut self) -> Option<SlotContext> {
         loop {
             self.ensure_current_block();
-            match self.current_block.as_mut() {
-                Some(block) => {
-                    if let Some(slot) = block.next_slot() {
-                        return Some(slot);
-                    }
-                    self.current_block = None;
+            {
+                let block = self.current_block.as_mut()?;
+                if let Some(slot) = block.next_slot() {
+                    return Some(slot);
                 }
-                None => return None,
+                self.current_block = None;
             }
         }
     }

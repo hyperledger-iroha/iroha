@@ -30,7 +30,9 @@ fn bytes(value: &Value) -> Vec<u8> {
     let text = value.as_str().expect("hex string");
     assert!(text.len().is_multiple_of(2));
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = core::str::from_utf8(pair).expect("ASCII hex");
             let value = u8::from_str_radix(pair, 16).expect("hex byte");

@@ -13,7 +13,7 @@ use iroha_data_model::{
 
 /// Execute an already-authorized request using its original signed attachment binding.
 /// No proof/cached-success token or generic direct-submission binding is accepted.
-pub(crate) fn execute_x509_submission(
+pub fn execute_x509_submission(
     request: &SubmitPrivacyZkX509CertificateV1,
     binding: &X509Binding,
     proof: &[u8],

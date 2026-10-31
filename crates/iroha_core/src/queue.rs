@@ -2176,10 +2176,8 @@ impl Queue {
         };
         let initial_applied =
             self.install_lane_manifests_with_state_if_consensus_compatible(&initial, &state);
-        if initial_applied {
-            if let Some(telemetry_handle) = telemetry.as_ref() {
-                telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
-            }
+        if initial_applied && let Some(telemetry_handle) = telemetry.as_ref() {
+            telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
         }
         if registry_cfg.poll_interval.is_zero() {
             return;
@@ -2952,7 +2950,7 @@ impl Queue {
                     return Err("transaction queue resident custody belongs to a different original State pool");
                 }
                 let ticket = self.sumeragi_start_ticket
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |previous| previous.checked_add(1))
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |previous| previous.checked_add(1))
                     .map_err(|_| "transaction queue startup identity is exhausted")?;
                 Ok((ticket, binding.replace(SumeragiQueueWake::Reserved { ticket, budget: budget.clone() })))
             },
@@ -8135,12 +8133,12 @@ pub mod tests {
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &queue_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*queue.lane_privacy_registry.read(),
+            &queue.lane_privacy_registry.read(),
             &queue_privacy_before
         ));
 
@@ -8168,7 +8166,7 @@ pub mod tests {
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &source_backed));

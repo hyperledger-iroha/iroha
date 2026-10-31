@@ -676,21 +676,31 @@ history survive.
 
 1. **Authorize.** The running chain commits an adoption authorization through the governance it
    already has: on Taira today the account holding `CanManageRuntimeUpgrades`, and SORA Parliament
-   once it is integrated. It names the foundation release by its artifact digests, the adoption
-   height `H` and the foundation's initial selection. Authority comes from that certified
-   transaction, never from node configuration or from installing software.
-2. **Stop.** The predecessor commits no block after `H`. The authorization is a scheduled runtime
-   upgrade the predecessor release cannot activate, and an unsupported scheduled upgrade halts it at
-   its start height (`State::apply_block_start_world_transitions`). How the predecessor recognizes
-   it is fixed with the adoption carrier (section 14, step 5). This one switch is coordinated, not
-   rolling: the foundation release never executes the predecessor protocol.
+   once it is integrated. It names the foundation's initial selection and opens an adoption
+   window. Authority comes from that certified record, never from node configuration or from
+   installing software. On Taira's predecessor (iroha f31b64d8c5) the carrier is an ABI-v1 runtime
+   upgrade manifest named `iroha:runtime:adoption:v1` whose SBOM digest
+   `iroha:runtime:adoption-selection:v1` is the foundation's baseline selection; the foundation
+   release prints it (`iroha runtime adoption manifest --start-height A --end-height E`) and the
+   holder of `CanManageRuntimeUpgrades` submits it with the predecessor's
+   `iroha runtime upgrade propose --file`.
+2. **Stop.** The predecessor commits no block after `H`. The predecessor admits only manifests it
+   can activate, so it cannot halt itself at a governed height: it activates the authorization at
+   its start height `A`, and validators stop together at a checkpoint `H` with `A < H < E`. This
+   one switch is coordinated, not rolling: the foundation release never executes the predecessor
+   protocol, refuses a checkpoint outside the window, and a predecessor that commits past `H`
+   simply moves the checkpoint to its new tip.
 3. **Import.** The foundation release reads the predecessor's State at `H` and checks the World
    against block `H`'s certified World root under the predecessor's root rule. It maps every
    predecessor field onto a storage definition of the baseline catalog; a field the foundation
-   retired must be empty, so nothing is dropped. State outside the World root (transaction
-   membership, commit topologies, the canonical runtime; finding G1-D2) comes from the predecessor's
-   signed snapshot. Its correctness rests on the authorization and on every validator importing the
-   same bytes, which their attestations of the resulting keyed root confirm.
+   retired must be empty, so nothing is dropped, except the retired `runtime_upgrades` table,
+   which may hold only adoption authorizations. Their entries enter the predecessor's root, so
+   the certified root proves them, and exactly one must authorize this selection at `H`: activated
+   at its start height `A` with `A < H < E`. The import refuses otherwise; node configuration
+   (`snapshot.upgrade_checkpoint`) only locates `H` and its snapshot. State outside the World root
+   (transaction membership, commit topologies, the canonical runtime; finding G1-D2) comes from
+   the predecessor's signed snapshot. Its correctness rests on the authorization and on every
+   validator importing the same bytes, which their attestations of the resulting root confirm.
 4. **Anchor.** The adoption record (network, `H` and its block hash, the predecessor roots, the keyed
    root of the imported State, the committee and epoch, and the foundation's selection) becomes the
    network's trust anchor. All `n` validators attest it before the foundation history continues at
@@ -701,9 +711,11 @@ history survive.
    validator has adopted. From then on no
    release carries pre-foundation code.
 
-An interim checkpoint import that keeps Taira on a newer release before the foundation is ready
-follows the same steps but takes its checkpoint from node configuration. The governed adoption
-replaces it, and it is deleted with the rest of the pre-foundation code.
+The import builds the adoption record (`AdoptionRecordV1`) from the authenticated predecessor
+State and logs it. Recording it in committed State and collecting every validator's attestation
+of it, which a node starting from the anchor instead of the predecessor history needs, arrive with
+checkpoint bootstrap (section 14, step 5). The configuration-only import that preceded the governed
+one is gone: every import needs the authorization.
 
 ## 14. Implementation order
 

@@ -427,8 +427,10 @@ impl ScalarSegment {
             return Err(Error::InvalidProfile);
         }
         let words = bytes
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("four-byte chunk")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
             .collect();
         let result = Self {
             contract,
@@ -494,7 +496,9 @@ impl ScalarSegment {
                 != ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
             || executable.len() != self.words.len() * 4
             || executable
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .zip(&self.words)
                 .any(|(bytes, word)| bytes != word.to_le_bytes())
             || self

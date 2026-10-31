@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn completed_original_payload_survives_unrelated_queue_admissions_without_recapture() {
-        let (_, time) = iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(30_000));
+        let (_, time) = iroha_primitives::time::TimeSource::new_mock(Duration::from_secs(30));
         super::super::publication_tests::with_worker_clock(
             time.clone(),
             move |chain, worker, _blocks, _events| {
@@ -604,7 +604,7 @@ mod tests {
                 );
                 assert_eq!(original.network_entrypoints().next().unwrap().hash(), input);
 
-                clock.set(Duration::from_millis(20_000));
+                clock.set(Duration::from_secs(20));
                 let retained = worker.build(2, 0, 1 << 20, 100).unwrap().unwrap();
                 assert_eq!(
                     retained.payload.as_slice().as_ptr(),
@@ -615,7 +615,7 @@ mod tests {
                 let proposal = payload::decode(fresh.payload.as_slice()).unwrap();
                 assert_eq!(
                     proposal.header().creation_time(),
-                    Duration::from_millis(20_000),
+                    Duration::from_secs(20),
                     "fresh view must refresh certified time without another signed transaction"
                 );
                 assert_eq!(proposal.network_entrypoints().count(), 1);

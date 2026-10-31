@@ -439,7 +439,7 @@ fn det_signing_refusal_worker_event_is_only_local_telemetry() {
         assert_refused(&out, kind);
         assert!(h.core.high_pqc.is_none());
         assert!(h.core.mine.proposal.is_none());
-        assert!(h.core.votes.len() == 0);
+        assert_eq!(h.core.votes.len(), 0);
     }
 }
 

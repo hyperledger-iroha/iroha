@@ -104,7 +104,7 @@ impl JindoFieldElementV1 {
     pub(crate) fn to_canonical_bytes(self) -> [u8; 32] {
         let limbs = self.to_canonical_limbs();
         let mut bytes = [0_u8; 32];
-        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
+        for (chunk, limb) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(limbs) {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
         bytes
@@ -259,7 +259,7 @@ mod tests {
     use super::*;
     fn canonical_from_limbs(limbs: [u64; 4]) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
-        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
+        for (chunk, limb) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(limbs) {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
         bytes

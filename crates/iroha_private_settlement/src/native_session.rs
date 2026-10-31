@@ -52,7 +52,7 @@ pub const NATIVE_PRIVATE_SETTLEMENT_TERMINAL_ALLOWANCE: usize = MAX_EXECUTED_BLO
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 fn next_id() -> Result<u64, NativePrivateSettlementSessionError> {
     NEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| NativePrivateSettlementSessionError::Capacity)
 }
 
@@ -502,8 +502,8 @@ impl NativePrivateSettlementHost {
             return Err(NativePrivateSettlementSessionError::Busy);
         }
         let slot = self.sender.try_reserve().map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => NativePrivateSettlementSessionError::Capacity,
-            mpsc::error::TrySendError::Closed(_) => {
+            mpsc::error::TrySendError::Full(()) => NativePrivateSettlementSessionError::Capacity,
+            mpsc::error::TrySendError::Closed(()) => {
                 NativePrivateSettlementSessionError::Unavailable
             }
         })?;
@@ -560,8 +560,8 @@ impl NativePrivateSettlementHost {
             .ok_or(NativePrivateSettlementSessionError::StagingUnavailable)?;
         let source = files::FileInput::capture(descriptor, remaining)?;
         let slot = self.sender.try_reserve().map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => NativePrivateSettlementSessionError::Capacity,
-            mpsc::error::TrySendError::Closed(_) => {
+            mpsc::error::TrySendError::Full(()) => NativePrivateSettlementSessionError::Capacity,
+            mpsc::error::TrySendError::Closed(()) => {
                 NativePrivateSettlementSessionError::Unavailable
             }
         })?;
@@ -843,8 +843,10 @@ impl NativePrivateSettlementAdmission {
             .sender
             .try_reserve()
             .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => NativePrivateSettlementSessionError::Capacity,
-                mpsc::error::TrySendError::Closed(_) => {
+                mpsc::error::TrySendError::Full(()) => {
+                    NativePrivateSettlementSessionError::Capacity
+                }
+                mpsc::error::TrySendError::Closed(()) => {
                     NativePrivateSettlementSessionError::Unavailable
                 }
             })?;

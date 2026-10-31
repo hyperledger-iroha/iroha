@@ -890,7 +890,10 @@ fn borrowed_instruction_validator_payload_has_exact_canonical_owned_wire() {
         context: context(),
         target: norito::core::PayloadRef(&instruction),
     };
-    assert!(std::ptr::eq(&*borrowed.target, &instruction));
+    assert!(std::ptr::eq(
+        &raw const *borrowed.target,
+        &raw const instruction
+    ));
     let owned = ValidatePayload {
         context: context(),
         target: instruction.clone(),
@@ -15329,7 +15332,7 @@ fn execution_fee_settlement_refuses_equal_value_from_a_different_predecessor() {
         0,
     );
     let settlement = {
-        let mut block = state.block(header.clone());
+        let mut block = state.block(header);
         let mut execution =
             block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         execution.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

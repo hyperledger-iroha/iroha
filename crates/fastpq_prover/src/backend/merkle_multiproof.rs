@@ -701,7 +701,9 @@ mod tests {
                 let parents = levels
                     .last()
                     .unwrap()
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .enumerate()
                     .map(|(i, pair)| {
                         candidate_parent(&context, oracle, level, i, pair[0], pair[1]).unwrap()

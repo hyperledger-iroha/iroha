@@ -435,7 +435,7 @@ impl GoldilocksFp4V1 {
     /// Decode the canonical fixed-width big-endian wire encoding.
     pub(crate) fn canonical_be_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut values = [0_u64; GOLDILOCKS_FP4_DEGREE_V1];
-        for (index, chunk) in bytes.chunks_exact(8).enumerate() {
+        for (index, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
             values[index] = u64::from_be_bytes(
                 chunk
                     .try_into()
@@ -3044,7 +3044,7 @@ mod tests {
     }
     fn digest_from_words(words: [u64; 6]) -> PrivacyOuterDigestV1 {
         let mut bytes = [0; 48];
-        for (chunk, word) in bytes.chunks_exact_mut(8).zip(words) {
+        for (chunk, word) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(words) {
             chunk.copy_from_slice(&word.to_be_bytes());
         }
         PrivacyOuterDigestV1::from_bytes(bytes)
@@ -3626,7 +3626,9 @@ mod tests {
             let parent_level = u64::try_from(reference_levels.len()).expect("small tree depth");
             let previous = reference_levels.last().expect("reference Merkle level");
             let next = previous
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .map(|(index, pair)| {
                     privacy_outer_merkle_node_v1(

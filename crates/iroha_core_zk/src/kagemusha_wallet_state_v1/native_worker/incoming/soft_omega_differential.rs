@@ -470,8 +470,10 @@ fn current_omega_soft_local_decoders_match_native_and_retain_opening() {
     let proof_length = Protocol::new(binding.descriptor()).unwrap().proof_length();
     assert_eq!(fixture.originals[2].len(), proof_length);
     let public: [Fp; 18] = fixture.originals[3]
-        .chunks_exact(32)
-        .map(|b| Option::<Fp>::from(Fp::from_repr(b.try_into().unwrap())).unwrap())
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(|b| Option::<Fp>::from(Fp::from_repr(*b)).unwrap())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();

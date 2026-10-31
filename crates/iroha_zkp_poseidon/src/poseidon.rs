@@ -325,13 +325,13 @@ fn hash_words_internal(words: &[Fr]) -> Fr {
 }
 fn hash_u64_words_internal(words: &[u64]) -> Fr {
     let mut state = [Fr::ZERO; 3];
-    let mut pairs = words.chunks_exact(2);
-    for pair in &mut pairs {
-        state[0] += fr_from_u64(pair[0]);
-        state[1] += fr_from_u64(pair[1]);
+    let (pairs, remainder) = words.as_chunks::<2>();
+    for [first, second] in pairs {
+        state[0] += fr_from_u64(*first);
+        state[1] += fr_from_u64(*second);
         poseidon3_permute(&mut state);
     }
-    match pairs.remainder() {
+    match remainder {
         [] => state[0] += Fr::ONE,
         [word] => {
             state[0] += fr_from_u64(*word);

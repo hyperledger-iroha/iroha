@@ -220,7 +220,7 @@ impl OffenceKey {
             b'a'..=b'f' => Some(b - b'a' + 10),
             _ => None,
         };
-        for pair in source.as_bytes().chunks_exact(2) {
+        for pair in source.as_bytes().as_chunks::<2>().0 {
             bytes.push_reserved(
                 (nibble(pair[0]).ok_or(ForgeryStorageError::Invalid)? << 4)
                     | nibble(pair[1]).ok_or(ForgeryStorageError::Invalid)?,

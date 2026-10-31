@@ -189,8 +189,10 @@ where
     if let InputBinding::Terminal { descriptor, raw } = binding {
         words.extend(
             descriptor
-                .chunks_exact(16)
-                .map(|part| C::Base::from_u128(u128::from_le_bytes(part.try_into().unwrap()))),
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .map(|part| C::Base::from_u128(u128::from_le_bytes(*part))),
         );
         words.push(*raw);
     }

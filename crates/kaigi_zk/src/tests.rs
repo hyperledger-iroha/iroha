@@ -174,10 +174,12 @@ fn exact_root_instance_limbs_match_every_input_byte() {
     let instance = KaigiAuthorizationPublicInputsV1 { context, outputs }.instance();
     for (bytes, scalar) in context
         .pre_roster_root
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .zip(&instance[18..22])
     {
-        let expected = u64::from_le_bytes(bytes.try_into().unwrap());
+        let expected = u64::from_le_bytes(*bytes);
         let repr = scalar.to_repr();
         assert_eq!(u64::from_le_bytes(repr[..8].try_into().unwrap()), expected);
         assert!(repr[8..].iter().all(|&byte| byte == 0));

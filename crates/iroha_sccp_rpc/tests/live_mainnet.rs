@@ -160,10 +160,8 @@ impl CapturedRun {
             };
             if !matches!(
                 replay.verify_evidence(&evidence_bytes, evidence.taira_now_ms),
-                Err(SccpLcError::Ethereum(EthereumLcError::Event(_)))
-                    | Err(SccpLcError::Bsc(BscLcError::Receipt(
-                        EthereumLcError::Event(_)
-                    )))
+                Err(SccpLcError::Ethereum(EthereumLcError::Event(_))
+                    | SccpLcError::Bsc(BscLcError::Receipt(EthereumLcError::Event(_))))
             ) {
                 return Err(
                     "capture must pass inclusion and fail only at its non-SCCP event".into(),

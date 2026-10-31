@@ -1,7 +1,6 @@
 //! Authored source controls only; no compilation or execution has occurred.
 use super::*;
 use crate::{
-    HasMetadata,
     account::AccountId,
     events::time::{ExecutionTime, Schedule, TimeEventFilter},
     smart_contract::{
@@ -84,12 +83,12 @@ fn invocation_parts(address: &[u8], hash: &[u8], entrypoint: &[u8], arguments: &
     .concat()
 }
 
-fn invocation_bytes(address: &str, hash: &[u8], name: &str, arguments: Option<Vec<u8>>) -> Vec<u8> {
+fn invocation_bytes(address: &str, hash: &[u8], name: &str, arguments: Option<&[u8]>) -> Vec<u8> {
     invocation_parts(
         &payload(&address),
         hash,
         &payload(&name),
-        &payload(&arguments),
+        &payload(&arguments.map(<[u8]>::to_vec)),
     )
 }
 
@@ -294,8 +293,7 @@ fn contract_hash_marker_and_every_outer_field_are_consumed() {
     assert!(scan_invocation_bytes(&typed).is_ok());
     for hash in [&[0u8; 32][..], &[1u8; 31][..], &[1u8; 33][..]] {
         assert!(
-            scan_invocation_bytes(&invocation_bytes(ADDRESS, hash, "entry", Some(vec![1])))
-                .is_err()
+            scan_invocation_bytes(&invocation_bytes(ADDRESS, hash, "entry", Some(&[1]))).is_err()
         );
     }
     let mut trailing = typed;
@@ -319,13 +317,18 @@ fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
     use crate::transaction::executable::MAX_CONTRACT_ARGUMENT_RECORD_BYTES;
     for arguments in [None, Some(vec![])] {
         assert_eq!(
-            scan_invocation_bytes(&invocation_bytes(ADDRESS, &[1; 32], "entry", arguments)),
+            scan_invocation_bytes(&invocation_bytes(
+                ADDRESS,
+                &[1; 32],
+                "entry",
+                arguments.as_deref()
+            )),
             Err(ScanError::UnsupportedExecutable)
         );
     }
     for name in ["", " entry", "entry ", "\u{2003}entry"] {
         assert_eq!(
-            scan_invocation_bytes(&invocation_bytes(ADDRESS, &[1; 32], name, Some(vec![1]))),
+            scan_invocation_bytes(&invocation_bytes(ADDRESS, &[1; 32], name, Some(&[1]))),
             Err(ScanError::UnsupportedExecutable)
         );
     }
@@ -334,7 +337,7 @@ fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
             ADDRESS,
             &[1; 32],
             &"x".repeat(255),
-            Some(vec![1])
+            Some(&[1])
         ))
         .is_ok()
     );
@@ -343,7 +346,7 @@ fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
             ADDRESS,
             &[1; 32],
             &"x".repeat(256),
-            Some(vec![1])
+            Some(&[1])
         ))
         .is_err()
     );
@@ -351,7 +354,13 @@ fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
     // These opaque zero bytes deliberately demonstrate outer framing scope only;
     // nested EntrypointArgumentRecord semantics are not claimed by this scanner.
     assert!(
-        scan_invocation_bytes(&invocation_bytes(ADDRESS, &[1; 32], "entry", Some(maximum))).is_ok()
+        scan_invocation_bytes(&invocation_bytes(
+            ADDRESS,
+            &[1; 32],
+            "entry",
+            Some(maximum.as_slice())
+        ))
+        .is_ok()
     );
     let mut oversized = vec![1];
     oversized.extend(field(
@@ -380,13 +389,12 @@ fn borrowed_address_validator_preserves_original_checksum_variants_and_refusals(
     ] {
         let _: ContractAddress = text.parse().unwrap();
         assert!(
-            scan_invocation_bytes(&invocation_bytes(&text, &[1; 32], "entry", Some(vec![1])))
-                .is_ok()
+            scan_invocation_bytes(&invocation_bytes(&text, &[1; 32], "entry", Some(&[1]))).is_ok()
         );
         let upper = text.to_uppercase();
         assert!(upper.parse::<ContractAddress>().is_err());
         assert!(
-            scan_invocation_bytes(&invocation_bytes(&upper, &[1; 32], "entry", Some(vec![1])))
+            scan_invocation_bytes(&invocation_bytes(&upper, &[1; 32], "entry", Some(&[1])))
                 .is_err()
         );
     }
@@ -403,8 +411,7 @@ fn borrowed_address_validator_preserves_original_checksum_variants_and_refusals(
     ] {
         assert!(text.parse::<ContractAddress>().is_err());
         assert!(
-            scan_invocation_bytes(&invocation_bytes(&text, &[1; 32], "entry", Some(vec![1])))
-                .is_err()
+            scan_invocation_bytes(&invocation_bytes(&text, &[1; 32], "entry", Some(&[1]))).is_err()
         );
     }
 }

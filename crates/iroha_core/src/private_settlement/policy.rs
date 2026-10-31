@@ -9,9 +9,7 @@ use iroha_data_model::{
 };
 
 /// Preserve the codec attempt before decorating a deterministic policy failure.
-pub(crate) fn attempt(
-    error: PrivateSettlementPolicyParameterErrorV1,
-) -> ExecutionAttemptError<String> {
+pub fn attempt(error: PrivateSettlementPolicyParameterErrorV1) -> ExecutionAttemptError<String> {
     match error {
         PrivateSettlementPolicyParameterErrorV1::Codec(original) => {
             canonical_decode_attempt_error(original, |error| error.to_string())
@@ -21,7 +19,7 @@ pub(crate) fn attempt(
 }
 
 /// Read the immutable baseline only when the exact committed extension is absent.
-pub(crate) fn read(
+pub fn read(
     parameters: &Parameters,
     protocol: Option<&PrivacyProtocolPolicyV1>,
     committed_height: u64,

@@ -21,7 +21,9 @@ pub(super) fn extend_le_bytes(bytes: &mut Vec<u8>, words: &[u64]) {
 /// The little-endian words of `bytes`; a trailing partial word is ignored.
 pub(super) fn words_from_le_bytes(bytes: &[u8]) -> Vec<u64> {
     bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut word = [0_u8; 8];
             word.copy_from_slice(chunk);

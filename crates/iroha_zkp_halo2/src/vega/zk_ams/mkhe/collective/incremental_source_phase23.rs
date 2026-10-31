@@ -247,7 +247,9 @@ impl Phase23SecretRecordChunkPoolV1 {
         } = self;
         let mut chunks = main.into_iter();
         for (block, coefficients) in canonical_plaintext
-            .chunks_exact(PHASE23_CANONICAL_COEFFICIENTS_PER_BLOCK_V1)
+            .as_chunks::<PHASE23_CANONICAL_COEFFICIENTS_PER_BLOCK_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             let mut chunk = chunks.next().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -259,7 +261,9 @@ impl Phase23SecretRecordChunkPoolV1 {
             )?;
         }
         for (block, coefficients) in ephemeral
-            .chunks_exact(PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1)
+            .as_chunks::<PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             let mut chunk = chunks.next().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -271,7 +275,9 @@ impl Phase23SecretRecordChunkPoolV1 {
             )?;
         }
         for (block, coefficients) in error_zero
-            .chunks_exact(PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1)
+            .as_chunks::<PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             let mut chunk = chunks.next().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -283,7 +289,9 @@ impl Phase23SecretRecordChunkPoolV1 {
             )?;
         }
         for (block, coefficients) in error_one
-            .chunks_exact(PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1)
+            .as_chunks::<PHASE23_SIGNED_COEFFICIENTS_PER_BLOCK_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             let mut chunk = chunks.next().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -314,7 +322,7 @@ fn fill_canonical_source_block_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    for (encoded, coefficient) in output.chunks_exact_mut(32).zip(coefficients) {
+    for (encoded, coefficient) in output.as_chunks_mut::<32>().0.iter_mut().zip(coefficients) {
         encoded.copy_from_slice(coefficient);
     }
     Ok(())
@@ -329,7 +337,7 @@ fn fill_signed_source_block_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    for (encoded, coefficient) in output.chunks_exact_mut(8).zip(coefficients) {
+    for (encoded, coefficient) in output.as_chunks_mut::<8>().0.iter_mut().zip(coefficients) {
         encoded.copy_from_slice(&coefficient.to_be_bytes());
     }
     Ok(())

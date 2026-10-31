@@ -104,14 +104,14 @@ fn exact_intake_is_selected_before_verification_and_survives_reopen() {
     let retained = w.retain_deferred_credited(&send, &original).unwrap();
     // Inspect the authoritative checkpoint before entering the verifier, not raw put success.
     let checkpoint = w.custody.checkpoint.clone().unwrap();
-    assert_eq!(w.next_deferred_credited().unwrap(), Some(retained.clone()));
+    assert_eq!(w.next_deferred_credited().unwrap(), Some(retained));
     assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
     assert_eq!(w.custody.signatures, 0);
     let mut w = reopen(w);
     assert_eq!(w.custody.checkpoint.as_ref(), Some(&checkpoint));
     w.proofs.reject = true; // generic source/proof refusal is not a receipt verdict
     assert!(w.verify_deferred_credited(&retained).is_err());
-    assert_eq!(w.next_deferred_credited().unwrap(), Some(retained.clone()));
+    assert_eq!(w.next_deferred_credited().unwrap(), Some(retained));
     assert_eq!(w.custody.checkpoint.as_ref(), Some(&checkpoint));
     w.proofs.reject = false;
     assert_eq!(w.verify_deferred_credited(&retained).unwrap().bytes()[3], 4);
@@ -127,14 +127,14 @@ fn malformed_oldest_is_retained_but_does_not_block_later_valid_receipt_after_res
         .unwrap();
     let good = w.retain_deferred_credited(&send, &original).unwrap();
     let mut w = reopen(w);
-    assert_eq!(w.next_deferred_credited().unwrap(), Some(bad.clone()));
+    assert_eq!(w.next_deferred_credited().unwrap(), Some(bad));
     assert!(matches!(
         w.verify_deferred_credited(&bad),
         Err(Error::ReceiptRejected(_))
     ));
     let selected = w.custody.checkpoint.clone();
     let mut w = reopen(w);
-    assert_eq!(w.next_deferred_credited().unwrap(), Some(good.clone()));
+    assert_eq!(w.next_deferred_credited().unwrap(), Some(good));
     assert_eq!(
         w.retain_deferred_credited(&send, b"not a canonical Credited")
             .unwrap(),
@@ -225,7 +225,7 @@ fn intake_uncertain_publication_reconciles_selected_bytes_without_resetting_time
         assert_eq!(summary.oldest_age, DeferredArchiveAgeV1::Regression);
         assert_eq!(
             w.deferred_archive_wake_hint().unwrap(),
-            DeferredArchiveWakeHintV1::RecheckAfter(Duration::from_secs(900))
+            DeferredArchiveWakeHintV1::RecheckAfter(Duration::from_mins(15))
         );
     }
 }
@@ -431,12 +431,12 @@ fn canonical_model_invalid_evidence_is_rejected_without_hiding_later_valid_evide
             .unwrap();
         let good = w.retain_deferred_credited(&send, &good_bytes).unwrap();
         let mut w = reopen(w);
-        assert_eq!(w.next_deferred_credited().unwrap(), Some(bad.clone()));
+        assert_eq!(w.next_deferred_credited().unwrap(), Some(bad));
         assert!(matches!(
             w.verify_deferred_credited(&bad),
             Err(Error::ReceiptRejected(_))
         ));
-        assert_eq!(w.next_deferred_credited().unwrap(), Some(good.clone()));
+        assert_eq!(w.next_deferred_credited().unwrap(), Some(good));
         w.verify_deferred_credited(&good).unwrap();
         assert_eq!(
             w.deferred_archive_summary()
@@ -586,12 +586,12 @@ fn fresh_open_send_retains_first_intent_before_verified_membership_and_recovers_
             .retain_deferred_credited(&request.request_id, &original)
             .unwrap();
         let mut w = reopen(w);
-        assert_eq!(w.next_deferred_credited().unwrap(), Some(invalid.clone()));
+        assert_eq!(w.next_deferred_credited().unwrap(), Some(invalid));
         assert!(matches!(
             w.verify_deferred_credited(&invalid),
             Err(Error::ReceiptRejected("deferred Credited Send binding"))
         ));
-        assert_eq!(w.next_deferred_credited().unwrap(), Some(good.clone()));
+        assert_eq!(w.next_deferred_credited().unwrap(), Some(good));
         let signatures = w.custody.signatures;
         let preparations = w.proofs.preparations.load(Ordering::SeqCst);
         // Inject before/after each of request-only intent and ready membership publication.
@@ -618,7 +618,7 @@ fn fresh_open_send_retains_first_intent_before_verified_membership_and_recovers_
             if membership_selected {
                 None
             } else {
-                Some(good.clone())
+                Some(good)
             }
         );
         assert_eq!(w.custody.signatures, signatures);
@@ -652,7 +652,7 @@ fn only_explicit_completed_receipt_verdict_advances_the_unverified_fifo() {
             assert!(w.next_deferred_credited().unwrap().is_none());
         } else {
             assert!(matches!(outcome, Err(Error::NativeVerification(_))));
-            assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt.clone()));
+            assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt));
             w.proofs.deferred_receipt_refusal = None;
             w.verify_deferred_credited(&receipt).unwrap();
             assert_eq!(w.deferred_archive_summary().unwrap().count, 1);
@@ -697,7 +697,7 @@ fn rejected_checkpoint_cuts_recover_selected_verdict_and_preserve_exact_original
         let mut w = reopen(w);
         assert_eq!(
             w.next_deferred_credited().unwrap(),
-            Some(if after { good.clone() } else { bad.clone() })
+            Some(if after { good } else { bad })
         );
         let selected = w.custody.checkpoint.clone();
         assert_eq!(
@@ -727,7 +727,7 @@ fn rejected_checkpoint_cuts_recover_selected_verdict_and_preserve_exact_original
                 .unwrap(),
             FAULT_TEST_MALFORMED_CREDITED
         );
-        assert_eq!(w.next_deferred_credited().unwrap(), Some(good.clone()));
+        assert_eq!(w.next_deferred_credited().unwrap(), Some(good));
         w.verify_deferred_credited(&good).unwrap();
         let summary = w.deferred_archive_summary().unwrap();
         assert_eq!(summary.count, 1);
@@ -790,7 +790,7 @@ fn each_intake_object_write_cut_leaves_no_selected_receipt_and_retries_after_reo
                 .retain_deferred_credited_with_clock(&send, &original, || None)
                 .unwrap();
             let mut w = reopen_with_session(w);
-            assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt.clone()));
+            assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt));
             w.verify_deferred_credited(&receipt).unwrap();
             let summary = w.deferred_archive_summary().unwrap();
             assert_eq!(summary.count, 1);
@@ -843,7 +843,7 @@ fn each_rejection_index_write_cut_keeps_oldest_discoverable_until_selected_retry
             assert_eq!(w.custody.checkpoint, selected);
             assert_eq!(w.custody.publication_calls, publications);
             let mut w = reopen_with_session(w);
-            assert_eq!(w.next_deferred_credited().unwrap(), Some(bad.clone()));
+            assert_eq!(w.next_deferred_credited().unwrap(), Some(bad));
             assert_eq!(
                 w.retain_deferred_credited_with_clock(&send, FAULT_TEST_MALFORMED_CREDITED, || {
                     panic!("failed rejection retains original age")
@@ -857,7 +857,7 @@ fn each_rejection_index_write_cut_keeps_oldest_discoverable_until_selected_retry
                 Err(Error::ReceiptRejected(_))
             ));
             let mut w = reopen_with_session(w);
-            assert_eq!(w.next_deferred_credited().unwrap(), Some(good.clone()));
+            assert_eq!(w.next_deferred_credited().unwrap(), Some(good));
             w.verify_deferred_credited(&good).unwrap();
             let summary = w.deferred_archive_summary().unwrap();
             assert_eq!(summary.count, 1);
@@ -913,7 +913,7 @@ fn each_verified_membership_write_cut_retains_unverified_intake_for_exact_retry(
             assert_eq!(w.custody.checkpoint, selected);
             assert_eq!(w.custody.publication_calls, publications);
             let mut w = reopen_with_session(w);
-            assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt.clone()));
+            assert_eq!(w.next_deferred_credited().unwrap(), Some(receipt));
             assert_eq!(w.deferred_archive_summary().unwrap().count, 0);
             assert_eq!(
                 w.retain_deferred_credited_with_clock(&send, &original, || {

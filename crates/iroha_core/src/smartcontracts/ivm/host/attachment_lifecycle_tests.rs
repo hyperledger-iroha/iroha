@@ -352,7 +352,7 @@ fn attachment_host_wrong_root_or_caller_subject_cannot_consume() {
         .unwrap();
         assert!(matches!(
             consume_attachment_host_fixture(&mut host, declaration),
-            Err(CustodyError::WrongInvocation(_)) | Err(CustodyError::WrongAuthority(_))
+            Err(CustodyError::WrongInvocation(_) | CustodyError::WrongAuthority(_))
         ));
         drop(host);
         assert_eq!(owner.finish(), Err(CustodyError::FailedAttempt));
@@ -621,9 +621,7 @@ fn attachment_host_consumption_is_once_and_unfinished_or_unwound_hosts_poison() 
                     .unwrap(),
             )
             .unwrap();
-            if unwind {
-                panic!("injected host unwinding before finish");
-            }
+            assert!(!unwind, "injected host unwinding before finish")
             // Ordinary unfinished-host destruction has the same poisoning owner.
         }));
         assert_eq!(result.is_err(), unwind);

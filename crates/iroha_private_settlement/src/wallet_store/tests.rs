@@ -345,7 +345,7 @@ fn native_authorization_reopens_exactly_and_first_round_cannot_be_replaced() {
         *actual == *expected,
         "native secret custody must reopen exact original bytes"
     );
-    assert!(inspected == inspection);
+    assert_eq!(inspected, inspection);
     drop(first);
     drop(wallet);
     let reopened = open_wallet(&root);

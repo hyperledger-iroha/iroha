@@ -201,10 +201,9 @@ fn decode_digest384_output_v1(
     digests
         .try_reserve_exact(output.len() / 6)
         .map_err(|_| Digest384GpuErrorV1::InvalidInput("output allocation failed"))?;
-    for words in output.chunks_exact(6) {
+    for words in output.as_chunks::<6>().0 {
         digests.push(
-            GoldilocksDigest384V1::new(words.try_into().expect("six-word chunk"))
-                .ok_or(Digest384GpuErrorV1::NoncanonicalOutput)?,
+            GoldilocksDigest384V1::new(*words).ok_or(Digest384GpuErrorV1::NoncanonicalOutput)?,
         );
     }
     Ok(digests)

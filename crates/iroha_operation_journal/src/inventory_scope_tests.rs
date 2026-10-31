@@ -318,7 +318,7 @@ thread_local! {
         std::cell::RefCell::new(None)
     };
 }
-pub(super) fn before_child_exit() {
+pub fn before_child_exit() {
     let hook = BEFORE_CHILD_EXIT.with(|slot| slot.borrow_mut().take());
     if let Some(hook) = hook {
         hook();

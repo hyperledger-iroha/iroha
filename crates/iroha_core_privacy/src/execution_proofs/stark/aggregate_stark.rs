@@ -694,8 +694,8 @@ pub fn validate_affine_batched_fri_theorem2_v1(
         || certificate.claimed_query_error_bits == 0
         || terminal_size
             .checked_shl(u32::from(certificate.fold_count))
-            .filter(|size| *size == domain_size)
-            .is_none()
+            .as_ref()
+            .is_none_or(|size| *size != domain_size)
         || (parameters.terminal_degree_bound + 1)
             .checked_mul(usize::from(certificate.rho_denominator))
             .zip(terminal_size.checked_mul(usize::from(certificate.rho_numerator)))

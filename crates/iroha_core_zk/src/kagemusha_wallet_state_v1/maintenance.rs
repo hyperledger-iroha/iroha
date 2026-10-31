@@ -15,7 +15,7 @@ pub enum MaintenanceViewV1 {
     /// An operation is source-selected Pending. Recover it without idle admission gates.
     /// The view has not resumed the operation or read its frozen recovery inputs.
     SelectedPending,
-    /// The current released head is ArchiveSent and its covering fold is not yet selected.
+    /// The current released head is `ArchiveSent` and its covering fold is not yet selected.
     /// The exact current head remains discoverable even after its queue entry is removed.
     AwaitingArchiveFold(Snapshot),
     /// A released head without an outstanding current Archive fold obligation.

@@ -1150,7 +1150,7 @@ fn ordinary_holder_lifecycle_with_retained_public_receipt() {
     let trusted_block_timestamp_ms =
         reference.statement.presentation_not_before_unix_seconds * 1_000;
     let fixture = build_zk_x509_network_release_fixture_v1(
-        reference.statement.context.clone(),
+        reference.statement.context,
         trusted_block_timestamp_ms,
         reference.statement.wallet_account.clone(),
     )

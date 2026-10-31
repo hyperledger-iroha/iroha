@@ -371,7 +371,7 @@ pub fn constraint_residues<F: IntegerAirField>(
             registers[index] = output;
         }
     }
-    for xor in witness.feed_forward.iter() {
+    for xor in &witness.feed_forward {
         residues.extend(xor_residues(active, xor));
     }
     for index in 0..8 {
@@ -588,7 +588,9 @@ mod tests {
         let expected = "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923";
         let bytes: Vec<_> = expected
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u8::from_str_radix(core::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect();
         assert_eq!(hash_bytes(&witness.output), bytes);

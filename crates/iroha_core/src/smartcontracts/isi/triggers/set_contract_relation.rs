@@ -414,7 +414,7 @@ impl Strategy for CheckedStrategy {
     }
 }
 fn compact_prefix(value: usize) -> u64 {
-    u64::from((usize::BITS - value.leading_zeros()).max(1)).div_ceil(7)
+    u64::from(value.bit_width().max(1)).div_ceil(7)
 }
 #[derive(Clone, Copy)]
 enum Phase {

@@ -674,7 +674,7 @@ pub fn derive_atomic_private_settlement_input_nullifiers_v1(
 /// Rejects a substituted context, wrong fixed shape, malformed note/view key,
 /// or unavailable/unsafe encryption randomness.
 pub fn prepare_atomic_private_settlement_outputs_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     manifest: &AtomicPrivateSettlementV1,
     statement: &PrivateSettlementProofStatementV1,
     outputs: &mut [PrivateSettlementAuditOutputV1],
@@ -2080,7 +2080,7 @@ fn prepare_input_openings_from_bound_context_v1(
 }
 
 fn prepare_outputs_from_bound_context_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut (impl TryCryptoRng),
     statement: &PrivateSettlementProofStatementV1,
     outputs: &mut [PrivateSettlementAuditOutputV1],
 ) -> Result<Vec<PrivacyEncryptedOutputV1>, AtomicPrivateSettlementWalletErrorV1> {

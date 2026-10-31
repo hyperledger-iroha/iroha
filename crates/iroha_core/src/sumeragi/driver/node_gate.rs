@@ -39,7 +39,7 @@ impl NodeGate {
     /// Admit one operation before closure, with a stack-only owner that cannot reopen it.
     pub(crate) fn enter(&self) -> Option<Operation<'_>> {
         self.state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
                 if state & CLOSED != 0 {
                     return None;
                 }

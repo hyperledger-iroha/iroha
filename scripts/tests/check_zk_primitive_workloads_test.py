@@ -205,7 +205,7 @@ class ScanChecks(TreeFixture):
     def test_a_new_primitive_in_a_listed_file_fails(self) -> None:
         spec = self.mutated()
         path = "crates/iroha_data_model/src/kaigi/authorization.rs"
-        spec["scan"]["files"][path].remove("digest384")
+        spec["scan"]["files"][path].remove("blake3")
         self.assertTrue(any(path in error and "but uses" in error for error in self.scan_errors(spec)))
 
     def test_a_stale_file_entry_fails(self) -> None:
@@ -244,8 +244,8 @@ class ScanChecks(TreeFixture):
 
     def test_an_unclassified_consumer_use_fails(self) -> None:
         spec = self.mutated()
-        del spec["consumers"]["kaigi"]["uses"]["digest384"]
-        self.assertReported(self.consumer_errors(spec), "consumer kaigi: use of digest384")
+        del spec["consumers"]["kaigi"]["uses"]["blake3"]
+        self.assertReported(self.consumer_errors(spec), "consumer kaigi: use of blake3")
 
     def test_a_stale_classification_fails(self) -> None:
         spec = self.mutated()
@@ -256,16 +256,16 @@ class ScanChecks(TreeFixture):
 
     def test_a_classification_needs_a_known_class_note_and_matching_role(self) -> None:
         spec = self.mutated()
-        spec["consumers"]["kaigi"]["uses"]["digest384"]["class"] = "approved"
+        spec["consumers"]["kaigi"]["uses"]["blake3"]["class"] = "approved"
         self.assertReported(self.consumer_errors(spec), "unknown class")
         spec = self.mutated()
-        spec["consumers"]["kaigi"]["uses"]["digest384"]["note"] = ""
+        spec["consumers"]["kaigi"]["uses"]["blake3"]["note"] = ""
         self.assertReported(self.consumer_errors(spec), "note is missing")
         spec = self.mutated()
-        spec["consumers"]["kaigi"]["uses"]["digest384"]["roles"] = ["kaigi.relation-poseidon"]
-        self.assertReported(self.consumer_errors(spec), "needs a role whose primitive is digest384")
+        spec["consumers"]["kaigi"]["uses"]["blake3"]["roles"] = ["kaigi.relation-poseidon"]
+        self.assertReported(self.consumer_errors(spec), "needs a role whose primitive is blake3")
         spec = self.mutated()
-        spec["consumers"]["kaigi"]["uses"]["digest384"]["roles"] = ["kaigi.missing"]
+        spec["consumers"]["kaigi"]["uses"]["blake3"]["roles"] = ["kaigi.missing"]
         self.assertReported(self.consumer_errors(spec), "does not exist")
 
     def test_a_role_must_be_listed_by_its_consumer(self) -> None:
@@ -332,7 +332,7 @@ class ScanChecks(TreeFixture):
             for primitive in self.spec["digest_primitives"]
             if primitive["kind"] == "watch"
         }
-        self.assertFalse(watch["sinsemilla"] or watch["merlin"] or watch["ripemd"])
+        self.assertFalse(watch["sinsemilla"] or watch["merlin"] or watch["kmac"])
 
 
 class ScannerUnits(unittest.TestCase):
@@ -351,6 +351,11 @@ class ScannerUnits(unittest.TestCase):
             "lt_hash16": ["lthash"],
             "a monolithic index": [],
             "monolith64": ["monolith"],
+            # Google-style constants are not KMAC.
+            "inline constexpr int kMacAddressLength = 6;": [],
+            "kMacOS": [],
+            "KMAC256(key, data)": ["kmac"],
+            "KmacXof::v128(key)": ["kmac"],
             "poseidon2_simd": ["poseidon2"],
             "poseidon6": ["poseidon"],
             "shake256_into": ["shake"],
@@ -565,7 +570,7 @@ class RoleChecks(TreeFixture):
             ("domain_separation", "", "`domain_separation` is missing"),
             ("key", "Kaigi Identity", "not a stable key"),
             ("family", "banana", "unknown family 'banana'"),
-            ("family", "in-circuit", "decision changes-with-profile does not apply to a role of family in-circuit"),
+            ("family", "in-circuit", "decision already-blake3 does not apply to a role of family in-circuit"),
         )
         for field, value, expected in cases:
             spec = self.mutated()
@@ -674,8 +679,9 @@ class RoleChecks(TreeFixture):
                 self.assertNotIn("bytes-array", checker.carrier_forms(("[" + ", ".join(changed) + "]").encode(), needles))
 
     def test_a_moving_role_needs_its_transcript_seed_check(self) -> None:
-        # Kaigi still binds a proof profile; the catalog has already migrated.
-        moving_role = "kaigi.authorization-identity"
+        # The execution fork's catalog identity still moves only with its proof
+        # profile; Kaigi and the privacy catalog have already migrated.
+        moving_role = "execution.catalog-identity-sha384"
         spec = self.mutated()
         del self.role(spec, moving_role)["canonical_native"]["transcript_seed_check"]
         self.assertReported(self.role_errors(spec), "needs `transcript_seed_check`")
@@ -735,7 +741,7 @@ class RoleChecks(TreeFixture):
         surface = self.role(self.spec, key)["surface"]
         self.assertEqual({owner["sdk"] for owner in surface["sdk_owners"]}, set(checker.SDKS))
         self.assertIn("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt", surface["type_files"])
-        self.assertIn("javascript/iroha_js/privacy-capabilities.d.ts", surface["type_files"])
+        self.assertIn("javascript/iroha_js/src/norito.js", surface["type_files"])
 
 
 class ProducerLedgerChecks(TreeFixture):
@@ -2223,7 +2229,8 @@ class SemanticProfiles(TreeFixture):
         section["role_dispositions"]["zk-ace.identity-digest384"] = {"disposition": "retained", "profiles": ["retained.x"]}
         self.assertReported(self.profile_errors(spec), "the unqualified six-lane digest is retained or frozen")
         spec = self.mutated()
-        spec["semantic_profiles"]["role_dispositions"]["kaigi.authorization-identity"].pop("replaces")
+        # A frozen profile is accepted for the six-lane digest only as its replacement.
+        spec["semantic_profiles"]["role_dispositions"]["zk-ace.identity-digest384"] = {"disposition": "frozen-profile", "profiles": [self.NATIVE]}
         self.assertReported(self.profile_errors(spec), "the unqualified six-lane digest is retained or frozen")
         spec = self.mutated()
         profile = self.profile(spec, self.NATIVE)
@@ -2236,7 +2243,8 @@ class SemanticProfiles(TreeFixture):
     def test_every_role_and_defect_has_a_disposition(self) -> None:
         cases = (
             (lambda s: s["role_dispositions"].pop("kaigi.authorization-identity"), "role dispositions differ from the digest roles"),
-            (lambda s: s["role_dispositions"]["kaigi.authorization-identity"].pop("accepted_level"), "`accepted_level` of the selected native commitment is missing"),
+            (lambda s: s["role_dispositions"]["kaigi.authorization-identity"].pop("accepted_level"), "kaigi.authorization-identity: `accepted_level` is missing"),
+            (lambda s: s["role_dispositions"]["execution.catalog-identity-sha384"].pop("accepted_level"), "`accepted_level` of the selected native commitment is missing"),
             (lambda s: s["role_dispositions"]["privacy.statement-digest-blake3"].pop("required_property"), "`required_property` is missing"),
             (lambda s: s["role_dispositions"]["kaigi.authorization-identity"].__setitem__("profiles", ["unknown"]), "unknown profile 'unknown'"),
             (lambda s: s["role_dispositions"].__setitem__("confidential.spentness-tree", {"disposition": "frozen-profile", "profiles": [self.NATIVE], "replaces": "x", "required_property": "p", "accepted_level": "l"}), "a provisional role must stay deferred"),

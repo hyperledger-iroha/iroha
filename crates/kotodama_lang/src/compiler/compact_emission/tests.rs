@@ -74,7 +74,9 @@ fn syscall_words(output: &CompileOutput, number: u32) -> usize {
         encoding::wide::encode_syscallx(number)
     };
     output.artifact[offset..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|bytes| u32::from_le_bytes((*bytes).try_into().unwrap()) == word)
         .count()
 }
@@ -106,8 +108,10 @@ fn shared_nominal_abort_scope_preserves_all_original_callable_frames_and_full_er
         syscalls::SYSCALL_CONTRACT_ABORT as u8,
     );
     let abort_pc = after.artifact[parsed.code_offset..]
-        .chunks_exact(4)
-        .position(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == abort_word)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .position(|bytes| u32::from_le_bytes(*bytes) == abort_word)
         .unwrap()
         * 4;
     let owners = after
@@ -348,8 +352,10 @@ fn shared_nominal_abort_cross_function_jump_keeps_complete_caller_and_target_ran
     assert_eq!(syscall_words(&after, syscalls::SYSCALL_CONTRACT_ABORT), 1);
     let parsed = ProgramMetadata::parse(&after.artifact).unwrap();
     let words = after.artifact[parsed.code_offset..]
-        .chunks_exact(4)
-        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| u32::from_le_bytes(*bytes))
         .collect::<Vec<_>>();
     let abort = encoding::wide::encode_sys(
         instruction::wide::system::SCALL,

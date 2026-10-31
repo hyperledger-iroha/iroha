@@ -366,6 +366,32 @@ candidate release before it is installed ([`live_runtime_upgrades.md`](live_runt
 - The JSON report is the last line of standard output and the command exits nonzero unless
   every replayed block matched.
 
+## Adoption
+
+A running predecessor network adopts this release once, at a governed checkpoint (design §13,
+`iroha_core::state::upgrade_checkpoint`):
+
+1. **Authorize.** `iroha runtime adoption manifest --start-height A --end-height E` prints the
+   authorization in the predecessor's manifest JSON: an ABI-v1 surface the predecessor admits,
+   named `iroha:runtime:adoption:v1`, whose SBOM digest `iroha:runtime:adoption-selection:v1` is
+   this release's baseline selection. The holder of `CanManageRuntimeUpgrades` submits it with the
+   predecessor's `iroha runtime upgrade propose --file`, adding any provenance the predecessor's
+   configured policy requires.
+2. **Stop.** The predecessor admits only manifests it can activate, so it activates the
+   authorization at `A` and keeps running; validators stop together at a checkpoint `H` with
+   `A < H < E` and its signed snapshot.
+3. **Import.** With `[snapshot.upgrade_checkpoint]` locating `H`, the import rewrites the
+   predecessor's World, proves it against block `H`'s certified World root under the predecessor's
+   root rule and requires the retired `runtime_upgrades` table to hold only adoption
+   authorizations, which enter that root, exactly one of which authorizes this selection at `H`
+   (activated at its start height `A`, `A < H < E`). The checkpoint block must not have changed
+   the table. Otherwise the import refuses; configuration alone never authorizes it.
+4. **Anchor.** The import builds the `AdoptionRecordV1` (network, `H` and its block hash, both
+   roots, the committee digest, the selection and the authorization's identity) and logs it.
+
+The types that read the predecessor's records reproduce its exact encoding and are deleted with
+the import once every validator has adopted.
+
 ## Still open
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
@@ -385,9 +411,9 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
 - **Commitment and history:** complete-State commitments, which first need the node-configured
   policy cells (G1-D3, ZK delivery F.4) in committed State and a decision on how the pinned
   history meets the new root; checkpoints and the startup floor.
-- **Adoption:** the governed adoption carrier that replaces the interim configuration import
-  (`state::upgrade_checkpoint`): a predecessor-recorded authorization naming this baseline and
-  the adoption height, verified at import, with the adoption record as trust anchor.
+- **Adoption:** recording the adoption record in committed State and every validator's
+  attestation of it, which a node starting from the anchor needs (with checkpoint bootstrap); a
+  rehearsal against a copy of Taira that proves the predecessor-record encoding end to end.
 
 Parliament lifecycle parameter updates are validated, but Core still needs the frozen
 governance-clock policy and anonymous-ballot integration owned by

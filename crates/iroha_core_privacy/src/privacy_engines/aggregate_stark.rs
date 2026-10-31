@@ -834,9 +834,7 @@ pub fn validate_affine_batched_fri_theorem2_v1(
         || parameters.query_count > domain_size
         || certificate.claimed_query_error_bits == 0
         || terminal_size
-            .checked_shl(u32::from(certificate.fold_count))
-            .filter(|size| *size == domain_size)
-            .is_none()
+            .checked_shl(u32::from(certificate.fold_count)).as_ref().is_none_or(|size| *size != domain_size)
         || (parameters.terminal_degree_bound + 1)
             .checked_mul(usize::from(certificate.rho_denominator))
             .zip(terminal_size.checked_mul(usize::from(certificate.rho_numerator)))
@@ -2377,7 +2375,7 @@ impl ZeroizingFieldColumnV1 {
 
 #[cfg(test)]
 #[path = "aggregate_stark/field_column_erasure_tests.rs"]
-pub(crate) mod field_column_erasure;
+pub mod field_column_erasure;
 
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];

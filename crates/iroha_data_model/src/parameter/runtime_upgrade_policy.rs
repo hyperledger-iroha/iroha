@@ -124,7 +124,7 @@ impl RuntimeUpgradePolicyV1 {
         }
         let value: Self = norito::json::from_str(payload.get())
             .map_err(|_| RuntimeUpgradePolicyErrorV1::CustomParameter("malformed payload"))?;
-        if Json::try_new(&value).ok().as_ref() != Some(payload) {
+        if Json::try_new(value).ok().as_ref() != Some(payload) {
             return Err(RuntimeUpgradePolicyErrorV1::CustomParameter(
                 "payload is not the canonical JSON of its value",
             ));
@@ -176,7 +176,7 @@ mod tests {
         let policy = RuntimeUpgradePolicyV1::default();
         let other = CustomParameter::new(
             "parliament_lifecycle_v1".parse().unwrap(),
-            Json::try_new(&policy).unwrap(),
+            Json::try_new(policy).unwrap(),
         );
         assert!(matches!(
             RuntimeUpgradePolicyV1::from_custom_parameter(&other),

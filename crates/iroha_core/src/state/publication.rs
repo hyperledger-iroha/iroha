@@ -420,8 +420,6 @@ impl<'state> StateBlock<'state> {
             pending_parliament_telemetry_events,
             pending_public_lane_slash_observability,
             _curr_block,
-            #[cfg(feature = "zk-preverify")]
-                zk_dedup: _,
             ..
         } = this.fields.as_mut().expect("original executing State");
         #[cfg(feature = "telemetry")]

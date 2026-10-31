@@ -119,10 +119,6 @@ pub fn reject_opaque_deferred_authority(
 /// # Errors
 /// Rejects nested committee, monetary staking or `RecordSccpMessage` instructions,
 /// unresolved live multisig approvals, and proposal graphs exceeding the traversal bound.
-#[expect(
-    single_use_lifetimes,
-    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
-)]
 pub fn reject_opaque_instruction_authority<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
@@ -236,10 +232,6 @@ fn executable_derives_sccp_outbound_record(executable: &Executable, depth: usize
     }
 }
 
-#[expect(
-    single_use_lifetimes,
-    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
-)]
 fn instructions_derive_sccp_outbound_record<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     depth: usize,
@@ -268,10 +260,6 @@ fn instructions_derive_sccp_outbound_record<'a>(
     })
 }
 
-#[expect(
-    single_use_lifetimes,
-    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
-)]
 fn reject_opaque_committee_operations_with<'a, F>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     visited: &mut std::collections::BTreeSet<String>,

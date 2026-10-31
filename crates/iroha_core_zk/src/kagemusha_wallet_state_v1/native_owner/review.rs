@@ -96,7 +96,7 @@ fn require_review_identity(request_id: [u8; 32]) -> Result<(), Error> {
 pub enum ReviewMaintenanceWaitV1 {
     /// An actual source-selected Pending operation needs ordinary recovery.
     SelectedPending,
-    /// The current ArchiveSent head still needs its covering fold.
+    /// The current `ArchiveSent` head still needs its covering fold.
     ArchiveFold,
     /// An existing Archive reservation is still being reconciled.
     Busy,
@@ -911,13 +911,12 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         expectation: ReviewExpectationV1,
     ) -> Result<ReviewDecisionV1, Error> {
         require_review_identity(request.request_id)?;
-        if let ReviewExpectationV1::OriginalUnstarted(expected) = &expectation {
-            if expected.scheme_id != self.scheme_id
+        if let ReviewExpectationV1::OriginalUnstarted(expected) = &expectation
+            && (expected.scheme_id != self.scheme_id
                 || expected.wallet_id != self.wallet_id
-                || expected.kind != request.kind()
-            {
-                return Err(Error::OperationConflict);
-            }
+                || expected.kind != request.kind())
+        {
+            return Err(Error::OperationConflict);
         }
         if let Some(bound) = self.bound_review_request(&request)? {
             return Ok(ReviewDecisionV1::Existing(bound));

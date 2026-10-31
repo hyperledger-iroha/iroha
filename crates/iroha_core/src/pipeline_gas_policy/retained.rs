@@ -71,7 +71,7 @@ fn overflow() -> ParameterRetentionError {
 
 /// An original refusal captured while the real retention operation is observed.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ParameterRetentionAttemptError {
+pub enum ParameterRetentionAttemptError {
     /// Original canonical observer identity, including ordinary invalid input.
     #[error(transparent)]
     Codec(norito::core::DecodeAttemptError),
@@ -91,10 +91,10 @@ impl ParameterRetentionAttemptError {
     ) -> Result<T, Self> {
         let observed = norito::core::classify_decode_attempt(|| match operation() {
             Ok(value) => Ok(Ok(value)),
-            Err(ParameterRetentionError::Codec(error))
-            | Err(ParameterRetentionError::Custom(CustomParametersAdmissionError::Codec(error))) => {
-                Err(error)
-            }
+            Err(
+                ParameterRetentionError::Codec(error)
+                | ParameterRetentionError::Custom(CustomParametersAdmissionError::Codec(error)),
+            ) => Err(error),
             Err(error) => Ok(Err(error)),
         });
         match observed {
@@ -349,7 +349,7 @@ impl RetainedStateParameters {
 
 /// A fully admitted successor bound to the exact predecessor and original pool.
 #[derive(Debug)]
-pub(crate) struct PreparedParameters {
+pub struct PreparedParameters {
     predecessor: RetainedStateParameters,
     successor: RetainedStateParameters,
 }

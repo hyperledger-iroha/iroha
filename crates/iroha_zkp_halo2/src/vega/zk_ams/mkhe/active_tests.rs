@@ -1567,8 +1567,8 @@ fn buffered_sparse_challenge_reference_v1(
     let position_mask = ring_degree as u64 - 1;
     let mut selected_positions = vec![false; ring_degree];
     let mut terms = Vec::with_capacity(weight);
-    for chunk in stream.chunks_exact(8) {
-        let candidate = u64::from_le_bytes(chunk.try_into().unwrap());
+    for chunk in stream.as_chunks::<8>().0 {
+        let candidate = u64::from_le_bytes(*chunk);
         let position = (candidate & position_mask) as usize;
         if selected_positions[position] {
             continue;

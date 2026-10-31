@@ -635,20 +635,20 @@ mod reference_tests {
     #[test]
     fn extraction_preserves_reference_order_and_conservative_false_positives() {
         let examples = [
-            r##"include_bytes!("third"); include!("first"); include_str!("second"); #[path = "last"] mod m;"##,
-            r##"// include!("comment");
+            r#"include_bytes!("third"); include!("first"); include_str!("second"); #[path = "last"] mod m;"#,
+            r#"// include!("comment");
 const TEXT: &str = "include_str!(\"quoted\");";
 #[pathology = "false-positive"] struct Any;
-"##,
-            r##"include!(concat!(env!("CARGO_MANIFEST_DIR"), "/file.rs"));
+"#,
+            r#"include!(concat!(env!("CARGO_MANIFEST_DIR"), "/file.rs"));
 include_bytes!("semicolon;inside"); #[path = "bracket]inside"]
-include_str!("unterminated""##,
+include_str!("unterminated""#,
             "include \u{2003}!\u{a0}(\"unicode\"); include\u{200b}!(\"not-whitespace\");",
-            r##"includeinclude!("overlap"); include_bytesinclude_str!("nested-name");
+            r#"includeinclude!("overlap"); include_bytesinclude_str!("nested-name");
 notinclude!("suffix"); include!!("double-bang");
-include!("include_str!(\"nested-string\");");"##,
-            r##"#[path = "one"] #[path="two"] # [path="unmatched"]
-#[path #[path="nested"] #[path = "unterminated""##,
+include!("include_str!(\"nested-string\");");"#,
+            r#"#[path = "one"] #[path="two"] # [path="unmatched"]
+#[path #[path="nested"] #[path = "unterminated""#,
         ];
         for source in examples {
             assert_eq!(

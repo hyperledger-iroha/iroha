@@ -90,11 +90,10 @@ fn digest_address_selection_agrees_with_native_schedule_and_interpolated_lde() {
                 expected_coefficients[i + j].sub(quadratic.mul(left).mul(right));
         }
     }
-    let mut points = (0..8)
+    let points = (0..8)
         .map(|index| E::from_base(root.pow(index)))
-        .collect::<Vec<_>>();
-    points.extend([E::from_base(F(7)), E::canonical([5, 1, 2, 3]).unwrap()]);
-    for (index, point) in points.into_iter().enumerate() {
+        .chain([E::from_base(F(7)), E::canonical([5, 1, 2, 3]).unwrap()]);
+    for (index, point) in points.enumerate() {
         let digest = horner(&selector_coefficients, point);
         let mut input = rows(|_| E::ZERO);
         input[0][0] = E::from_base(F(11));

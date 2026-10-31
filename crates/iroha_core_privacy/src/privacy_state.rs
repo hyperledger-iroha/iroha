@@ -782,7 +782,7 @@ pub fn load_privacy_pgc_pool_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = retained_roots
         .last()
         .expect("non-empty history checked above");
@@ -1871,7 +1871,7 @@ fn validate_zk_x509_root_history_v1<'a>(
         }
     }
     head.validate_retained_history_count(history.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = history
         .last()
         .expect("non-empty X.509 history checked above");
@@ -2516,7 +2516,7 @@ pub fn load_privacy_zk_ams_registry_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = retained_roots
         .last()
         .expect("non-empty ZK-AMS history checked above");
@@ -4202,7 +4202,7 @@ pub fn load_privacy_proof_managed_pool_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     for (key, provenance) in &retained_roots {
         match *provenance {
             PrivacyRootProvenanceV1::ProofManagedPoolBootstrap {
@@ -4593,7 +4593,7 @@ pub fn validate_privacy_persisted_state_v1(
         provenance
             .validate()
             .map_err(|error| format!("invalid privacy root provenance: {error}"))?;
-        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {}
+        key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         history_by_scope
             .entry((key.namespace(), key.role()))
             .or_default()
@@ -4843,7 +4843,7 @@ pub fn validate_privacy_persisted_state_v1(
             }
         }
         head.validate_retained_history_count(history.len(), retained)
-            .map_err(|error| error.to_owned())?;
+            .map_err(std::borrow::ToOwned::to_owned)?;
         let latest = history.last().expect("grouped history is non-empty");
         if head.epoch() != latest.0.epoch()
             || head.root() != latest.0.root()
@@ -4860,7 +4860,7 @@ pub fn validate_privacy_persisted_state_v1(
             .map_err(|error| format!("invalid privacy root-head key: {error}"))?;
         head.validate()
             .map_err(|error| format!("invalid privacy root-head record: {error}"))?;
-        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {}
+        key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
         if !history_by_scope.contains_key(&(key.namespace(), key.role())) {
             return Err(format!(
                 "privacy root head for {:?}/{:?} has no retained history",
@@ -5990,7 +5990,7 @@ pub fn load_privacy_orchard_pool_snapshot_v1(
         &retained_roots,
     )?;
     head.validate_retained_history_count(retained_roots.len(), retained_root_count)
-        .map_err(|error| error.to_owned())?;
+        .map_err(std::borrow::ToOwned::to_owned)?;
     let latest = retained_roots
         .last()
         .expect("non-empty Orchard history checked above");

@@ -152,7 +152,7 @@ fn fresh_proposal_progress_recheck_uses_captured_time_with_original_signed_input
     let mut selected = vec![accepted_tick(&chain, 3_000)];
     let original = selected[0].entrypoint_bytes();
     let original_hash = selected[0].hash_as_entrypoint();
-    let captured = Duration::from_millis(100_000);
+    let captured = Duration::from_secs(100);
     let assembly = Assembly {
         parent: &parent,
         view: 1,

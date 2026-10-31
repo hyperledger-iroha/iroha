@@ -26,6 +26,10 @@ struct ValidationCache {
 }
 
 impl ValidationCache {
+    #[expect(
+        clippy::large_stack_arrays,
+        reason = "the const thread-local initializer builds it in place; only tests construct one at runtime"
+    )]
     const fn new() -> Self {
         Self {
             sets: [[EMPTY; WAYS]; SETS],
@@ -51,7 +55,7 @@ impl ValidationCache {
         let way = set
             .iter()
             .position(|slot| *slot == EMPTY)
-            .unwrap_or(usize::from(key[2]) % WAYS);
+            .unwrap_or_else(|| usize::from(key[2]) % WAYS);
         set[way] = *key;
     }
 }

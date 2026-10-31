@@ -12,9 +12,6 @@
         reason = "test-only derive expansion materializes the complete data-model type registry as one local array; production code does not allocate it"
     )
 )]
-#[cfg(test)]
-#[path = "../tests/fixtures/abi_v1_hash.rs"]
-mod abi_v1_fixture;
 mod model_mutation_guard;
 #[cfg(test)]
 extern crate self as iroha_data_model;

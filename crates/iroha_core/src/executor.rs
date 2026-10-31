@@ -1059,7 +1059,7 @@ fn validate_builtin_account_alias_query_permission(
                     catalog
                         .by_alias(dataspace)
                         .map(|entry| entry.id)
-                        .ok_or_else(&deny)
+                        .ok_or_else(deny)
                 })
                 .transpose()?;
             let domain_filter = query
@@ -4639,7 +4639,7 @@ fn resolve_pipeline_gas_quote_asset(
             ));
         }
         requested
-    } else if requested_is_accepted && requested.as_deref().is_some_and(&sponsor_covers) {
+    } else if requested_is_accepted && requested.as_deref().is_some_and(sponsor_covers) {
         requested.expect("accepted requested pipeline gas asset exists")
     } else {
         pipeline
@@ -4755,9 +4755,9 @@ fn evaluate_nexus_fee_admission_payload(
     let (tx_bytes_len, instruction_count, gas_used) =
         fee_bound_for_admission_payload(payload, zk_gas)?;
     let mut charges = Vec::with_capacity(2);
-    let fee = compute_nexus_fee_amount(&fees, tx_bytes_len, instruction_count, gas_used)
+    let fee = compute_nexus_fee_amount(fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
-    let asset_definition_id = root_fees::currency(world, &fees, observation_time_ms)?;
+    let asset_definition_id = root_fees::currency(world, fees, observation_time_ms)?;
     if !fee.is_zero() {
         charges.push(FeeChargeBound {
             kind: FeeChargeKind::Nexus,
@@ -5864,7 +5864,7 @@ impl Executor {
                 "private-root fee sponsors require a scoped vault owner".into(),
             ));
         }
-        let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
+        let fee = compute_nexus_fee_amount(cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
             return Ok(());
         }
@@ -5875,7 +5875,7 @@ impl Executor {
         };
         let asset_def = match root_fees::currency(
             &state_transaction.world,
-            &cfg,
+            cfg,
             state_transaction.block_unix_timestamp_ms(),
         ) {
             Ok(asset) => asset,
@@ -5906,7 +5906,7 @@ impl Executor {
             sponsor,
             &asset_def,
             &fee,
-            &cfg,
+            cfg,
             tx_bytes_len,
             instruction_count,
             gas_used,
@@ -6774,7 +6774,7 @@ impl Executor {
                     state_transaction.arm_direct_parliament_candidate_testing(
                         transaction,
                         authority,
-                        &isi,
+                        isi,
                         index,
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     );
@@ -7570,7 +7570,7 @@ impl Executor {
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
-        state_transaction.bind_privacy_transaction_source_v1(&transaction)?;
+        state_transaction.bind_privacy_transaction_source_v1(transaction)?;
         let private_settlement_carrier_binding =
             crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(
                 transaction,
@@ -7966,7 +7966,7 @@ impl Executor {
                 } else {
                     gas_limit_md
                 };
-                let explicit_instructions = AuthoredBatchInstructions::new(items.as_ref());
+                let explicit_instructions = AuthoredBatchInstructions::new(items);
                 let explicit_gas = explicit_instructions
                     .clone()
                     .try_fold(0_u64, |total, instruction| {

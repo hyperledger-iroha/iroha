@@ -208,7 +208,7 @@ impl WorldStateAccumulator {
     fn payload(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(Self::PAYLOAD_BYTES);
         bytes.extend_from_slice(&self.entries.to_le_bytes());
-        for lane in self.lanes.iter() {
+        for lane in &self.lanes {
             bytes.extend_from_slice(&lane.to_le_bytes());
         }
         bytes
@@ -367,7 +367,7 @@ type Fingerprint = (u8, Option<Hash>, Hash);
 /// Digest of the fixed parameters of this release's commitment profile: the lane count of the
 /// `LtHash16` accumulator whose element, path and root rules
 /// (`iroha_data_model::sumeragi_finality`) the profile's scheme names.
-pub(crate) fn commitment_parameters() -> [u8; 32] {
+pub fn commitment_parameters() -> [u8; 32] {
     Hash::new_from_chunks(&[PROFILE, &(LANES as u64).to_le_bytes()]).into()
 }
 
@@ -376,7 +376,7 @@ pub(crate) fn commitment_parameters() -> [u8; 32] {
 ///
 /// # Errors
 /// This release does not implement the selection's commitment profile.
-pub(crate) fn selection_schema(selection: &RootSelectionV1) -> Result<Hash, String> {
+pub fn selection_schema(selection: &RootSelectionV1) -> Result<Hash, String> {
     let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
     if selection.commitment_profile != catalog.baseline.commitment_profile {
         return Err(format!(
@@ -452,17 +452,19 @@ fn schema_digest(fingerprints: &BTreeMap<&'static str, Fingerprint>) -> Result<H
 /// `current` is a cold capture, under this release's registry, of a World imported from the
 /// predecessor's snapshot with the added tables still empty and the runtime fields founded on
 /// the baseline. The predecessor's registry held the retired tables instead and none of the
-/// founded fields. An import admits only the retired tables' empty values, which add no
-/// element; the founded fields' baseline elements are removed again.
+/// founded fields. An import admits the retired tables empty, except the adoption
+/// authorizations of `runtime_upgrades`, whose entries are added back here, so the certified
+/// root proves them; the founded fields' baseline elements are removed again.
 ///
 /// # Errors
 /// The registry of this release no longer matches the predecessor profile, or a value fails to
 /// encode.
 pub(in crate::state) fn predecessor_root(
     current: &WorldStateAccumulator,
+    authorizations: &[crate::state::upgrade_checkpoint::adoption::PredecessorRecord],
 ) -> Result<(WorldStateAccumulator, Hash), String> {
     use crate::state::upgrade_checkpoint::{
-        ADDED_WORLD_FIELDS, FOUNDED_WORLD_FIELDS, retired_world_fields,
+        ADDED_WORLD_FIELDS, AUTHORIZATION_FIELD, FOUNDED_WORLD_FIELDS, retired_world_fields,
     };
     let mut fingerprints = field_index()
         .as_ref()
@@ -522,6 +524,13 @@ pub(in crate::state) fn predecessor_root(
                 "{} is still a canonical World field of this release",
                 retired.id
             ));
+        }
+        if retired.name == AUTHORIZATION_FIELD {
+            let path = path_hash(retired.id, TABLE)?;
+            for entry in authorizations {
+                let (key, value) = entry.element_hashes()?;
+                predecessor.add(&element(&path, Some(&key), &value));
+            }
         }
     }
     let root = world_state_root_from_accumulator_v1(
@@ -988,11 +997,12 @@ impl crate::state::World {
     /// Take over a World imported at an upgrade checkpoint (`state::upgrade_checkpoint`).
     ///
     /// The decoded accumulator Cell is the predecessor's. A cold capture of this World under
-    /// this release's registry must equal it once the predecessor's retired fields are added back
-    /// ([`predecessor_root`]), which proves every canonical entry was imported exactly, and the
-    /// predecessor's root of it must equal `certified`, the checkpoint block's certified World
-    /// root. The Cell then holds the capture under this release's registry, from which the next
-    /// block chains. Returns that root.
+    /// this release's registry must equal it once the predecessor's retired fields, with the
+    /// adoption `authorizations` they held, are added back ([`predecessor_root`]), which proves
+    /// every canonical entry and every authorization was imported exactly, and the predecessor's
+    /// root of it must equal `certified`, the checkpoint block's certified World root. The Cell
+    /// then holds the capture under this release's registry, from which the next block chains.
+    /// Returns that root.
     ///
     /// # Errors
     /// The import differs from the predecessor's World, the root differs from `certified`, the
@@ -1001,6 +1011,7 @@ impl crate::state::World {
         &mut self,
         execution_budget: &iroha_allocation::AllocationBudget,
         certified: Hash,
+        authorizations: &[crate::state::upgrade_checkpoint::adoption::PredecessorRecord],
     ) -> Result<Hash, WorldStateVerificationError> {
         let stored = self.state_accumulator.view().get().clone();
         let block = self
@@ -1009,8 +1020,8 @@ impl crate::state::World {
         let captured =
             WorldStateAccumulator::capture(&block).map_err(WorldStateVerificationError::Capture)?;
         drop(block);
-        let (predecessor, root) =
-            predecessor_root(&captured).map_err(WorldStateVerificationError::Capture)?;
+        let (predecessor, root) = predecessor_root(&captured, authorizations)
+            .map_err(WorldStateVerificationError::Capture)?;
         if predecessor != stored || root != certified {
             return Err(WorldStateVerificationError::Mismatch {
                 stored_root: certified,

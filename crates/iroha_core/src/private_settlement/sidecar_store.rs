@@ -3545,7 +3545,7 @@ fn parse_sidecar_file_name_v1(name: &str) -> Result<Hash, PrivateSettlementSidec
         return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
     let mut digest = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (hex_nibble_v1(pair[0])? << 4) | hex_nibble_v1(pair[1])?;
     }
     let digest = Hash::prehashed(digest);
@@ -3568,7 +3568,7 @@ fn parse_provisional_file_name_v1(
         return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
     let mut digest = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (hex_nibble_v1(pair[0])? << 4) | hex_nibble_v1(pair[1])?;
     }
     let digest = Hash::prehashed(digest);

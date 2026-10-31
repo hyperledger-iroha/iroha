@@ -170,7 +170,7 @@ fn hash_digest384_pairs_with_preparation_limit_v1<'a>(
         encoded
             .try_reserve_exact(pair_count)
             .map_err(|_| allocation_error())?;
-        for pair in pairs.chunks_exact(2) {
+        for pair in pairs.as_chunks::<2>().0 {
             encoded.push([pair[0].to_le_bytes(), pair[1].to_le_bytes()]);
         }
         let mut fields: Vec<[&[u8]; 2]> = Vec::new();
@@ -470,7 +470,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sizes, [1024, 2]);
-        for (index, pair) in leaves.chunks_exact(2).enumerate() {
+        for (index, pair) in leaves.as_chunks::<2>().0.iter().enumerate() {
             let left = pair[0].to_le_bytes();
             let right = pair[1].to_le_bytes();
             let expected = GoldilocksDigest384FrameV1::new(domain(index), &[&left, &right])

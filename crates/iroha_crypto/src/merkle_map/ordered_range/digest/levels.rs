@@ -130,7 +130,7 @@ fn build_prepaid(
             .map_err(NoritoKeyRangeError::PrepaidCapacity)?;
         let mut parents = ChargedBuffer::try_from_charge(parent_count, parent_charge)
             .map_err(|(_charge, _error)| NoritoKeyRangeError::Allocation)?;
-        for pair in current.as_slice().chunks_exact(2) {
+        for pair in current.as_slice().as_chunks::<2>().0 {
             parents
                 .try_push(branch_hash(level, pair[0], pair[1]))
                 .map_err(|_| NoritoKeyRangeError::Capacity)?;

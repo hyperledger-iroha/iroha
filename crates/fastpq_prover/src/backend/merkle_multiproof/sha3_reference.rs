@@ -64,7 +64,9 @@ mod tests {
             let next = levels
                 .last()
                 .unwrap()
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .map(|(index, children)| {
                     parent(

@@ -19,7 +19,7 @@ use iroha_data_model::{
 use iroha_test_samples::private_settlement::{availability_material_fixture_v1, context_fixture};
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug)]
-pub(crate) struct FinalityTransport(pub SumeragiFinalityProof);
+pub struct FinalityTransport(pub SumeragiFinalityProof);
 impl HttpTransport for FinalityTransport {
     fn send_blocking(&self, _: TransportRequest) -> eyre::Result<http::Response<Vec<u8>>> {
         panic!("async original finality required")
@@ -126,7 +126,7 @@ fn row<K: norito::codec::Encode, V: norito::codec::Encode>(
         value_hash: world_state_value_hash_v1(value).unwrap(),
     }
 }
-pub(crate) fn context(
+pub fn context(
     client: &Client,
 ) -> (
     PrivateSettlementContextsProofV1,
@@ -222,7 +222,7 @@ pub(crate) fn context(
         material.manifest.proof_intent(),
     )
 }
-pub(crate) fn request(
+pub fn request(
     client: &Client,
     proof: &PrivateSettlementContextsProofV1,
     original: &PrivateSettlementProofIntentV1,
@@ -2035,11 +2035,11 @@ async fn committed_padding_and_retention_refuse_before_original_wallet_effects()
         assert!(
             std::fs::read_dir(root.path().join("artifacts"))
                 .unwrap()
-                .all(|entry| !entry
+                .all(|entry| entry
                     .unwrap()
                     .path()
                     .extension()
-                    .is_some_and(|extension| extension == "prepared"))
+                    .is_none_or(|extension| extension != "prepared"))
         );
     }
 }

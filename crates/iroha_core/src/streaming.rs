@@ -2177,8 +2177,7 @@ impl StreamingHandle {
         self.inner
             .publisher_sessions
             .read()
-            .ok()
-            .is_some_and(|sessions| sessions.contains_key(peer_id))
+            .is_ok_and(|sessions| sessions.contains_key(peer_id))
     }
     fn handle_key_update(
         &self,

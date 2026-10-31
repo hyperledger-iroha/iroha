@@ -446,8 +446,8 @@ pub mod json_wrappers {
             .ok_or(norito::json::BoundedJsonError::BodyTooLarge)?;
         output.reserve(encoded_bytes)?;
         output.push('"')?;
-        let mut chunks = bytes.chunks_exact(3);
-        for chunk in &mut chunks {
+        let (chunks, remainder) = bytes.as_chunks::<3>();
+        for chunk in chunks {
             output.push(ALPHABET[usize::from(chunk[0] >> 2)] as char)?;
             output
                 .push(ALPHABET[usize::from(((chunk[0] & 0x03) << 4) | (chunk[1] >> 4))] as char)?;
@@ -455,7 +455,7 @@ pub mod json_wrappers {
                 .push(ALPHABET[usize::from(((chunk[1] & 0x0f) << 2) | (chunk[2] >> 6))] as char)?;
             output.push(ALPHABET[usize::from(chunk[2] & 0x3f)] as char)?;
         }
-        match chunks.remainder() {
+        match remainder {
             [] => {}
             [first] => {
                 output.push(ALPHABET[usize::from(*first >> 2)] as char)?;

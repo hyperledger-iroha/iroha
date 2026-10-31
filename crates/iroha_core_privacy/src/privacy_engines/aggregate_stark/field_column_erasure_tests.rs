@@ -5,7 +5,7 @@ use std::cell::RefCell;
 
 /// Counts immediately before and after one actual owner erasure.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ObservationV1 {
+pub struct ObservationV1 {
     /// Number of initialized field cells owned by the column.
     pub(crate) cells: usize,
     /// Number of populated cells immediately before clearing.
@@ -40,7 +40,7 @@ pub(super) fn after_clear_v1(values: &[F], observation: Option<ObservationV1>) {
 }
 
 /// Collect actual field-column owner clears on this thread during an operation.
-pub(crate) fn observe_v1<T>(operation: impl FnOnce() -> T) -> (T, Vec<ObservationV1>) {
+pub fn observe_v1<T>(operation: impl FnOnce() -> T) -> (T, Vec<ObservationV1>) {
     struct Scope;
     impl Drop for Scope {
         fn drop(&mut self) {

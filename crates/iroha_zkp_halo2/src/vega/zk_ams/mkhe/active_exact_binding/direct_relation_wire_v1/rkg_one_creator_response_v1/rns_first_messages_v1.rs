@@ -107,7 +107,9 @@ fn decode_mask_slots_v1(
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
     for (destination, slot) in output
-        .chunks_exact_mut(RELEASE_RING_COEFFICIENTS_V1)
+        .as_chunks_mut::<RELEASE_RING_COEFFICIENTS_V1>()
+        .0
+        .iter_mut()
         .zip(slots)
     {
         for (coefficient, residue) in destination.iter_mut().enumerate() {
@@ -124,13 +126,13 @@ fn decode_mask_slots_v1(
 }
 
 fn encode_residues_v1(residues: &[u64], encoded: &mut [u8]) {
-    for (destination, residue) in encoded.chunks_exact_mut(8).zip(residues) {
+    for (destination, residue) in encoded.as_chunks_mut::<8>().0.iter_mut().zip(residues) {
         destination.copy_from_slice(&residue.to_be_bytes());
     }
 }
 
 fn encode_signed_residues_v1(residues: &[i64], modulus: u64, encoded: &mut [u8]) {
-    for (destination, residue) in encoded.chunks_exact_mut(8).zip(residues) {
+    for (destination, residue) in encoded.as_chunks_mut::<8>().0.iter_mut().zip(residues) {
         destination.copy_from_slice(&signed_mod(*residue, modulus).to_be_bytes());
     }
 }

@@ -59,7 +59,7 @@ fn in_memory_puzzle_replay_config() -> Arc<SoranetHandshakeConfig> {
     let puzzle_params =
         test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(60));
     let limits =
-        TicketRevocationStoreLimits::new(16, Duration::from_secs(900)).expect("valid limits");
+        TicketRevocationStoreLimits::new(16, Duration::from_mins(15)).expect("valid limits");
     let store =
         TicketRevocationStore::in_memory(limits).expect("in-memory revocation store should open");
     Arc::new(
@@ -503,7 +503,7 @@ fn puzzle_ticket_mints_and_verifies() {
         NonZeroU32::new(2).expect("time"),
         NonZeroU32::new(1).expect("lanes"),
         2,
-        Duration::from_secs(900),
+        Duration::from_mins(15),
         Duration::from_secs(120),
     )
     .expect("test puzzle parameters must be valid");
@@ -580,7 +580,7 @@ fn inbound_challenge_owner_redacts_and_scrubs_sensitive_bytes() {
 #[test]
 fn mint_challenge_ticket_reports_rng_failure() {
     let puzzle_params =
-        test_puzzle_parameters(5, Duration::from_secs(900), Duration::from_secs(120));
+        test_puzzle_parameters(5, Duration::from_mins(15), Duration::from_secs(120));
     let config = SoranetHandshakeConfig::new(
         SoranetHandshakeParams {
             descriptor_commit: iroha_crypto::soranet::handshake::DEFAULT_DESCRIPTOR_COMMIT.to_vec(),
@@ -617,10 +617,10 @@ fn mint_challenge_ticket_reports_rng_failure() {
 #[test]
 fn puzzle_ticket_replay_rejected_and_persisted() {
     let puzzle_params =
-        test_puzzle_parameters(1, Duration::from_secs(900), Duration::from_secs(120));
+        test_puzzle_parameters(1, Duration::from_mins(15), Duration::from_secs(120));
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
-    let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+    let limits = TicketRevocationStoreLimits::new(4, Duration::from_mins(15)).expect("limits");
     let store = TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("store");
     let config = SoranetHandshakeConfig::new(
         SoranetHandshakeParams {
@@ -746,7 +746,7 @@ fn revocation_store_capacity_fails_closed_without_forgetting_replays() {
         test_puzzle_parameters(1, Duration::from_secs(300), Duration::from_secs(60));
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("revocations.norito");
-    let limits = TicketRevocationStoreLimits::new(1, Duration::from_secs(900)).expect("limits");
+    let limits = TicketRevocationStoreLimits::new(1, Duration::from_mins(15)).expect("limits");
     let store = TicketRevocationStore::load(&path, limits, SystemTime::now()).expect("store");
     let config = SoranetHandshakeConfig::new(
         SoranetHandshakeParams {

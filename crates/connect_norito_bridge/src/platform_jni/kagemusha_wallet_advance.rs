@@ -12,10 +12,10 @@ pub(super) fn read(
     bytes: &JByteArray<'_>,
     bound: usize,
 ) -> wallet::Result<Vec<u8>> {
-    let length = env
-        .get_array_length(bytes)
+    let length = bytes
+        .len(env)
         .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-    if length < 0 || length as usize > bound {
+    if length > bound {
         return Err(wallet::Failure::code(wallet::INVALID));
     }
     env.convert_byte_array(bytes)
@@ -36,21 +36,21 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     source: JByteArray<'_>,
     root: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             for (array, maximum) in [(&source, 8192), (&root, 4096)] {
-                let length = env
-                    .get_array_length(array)
+                let length = array
+                    .len(env)
                     .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-                if length <= 0 || length > maximum {
+                if length == 0 || length > maximum {
                     return Err(wallet::Failure::code(wallet::INVALID));
                 }
             }
-            let source = read(&mut env, &source, 8192)?;
-            let root = read(&mut env, &root, 4096)?;
+            let source = read(env, &source, 8192)?;
+            let root = read(env, &root, 4096)?;
             wallet::relocate_registration_source(&source, &root)
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }
 pub(super) fn response_class(
@@ -109,15 +109,15 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     account: JByteArray<'_>,
     asset: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
-            let a = read(&mut env, &credential, wallet::open::BOUNDS[0])?;
-            let b = read(&mut env, &certificates, wallet::open::BOUNDS[1])?;
-            let c = read(&mut env, &account, wallet::open::BOUNDS[2])?;
-            let d = read(&mut env, &asset, wallet::open::BOUNDS[3])?;
+            let a = read(env, &credential, wallet::open::BOUNDS[0])?;
+            let b = read(env, &certificates, wallet::open::BOUNDS[1])?;
+            let c = read(env, &account, wallet::open::BOUNDS[2])?;
+            let d = read(env, &asset, wallet::open::BOUNDS[3])?;
             wallet::open::begin(runtime as u64, [&a, &b, &c, &d])
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }
 /// Consume one account challenge; failed signatures retain unadmitted native custody.
@@ -128,13 +128,13 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     runtime: jlong,
     signature: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             // Failed/oversized input still consumes this pending challenge as an invalid signature.
-            let signature = read(&mut env, &signature, 64).unwrap_or_default();
+            let signature = read(env, &signature, 64).unwrap_or_default();
             wallet::open::finish(runtime as u64, &signature)
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }
 /// Abandon an account challenge without accepting any authority or deleting custody.
@@ -187,13 +187,13 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     first: JByteArray<'_>,
     second: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let observation = (operation == 3)
             .then(|| wallet::FoldBridgeTurnV1::begin(handle as u64))
             .flatten();
         let result = wallet::run(|| {
-            let first = read(&mut env, &first, 32)?;
-            let second = read(&mut env, &second, 32)?;
+            let first = read(env, &first, 32)?;
+            let second = read(env, &second, 32)?;
             if operation != 4 && !second.is_empty() {
                 return Err(wallet::Failure::code(wallet::INVALID));
             }
@@ -209,7 +209,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         if let Some(observation) = observation {
             observation.finish(result.is_ok());
         }
-        response(&mut env, result)
+        response(env, result)
     })
 }
 
@@ -230,7 +230,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     second: JByteArray<'_>,
     third: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let mut admitted = None;
         let mut delivery = wallet::review::CapabilityDelivery::default();
         let result = wallet::run(|| {
@@ -243,17 +243,17 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                 .zip([32, bounds[0], bounds[1], bounds[2]])
                 .enumerate()
             {
-                let length = env
-                    .get_array_length(array)
+                let length = array
+                    .len(env)
                     .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-                if length < 0 || length as usize > bound || (index == 0 && length != 32) {
+                if length > bound || (index == 0 && length != 32) {
                     return Err(wallet::Failure::code(wallet::INVALID));
                 }
             }
-            let request_id = read(&mut env, &request_id, 32)?;
-            let first = read(&mut env, &first, bounds[0])?;
-            let second = read(&mut env, &second, bounds[1])?;
-            let third = read(&mut env, &third, bounds[2])?;
+            let request_id = read(env, &request_id, 32)?;
+            let first = read(env, &first, bounds[0])?;
+            let second = read(env, &second, bounds[1])?;
+            let third = read(env, &third, bounds[2])?;
             let request = wallet::setup::request(
                 &request_id,
                 selector,
@@ -275,7 +275,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             )
         });
         wallet::review::deliver(delivery, result, |result| {
-            let value = response(&mut env, result);
+            let value = response(env, result);
             (value, !value.is_null())
         })
     })
@@ -296,16 +296,16 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     second: JByteArray<'_>,
     third: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let mut admitted = None;
         let result = wallet::run(|| {
             let selector =
                 u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
             let bounds = wallet::requests::bounds(selector)?;
-            let request_id = read(&mut env, &request_id, 32)?;
-            let first = read(&mut env, &first, bounds[0])?;
-            let second = read(&mut env, &second, bounds[1])?;
-            let third = read(&mut env, &third, bounds[2])?;
+            let request_id = read(env, &request_id, 32)?;
+            let first = read(env, &first, bounds[0])?;
+            let second = read(env, &second, bounds[1])?;
+            let third = read(env, &third, bounds[2])?;
             let request = wallet::requests::request(
                 &request_id,
                 selector,
@@ -323,7 +323,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                 request,
             )
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }
 
@@ -334,7 +334,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     _class: JClass<'_>,
     handle: jlong,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let value = match wallet::run(|| wallet::snapshot(handle as u64)) {
             Ok(value) => wallet::WalletSnapshot::from(value),
             Err(error) => wallet::WalletSnapshot::from(error),
@@ -362,7 +362,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             let folded_head = env.byte_array_from_slice(&value.folded_head)?;
             let folded_credential = env.byte_array_from_slice(&value.folded_credential)?;
             let numbers = env.new_long_array(18)?;
-            env.set_long_array_region(&numbers, 0, &scalars)?;
+            numbers.set_region(env, 0, &scalars)?;
             env.new_object(
                 jni::jni_str!(
                     "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletSnapshotReplyV1"
@@ -400,42 +400,42 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     third: JByteArray<'_>,
     certificates: JObjectArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             let selector =
                 u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
             let bounds = wallet::enrollment::bounds(selector)?;
-            let count = env
-                .get_array_length(&certificates)
+            let count = certificates
+                .len(env)
                 .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-            if !(0..=8).contains(&count) || (selector != 3 && count != 0) {
+            if count > 8 || (selector != 3 && count != 0) {
                 return Err(wallet::Failure::code(wallet::INVALID));
             }
             for (array, bound) in [&first, &second, &third].into_iter().zip(bounds) {
-                let length = env
-                    .get_array_length(array)
+                let length = array
+                    .len(env)
                     .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-                if length < 0 || length as usize > bound {
+                if length > bound {
                     return Err(wallet::Failure::code(wallet::INVALID));
                 }
             }
-            let first = read(&mut env, &first, bounds[0])?;
-            let second = read(&mut env, &second, bounds[1])?;
-            let third = read(&mut env, &third, bounds[2])?;
-            let mut chain = Vec::with_capacity(count as usize);
+            let first = read(env, &first, bounds[0])?;
+            let second = read(env, &second, bounds[1])?;
+            let third = read(env, &third, bounds[2])?;
+            let mut chain = Vec::with_capacity(count);
             for index in 0..count {
-                let item = env
-                    .get_object_array_element(&certificates, index as usize)
+                let item = certificates
+                    .get_element(env, index)
                     .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-                let item = JByteArray::cast_local(&mut env, item)
+                let item = JByteArray::cast_local(env, item)
                     .map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-                chain.push(read(&mut env, &item, 16_384)?);
+                chain.push(read(env, &item, 16_384)?);
             }
             let refs: Vec<_> = chain.iter().map(Vec::as_slice).collect();
             let action = wallet::enrollment::request(selector, [&first, &second, &third], &refs)?;
             wallet::enrollment::call(runtime as u64, action)
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }
 /// Closed E1 refusal table (design §2.4), the same pure lookup as the C export: the holder

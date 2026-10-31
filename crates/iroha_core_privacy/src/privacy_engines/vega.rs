@@ -818,7 +818,9 @@ impl VegaMdlPublicInputsV1 {
         for (index, word) in statement
             .device_authentication_digest
             .as_bytes()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
         {
             let value = u32::from_be_bytes(

@@ -454,7 +454,7 @@ fn add_modulus<F: PastaField>(limbs: &[u32; 8]) -> [u8; 32] {
     let modulus = canonical_u32_limbs(&-F::ONE);
     let mut out = [0_u8; 32];
     let mut carry = 1_u64; // |F| = (|F| - 1) + 1
-    for (index, chunk) in out.chunks_exact_mut(4).enumerate() {
+    for (index, chunk) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let total = u64::from(limbs[index]) + u64::from(modulus[index]) + carry;
         let bytes = total.to_le_bytes();
         chunk.copy_from_slice(&bytes[..4]);

@@ -1940,9 +1940,8 @@ impl DataEventFilter {
             | Self::SpaceDirectory(_)
             | Self::Oracle(_)
             | Self::Social(_)
-            | Self::Bridge(_) => {}
-
-            Self::Governance(_) => {}
+            | Self::Bridge(_)
+            | Self::Governance(_) => {}
         }
         updated
     }

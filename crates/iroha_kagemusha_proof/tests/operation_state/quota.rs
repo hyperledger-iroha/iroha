@@ -95,7 +95,9 @@ impl Fixture {
                 .collect();
             while nodes.len() > 1 {
                 nodes = nodes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| hash_with_domain(node_domain, pair))
                     .collect();
             }

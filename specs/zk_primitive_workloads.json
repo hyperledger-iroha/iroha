@@ -549,7 +549,7 @@
       "symbol": "WorldStateAccumulator|world_state_element_v1|world_state_root_from_accumulator_v1",
       "owner": {
        "path": "crates/iroha_core/src/state/world_state_accumulator.rs",
-       "symbol": "pub(crate) struct WorldStateAccumulator"
+       "symbol": "pub struct WorldStateAccumulator"
       },
       "note": "LtHash16 accumulator of the World State and its element and root helpers."
      }
@@ -558,7 +558,7 @@
    "owners": [
     {
      "path": "crates/iroha_core/src/state/world_state_accumulator.rs",
-     "symbol": "pub(crate) struct WorldStateAccumulator {"
+     "symbol": "pub struct WorldStateAccumulator {"
     }
    ],
    "in_use": true
@@ -603,8 +603,14 @@
    "token": {
     "pattern": "ripemd"
    },
-   "owners": [],
-   "in_use": false
+   "owners": [
+    {
+     "path": "vendor/boringssl-swiftpm/include/openssl/ripemd.h",
+     "symbol": "OPENSSL_EXPORT int RIPEMD160_Init(RIPEMD160_CTX *ctx);"
+    }
+   ],
+   "in_use": true,
+   "note": "Named only by the vendored BoringSSL that supplies Nearby's openssl_grpc (its upstream RIPEMD-160); no first-party code uses it."
   },
   {
    "id": "rescue",
@@ -731,12 +737,13 @@
    "kind": "watch",
    "output_bytes": [],
    "token": {
-    "pattern": "kmac",
+    "pattern": "kmac(?:xof)?(?![a-z])",
     "not_preceded_by": "abcdefghijklmnopqrstuvwxyz",
     "camel_case": true
    },
    "owners": [],
-   "in_use": false
+   "in_use": false,
+   "note": "A letter may follow only as XOF, so the Google-style constants kMacOS and kMacAddressLength of the vendored Nearby sources are not KMAC."
   },
   {
    "id": "cshake",
@@ -746,8 +753,14 @@
    "token": {
     "pattern": "cshake"
    },
-   "owners": [],
-   "in_use": false
+   "owners": [
+    {
+     "path": "vendor/boringssl-swiftpm/crypto/fipsmodule/keccak/internal.h",
+     "symbol": "OPENSSL_EXPORT void BORINGSSL_cshake_init(struct BORINGSSL_keccak_st *ctx,"
+    }
+   ],
+   "in_use": true,
+   "note": "Named only by the vendored BoringSSL that supplies Nearby's openssl_grpc (cSHAKE inside its upstream Keccak module); no first-party code uses it."
   },
   {
    "id": "merlin",
@@ -833,7 +846,7 @@
       {
        "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
        "symbol": "exact12_catalog_commitment_bytes_v1()",
-       "literals": ["pub(crate) fn catalog_v1(self) -> [u8; 32] {"]
+       "literals": ["pub(crate) fn catalog_v1() -> [u8; 32] {"]
       },
       {
        "path": "crates/iroha_core_zk/src/stark.rs",
@@ -871,23 +884,8 @@
       "sdk": "kotlin"
      },
      {
-      "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt",
-      "symbol": "@JvmField val catalogCommitment: PrivacyExact12CatalogCommitmentV1,",
-      "sdk": "kotlin"
-     },
-     {
       "path": "javascript/iroha_js/src/norito.js",
       "symbol": "const PRIVACY_EXACT12_CATALOG_COMMITMENT_V1 = /* @__PURE__ */ Buffer.from(",
-      "sdk": "javascript"
-     },
-     {
-      "path": "javascript/iroha_js/src/privacyCapabilities.js",
-      "symbol": "\"catalog_commitment\",",
-      "sdk": "javascript"
-     },
-     {
-      "path": "javascript/iroha_js/privacy-capabilities.d.ts",
-      "symbol": "readonly catalog_commitment: PrivacyFixed32BytesV1;",
       "sdk": "javascript"
      },
      {
@@ -896,8 +894,8 @@
       "sdk": "python"
      },
      {
-      "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs",
-      "symbol": "private static readonly byte[] Exact12CatalogCommitment = Convert.FromHexString(",
+      "path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12FixtureCodecV1.X509.cs",
+      "symbol": "X509Equal(envelope[1], Convert.FromHexString(\"5bcf366fb18d2e4361486c015da5b41a3fb00edf05611042ccc452120d176eb0\"), \"catalog commitment\");",
       "sdk": "csharp"
      }
     ],
@@ -995,7 +993,7 @@
     "extensions": [".rs", ".kt", ".kts", ".java", ".swift", ".ts", ".js", ".mjs", ".cjs", ".py", ".cs", ".json", ".b64", ".norito", ".toml", ".yaml", ".yml", ".txt", ".tsv"],
     "exclude_prefixes": ["specs/", "scripts/", "docs/", "dist/"],
     "scope_note": "The exact 32-byte identity type, relation contexts carrying four full u64 words per identity, and the account-identity helper.",
-    "type_files": ["crates/iroha_core/src/privacy_release_evidence/kaigi.rs", "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs", "crates/iroha_core/tests/kaigi_privacy.rs", "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "crates/iroha_core_zk/src/native_pipa_r.rs", "crates/iroha_data_model/src/kaigi/authorization.rs", "crates/iroha_data_model/tests/fixtures/additional_frame_owner_identity_observations.json", "crates/iroha_js_host/src/kaigi_authorization_v1.rs", "crates/kaigi_zk/src/authorization_v1.rs", "crates/kaigi_zk/src/authorization_v1/tests.rs", "crates/kaigi_zk/src/native.rs", "crates/kaigi_zk/src/tests.rs", "crates/kaigi_zk/src/usage_v1.rs"],
+    "type_files": ["crates/iroha_cli/src/commands/kaigi/private.rs", "crates/iroha_core/benches/kaigi.rs", "crates/iroha_core/src/privacy_release_evidence/kaigi.rs", "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs", "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy/authorization_v1.rs", "crates/iroha_core/tests/kaigi_privacy.rs", "crates/iroha_core_zk/src/kaigi_authorization_v1_tests.rs", "crates/iroha_core_zk/src/kaigi_client_v1.rs", "crates/iroha_core_zk/src/native_pipa_r.rs", "crates/iroha_data_model/src/kaigi/authorization.rs", "crates/iroha_data_model/tests/fixtures/additional_frame_owner_identity_observations.json", "crates/iroha_js_host/src/kaigi_authorization_v1.rs", "crates/kaigi_zk/src/authorization_v1.rs", "crates/kaigi_zk/src/authorization_v1/tests.rs", "crates/kaigi_zk/src/native.rs", "crates/kaigi_zk/src/tests.rs", "crates/kaigi_zk/src/usage_v1.rs"],
     "sdk_owners": [
      {
       "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
@@ -2097,7 +2095,7 @@
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
      "symbol": "sha2::Sha384::digest(",
-     "literals": ["b\"iroha:execution:catalog:v1:goldilocks-poseidon-x7-six-lane\"", "fn catalog_v1(self) -> [u8; 48] {"],
+     "literals": ["b\"iroha:execution:catalog:v1:goldilocks-poseidon-x7-six-lane\"", "fn catalog_v1() -> [u8; 48] {"],
      "compiled": "production"
     }
    ],
@@ -2112,7 +2110,7 @@
      "sites": [
       {
        "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
-       "symbol": "let catalog = context.catalog_v1();",
+       "symbol": "let catalog = TransparentStarkDigestContextV1::catalog_v1();",
        "literals": ["pub fn goldilocks_digest384_frame_v1("]
       }
      ],
@@ -2128,7 +2126,7 @@
     "sdk_owners": [
      {
       "path": "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
-      "symbol": "fn catalog_v1(self) -> [u8; 48] {",
+      "symbol": "fn catalog_v1() -> [u8; 48] {",
       "sdk": "rust"
      }
     ],
@@ -2251,8 +2249,8 @@
    "sites": [
     {
      "path": "crates/iroha_core/src/state/world_state_accumulator.rs",
-     "symbol": "pub(crate) struct WorldStateAccumulator {",
-     "literals": ["pub(crate) const LANES: usize = 1024;"],
+     "symbol": "pub struct WorldStateAccumulator {",
+     "literals": ["pub const LANES: usize = 1024;"],
      "compiled": "production"
     }
    ],
@@ -2942,7 +2940,12 @@
     {
      "path": "crates/iroha_plonk/src/transcript/pipa_r.rs",
      "symbol": "pub struct BasePoseidonHash",
-     "literals": ["Self::with_domain(*b\"pipa-rb1\")", "pub fn absorb_prelude_v2", "pub fn scalar_elements"],
+     "literals": ["Self::with_domain(crate::contract::PIPA_R_PROOF_DOMAIN)", "pub fn absorb_prelude_v2", "pub fn scalar_elements"],
+     "compiled": "production"
+    },
+    {
+     "path": "crates/iroha_plonk/src/contract.rs",
+     "symbol": "pub const PIPA_R_PROOF_DOMAIN: [u8; 8] = *b\"pipa-rb1\";",
      "compiled": "production"
     },
     {
@@ -2990,7 +2993,12 @@
     {
      "path": "crates/iroha_plonk/src/transcript/pipa_r.rs",
      "symbol": "pub fn derive(",
-     "literals": ["b\"Iroha-PlonkVK-v2\"", "blake2b_personal::<64>(persona, &[digest, vk])", "Self::Base(C::Base::from_uniform_bytes(&wide))"],
+     "literals": ["crate::contract::VK_TRANSCRIPT_DOMAIN", "blake2b_personal::<64>(persona, &[digest, vk])", "Self::Base(C::Base::from_uniform_bytes(&wide))"],
+     "compiled": "production"
+    },
+    {
+     "path": "crates/iroha_plonk/src/contract.rs",
+     "symbol": "pub(crate) const VK_TRANSCRIPT_DOMAIN: &[u8; 16] = b\"Iroha-PlonkVK-v2\";",
      "compiled": "production"
     },
     {
@@ -3599,6 +3607,11 @@
   "x509": {
    "description": "ZK-X509 relation, aggregate adapter and release evidence.",
    "uses": {
+    "blake3": {
+     "class": "role",
+     "note": "The Swift and JavaScript X509 transaction builders and the C# X509 fixture checks recompute the ledger's BLAKE3 digests of the direct X509 transaction: the privacy statement digest, the request public-input, ordered-intent and action-statement digests and the proof attachment content hash, all owned by iroha_data_model; a data-model test recomputes the public-input digest. The engine's pinned transcript frames bind the native BLAKE3 Exact12 catalog commitment.",
+     "roles": ["privacy.statement-digest-blake3", "catalog.exact12-commitment"]
+    },
     "digest384": {
      "class": "role",
      "note": "Statement and test digests.",
@@ -4796,6 +4809,7 @@
    "crates/fastpq_prover/tests/transcript_replay.rs": ["iroha-hash", "poseidon"],
    "crates/iroha/src/client/url_join_tests.rs": ["poseidon2", "sha2-256", "sha2-512"],
    "crates/iroha/src/privacy_issuance.rs": ["sha2-256"],
+   "crates/iroha_cli/src/commands/kaigi/private.rs": ["iroha-hash"],
    "crates/iroha_cli/src/soracloud.rs": ["blake3", "iroha-hash", "keccak", "sha2-256", "sha3"],
    "crates/iroha_cli/src/soracloud/assets/v1/tests/pii_capability_authorization.mjs": ["hmac"],
    "crates/iroha_cli/src/soracloud/assets/v1/tests/pii_external_adapter_smoke.mjs": ["hmac"],
@@ -4833,6 +4847,7 @@
    "crates/iroha_config/tests/fastpq_queue_overrides.rs": ["poseidon"],
    "crates/iroha_config/tests/zk_validity_env_independence.rs": ["pedersen", "poseidon"],
    "crates/iroha_core/benches/crypto_hotpaths.rs": ["iroha-hash", "poseidon"],
+   "crates/iroha_core/benches/kaigi.rs": ["iroha-hash"],
    "crates/iroha_core/src/bin/fastpq_fixture_capture.rs": ["iroha-hash"],
    "crates/iroha_core/src/bin/privacy_exact12_action_driver.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core/src/block/axt_anchored_spend_admission_tests.rs": ["iroha-hash"],
@@ -5375,6 +5390,7 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs": ["blake2b", "poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming_inputs.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/retention.rs": ["sha2-256"],
+   "crates/iroha_core_zk/src/kaigi_client_v1.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/lib.rs": ["blake2b", "digest384", "iroha-hash", "poseidon", "poseidon2", "sha2-256", "sha2-512"],
    "crates/iroha_core_zk/src/native_pipa_r_tests.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/ram_lfe_poseidon.rs": ["poseidon"],
@@ -5394,6 +5410,7 @@
    "crates/iroha_crypto/src/confidential_spool.rs": ["blake3"],
    "crates/iroha_crypto/src/confidential_spool/resource_accounting_tests_v1.rs": ["blake3"],
    "crates/iroha_crypto/src/drand.rs": ["sha2-256"],
+   "crates/iroha_crypto/src/ed25519_decode_cache.rs": ["sha2-512"],
    "crates/iroha_crypto/src/fhe_bfv.rs": ["blake2b", "digest384", "iroha-hash", "poseidon", "sha2-256", "sha3", "shake"],
    "crates/iroha_crypto/src/fhe_bfv/conformance.rs": ["iroha-hash"],
    "crates/iroha_crypto/src/fhe_bfv/eight_party_decryption.rs": ["iroha-hash"],
@@ -5449,7 +5466,7 @@
    "crates/iroha_crypto/src/native_commitment/tests.rs": ["blake3", "shake"],
    "crates/iroha_crypto/src/privacy.rs": ["blake3", "iroha-hash", "sha2-256"],
    "crates/iroha_crypto/src/protocol_key.rs": ["sha2-512"],
-   "crates/iroha_crypto/src/public_key_decode.rs": ["sha2-256", "sha2-512"],
+   "crates/iroha_crypto/src/public_key_decode.rs": ["sha2-256"],
    "crates/iroha_crypto/src/ram_lfe.rs": ["hkdf", "iroha-hash", "sha3"],
    "crates/iroha_crypto/src/ram_lfe/availability_tests.rs": ["hkdf", "iroha-hash", "sha3"],
    "crates/iroha_crypto/src/ram_lfe/canonical.rs": ["blake2b", "blake3", "iroha-hash"],
@@ -5588,6 +5605,7 @@
    "crates/iroha_data_model/src/privacy.rs": ["blake3", "digest384", "keccak", "poseidon", "poseidon2", "sha2-256", "sha3"],
    "crates/iroha_data_model/src/privacy/capability_manifest.rs": ["sha2-256"],
    "crates/iroha_data_model/src/privacy/credentials.rs": ["blake3", "sha2-256", "sha3"],
+   "crates/iroha_data_model/src/privacy/private_settlement_policy.rs": ["iroha-hash"],
    "crates/iroha_data_model/src/privacy/proofs.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_data_model/src/privacy/protocol.rs": ["blake3", "sha2-256"],
    "crates/iroha_data_model/src/privacy/release_manifest.rs": ["sha2-256"],
@@ -6551,7 +6569,7 @@
    "scripts#other": ["anemoi", "argon2", "blake2b", "blake2s", "blake3", "digest384", "hkdf", "hmac", "iroha-hash", "keccak", "md5", "monolith", "poseidon", "poseidon2", "rescue", "sha1", "sha2-256", "sha2-512", "sha3", "shake", "sm3", "streebog", "tip5"],
    "state-candidates": ["blake2b", "blake3", "digest384", "iroha-hash", "poseidon", "poseidon2", "rescue", "sha2-256"],
    "tools#other": ["argon2", "blake2b", "blake3", "hkdf", "iroha-hash", "sha1", "sha2-256", "sha2-512", "sha3"],
-   "vendor": ["blake2b", "cshake", "hkdf", "hmac", "iroha-hash", "keccak", "kmac", "md5", "pbkdf2", "pedersen", "ripemd", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3", "shake", "sm3", "streebog"],
+   "vendor": ["blake2b", "cshake", "hkdf", "hmac", "iroha-hash", "keccak", "md5", "pbkdf2", "pedersen", "ripemd", "scrypt", "sha1", "sha2-256", "sha2-512", "sha3", "shake", "sm3", "streebog"],
    "xtask#other": ["blake2b", "blake3", "digest384", "hkdf", "iroha-hash", "md5", "poseidon", "poseidon2", "sha2-256", "sha3", "sm3"]
   },
   "oversized_files": []
@@ -6799,6 +6817,15 @@
      "domains": [],
      "returns": "[u8; 32]",
      "role": "privacy.record-digest-sha256"
+    }
+   },
+   "crates/iroha_data_model/src/privacy/private_settlement_policy.rs": {
+    "PrivateSettlementProtocolClosureDrainV1::capture": {
+     "primitives": ["iroha-hash"],
+     "domains": [],
+     "returns": "Result<Self, PrivateSettlementPolicyParameterErrorV1>",
+     "role": "ledger.identity-hash",
+     "role_note": "Ledger identity hash of the canonical frame of the scheduled successor limits that a protocol closure drain retains."
     }
    },
    "crates/iroha_data_model/src/privacy/proofs.rs": {
@@ -7160,6 +7187,7 @@
   "test_only_counts": {
    "crates/iroha_core_privacy/src/privacy_state/public_reserve_digest_tests.rs": 1,
    "crates/iroha_data_model/src/kaigi/authorization.rs": 2,
+   "crates/iroha_data_model/src/privacy/private_settlement_policy.rs": 1,
    "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs": 2,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs": 17,
    "crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/active.rs": 14,
@@ -8120,7 +8148,7 @@
      "replacement_changes": "A command-line flag name."
     }
    ],
-   "files": ["crates/iroha_cli/src/commands/sorafs.rs", "crates/iroha_cli/src/commands/sorafs/toolkit.rs", "crates/iroha_cli/src/commands/streaming.rs", "crates/iroha_cli/src/nexus/private_settlement_online_auditor.rs", "crates/iroha_config/src/parameters/user.rs", "crates/iroha_config/tests/fixtures.rs", "crates/iroha_core/src/beacon/fixtures/private_exchange.rs", "crates/iroha_core/src/beacon/session_owner/dkg/pending.rs", "crates/iroha_core/src/block/valid/admission_batching.rs", "crates/iroha_core/src/streaming.rs", "crates/iroha_core/src/streaming/snapshot_bounds_and_capability_tests.rs", "crates/iroha_core/src/telemetry.rs", "crates/iroha_core/tests/zk_lane_warning.rs", "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs", "crates/iroha_crypto/src/algorithm.rs", "crates/iroha_crypto/src/hybrid.rs", "crates/iroha_crypto/src/hybrid/borrowed_validation_tests.rs", "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "crates/iroha_crypto/src/multihash.rs", "crates/iroha_crypto/src/soranet/handshake.rs", "crates/iroha_crypto/src/soranet/handshake_tests.rs", "crates/iroha_crypto/src/streaming.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint/tests.rs", "crates/iroha_crypto/tests/pqc_batch.rs", "crates/iroha_crypto/tests/streaming_handshake.rs", "crates/iroha_data_model/src/account/curve.rs", "crates/iroha_data_model/src/nexus/private_settlement.rs", "crates/iroha_p2p/src/streaming/quic.rs", "crates/iroha_telemetry/src/metrics.rs", "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs", "crates/ivm/src/gas.rs", "crates/ivm/src/ivm.rs", "crates/ivm/src/ivm/register_logging/event_counts.rs", "crates/ivm/src/ivm/tests/read_deferrals.rs", "crates/ivm/src/ivm/trace_logging/change_counts.rs", "crates/ivm/src/proof_coverage/opcodes.rs", "crates/ivm/src/signature.rs", "crates/ivm/tests/gas_golden.rs", "crates/ivm/tests/opcode_validation.rs", "crates/ivm/tests/privacy_enforcement.rs", "crates/ivm/tests/verify_signature_tlv.rs", "crates/ivm_abi/src/instruction.rs", "crates/norito/src/streaming.rs", "crates/norito/src/streaming/tests/codec_wire_values.rs", "crates/norito/src/streaming/tests/wire_value_fixtures.rs", "crates/norito/tests/streaming_decode.rs", "crates/norito/tests/transport_capabilities.rs", "crates/sorafs_car/src/bin/sorafs_fetch.rs", "crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", "crates/sorafs_car/src/bin/sorafs_manifest_builder.rs", "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs", "crates/sorafs_manifest/src/governance.rs", "crates/sorafs_manifest/src/governance/tests.rs", "crates/sorafs_manifest/src/hybrid_envelope.rs", "crates/sorafs_manifest/src/reference.rs", "crates/sorafs_node/src/pop_credentials.rs", "crates/sorafs_node/src/pop_credentials_tests.rs", "crates/soranet_pq/src/mldsa/fips204_nistkat_tests.rs", "crates/soranet_pq/src/mlkem.rs", "crates/soranet_pq/src/mlkem/fips203_nistkat_tests.rs", "integration_tests/tests/norito_streaming_end_to_end.rs", "integration_tests/tests/norito_streaming_feedback.rs", "integration_tests/tests/streaming/mod.rs", "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoStreaming.kt", "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/norito/NoritoJavaConsumerTest.java", "python/iroha_python/iroha_python_rs/src/tests/python_crypto_boundary_tests.rs", "python/iroha_python/tests/crypto_algorithms_test.py", "python/norito_py/src/norito/__init__.py", "python/norito_py/src/norito/streaming.py", "tools/soranet-handshake-harness/tests/simulate_cli.rs", "tools/soranet-relay/src/capability.rs", "tools/soranet-relay/src/circuit.rs", "tools/soranet-relay/src/compliance.rs", "tools/soranet-relay/src/config.rs", "tools/soranet-relay/src/config_tests.rs", "tools/soranet-relay/src/runtime/tests.rs", "tools/soranet-relay/tests/constant_rate_handshake.rs", "xtask/src/soranet_gateway_ops.rs"]
+   "files": ["crates/iroha_cli/src/commands/sorafs.rs", "crates/iroha_cli/src/commands/sorafs/toolkit.rs", "crates/iroha_cli/src/commands/streaming.rs", "crates/iroha_cli/src/nexus/private_settlement_online_auditor.rs", "crates/iroha_config/src/parameters/user.rs", "crates/iroha_config/tests/fixtures.rs", "crates/iroha_core/src/beacon/fixtures/private_exchange.rs", "crates/iroha_core/src/beacon/session_owner/dkg/pending.rs", "crates/iroha_core/src/block/valid/admission_batching.rs", "crates/iroha_core/src/streaming.rs", "crates/iroha_core/src/streaming/snapshot_bounds_and_capability_tests.rs", "crates/iroha_core/src/telemetry.rs", "crates/iroha_core/tests/zk_lane_warning.rs", "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/audit.rs", "crates/iroha_crypto/src/algorithm.rs", "crates/iroha_crypto/src/hybrid.rs", "crates/iroha_crypto/src/hybrid/borrowed_validation_tests.rs", "crates/iroha_crypto/src/hybrid/fixed_owner_tests.rs", "crates/iroha_crypto/src/multihash.rs", "crates/iroha_crypto/src/soranet/handshake.rs", "crates/iroha_crypto/src/soranet/handshake_tests.rs", "crates/iroha_crypto/src/streaming.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint.rs", "crates/iroha_crypto/src/threshold_bls/checkpoint/tests.rs", "crates/iroha_crypto/tests/pqc_batch.rs", "crates/iroha_crypto/tests/streaming_handshake.rs", "crates/iroha_data_model/src/account/curve.rs", "crates/iroha_data_model/src/kaigi.rs", "crates/iroha_data_model/src/nexus/private_settlement.rs", "crates/iroha_p2p/src/streaming/quic.rs", "crates/iroha_telemetry/src/metrics.rs", "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs", "crates/ivm/src/gas.rs", "crates/ivm/src/ivm.rs", "crates/ivm/src/ivm/register_logging/event_counts.rs", "crates/ivm/src/ivm/tests/read_deferrals.rs", "crates/ivm/src/ivm/trace_logging/change_counts.rs", "crates/ivm/src/proof_coverage/opcodes.rs", "crates/ivm/src/signature.rs", "crates/ivm/tests/gas_golden.rs", "crates/ivm/tests/opcode_validation.rs", "crates/ivm/tests/privacy_enforcement.rs", "crates/ivm/tests/verify_signature_tlv.rs", "crates/ivm_abi/src/instruction.rs", "crates/norito/src/streaming.rs", "crates/norito/src/streaming/tests/codec_wire_values.rs", "crates/norito/src/streaming/tests/wire_value_fixtures.rs", "crates/norito/tests/streaming_decode.rs", "crates/norito/tests/transport_capabilities.rs", "crates/sorafs_car/src/bin/sorafs_fetch.rs", "crates/sorafs_car/src/bin/sorafs_fetch/tests.rs", "crates/sorafs_car/src/bin/sorafs_manifest_builder.rs", "crates/sorafs_manifest/src/bin/generate_por_fixtures.rs", "crates/sorafs_manifest/src/governance.rs", "crates/sorafs_manifest/src/governance/tests.rs", "crates/sorafs_manifest/src/hybrid_envelope.rs", "crates/sorafs_manifest/src/reference.rs", "crates/sorafs_node/src/pop_credentials.rs", "crates/sorafs_node/src/pop_credentials_tests.rs", "crates/soranet_pq/src/mldsa/fips204_nistkat_tests.rs", "crates/soranet_pq/src/mlkem.rs", "crates/soranet_pq/src/mlkem/fips203_nistkat_tests.rs", "integration_tests/tests/norito_streaming_end_to_end.rs", "integration_tests/tests/norito_streaming_feedback.rs", "integration_tests/tests/streaming/mod.rs", "java/norito_java/src/main/java/org/hyperledger/iroha/norito/NoritoStreaming.java", "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/norito/NoritoStreaming.kt", "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/norito/NoritoJavaConsumerTest.java", "python/iroha_python/iroha_python_rs/src/tests/python_crypto_boundary_tests.rs", "python/iroha_python/tests/crypto_algorithms_test.py", "python/norito_py/src/norito/__init__.py", "python/norito_py/src/norito/streaming.py", "tools/soranet-handshake-harness/tests/simulate_cli.rs", "tools/soranet-relay/src/capability.rs", "tools/soranet-relay/src/circuit.rs", "tools/soranet-relay/src/compliance.rs", "tools/soranet-relay/src/config.rs", "tools/soranet-relay/src/config_tests.rs", "tools/soranet-relay/src/runtime/tests.rs", "tools/soranet-relay/tests/constant_rate_handshake.rs", "xtask/src/soranet_gateway_ops.rs"]
   },
   "replacement_wire_impact": ["No algorithm replacement is needed for the locked packages: the bytes on the wire are already ML-KEM and ML-DSA.", "Renaming the superseded labels changes Norito variant names, schema identities, JSON tags, configuration keys and SDK codecs listed under wire_visible; first-release rules replace them directly without aliases.", "If a later dependency change replaced the implementation, the encoded lengths under parameter_sets stay fixed by the standards; a deployment that still held round-three keys or signatures would need new keys, because ML-KEM derivation and ML-DSA encodings are not compatible with them."],
   "findings": [

@@ -505,7 +505,7 @@ mod tests {
         for case in 0..3 {
             let state = blank_state_with_staking(Some(staking_policy(
                 SCCP_UNBONDING_DELAY_MS,
-                if case == 1 { 0 } else { 1 },
+                u16::from(case != 1),
             )));
             let mut block = state.block(header(1));
             let mut stx = block.transaction();

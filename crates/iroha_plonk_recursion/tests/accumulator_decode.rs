@@ -50,8 +50,10 @@ impl<C: PastaCurve> Decode<C> {
     fn instances(&self, valid: bool, input: &FoldInput<C>) -> Vec<C::Base> {
         let mut out = self
             .bytes
-            .chunks_exact(32)
-            .flat_map(|bytes| bytes_to_limbs(&bytes.try_into().unwrap()).map(C::Base::from_u128))
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .flat_map(|bytes| bytes_to_limbs(&*bytes).map(C::Base::from_u128))
             .collect::<Vec<_>>();
         out.extend([
             C::Base::from(u64::from(self.length)),
@@ -149,7 +151,12 @@ impl<C: PastaCurve> Circuit<C::Base> for Decode<C> {
 fn encode<C: PastaCurve>(input: &FoldInput<C>) -> [u8; ACCUMULATOR_BYTES] {
     let mut out = [0; ACCUMULATOR_BYTES];
     out[..32].copy_from_slice(&encode_point::<C>(input.g()));
-    for (chunk, value) in out[32..].chunks_exact_mut(32).zip(input.challenges()) {
+    for (chunk, value) in out[32..]
+        .as_chunks_mut::<32>()
+        .0
+        .iter_mut()
+        .zip(input.challenges())
+    {
         chunk.copy_from_slice(&value.to_repr());
     }
     out
@@ -158,8 +165,8 @@ fn encode<C: PastaCurve>(input: &FoldInput<C>) -> [u8; ACCUMULATOR_BYTES] {
 fn native<C: PastaCurve>(bytes: &[u8; ACCUMULATOR_BYTES], k: u32) -> Option<FoldInput<C>> {
     let g = decode_generator::<C>(&bytes[..32].try_into().ok()?).ok()?;
     let mut challenges = [C::ScalarExt::ZERO; K];
-    for (chunk, value) in bytes[32..].chunks_exact(32).zip(&mut challenges) {
-        *value = decode_scalar(&chunk.try_into().ok()?).ok()?;
+    for (chunk, value) in bytes[32..].as_chunks::<32>().0.iter().zip(&mut challenges) {
+        *value = decode_scalar(&*chunk).ok()?;
     }
     FoldInput::from_normalized(g, k, challenges).ok()
 }
@@ -305,7 +312,7 @@ fn normalized_native_decoder_preserves_scoped_identity_and_actual_nonzero_rounds
     fn cases<C: PastaCurve>() {
         for k in [1, 12, 14, 16] {
             let mut bytes = [0; ACCUMULATOR_BYTES];
-            for scalar in bytes[32 * (K - k as usize + 1)..].chunks_exact_mut(32) {
+            for scalar in bytes[32 * (K - k as usize + 1)..].as_chunks_mut::<32>().0 {
                 scalar.copy_from_slice(&C::ScalarExt::ONE.to_repr());
             }
             let claim = native::<C>(&bytes, k).expect("canonical scoped identity");

@@ -36,7 +36,7 @@ pub(super) fn poseidon(
         return false;
     };
     if state.len() != expected_words
-        || !state.chunks_exact(4).all(|limbs| {
+        || !state.as_chunks::<4>().0.iter().all(|limbs| {
             limbs
                 .try_into()
                 .is_ok_and(|words| FieldElem(words).is_canonical())
@@ -117,7 +117,7 @@ mod tests {
         let mut maximum = MODULUS;
         maximum[0] -= 1;
         let mut state = [0; 48];
-        for field in state.chunks_exact_mut(4) {
+        for field in state.as_chunks_mut::<4>().0 {
             field.copy_from_slice(&maximum);
         }
         for width in [3, 6] {
@@ -132,6 +132,12 @@ mod tests {
             ));
         }
         assert_eq!(calls.get(), 2);
-        assert!(state.chunks_exact(4).all(|field| field == maximum));
+        assert!(
+            state
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|field| field == maximum)
+        );
     }
 }

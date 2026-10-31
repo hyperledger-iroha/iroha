@@ -2137,12 +2137,9 @@ fn validate_jindo(
                 },
             );
         }
-        for (coefficient_index, bytes) in commitment.encoding.chunks_exact(4).enumerate() {
-            let coefficient = i32::from_le_bytes(
-                bytes
-                    .try_into()
-                    .expect("Jindo commitment width is a multiple of four"),
-            );
+        for (coefficient_index, bytes) in commitment.encoding.as_chunks::<4>().0.iter().enumerate()
+        {
+            let coefficient = i32::from_le_bytes(*bytes);
             if !(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1
                 ..=IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1)
                 .contains(&coefficient)

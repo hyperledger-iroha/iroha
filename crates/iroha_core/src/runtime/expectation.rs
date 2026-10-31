@@ -35,7 +35,7 @@ fn digest(
 }
 
 /// Preserve local encoding failures on the transaction's original retry owner.
-pub(crate) fn digest_owned(
+pub fn digest_owned(
     expectation: &ExpectationV1,
     world: &WorldTransaction<'_, '_>,
 ) -> Result<iroha_crypto::Hash, Error> {
@@ -49,7 +49,7 @@ pub(crate) fn digest_owned(
 }
 
 /// Capture the executable retained by the trigger engine, including already loaded IVM code.
-pub(crate) fn capture_loaded_executable(
+pub fn capture_loaded_executable(
     executable: &crate::smartcontracts::isi::triggers::set::ExecutableRef,
     world: &WorldTransaction<'_, '_>,
 ) -> Result<ExpectationV1, Error> {
@@ -62,7 +62,7 @@ pub(crate) fn capture_loaded_executable(
 }
 
 /// Capture the immutable execution closure of a deferred instruction list.
-pub(crate) fn capture_instructions(
+pub fn capture_instructions(
     instructions: &[InstructionBox],
     world: &WorldTransaction<'_, '_>,
 ) -> Result<ExpectationV1, Error> {
@@ -75,7 +75,7 @@ pub(crate) fn capture_instructions(
 }
 
 /// Capture an action before it becomes eligible for any trigger event.
-pub(crate) fn capture_executable(
+pub fn capture_executable(
     executable: &Executable,
     world: &WorldTransaction<'_, '_>,
 ) -> Result<ExpectationV1, Error> {
@@ -214,7 +214,7 @@ fn add_binding(
 }
 
 /// Refuse changed semantics and any restriction affecting the captured dependency closure.
-pub(crate) fn check(
+pub fn check(
     expectation: &ExpectationV1,
     world: &WorldTransaction<'_, '_>,
     height: u64,

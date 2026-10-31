@@ -21,20 +21,12 @@ fn projection_message_product_for_test_v1(
                 lanes.lanes[lane],
             ));
         };
-        for (index, bytes) in words.chunks_exact(4).enumerate() {
-            absorb(
-                3,
-                index as u64,
-                u64::from(u32::from_be_bytes(bytes.try_into().unwrap())),
-            );
+        for (index, bytes) in words.as_chunks::<4>().0.iter().enumerate() {
+            absorb(3, index as u64, u64::from(u32::from_be_bytes(*bytes)));
         }
         absorb(4, 0, message.len() as u64);
-        for (index, bytes) in digest.chunks_exact(4).enumerate() {
-            absorb(
-                1,
-                index as u64,
-                u64::from(u32::from_be_bytes(bytes.try_into().unwrap())),
-            );
+        for (index, bytes) in digest.as_chunks::<4>().0.iter().enumerate() {
+            absorb(1, index as u64, u64::from(u32::from_be_bytes(*bytes)));
         }
     }
     result

@@ -214,7 +214,7 @@ pub(in crate::account) fn canonical<D: Destination>(
     Ok(controller)
 }
 
-/// Strict AccountId literal entry; never accepts an alternate identity envelope.
+/// Strict `AccountId` literal entry; never accepts an alternate identity envelope.
 pub(in crate::account) fn account_literal<D: Destination>(
     input: &str,
     destination: &D,
@@ -526,8 +526,8 @@ pub(super) fn encode_base_n<D: BufferDestination>(
     }
     // The generic helper accepts every radix in 2..=256. Use its actual
     // information bound so a smaller radix cannot outgrow admitted storage.
-    let bits_per_digit = usize::try_from(u64::BITS - base.leading_zeros() - 1)
-        .expect("bounded radix bit width fits usize");
+    let bits_per_digit =
+        usize::try_from(base.bit_width() - 1).expect("bounded radix bit width fits usize");
     let maximum_digits = bytes
         .len()
         .checked_mul(8)
@@ -606,8 +606,7 @@ pub(super) fn decode_base_n<D: Destination>(
         group_radix = next;
         group_digits += 1;
     }
-    let bits_per_digit =
-        usize::try_from(u64::BITS - (base - 1).leading_zeros()).expect("u64 bit width fits usize");
+    let bits_per_digit = usize::try_from((base - 1).bit_width()).expect("u64 bit width fits usize");
     let maximum_limbs = significant
         .len()
         .checked_mul(bits_per_digit)

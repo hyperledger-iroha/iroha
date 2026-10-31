@@ -64,11 +64,10 @@ impl<'a> Base64Writer<'a> {
             self.emit_full_block(self.carry)?;
             self.carry_len = 0;
         }
-        let mut chunks = bytes.chunks_exact(3);
-        for chunk in &mut chunks {
-            self.emit_full_block([chunk[0], chunk[1], chunk[2]])?;
+        let (chunks, remainder) = bytes.as_chunks::<3>();
+        for chunk in chunks {
+            self.emit_full_block(*chunk)?;
         }
-        let remainder = chunks.remainder();
         self.carry[..remainder.len()].copy_from_slice(remainder);
         self.carry_len = remainder.len();
         Ok(())

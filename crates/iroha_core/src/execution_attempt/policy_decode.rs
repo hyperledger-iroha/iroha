@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 
 /// The actual original counter controls lent to every policy read of a native attempt.
 #[derive(Clone)]
-pub(crate) struct PolicyDecodeControls(ChargedShared<Mutex<PreparedDecodeWorkspace>>);
+pub struct PolicyDecodeControls(ChargedShared<Mutex<PreparedDecodeWorkspace>>);
 
 impl PolicyDecodeControls {
     /// Admit the shared owner and both counter controls atomically before World acquisition.

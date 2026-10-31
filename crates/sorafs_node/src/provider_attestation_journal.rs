@@ -1978,7 +1978,7 @@ fn validate_stored_state(
                 }
                 MusubiProviderAttestationDeadLetterReasonV1::HandoffRetryExhausted
                 | MusubiProviderAttestationDeadLetterReasonV1::HandoffRejected => {
-                    attestation.as_deref().is_some_and(&valid_attestation)
+                    attestation.as_deref().is_some_and(valid_attestation)
                 }
             };
             entry.generation != 0

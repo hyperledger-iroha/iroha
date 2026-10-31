@@ -67,7 +67,7 @@ impl Event {
         row[ENABLED] = F::ONE;
         row[WRITE] = F(u64::from(self.write));
         for (offset, bytes) in [(BEFORE, &self.before), (AFTER, &self.after)] {
-            for (limb, pair) in bytes.chunks_exact(2).enumerate() {
+            for (limb, pair) in bytes.as_chunks::<2>().0.iter().enumerate() {
                 row[offset + limb] = F(u64::from(u16::from_le_bytes([pair[0], pair[1]])));
             }
         }

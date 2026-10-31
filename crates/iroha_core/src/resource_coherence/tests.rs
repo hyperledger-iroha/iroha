@@ -73,7 +73,7 @@ fn lower_limits(action: u32, block: u32) -> PrivacyConsensusLimitsV1 {
 }
 
 fn set_caps(world: &World, transaction: u64, block: u32) {
-    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(world).unwrap();
     crate::state::set_parameter_cell_for_testing(
         &mut parameters,
         Parameter::Transaction(TransactionParameter::MaxTxBytes(
@@ -94,7 +94,7 @@ fn set_caps(world: &World, transaction: u64, block: u32) {
 }
 
 fn set_signatures(world: &World, signatures: u64) {
-    let mut parameters = crate::state::parameter_cell_block_for_testing(&world).unwrap();
+    let mut parameters = crate::state::parameter_cell_block_for_testing(world).unwrap();
     crate::state::set_parameter_cell_for_testing(
         &mut parameters,
         Parameter::Transaction(TransactionParameter::MaxSignatures(
@@ -785,7 +785,7 @@ fn governed_signer_tightening_cannot_strand_original_two_signer_cleanup() {
         manifest,
         PrivateSettlementAbortReasonV1::Expired,
     )])
-    .sign_multisig(keys[..2].iter().map(|key| key.private_key()));
+    .sign_multisig(keys[..2].iter().map(iroha_crypto::KeyPair::private_key));
     cleanup.verify_signature().unwrap();
     assert_eq!(cleanup.signature_count(), 2);
     let update = chain.sign(

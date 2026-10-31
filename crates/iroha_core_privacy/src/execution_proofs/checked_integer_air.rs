@@ -165,7 +165,9 @@ mod tests {
         let mut fields = Vec::new();
         for node in nodes {
             let operands = node[1..]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|operand| read(operand, &fields, input))
                 .collect::<Vec<_>>();
             fields.push(match node[0] {

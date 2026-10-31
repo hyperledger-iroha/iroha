@@ -58,7 +58,7 @@ fn field_bits_repr(limbs: [u64; 4]) -> PastaReprBits {
 #[cfg(any(test, not(target_pointer_width = "64")))]
 fn field_bits_u32(limbs: [u64; 4]) -> [u32; 8] {
     let mut words = [0; 8];
-    for (pair, limb) in words.chunks_exact_mut(2).zip(limbs) {
+    for (pair, limb) in words.as_chunks_mut::<2>().0.iter_mut().zip(limbs) {
         let bytes = limb.to_le_bytes();
         pair[0] = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         pair[1] = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
@@ -670,10 +670,8 @@ pub(crate) use impl_pasta_field;
 /// Reads 32 little-endian bytes as four 64-bit limbs.
 pub(crate) fn limbs_from_le_bytes(bytes: &[u8; 32]) -> [u64; 4] {
     let mut limbs = [0u64; 4];
-    for (limb, chunk) in limbs.iter_mut().zip(bytes.chunks_exact(8)) {
-        let mut word = [0u8; 8];
-        word.copy_from_slice(chunk);
-        *limb = u64::from_le_bytes(word);
+    for (limb, chunk) in limbs.iter_mut().zip(bytes.as_chunks::<8>().0) {
+        *limb = u64::from_le_bytes(*chunk);
     }
     limbs
 }
@@ -681,7 +679,7 @@ pub(crate) fn limbs_from_le_bytes(bytes: &[u8; 32]) -> [u64; 4] {
 /// Writes four 64-bit limbs as 32 little-endian bytes.
 pub(crate) fn limbs_to_le_bytes(limbs: &[u64; 4]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    for (chunk, limb) in out.chunks_exact_mut(8).zip(limbs.iter()) {
+    for (chunk, limb) in out.as_chunks_mut::<8>().0.iter_mut().zip(limbs.iter()) {
         chunk.copy_from_slice(&limb.to_le_bytes());
     }
     out

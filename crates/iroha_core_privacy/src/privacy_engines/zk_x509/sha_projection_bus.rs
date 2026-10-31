@@ -3,17 +3,17 @@ use super::*;
 use crate::privacy_engines::zk_x509::projection_air::hash_bus;
 
 /// Four new private cyclic products follow the original SHA auxiliaries.
-pub(crate) const AUX_START_V1: usize = 78;
+pub const AUX_START_V1: usize = 78;
 /// Payload-word event selector; SHA padding bytes are masked out separately.
-pub(crate) const FIX_WORD_V1: usize = 134;
+pub const FIX_WORD_V1: usize = 134;
 /// Exact message length event on the call's final row.
-pub(crate) const FIX_LENGTH_V1: usize = 135;
+pub const FIX_LENGTH_V1: usize = 135;
 /// Actual SHA digest word event.
-pub(crate) const FIX_DIGEST_V1: usize = 136;
+pub const FIX_DIGEST_V1: usize = 136;
 pub(super) const FIX_END_V1: usize = 137;
-pub(crate) const WORDS_V1: usize = 512;
+pub const WORDS_V1: usize = 512;
 
-pub(crate) fn is_active_v1(manifest: ZkX509ShaCallManifestV1) -> bool {
+pub fn is_active_v1(manifest: ZkX509ShaCallManifestV1) -> bool {
     matches!(manifest.role, ZkX509ShaCallRoleV1::Projection(0..=6))
         && manifest.activation == ZkX509ShaCallActivationV1::Required
 }

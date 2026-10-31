@@ -134,7 +134,7 @@ impl DirectGaloisBStatementReplayV1 {
         );
         self.statement_hash.update(&modulus.to_be_bytes());
         let mut scratch = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
-        for residues in output.chunks_exact_mut(RESIDUES_PER_READ_V1) {
+        for residues in output.as_chunks_mut::<RESIDUES_PER_READ_V1>().0 {
             if self.transaction.read_next(provider, &mut scratch)? != scratch.len() {
                 return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
             }

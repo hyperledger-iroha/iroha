@@ -137,8 +137,10 @@ fn words(output: &CompileOutput, name: &str, arguments: usize) -> (Vec<u32>, u32
     (
         output.artifact[metadata.code_offset + budget.pc_start as usize
             ..metadata.code_offset + budget.pc_end as usize]
-            .chunks_exact(4)
-            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
             .collect(),
         budget.frame_bytes,
     )

@@ -67,7 +67,9 @@ fn ticket_revocation_golden() {
 fn from_hex(hex: &str) -> Vec<u8> {
     let clean: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     clean
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| (decode_nibble(chunk[0]) << 4) | decode_nibble(chunk[1]))
         .collect()
 }

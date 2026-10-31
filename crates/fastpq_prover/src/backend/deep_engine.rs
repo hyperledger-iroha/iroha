@@ -599,7 +599,12 @@ fn walk_chains(
                 }
             }
             let mut bytes = [0; 16 * F::BYTES];
-            for (target, value) in bytes.chunks_exact_mut(F::BYTES).zip(&full[..arity]) {
+            for (target, value) in bytes
+                .as_chunks_mut::<{ F::BYTES }>()
+                .0
+                .iter_mut()
+                .zip(&full[..arity])
+            {
                 target.copy_from_slice(&value.to_le_bytes());
             }
             digests.push(

@@ -145,6 +145,14 @@ impl core::fmt::Display for ExecutionOutputPolicyV1 {
     }
 }
 
+impl norito::json::JsonDeserialize for ExecutionOutputPolicyV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        super::system::parameters_json::decode_execution_output(parser)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,13 +236,5 @@ mod tests {
             .unwrap()
             .insert("local_memory_override".into(), 1_u64.into());
         assert!(norito::json::from_value::<ExecutionOutputPolicyV1>(value).is_err());
-    }
-}
-
-impl norito::json::JsonDeserialize for ExecutionOutputPolicyV1 {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        super::system::parameters_json::decode_execution_output(parser)
     }
 }

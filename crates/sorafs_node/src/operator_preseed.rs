@@ -908,7 +908,7 @@ mod tests {
 
     fn synthetic_artifact(seed: u32) -> OperatorPreseedArtifactReceiptV1 {
         let mut digest = [0_u8; 32];
-        for chunk in digest.chunks_exact_mut(4) {
+        for chunk in digest.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&seed.to_be_bytes());
         }
         OperatorPreseedArtifactReceiptV1 {

@@ -245,12 +245,8 @@ where
             wire_hash.update(&buffer[..take_bytes]);
             native_limb.update(&buffer[..take_bytes]);
             wire_limb.update(&buffer[..take_bytes]);
-            for encoded in buffer[..take_bytes].chunks_exact(8) {
-                let residue = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-                );
+            for encoded in buffer[..take_bytes].as_chunks::<8>().0 {
+                let residue = u64::from_be_bytes(*encoded);
                 if residue >= modulus {
                     return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
                 }

@@ -225,7 +225,7 @@ pub fn authenticate_successor_context(
 }
 
 /// The common current-State predecessor check, before any history preparation.
-pub(crate) fn require_successor_cut(
+pub fn require_successor_cut(
     state: &(impl StateReadOnly + ?Sized),
     header: &iroha_data_model::block::BlockHeader,
 ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
@@ -252,7 +252,7 @@ pub(crate) fn require_successor_cut(
 }
 
 /// Compare authenticated original history with the current schedule and transported context.
-pub(crate) fn compare_successor_context(
+pub fn compare_successor_context(
     state: &(impl StateReadOnly + ?Sized),
     header: &iroha_data_model::block::BlockHeader,
     expected: &GlobalThresholdBeaconPulseContextV1,
@@ -283,28 +283,8 @@ impl StateBlock<'_> {
     /// Capture the exact authenticated source in the pristine constructor callback, after
     /// source-generation/header validation and before any schedule or execution effect.
     /// Missing mandatory transported beacon work is refused; local aggregation is irrelevant.
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "the supplied pulse is validated and transferred into the retained native schedule result"
-    )]
-    pub(crate) fn request_sumeragi_schedule(
-        &mut self,
-        genesis_height: u64,
-        source: &SignedBlock,
-        supplied_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
-        expected_context: Option<GlobalThresholdBeaconPulseContextV1>,
-    ) -> Result<(), ExecutionAttemptError<ScheduleError>> {
-        self.request_sumeragi_schedule_with_preparation(
-            genesis_height,
-            source,
-            supplied_pulse,
-            expected_context,
-            None,
-        )
-    }
-
-    /// Capture the same pristine schedule using the native attempt's retained history.
-    /// Standalone callers use the same authentication kernel through the ordinary read.
+    /// A native attempt supplies its retained history; standalone callers pass `None` and
+    /// use the same authentication kernel through the ordinary read.
     #[expect(
         clippy::large_types_passed_by_value,
         reason = "the supplied pulse is transferred into the original native schedule result"

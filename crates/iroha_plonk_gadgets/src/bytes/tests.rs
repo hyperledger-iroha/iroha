@@ -1150,7 +1150,7 @@ fn plus_modulus<F: PastaField>(value: &F) -> Option<[u8; 32]> {
         return None;
     }
     let mut bytes = [0_u8; 32];
-    for (chunk, limb) in bytes.chunks_exact_mut(8).zip(out) {
+    for (chunk, limb) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(out) {
         chunk.copy_from_slice(&limb.to_le_bytes());
     }
     Some(bytes)

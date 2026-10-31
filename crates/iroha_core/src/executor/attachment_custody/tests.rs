@@ -164,7 +164,7 @@ fn original_signed_source_and_every_consumed_byte_remain_borrowed() {
     let tx = direct();
     let before = norito::encode_canonical(&tx).unwrap();
     let mut custody = AttachmentCustody::new(&tx).unwrap();
-    assert!(std::ptr::eq(custody.owner.source, &tx));
+    assert!(std::ptr::eq(custody.owner.source, &raw const tx));
     custody
         .direct(0, tx.authority(), |frame| consume_action(frame, &tx, 0))
         .unwrap();

@@ -173,7 +173,9 @@ pub fn turn_packet(header: LaneHeader, sector: u8, data: &[u8]) -> Option<AtomPa
         header,
         first_id: turn_first_id(header.frame, sector),
         atoms: atoms
-            .chunks_exact(ATOM_LEN)
+            .as_chunks::<ATOM_LEN>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut atom: Atom = [0; ATOM_LEN];
                 atom.copy_from_slice(chunk);
@@ -497,7 +499,7 @@ fn centroid(window: &[f64]) -> (f64, f64) {
             *gb = (-(t - eb) * (t - eb) / k).exp();
         }
         let (mut sum, mut sa, mut sb) = (0.0, 0.0, 0.0);
-        for (j, row) in window.chunks_exact(GRID_SIDE).enumerate() {
+        for (j, row) in window.as_chunks::<GRID_SIDE>().0.iter().enumerate() {
             let b = f64::from(j as i32 - GRID_HALF);
             for (i, &level) in row.iter().enumerate() {
                 let a = f64::from(i as i32 - GRID_HALF);

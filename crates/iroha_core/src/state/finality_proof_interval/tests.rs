@@ -30,7 +30,7 @@ fn limits(height: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(height).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
     )
     .unwrap()
 }
@@ -410,7 +410,7 @@ fn single(height: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(height).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
     )
     .unwrap()
 }
@@ -424,7 +424,7 @@ fn ladder(
         owner,
         NonZeroU64::new(height).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
         &AtomicBool::new(false),
         step,
     )
@@ -751,7 +751,7 @@ fn interval(from: u64, to: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(to).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + Duration::from_secs(900),
+        Instant::now() + Duration::from_mins(15),
     )
     .unwrap()
 }

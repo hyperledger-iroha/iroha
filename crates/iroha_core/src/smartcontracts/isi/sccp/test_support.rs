@@ -54,13 +54,13 @@ use iroha_primitives::numeric::Numeric;
 use std::num::NonZeroU64;
 
 /// Return a blank test State with explicit ordinary crypto authoring only.
-pub(crate) fn blank_state() -> State {
+pub fn blank_state() -> State {
     blank_state_with_staking(None)
 }
 
 /// Construct a component State after the caller explicitly chooses its original
 /// staking input. This creates no authenticated genesis policy capability.
-pub(crate) fn blank_state_with_staking(
+pub fn blank_state_with_staking(
     staking: Option<iroha_data_model::block::consensus::PublicLaneStakingPolicy>,
 ) -> State {
     let mut world = World::default();
@@ -86,7 +86,7 @@ pub(crate) fn blank_state_with_staking(
 }
 
 /// Original component fixture delay that meets the Taira SCCP liability floor.
-pub(crate) const SCCP_UNBONDING_DELAY_MS: u64 = 1_814_400_000;
+pub const SCCP_UNBONDING_DELAY_MS: u64 = 1_814_400_000;
 
 /// Return a header at `height` with creation time `height × 4 s`.
 pub fn header(height: u64) -> BlockHeader {

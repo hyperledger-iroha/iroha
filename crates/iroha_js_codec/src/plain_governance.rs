@@ -95,7 +95,10 @@ pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
                 value.duration_blocks,
                 Some(value.direction),
             )
-        } else if let Some(value) = instruction.as_any().downcast_ref::<UpdatePlainConviction>() {
+        } else {
+            let value = instruction
+                .as_any()
+                .downcast_ref::<UpdatePlainConviction>()?;
             (
                 UPDATE,
                 &value.referendum_id,
@@ -104,8 +107,6 @@ pub fn to_json(instruction: &InstructionBox) -> Option<CodecResult<Value>> {
                 value.duration_blocks,
                 None,
             )
-        } else {
-            return None;
         };
     Some((|| {
         let mut fields = json::Map::new();

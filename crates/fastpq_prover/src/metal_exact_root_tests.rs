@@ -168,13 +168,19 @@ fn fourth_root_shift_matches_independent_products_at_every_supported_order() {
         for root in [root, goldilocks_pow(root, 3), goldilocks_inv(root)] {
             let fourth = goldilocks_pow(root, 1_u64 << (log - 2));
             assert!(fourth == POSITIVE || fourth == NEGATIVE);
-            for value in [0, 1, u16::MAX as u64, 1 << 16, 1 << 48, FIELD_MODULUS - 1]
-                .into_iter()
-                .chain(
-                    (0..1024_u64)
-                        .map(|index| index.wrapping_mul(0x9e37_79b9_7f4a_7c15) % FIELD_MODULUS),
-                )
-            {
+            for value in [
+                0,
+                1,
+                u64::from(u16::MAX),
+                1 << 16,
+                1 << 48,
+                FIELD_MODULUS - 1,
+            ]
+            .into_iter()
+            .chain(
+                (0..1024_u64)
+                    .map(|index| index.wrapping_mul(0x9e37_79b9_7f4a_7c15) % FIELD_MODULUS),
+            ) {
                 let actual = metal_fourth_root_model(value, fourth);
                 let expected =
                     (u128::from(value) * u128::from(fourth) % u128::from(FIELD_MODULUS)) as u64;

@@ -53,7 +53,7 @@ fn strict_literal_rejects_alternate_envelopes_padding_checksum_and_wrong_chain()
     };
     checksum.replace_range(final_start.., replacement);
     for invalid in [
-        "".into(),
+        String::new(),
         " ".into(),
         "merchant@paynet".into(),
         expected.try_signatory().unwrap().to_string(),

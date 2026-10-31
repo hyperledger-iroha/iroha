@@ -61,7 +61,7 @@ pub enum ParameterIngressError {
     /// Intrinsic signed handshake/context validation without intermediate text.
     #[error(transparent)]
     Handshake(#[from] ConsensusHandshakeValidationError),
-    /// The original NPoS instruction explicitly zeroes one governed bound.
+    /// The original `NPoS` instruction explicitly zeroes one governed bound.
     #[error("SumeragiNposParameters.reconfig.{0} must be greater than zero")]
     NposZeroField(&'static str),
     /// Intrinsic pipeline validity rule; no policy text is reformatted.
@@ -170,7 +170,7 @@ impl From<GasAdmissionError> for ParameterIngressError {
 
 /// The result of observing this actual graph operation in the current decoder.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ParameterIngressAttemptError {
+pub enum ParameterIngressAttemptError {
     /// The original codec attempt, never an error replayed after the operation.
     #[error(transparent)]
     Codec(norito::core::DecodeAttemptError),
@@ -304,7 +304,7 @@ fn payload<'a>(parameters: &'a Parameters, id: &str) -> Option<&'a Json> {
         .custom()
         .values()
         .find(|value| value.id().name().as_ref() == id)
-        .map(|value| value.payload())
+        .map(iroha_data_model::parameter::CustomParameter::payload)
 }
 fn document<T, E: Into<ParameterIngressError>>(
     source: &Json,

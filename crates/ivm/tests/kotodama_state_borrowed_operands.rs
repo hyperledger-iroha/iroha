@@ -109,8 +109,10 @@ fn borrowed_state_operands_keep_quantity_conservation_and_owned_results_on_both_
         );
         assert!(
             !program[parsed.code_offset..]
-                .chunks_exact(4)
-                .any(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()) == publish)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|bytes| u32::from_le_bytes(*bytes) == publish)
         );
         let mut default = DefaultHost::new();
         let (vm, outcome) = run(&program, &mut default);

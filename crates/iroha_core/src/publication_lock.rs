@@ -174,7 +174,7 @@ impl<T> PublicationMutex<T> {
         // can create/rename/unlink or unwind. Saturation permanently disables
         // observation reuse instead of allowing an ABA wraparound.
         if let Some(epoch) = &self.mutation_epoch {
-            let _ = epoch.fetch_update(
+            let _ = epoch.try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |epoch| epoch.checked_add(1),
@@ -216,6 +216,7 @@ impl<T> PublicationMutex<T> {
     /// awaiting this event. A wake grants no predecessor or publication authority;
     /// retry must re-acquire the same target and rejoin its original journals.
     /// No publication, height change, timer, or scheduled polling is required.
+    #[cfg(test)]
     pub(crate) fn try_lock_or_wait(
         &self,
     ) -> Result<PublicationGuard<'_, T>, iroha_allocation::release::ReleaseWait> {

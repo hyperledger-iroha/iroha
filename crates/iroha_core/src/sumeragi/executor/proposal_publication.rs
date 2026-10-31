@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn native_original_proposal_rechecks_clock_after_worker_wait_and_restart() {
         let (clock, time_source) =
-            iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(20_000));
+            iroha_primitives::time::TimeSource::new_mock(Duration::from_secs(20));
         publication_tests::with_worker_clock(
             time_source,
             move |chain, worker, _blocks, _events| {

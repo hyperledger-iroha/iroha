@@ -1032,7 +1032,9 @@ mod tests {
     fn field_modulus() -> PrivacyJindoFieldElementV1 {
         let mut encoding = [0_u8; 32];
         for (chunk, limb) in encoding
-            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(field::JindoFieldElementV1::MODULUS)
         {
             chunk.copy_from_slice(&limb.to_le_bytes());

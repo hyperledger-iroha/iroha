@@ -78,8 +78,8 @@ mod native_aux_cache;
 #[path = "sha_native_base_cache.rs"]
 mod native_base_cache;
 #[path = "sha_projection_bus.rs"]
-pub(crate) mod projection_bus;
-pub(crate) use frame_prefix::{ShaFrameByteV1, sha_frame_byte_v1};
+pub mod projection_bus;
+pub use frame_prefix::{ShaFrameByteV1, sha_frame_byte_v1};
 /// Per-type closed-relation DER admission limit.
 pub const ZK_X509_SHA_CALL_MAX_DER_BYTES_V1: usize = 4_096;
 /// Exact number of canonical SHA calls at maximum shape.
@@ -296,16 +296,14 @@ const ZK_X509_SHA_FIXED_RFC_ROLE_V1: usize = 3;
 const ZK_X509_SHA_FIXED_RFC_CHANNEL_V1: usize = 4;
 const ZK_X509_SHA_FIXED_RFC_OFFSET_V1: usize = 5;
 /// Four message-byte masks for canonical SHA frame constants and raw lengths.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_MASK_V1: usize =
+pub const ZK_X509_SHA_FIXED_FRAME_MASK_V1: usize =
     ZK_X509_SHA_FIXED_RFC_STREAMS_V1 + 4 * ZK_X509_SHA_FIXED_RFC_STREAM_STRIDE_V1;
 /// Four constant parts of canonical SHA frame bytes, in big-endian word order.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1: usize = ZK_X509_SHA_FIXED_FRAME_MASK_V1 + 4;
+pub const ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1: usize = ZK_X509_SHA_FIXED_FRAME_MASK_V1 + 4;
 /// Four selectors for the high byte of the private CRL frame length.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1: usize =
-    ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + 4;
+pub const ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1: usize = ZK_X509_SHA_FIXED_FRAME_CONSTANT_V1 + 4;
 /// Four selectors for the low byte of the private CRL frame length.
-pub(crate) const ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1: usize =
-    ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + 4;
+pub const ZK_X509_SHA_FIXED_FRAME_LENGTH_LOW_V1: usize = ZK_X509_SHA_FIXED_FRAME_LENGTH_HIGH_V1 + 4;
 const CERTIFICATE_TBS_CALL_START_V1: usize = 0;
 const CRL_TBS_CALL_V1: usize = 3;
 const CRL_COMMITMENT_CALL_V1: usize = 4;
@@ -1960,8 +1958,10 @@ fn padded_words_v1(
         return Err(ZkX509ShaCallBusStarkErrorV1::LengthOrPadding);
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|word| u32::from_be_bytes(word.try_into().expect("four-byte SHA word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_be_bytes(*word))
         .collect())
 }
 #[cfg(test)]

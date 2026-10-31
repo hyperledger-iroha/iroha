@@ -1027,9 +1027,9 @@ fn build_sha256_word_circuit_unchecked_v1(
     #[cfg(test)]
     let private_allocations = (builder.words.as_ptr(), builder.operations.as_ptr());
     let mut state = SHA256_INITIAL_STATE_V1.map(|word| builder.allocate(word));
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         let mut schedule = Vec::with_capacity(64);
-        for bytes in block.chunks_exact(4) {
+        for bytes in block.as_chunks::<4>().0 {
             schedule.push(builder.input(u32::from_be_bytes(
                 bytes.try_into().expect("four-byte SHA-256 word"),
             )));

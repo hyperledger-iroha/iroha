@@ -645,10 +645,8 @@ fn parameters_are_context_inputs_only_v1(
                     angles = next;
                 }
                 Punct(b'>') if depth == 0 && angles != 0 => angles -= 1,
-                Punct(b':') if depth == 0 && angles == 0 => {
-                    if colon.replace(index).is_some() {
-                        return false;
-                    }
+                Punct(b':') if depth == 0 && angles == 0 && colon.replace(index).is_some() => {
+                    return false;
                 }
                 _ => {}
             }
