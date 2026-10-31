@@ -2383,7 +2383,9 @@ fn admitted_numeric_copy_preserves_signed_canonical_limbs_and_scale() {
         Numeric::new(1, MAX_DECIMAL_SCALE),
         Numeric::new(signed_maximum(), 0),
         Numeric::new(
-            signed_maximum().checked_neg().expect("representable negative maximum"),
+            signed_maximum()
+                .checked_neg()
+                .expect("representable negative maximum"),
             MAX_DECIMAL_SCALE,
         ),
     ] {

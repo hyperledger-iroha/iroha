@@ -24,7 +24,8 @@ touching `roadmap.md` items or replying to behaviour questions.
 | Format Rust code | `cargo fmt --all` *(edition 2024)* |
 | Test a single crate | `cargo test -p <crate>` |
 | Run one test | `cargo test -p <crate> <test_name> -- --nocapture` |
-| Swift SDK tests | From `IrohaSwift/`, run `swift test` |
+| Check this machine's tools | `make doctor` |
+| Swift SDK tests | From the repository root, run `python3.12 scripts/test_swift_local.py` |
 
 ## Workflow Fundamentals
 
@@ -38,8 +39,8 @@ touching `roadmap.md` items or replying to behaviour questions.
   so docs always describe current behaviour.
 - Add at least one unit test for every new or modified function. Prefer inline
   `#[cfg(test)]` modules or the crate’s `tests/` folder depending on scope.
-- After finishing work, update `status.md` with a short summary and reference
-  relevant files; keep `roadmap.md` focused on items that still need work.
+- Update `status.md` and `roadmap.md` only when current health, blockers or
+  outstanding outcomes change; replace entries in place rather than appending.
 
 ## Implementation Guardrails
 
@@ -85,8 +86,9 @@ touching `roadmap.md` items or replying to behaviour questions.
   in cuneiform rather than phonetic transliterations.
 
 ### Testing & Tooling Expectations
-- Run the relevant test suites locally (`cargo test`, `swift test`,
-  integration harnesses) and document the commands in the PR testing section.
+- Run the relevant test suites locally (`cargo test`,
+  `python3.12 scripts/test_swift_local.py`, integration harnesses) and document the
+  commands in the PR testing section.
 - Keep CI guard scripts (`ci/*.sh`) and dashboards in sync with new telemetry.
 - For proc-macros, pair unit tests with `trybuild` UI tests to lock diagnostics.
 
@@ -99,8 +101,8 @@ touching `roadmap.md` items or replying to behaviour questions.
    appear.
 4. Telemetry, dashboards, and alert definitions reference any new metrics or
    error codes.
-5. `status.md` includes a short summary referencing the relevant files and
-   roadmap section.
+5. `status.md` and `roadmap.md` reflect any change to current health or outstanding
+   outcomes.
 
 Following this checklist keeps roadmap execution auditable and ensures every
 agent contributes evidence that other teams can trust.

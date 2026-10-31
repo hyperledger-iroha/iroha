@@ -522,6 +522,17 @@ def test_core_custody_mutations_have_distinct_source_owners():
         "HC147": {"query/native_receipts/amx_read.rs"},
         "HC148": {"query/native_receipts/amx_read.rs"},
         "HC149": {"sumeragi/amx/native.rs"},
+        "HC491": {"state.rs"},
+        "HC492": {"smartcontracts/isi/world/parameter_validation.rs"},
+        "HC493": {"sumeragi/runtime_availability.rs"},
+        "HC494": {"sumeragi/driver/mod.rs"},
+        "HC495": {"smartcontracts/isi/sccp/conservation.rs"},
+        "HC496": {"smartcontracts/isi/sccp/forgery.rs"},
+        "HC497": {"smartcontracts/isi/privacy.rs"},
+        "HC972": {"smartcontracts/isi/sccp/settle.rs"},
+        "HC973": {"smartcontracts/isi/sccp/escrow/preflight.rs"},
+        "HC974": {"execution_attempt.rs"},
+        "HC975": {"state/asset_uid/binding_custody.rs"},
     }
     registered = gate.index_mutations(gate.CORE_MUTATIONS)
     source = gate.REPO / "crates/iroha_core/src"
@@ -881,7 +892,7 @@ def test_core_registry_refusal_gate_requires_native_fee_host_and_parliament_cont
     assert not gate.has_switch("HC30")
 
 
-def test_core_decode_gate_requires_credit_and_both_native_worker_original_source_controls():
+def test_core_decode_gate_requires_original_source_and_sccp_policy_controls():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC32"]
     assert rule.tests == (
         "validation_fee_rewards::tests::original_fee_credit_alias_decode_refusal_preserves_balance_and_retries",
@@ -903,10 +914,80 @@ def test_core_decode_gate_requires_credit_and_both_native_worker_original_source
         'smartcontracts::isi::kaigi::relay_typed_deferral_tests::primary_alias_refusal_preserves_original_registration_and_retry',
         'execution_attempt::tests::json_scoped_refusal_preserves_original_context_source_and_retry',
         'smartcontracts::isi::kaigi::relay_typed_deferral_tests::live_manifest_dependency_refusal_preserves_original_route_and_retry',
+        'smartcontracts::isi::asset::isi::sccp_balance_tests::asset_policy_decode_distinguishes_invalid_bytes_from_local_resources',
+        'state::asset_uid::sccp_decode_tests::binding_roster_and_usage_keep_decoder_refusals_separate_from_malformed_state',
+        'smartcontracts::isi::asset_uid::tests::sccp_uid_preflight_keeps_original_decode_refusal_out_of_pending_credit_results',
+        'smartcontracts::isi::sccp::settle::tests::uid::sccp_enrolled_precheck_retains_original_decode_refusal_without_movement',
+        'smartcontracts::isi::sccp::settle::tests::uid::sccp_enrollment_categories_forward_original_uid_fi_and_system_decode_refusals',
+        'state::retail_daily_limit_state::tests::sccp_retail_reads_preserve_decoder_refusals_and_reject_malformed_rows',
+        'smartcontracts::isi::asset::isi::sccp_balance_tests::sccp_fx_custody_guards_preserve_decoder_refusals',
+        'smartcontracts::isi::asset::isi::sccp_balance_tests::sccp_scope_and_domain_gates_preserve_original_sns_decode_refusals',
+        'smartcontracts::isi::sccp::settle::tests::sorafs::sccp_unrelated_sorafs_reserve_decode_refusal_aborts_release_without_pending_credit_refusal',
+        'smartcontracts::isi::sorafs_reserve::tests::sccp_reserve_guard_preserves_terminal_and_predecessor_decode_owners',
+        'smartcontracts::isi::sorafs_moderation::tests::sccp_unrelated_moderation_challenge_decode_refusal_defers_full_precheck',
+        'smartcontracts::isi::sorafs_moderation::tests::sccp_moderation_nested_challenge_case_and_outcome_readers_keep_original_refusal',
     )
     assert not rule.scenarios
     assert gate.has_switch("HC32", core=True)
     assert not gate.has_switch("HC32")
+
+
+
+@pytest.mark.parametrize("identifier,controls", [
+    ("HC972", (
+        ("smartcontracts::isi::sccp::settle::tests::inbound_local_capacity_refusal_never_records_a_pending_credit_reason",
+         "HC972 local inbound refusal must not write a pending-credit reason",
+         "crates/iroha_core/src/smartcontracts/isi/sccp/settle/tests.rs"),
+        ("smartcontracts::isi::sccp::settle::tests::refund_local_capacity_refusal_preserves_pending_reason_and_registration",
+         "HC972 local refund refusal must not write a pending-credit reason",
+         "crates/iroha_core/src/smartcontracts/isi/sccp/settle/tests.rs"),
+    )),
+    ("HC973", (
+        ("smartcontracts::isi::sccp::escrow::preflight::tests::bounded_inputs_keep_exact_original_charges_until_drop_and_unwind",
+         "HC973 preflight account backing must retain the original allocation pool",
+         "crates/iroha_core/src/smartcontracts/isi/sccp/escrow/preflight.rs"),
+    )),
+    ("HC974", (
+        ("state::asset_uid::sccp_decode_tests::sccp_policy_controls_wait_only_for_original_pool_and_retry_after_release",
+         "HC974 policy decoder controls must refuse on the original exhausted pool",
+         "crates/iroha_core/src/state/asset_uid.rs"),
+    )),
+    ("HC975", (
+        ("state::asset_uid::binding_custody::tests::sccp_binding_graph_capacity_preserves_original_refusal_before_uid_escape",
+         "HC975 transaction binding must refuse its actual account graph on the original pool before returning the UID",
+         "crates/iroha_core/src/state/asset_uid/binding_custody/tests.rs"),
+    )),
+    ("HC976", (
+        ("sumeragi::executor::uid_binding_retry_tests::native_worker_binding_leaf_refusal_keeps_original_bank_and_reuses_controls_after_rollback",
+         "a refused native binding must retain its original execution bank across World rollback",
+         "crates/iroha_core/src/sumeragi/executor_uid_binding_retry_tests.rs"),
+    )),
+    ("HC977", (
+        ("state::asset_uid::binding_custody::retry::tests::native_binding_finish_notifies_original_pool_only_after_bank_unlock",
+         "binding completion callbacks must run after the original bank mutex unlocks",
+         "crates/iroha_core/src/state/asset_uid/binding_custody/retry_tests.rs"),
+    )),
+    ("HC980", (
+        ("state::world_acquisition::admission_tests::world_control_capacity_refusal_stays_pending_until_original_external_release",
+         "World control admission must not satisfy its own original release wait",
+         "crates/iroha_core/src/state/world_acquisition/admission_tests.rs"),
+    )),
+    ("HC982", (
+        ("smartcontracts::isi::sccp::escrow::preflight::tests::complete_release_inputs_refuse_without_refunding_an_admitted_prefix",
+         "SCCP input preparation must not satisfy its own original release wait",
+         "crates/iroha_core/src/smartcontracts/isi/sccp/escrow/preflight.rs"),
+    )),
+])
+def test_sccp_preflight_mutations_require_exact_owned_causes(identifier, controls):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[identifier]
+    assert rule.tests == tuple(name for name, _, _ in controls)
+    assert rule.causes == tuple(gate.ExpectedFailure(cause, source)
+                               for _, cause, source in controls)
+    for name, cause, source in controls:
+        body = named_rust_function((ROOT / source).read_text(), name.rsplit("::", 1)[-1])
+        assert cause in body
+    assert gate.has_switch(identifier, core=True)
+    assert not gate.has_switch(identifier)
 
 
 def test_core_decode_refusal_classifier_gate_retains_global_and_inner_format_rejections():
@@ -3388,7 +3469,7 @@ def test_managed_bootstrap_owned_registry_has_real_hooks_and_original_named_cont
         "deploy": {
             "DEP1": "managed_amx_sources_refuse_partial_removed_and_substituted_custody_without_http_repair",
             "DEP2": "managed_amx_sources_bind_original_file_identity_and_exact_capsule_inventory",
-            "DEP3": "managed_amx_sources_recheck_release_after_retained_authentication_without_refetch",
+            "DEP3": "managed_amx_sources_recheck_deadline_after_retained_authentication_without_refetch",
             "DEP4": "managed_amx_sources_refuse_wrong_parent_height_and_expired_reads_before_publication",
             "DEP5": "managed_amx_sources_reopen_refuses_identical_g1_h2_replacement_without_http_repair",
             "DEP6": "original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution",
@@ -3714,7 +3795,10 @@ def test_native_amx_retry_visibility_is_separate_from_original_byte_custody():
     assert 'generation.checked_add(2)' in control
     assert 'fn original_paid_amx_worker_retry_reauthenticates_changed_native_parent(' in control
     assert 'fresh native successor authentication must reject a changed committed parent result' in control
-    assert 'match Self::native_header_source(&block, state, native_header, native_payload)' in validator
+    assert re.search(
+        r'match Self::native_header_source\(\s*&block,\s*state,\s*native_header,\s*native_payload,\s*successor_context,\s*\)',
+        validator,
+    )
     assert 'source_generation: source.generation' in validator
     assert '.validate_native_pristine_control_owner(' in validator
     assert '| HC167 |' in specification
@@ -3955,6 +4039,10 @@ def test_retained_predecessor_mutations_bind_original_descriptor_kernel_and_exac
     implementation = (source / owner).read_text()
     assert 'all(test, sumeragi_core_mutation = "' + mutation + '")' in implementation
     controls = (source / "state/publication/retained_rows/predecessor_tests.rs").read_text()
+    if mutation == "HC175":
+        cause = "HC175 later work refusal must retain completed predecessor descriptors"
+        assert rule.causes == (gate.ExpectedFailure(cause, "crates/iroha_core/src/state/publication/retained_rows/predecessor_tests.rs"),)
+        assert cause in named_rust_function(controls, name)
     assert "fn " + name + "(" in controls
     assert '#[path = "predecessor_tests.rs"]' in implementation
     assert "allocations_during" in controls
@@ -4138,7 +4226,10 @@ def test_completed_world_cut_mutation_uses_actual_worker_and_original_final_shel
     compact = re.sub(r"\s+", "", publication)
     assert 'all(test,sumeragi_core_mutation="HC179")' in compact
     assert "*world_cut_pending=None;" in compact
-    assert publication.index("let current_generation =") < publication.index("match world_cut_pending.take()")
+    assert publication.index("let current_generation =") < publication.index("world_cut_pending.take().map_or_else(")
+    retry = re.sub(r"\s+", "", publication.split("world_cut_pending.take().map_or_else(", 1)[1].split("match prepared", 1)[0])
+    assert "capture.prepare_retained(" in retry and "pending.try_share()" in retry
+    assert ".map_err(|(pending,error)|(Some(pending),error))" in retry
     assert "world.try_prepare_frozen_publication()" in compact
     assert "budget: budget.clone()" in cut
     assert "self.budget.try_reserve" in re.sub(r"\s+", "", cut)
@@ -4790,8 +4881,11 @@ def test_torii_pending_mutation_is_the_actual_original_query_refusal_rule():
     status = handler.split("fn reconcile_pending_pipeline_transaction_with_carrier_reader(", 1)[1].split("// A cached block outcome", 1)[0]
     assert '#[cfg(all(test, sumeragi_torii_mutation = "TOR2"))]\n    app.pipeline_status_cache.refresh_pending_blocks(&app.state);' in status
     assert status.index("canonical_transaction_read_with_authenticator") < status.index("complete_pending_from_carrier")
-    outer = handler.split("fn pipeline_status_terminal_or_state_entry_with_carrier_reader(", 1)[1].split("// Test convenience delegates", 1)[0]
-    assert outer.index("reconcile_pending_pipeline_transaction_with_carrier_reader") < outer.index("record_entry(hash.clone()")
+    outer = named_rust_function(handler, "pipeline_status_terminal_or_state_entry_with_carrier_reader")
+    assert outer.index("reconcile_pending_pipeline_transaction_with_carrier_reader(app, hash, read)?") < outer.index("pipeline_status_terminal_or_state_entry_from_outcome(app, hash, outcome)")
+    assert "record_entry" not in outer
+    publish = named_rust_function(handler, "pipeline_status_terminal_or_state_entry_from_outcome")
+    assert publish.index("outcome.map(CanonicalTransactionOutcome::into_pipeline_status_entry)") < publish.index("record_entry(*hash, entry.clone())")
     assert "read_pipeline_transaction_carrier(app, anchor)" in handler
     retained = handler.split("struct AuthenticatedPipelineCarrier {", 1)[1].split("}", 1)[0]
     assert retained.index("carrier:") < retained.index("owner:")
@@ -5243,7 +5337,7 @@ def test_native_carrier_metadata_mutation_has_actual_state_reader_controls():
 
 def test_deploy_completed_genesis_metadata_mutation_has_original_profile_owner():
     mid = "DEP7"
-    selector = "localnet::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"
+    selector = "sora_network::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"
     rule = gate.index_mutations(gate.DEPLOY_MUTATIONS)[mid]
     assert rule.tests == (selector,) and not rule.scenarios
     assert gate.has_switch(mid, deploy=True)
@@ -5260,7 +5354,7 @@ def test_deploy_completed_genesis_metadata_mutation_has_original_profile_owner()
     assert 'let values = IDS' in build
     row = re.findall(r"^\| " + mid + r" \|.*$", (ROOT / "specs/sumeragi.md").read_text(), re.MULTILINE)
     assert len(row) == 1 and selector in row[0]
-    native = (source / "src/localnet/private_root.rs").read_text()
+    native = (source / "src/sora_network/private_root.rs").read_text()
     assert "fn " + selector.rsplit("::", 1)[1] + "(" in native
 
 
@@ -6196,7 +6290,7 @@ def test_kaigi_relay_refusals_use_the_same_owned_hc32_classifier():
         'state::deserialize::kaigi_relay_typed_deferral_tests::restored_allowlist_refusal_retains_original_snapshot_and_retry',
     )
     assert rule.tests[7:13] == required
-    assert len(rule.tests) == 19
+    assert len(rule.tests) == 31
     source = (ROOT / 'crates/iroha_core/src/smartcontracts/isi/kaigi.rs').read_text()
     for begin, end in [
         ('fn decode_stored_relay_registration(', 'fn decode_stored_relay_feedback('),
@@ -6254,7 +6348,9 @@ def test_fallible_world_constructor_mutation_owns_the_single_public_result_bound
     for selector in required:
         assert controls.count('fn '+selector.rsplit('::', 1)[1]+'(') == 1
     assert 'try_new_owned(' in controls and 'consumed_before_retry' in controls
-    assert 'original.release_wait(), expected.release_wait()' in controls
+    assert 'assert_eq!(original, expected_refusal)' in controls
+    assert 'release: original_wait' in controls and 'release: expected_wait' in controls
+    assert 'assert_eq!(original_wait, expected_wait)' in controls
     assert 'json.get().as_ptr(), pointer' in controls
     rows = [row for row in (ROOT / 'specs/sumeragi.md').read_text().splitlines()
             if row.startswith('| HC221 |')]
@@ -6284,7 +6380,7 @@ def test_kaigi_sns_refusals_use_original_sns_owner_and_shared_hc32():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)['HC32']
     required = ('smartcontracts::isi::kaigi::relay_typed_deferral_tests::lineage_refusal_preserves_original_relay_retirement_and_retry', 'smartcontracts::isi::kaigi::relay_typed_deferral_tests::primary_alias_refusal_preserves_original_registration_and_retry')
     assert tuple(name for name in rule.tests if name in required) == required
-    assert len(rule.tests) == 19
+    assert len(rule.tests) == 31
     source = (ROOT / 'crates/iroha_core/src/smartcontracts/isi/kaigi.rs').read_text()
     for begin, end in [
         ('fn resolve_active_kaigi_account_with_graph(', 'fn accounts_share_active_lineage('),
@@ -6310,7 +6406,7 @@ def test_json_scoped_attempt_delegates_original_error_to_existing_hc32_owner():
     positive = 'execution_attempt::tests::json_scoped_refusal_preserves_original_context_source_and_retry'
     negative = 'execution_attempt::tests::json_stale_scoped_refusal_keeps_its_original_tag_without_retry_authority'
     assert tuple(name for name in rule.tests if name == positive) == (positive,)
-    assert len(rule.tests) == 19
+    assert len(rule.tests) == 31
     assert negative not in rule.tests
     source = (ROOT / 'crates/iroha_core/src/execution_attempt.rs').read_text()
     start = source.index('pub(crate) fn json_decode_attempt_error<E>(')
@@ -6333,7 +6429,7 @@ def test_json_scoped_attempt_delegates_original_error_to_existing_hc32_owner():
 def test_live_manifest_dependency_refusal_uses_original_world_bridge_and_hc32():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)['HC32']
     required = 'smartcontracts::isi::kaigi::relay_typed_deferral_tests::live_manifest_dependency_refusal_preserves_original_route_and_retry'
-    assert tuple(name for name in rule.tests if name == required) == (required,) and len(rule.tests) == 19
+    assert tuple(name for name in rule.tests if name == required) == (required,) and len(rule.tests) == 31
     owner = ROOT / 'crates/iroha_core/src/smartcontracts/isi/kaigi/relay_lifecycle_guard_v1.rs'
     source = owner.read_text().split('#[cfg(test)]', 1)[0]
     assert source.count('validate_indexed_kaigi_dependency(') == 1
@@ -6660,6 +6756,8 @@ def test_terminal_verification_slot_mutation_has_exact_owner_and_both_native_con
     ))
     rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
     assert rule.tests == selectors and not rule.scenarios
+    cause = "a late terminal result refusal must retain its earlier receipt slot instead of self-waking"
+    assert rule.causes == tuple(gate.ExpectedFailure(cause, "crates/iroha_core/src/sumeragi/certified_chain/terminal_selection/tests.rs") for _ in selectors)
     assert gate.has_switch(mid, core=True)
     for family in ({}, {"model": True}, {"daemon": True}, {"sdk": True},
                    {"deploy": True}, {"torii": True}, {"norito": True}):
@@ -6683,6 +6781,7 @@ def test_terminal_verification_slot_mutation_has_exact_owner_and_both_native_con
     assert all(tests.count("fn " + name.rsplit("::", 1)[1] + "(") == 1
                for name in selectors)
     control = tests.split("fn terminal_late_result_slot(", 1)[1]
+    assert cause in named_rust_function(tests, "terminal_late_result_slot")
     for requirement in ("reader.certified_terminal_amx(3)", "wait_for_release(&mut registration)",
                         "Poll::Pending", "Poll::Ready(())", "SharedSignedBlock::ptr_eq",
                         "original.allocation_refusal()", "baseline + occupied_bytes",
@@ -6701,8 +6800,8 @@ def test_terminal_verification_slot_mutation_has_exact_owner_and_both_native_con
 @pytest.mark.parametrize("statuses,verdict", [
     (("ok", "ok"), "survived"),
     (("FAILED", "FAILED"), "killed_by_test"),
-    (("FAILED", "ok"), "killed_by_test"),
-    (("ok", "FAILED"), "killed_by_test"),
+    (("FAILED", "ok"), "error"),
+    (("ok", "FAILED"), "error"),
     (("ignored", "FAILED"), "error"),
     (("FAILED", "ignored"), "error"),
     (("missing", "FAILED"), "error"),
@@ -6717,12 +6816,19 @@ def test_terminal_verification_slot_kill_requires_complete_native_accounting(
     monkeypatch.setattr(gate, "build", lambda *args: gate.Step(status="pass"))
     rows = [(name + "_incidental", "FAILED") if status == "incidental" else (name, status)
             for name, status in zip(rule.tests, statuses) if status != "missing"]
-    code, output = exact_control_output(rows)
+    code, output = causal_control_output(rule, rows)
     selected_cargo_results(monkeypatch, code, output, names=tuple(name for name, _ in rows))
     result = gate.evaluate(SimpleNamespace(core=True, target_dir=tmp_path,
                           timeout_test=900, fast=False), tmp_path, rule)
     assert result["verdict"] == verdict, result
     assert result["named_tests"] == list(rule.tests)
+    if verdict == "survived":
+        assert result["named"]["status"] == "pass"
+        assert "causal_failures" not in result["named"]
+    elif all(status in ("ok", "FAILED") for status in statuses):
+        assert result["named"]["causal_failures"] == {
+            name: status == "FAILED" for name, status in zip(rule.tests, statuses)
+        }
 
 
 @pytest.mark.parametrize("mid,name,retirement", [
@@ -8815,7 +8921,12 @@ def test_geometry_claim_watch_release_retains_original_cleanup_and_default_stack
         "signal.released.send_replace(true)", "self.signal.ready.swap(true, Ordering::AcqRel)",
     ):
         assert obligation in claim
-    assert "gate.end_publication()" in lease and "gate.end_publication()" in retained
+    cleanup = named_rust_function(lease, "take_cleanup")
+    assert ".map(crate::kura::lane_geometry::RawGeometryClaimGate::end_publication)" in cleanup
+    compact_cleanup = re.sub(r"\s+", "", cleanup)
+    assert compact_cleanup.index("self.claims.take()") < compact_cleanup.index("fences:[")
+    assert cleanup.count(".map(PublicationGuard::release_deferred)") == 4
+    assert "releases.claims.append(gate.end_publication())" in named_rust_function(retained, "release_into")
     assert "try_merge_into(batch)" in lease
     assert "try_scoped_publication_lease" in retained
     assert "publication: bool" in claim and "scope_count" not in claim
@@ -10899,9 +11010,10 @@ def test_original_publication_owner_mutations_use_current_causal_boundaries(iden
         assert physical.index("thread.join()") < physical.index("drop(failures);") < physical.index("\n    first")
         assert "calls.recv_timeout(Duration::from_millis(30))" in body
         executable_body = rust_index.mask(body)
-        joined = re.search(r"\blet\s+joined\s*=\s*thread\s*\.\s*join\s*\(\s*\)\s*;", executable_body)
+        joined = re.search(r"\blet\s+(\w+)\s*=\s*thread\s*\.\s*join\s*\(\s*\)\s*;", executable_body)
         assert joined is not None
         assert executable_body.index("release.send(())") < joined.start() < body.index(json.dumps(cause))
+        assert joined.end() < executable_body.index(f"assert!({joined.group(1)}.is_ok());") < body.index(json.dumps(cause))
     elif identifier == "HC423":
         assert "full_turn&&live_handle.status()" in "".join(body.split())
         assert "Duration::from_secs(1)" in body
@@ -10928,6 +11040,77 @@ def test_obsolete_map_publication_mutation_is_replaced_by_original_join_ownershi
     controls = (ROOT / "crates/iroha_core/src/sumeragi/driver/tests/threaded_retirement.rs").read_text()
     assert "an original pending startup must exclude its publication until every acquired worker is physically joined" in controls
     assert "a still-owned retiring driver must exclude its original pending publication from lifecycle continuation" in controls
+
+
+def test_committed_root_fee_projection_mutation_binds_execution_policy_and_actual_payments():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC396"]
+    selectors = (
+        "executor::settlement_replay::tests::committed_global_fee_policy_prevents_local_schedule_rejecting_payment",
+        "executor::settlement_replay::tests::committed_global_fee_policy_prevents_local_schedule_changing_paid_receipt",
+    )
+    source = "crates/iroha_core/src/executor/settlement_replay_tests.rs"
+    causes = (
+        "a node-local schedule cannot reject the same authorized payment",
+        "the exact same input must publish the same monetary receipt",
+    )
+    assert rule.tests == selectors and not rule.scenarios
+    assert rule.causes == tuple(gate.ExpectedFailure(cause, source) for cause in causes)
+    root = ROOT / "crates/iroha_core/src"
+    owners = {path.relative_to(root).as_posix() for path in root.rglob("*.rs")
+              if re.search(r'sumeragi_core_mutation\s*=\s*"HC396"', path.read_text())}
+    assert owners == {"executor/root_fees.rs"}
+    fee_source = (root / "executor/root_fees.rs").read_text()
+    policy = named_rust_function(fee_source, "captured_execution_policy")
+    assert policy.count('sumeragi_core_mutation = "HC396"') == 1
+    assert 'if cfg!(all(test, sumeragi_core_mutation = "HC396"))' in policy
+    assert policy.index("return Ok(local);") < policy.index("original\n")
+    assert ".root_fees()" in policy and '.ok_or("original committed root fee policy is absent")' in policy
+    admission = named_rust_function(fee_source, "execution_policy")
+    assert "captured_execution_policy(execution_parameters(transaction), &transaction.nexus.fees)" in admission
+    executor = (root / "executor.rs").read_text()
+    for function in ("charge_nexus_fees", "validate_root_fee_policy"):
+        body = named_rust_function(executor, function)
+        assert "let original_parameters = root_fees::execution_parameters(state_transaction).clone();" in body
+        assert "root_fees::captured_execution_policy(" in body
+        assert "&original_parameters," in body and "&state_transaction.nexus.fees," in body
+        assert body.index("let original_parameters") < body.index("root_fees::captured_execution_policy(") < body.index("root_fees::effective(")
+    controls = (ROOT / source).read_text()
+    for limit, selector in enumerate(selectors, 1):
+        body = named_rust_function(controls, selector.rsplit("::", 1)[-1])
+        assert f"global_fee_policy_payment({limit});" in body
+    payment = named_rust_function(controls, "global_fee_policy_payment")
+    assert "independent.genesis().hash(), original.genesis().hash()" in payment
+    assert "independent.state().nexus.write().fees.base_fee = 2_u32.into();" in payment
+    assert "independent.commit(vec![transaction.clone()])" in payment
+    assert "output.result.nexus_fee_receipt()," in payment and "Some(receipt)," in payment
+    assert all(json.dumps(cause) in payment for cause in causes)
+
+
+@pytest.mark.parametrize("mid", ["HC175", "HC232", "HC396"])
+@pytest.mark.parametrize("defect", ["none", "unrelated", "wrong-source", "missing-terminal", "all-pass", "first-passes", "abort", "timeout"])
+def test_restored_owner_mutations_require_exact_completed_causal_failure(monkeypatch, tmp_path, mid, defect):
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)[mid]
+    passing = set(range(len(rule.tests))) if defect == "all-pass" else {0} if defect == "first-passes" else set()
+    rows = [(name, "ok" if index in passing else "FAILED") for index, name in enumerate(rule.tests)]
+    if defect == "missing-terminal":
+        rows.pop()
+    code, output = causal_control_output(rule, rows)
+    if defect == "unrelated":
+        output = output.replace(rule.causes[0].cause, "unrelated fixture failure", 1)
+    elif defect == "wrong-source":
+        output = output.replace(rule.causes[0].source + ":123:", "foreign.rs:123:", 1)
+    elif defect == "abort":
+        code = -6
+    elif defect == "timeout":
+        code = None
+    monkeypatch.setattr(gate, "has_switch", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *_args: gate.Step(status="pass"))
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    result = gate.evaluate(SimpleNamespace(core=True, target_dir=tmp_path, timeout_test=900, fast=False), tmp_path, rule)
+    verdict = "killed_by_test" if defect == "none" else "survived" if len(passing) == len(rule.tests) else "error"
+    assert result["verdict"] == verdict, result
+    if defect == "none":
+        assert result["named"]["causal_failures"] == {name: True for name in rule.tests}
 
 
 @pytest.mark.parametrize("identifier", ["HC422", "HC423", "HC424", "HC425", "HC426"])
@@ -11140,8 +11323,12 @@ def test_original_proposal_read_lifecycle_has_one_explicit_owner_and_no_historic
     registry = (lanes / "registry.rs").read_text()
     cleanup = named_rust_function(registry, "clean_cancelled_proposal_reads")
     compact_cleanup = re.sub(r"\s+", "", cleanup)
-    assert "Arc::ptr_eq(&original.store,&store)" in compact_cleanup
-    assert "Arc::strong_count(&original.store)==2" in compact_cleanup
+    # Cancelled-read cleanup preserves Ready registration; only a cancelled, unshared
+    # Opening is removed. Actual read owners retire after releasing the registry lock.
+    assert "StoreSlot::Ready(store)=>Some(Arc::clone(&store.store))" in compact_cleanup
+    assert "letcancelled=matches!(slot,StoreSlot::Opening(opening,owners)ifowners.cancelled_request_only()&&Arc::strong_count(opening)==1);" in compact_cleanup
+    assert "letretired=ifcancelled{stores.remove(&key)}else{None};" in compact_cleanup
+    assert cleanup.index("let Some((key, ready, retired))") < cleanup.index("drop(retired);") < cleanup.index("store.release_cancelled_reads();")
     assert "store.release_cancelled_reads();" in cleanup and "drop(retired);" in cleanup
     owner = (ROOT / "crates/iroha_core/src/sumeragi/executor/payload_owner.rs").read_text()
     request = owner.split("pub(super) struct ProposalReadRequest", 1)[1].split("}", 1)[0]
@@ -11207,7 +11394,7 @@ def test_incoming_execution_uses_one_scoped_merge_algorithm_and_explicit_native_
     assert "request.admit(&state.ivm_execution_budget())" in re.sub(r"\s+", "", expansion)
     owner = (ROOT / "crates/iroha_core/src/sumeragi/executor/payload_owner.rs").read_text()
     handoff = named_rust_function(owner, "retain_incoming_lane_reads")
-    for obligation in ("references_lanes", "self.parent_applied(source)", "request.applied == self.applied", "original.instance != header.instance", "original.height != header.height", "original.view != header.origin_view", "original.block_hash != block_hash"):
+    for obligation in ("references_lanes", "self.parent_applied(source)", "request.applied == self.applied", "original.instance != header.instance", "original.height != header.height", "let origin_view_matches = original.view == header.origin_view;", "|| !origin_view_matches", "original.block_hash != block_hash"):
         assert obligation in handoff
     assert re.search(r"self\.proposal_reads\s*\.take\(\)", handoff)
     assert ".clone()" not in handoff
@@ -11221,7 +11408,7 @@ def test_incoming_execution_uses_one_scoped_merge_algorithm_and_explicit_native_
     assert execution.index("proposal_matches_header(") < execution.index("self.retain_incoming_lane_reads(")
     registry = (lanes / "registry.rs").read_text()
     completion = named_rust_function(registry, "complete_store_opening")
-    assert completion.index("self.progress_registered_opening(") < completion.index("drop(opening);") < completion.index("self.clean_cancelled_proposal_reads(false)")
+    assert completion.index("self.progress_registered_opening(") < completion.index("drop(opening);") < completion.index("self.clean_cancelled_proposal_reads()")
     readonly = (lanes / "registry/read_only.rs").read_text()
     parking = readonly.split("impl Drop for OriginalRead", 1)[1].split("/// One retained", 1)[0]
     assert parking.index("self.slot.lock()") < parking.index("read.interest.cancelled()") < parking.index("ReadSlot::Available(self.selected.take())")
@@ -11288,7 +11475,7 @@ def test_sccp_merged_custody_mutation_kill_requires_original_named_cause(
         assert result["named"]["causal_failures"] == {selector: True}
 
 
-ORIGINAL_SWEEP_CONTROLS = (('sumeragi::lanes::registry::tests::proposal_reads::cancelled_original_sweep_does_not_wait_for_new_disjoint_opening', 'original cancelled lane cleanup cannot wait for an unrelated newly registered opening'), ('sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner', 'an original lane sweep cannot retire a later same-key registration'))
+ORIGINAL_SWEEP_CONTROLS = (('sumeragi::lanes::registry::tests::proposal_reads::original_lane_sweep_does_not_wait_for_new_disjoint_opening', 'an original lane sweep cannot wait for an unrelated newly registered opening'), ('sumeragi::lanes::registry::tests::proposal_reads::original_sweep_preserves_a_later_same_key_native_owner', 'an original lane sweep cannot retire a later same-key registration'))
 
 
 def test_original_lane_sweep_binds_initial_membership_and_preserves_native_controls():
@@ -12109,3 +12296,57 @@ def test_execution_prefix_mutation_pins_actual_retained_charge_and_native_cause(
     assert "ChargedBuffer::new(1" not in source
     advance = named_rust_function(source, "advance")
     assert advance.index("original.read_block") < advance.index("prepare_execution_read_prefix_backing") < advance.index("initialize_execution_read_prefix")
+
+
+@pytest.mark.parametrize("mid,owner,control_owner,selectors,cause", [
+    ("HC488", "admission.rs", "admission.rs", (
+        "amx_relay::admission::tests::completed_early_source_cannot_starve_later_pending_admission",
+        "amx_relay::admission::tests::same_height_original_ordinals_receive_fair_admission",
+    ), "completed early source must not reacquire before the waiting later source"),
+    ("HC489", "ledger.rs", "ledger_tests.rs", (
+        "amx_relay::ledger::proof_tests::cold_journal_reset_cannot_resign_a_retained_unknown_or_applied_identity",
+    ), "original unresolved or applied custody must refuse a fresh signature after journal reset"),
+    ("HC490", "pending_custody.rs", "pending_custody/tests.rs", (
+        "amx_relay::pending_custody::tests::cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group",
+    ), "a full ordinary pool must not strand its prerequisite handoff"),
+])
+def test_pending_amx_mutations_bind_original_daemon_controls(mid, owner, control_owner, selectors, cause):
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
+    source = "crates/irohad/src/amx_relay/" + control_owner
+    assert rule.tests == selectors and not rule.scenarios
+    assert rule.causes == tuple(gate.ExpectedFailure(cause, source) for _ in selectors)
+    assert f'sumeragi_daemon_mutation = "{mid}"' in (ROOT / "crates/irohad/src/amx_relay" / owner).read_text()
+    controls = (ROOT / source).read_text()
+    for selector in selectors:
+        body = named_rust_function(controls, selector.rsplit("::", 1)[1])
+        if mid == "HC488":
+            assert "exercise_pair(" in body
+            assert cause in named_rust_function(controls, "exercise_pair")
+        else:
+            assert cause in body
+
+
+@pytest.mark.parametrize("mid", ["HC488", "HC489", "HC490"])
+@pytest.mark.parametrize("defect", ["none", "unrelated", "wrong-source", "missing-terminal", "survived", "abort", "timeout"])
+def test_pending_amx_mutations_require_completed_original_cause(monkeypatch, tmp_path, mid, defect):
+    rule = gate.index_mutations(gate.DAEMON_MUTATIONS)[mid]
+    rows = [(name, "ok" if defect == "survived" else "FAILED") for name in rule.tests]
+    if defect == "missing-terminal":
+        rows.pop()
+    code, output = causal_control_output(rule, rows)
+    if defect == "unrelated":
+        output = output.replace(rule.causes[0].cause, "unrelated fixture failure", 1)
+    elif defect == "wrong-source":
+        output = output.replace(rule.causes[0].source + ":123:", "foreign.rs:123:", 1)
+    elif defect == "abort":
+        code = -6
+    elif defect == "timeout":
+        code = None
+    monkeypatch.setattr(gate, "has_switch", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(gate, "build", lambda *_args: gate.Step(status="pass"))
+    selected_cargo_results(monkeypatch, code, output, names=rule.tests)
+    result = gate.evaluate(SimpleNamespace(daemon=True, target_dir=tmp_path, timeout_test=900, fast=False), tmp_path, rule)
+    verdict = "killed_by_test" if defect == "none" else "survived" if defect == "survived" else "error"
+    assert result["verdict"] == verdict, result
+    if defect == "none":
+        assert result["named"]["causal_failures"] == dict.fromkeys(rule.tests, True)

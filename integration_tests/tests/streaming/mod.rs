@@ -423,7 +423,7 @@ pub fn make_peer(key_pair: &KeyPair, port: u16) -> Peer {
 pub fn streaming_handle() -> StreamingHandle {
     let flags = BASE_CAPABILITIES;
     let mut codec = actual::StreamingCodec::from_defaults();
-    codec.rans_tables_path = repo_rans_tables_path();
+    codec.rans_tables_path = Some(repo_rans_tables_path());
     StreamingHandle::new()
         .with_capabilities(flags)
         .with_codec_config(&codec)
@@ -442,8 +442,8 @@ pub fn bundled_streaming_handle_with_accel(
 ) -> StreamingHandle {
     let flags = BASE_CAPABILITIES;
     let mut codec = actual::StreamingCodec::from_defaults();
-    codec.rans_tables_path = repo_rans_tables_path();
-    let max_width = load_bundle_tables_from_toml(&codec.rans_tables_path)
+    codec.rans_tables_path = Some(repo_rans_tables_path());
+    let max_width = load_bundle_tables_from_toml(repo_rans_tables_path())
         .expect("bundle tables must load for width selection")
         .max_width();
     codec.entropy_mode = EntropyMode::RansBundled;

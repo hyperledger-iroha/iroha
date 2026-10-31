@@ -8194,10 +8194,12 @@ fn main_log19_sha_base_sources_v1<'a>(
         .try_reserve_exact(ZK_X509_SHA_SEGMENT_COUNT_V1)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
-        sources.push(
-            ZkX509ShaBatchSegmentBaseSourceV1::new_v1(schedule, witnesses, segment)
-                .map_err(map_main_sha_source_error_v1)?,
-        );
+        let mut source = ZkX509ShaBatchSegmentBaseSourceV1::new_v1(schedule, witnesses, segment)
+            .map_err(map_main_sha_source_error_v1)?;
+        source
+            .retain_native_base_v1()
+            .map_err(map_main_sha_source_error_v1)?;
+        sources.push(source);
     }
     sources
         .try_into()
@@ -8380,6 +8382,11 @@ impl<'a> MainLog19BoundTraceGroupSourceV1<'a> {
             vector_v1(&self.der.base.rows),
             vector_v1(&self.der.aux_rows),
             self.sha_fixed.allocated_heap_bytes_v1(),
+            sum_v1(
+                self.sha_aux
+                    .iter()
+                    .map(ZkX509ShaBatchSegmentAuxSourceV1::retained_base_heap_bytes_v1),
+            ),
             sum_v1(
                 self.sha_aux
                     .iter()

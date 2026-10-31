@@ -1709,7 +1709,7 @@ public final class IrohaSDK: @unchecked Sendable {
         return try await toriiRestClient.getRuntimeAbiHash()
     }
 
-    public func listRuntimeUpgrades(completion: @escaping (Result<[ToriiRuntimeUpgradeListItem], Error>) -> Void) {
+    public func listRuntimeUpgrades(completion: @escaping (Result<ToriiRuntimeUpgradesSnapshot, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
@@ -1718,45 +1718,39 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func listRuntimeUpgrades() async throws -> [ToriiRuntimeUpgradeListItem] {
+    public func listRuntimeUpgrades() async throws -> ToriiRuntimeUpgradesSnapshot {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.listRuntimeUpgrades()
     }
 
-    public func proposeRuntimeUpgrade(manifest: ToriiRuntimeUpgradeManifest,
+    public func proposeRuntimeUpgrade(changeSet: ToriiRuntimeChangeSet,
+                                      provenance: [ToriiRuntimeChangeSetEndorsement] = [],
                                       completion: @escaping (Result<ToriiRuntimeUpgradeActionResponse, Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.proposeRuntimeUpgrade(manifest: manifest, completion: completion)
+        toriiRestClient.proposeRuntimeUpgrade(
+            changeSet: changeSet,
+            provenance: provenance,
+            completion: completion
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func proposeRuntimeUpgrade(manifest: ToriiRuntimeUpgradeManifest) async throws -> ToriiRuntimeUpgradeActionResponse {
+    public func proposeRuntimeUpgrade(
+        changeSet: ToriiRuntimeChangeSet,
+        provenance: [ToriiRuntimeChangeSetEndorsement] = []
+    ) async throws -> ToriiRuntimeUpgradeActionResponse {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.proposeRuntimeUpgrade(manifest: manifest)
-    }
-
-    public func activateRuntimeUpgrade(idHex: String,
-                                       completion: @escaping (Result<ToriiRuntimeUpgradeActionResponse, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.activateRuntimeUpgrade(idHex: idHex, completion: completion)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func activateRuntimeUpgrade(idHex: String) async throws -> ToriiRuntimeUpgradeActionResponse {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.activateRuntimeUpgrade(idHex: idHex)
+        return try await toriiRestClient.proposeRuntimeUpgrade(
+            changeSet: changeSet,
+            provenance: provenance
+        )
     }
 
     public func cancelRuntimeUpgrade(idHex: String,

@@ -65,8 +65,8 @@ pub use field_destination::{
     with_context_fields,
 };
 pub use prepared_scope::{
-    PreparedDecodeError, PreparedDecodeScopeError, PreparedDecodeWorkspace,
-    PreparedDecodeWorkspaceConstruction,
+    OwnedPreparedDecodeError, PreparedDecodeError, PreparedDecodeScopeError,
+    PreparedDecodeWorkspace, PreparedDecodeWorkspaceConstruction,
 };
 pub use prepared_sequence::{
     ChargedElementSequence, PreparedElementSequence, RetainedElementSequence,

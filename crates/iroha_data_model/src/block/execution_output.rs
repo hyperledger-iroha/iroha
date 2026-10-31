@@ -38,8 +38,8 @@ pub use trigger_lifecycle::{
     TriggerLifecycleActionFrameLimitsV1, TriggerLifecycleActionFrameV1,
     TriggerLifecycleActionSemanticsV1, TriggerLifecycleActionValidatorV1, TriggerLifecycleChangeV1,
     TriggerLifecycleEffectV1, TriggerLifecycleEffectsV1, TriggerLifecycleOriginV1,
-    TriggerLifecycleOwnerV1, TriggerLifecyclePolicyV1, TriggerLifecycleStateKindV1,
-    TriggerLifecycleRetryStateV1, TriggerLifecycleStateV1,
+    TriggerLifecycleOwnerV1, TriggerLifecyclePolicyV1, TriggerLifecycleRetryStateV1,
+    TriggerLifecycleStateKindV1, TriggerLifecycleStateV1,
 };
 
 const PIPELINE_CALL_DOMAIN: &[u8] = b"iroha:pipeline-invocation:v1\0";

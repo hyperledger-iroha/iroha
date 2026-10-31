@@ -861,7 +861,16 @@ impl MainKeyJoinPlanV1 {
         {
             return Err(ZkX509StarkErrorV1::ConstraintOpening);
         }
-        let policy = policy.reserve_additional_v1(Self::PRIVATE_BYTES_V1)?;
+        // Every group DEEP workspace has dropped before this serial pass. The
+        // complete finalization phase already includes the replay allowance;
+        // it covers both original target columns, native interpolation overlap
+        // and this deferred extension column. Keep the larger quotient bound
+        // as a conservative subphase charge without subtracting it a second
+        // time from device-staging headroom.
+        main_ca_resources::MainCaJointBufferPlanV1::new_v1(layout)?.check_replay_subphase_v1(
+            main_ca_resources::MainCaBufferPhaseV1::Finalization,
+            Self::PRIVATE_BYTES_V1,
+        )?;
         let length = (1 << 19) + MASK_DEGREE + 1;
         let mut deferred = ZeroizingExtensionColumnV1(Vec::new());
         deferred
@@ -1418,6 +1427,33 @@ mod tests {
             );
             assert_eq!(target, before);
         }
+    }
+
+    #[test]
+    fn key_deep_replay_fits_finalization_with_a_larger_admitted_assembly() {
+        let (layout, _) = plan_v1(4);
+        let count = (1 << 19) + MASK_DEGREE + 1;
+        // Two borrowed original targets, a conservative extra replay result,
+        // two native interpolation owners, and one deferred extension column.
+        // No key quotient numerator survives into this serial DEEP operation.
+        let deep_peak = 3 * count * 8 + 2 * (1 << 19) * 8 + count * 32 + 16 * 1024;
+        assert!(deep_peak < MainKeyJoinPlanV1::PRIVATE_BYTES_V1);
+        let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+            &layout,
+            320_000_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            policy.reserve_additional_v1(MainKeyJoinPlanV1::PRIVATE_BYTES_V1),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        ));
+        main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout)
+            .unwrap()
+            .check_replay_subphase_v1(
+                main_ca_resources::MainCaBufferPhaseV1::Finalization,
+                MainKeyJoinPlanV1::PRIVATE_BYTES_V1,
+            )
+            .unwrap();
     }
 
     #[test]

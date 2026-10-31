@@ -1472,6 +1472,10 @@ pub enum ExecutorMigrationError {
     /// A completed migration error retains its original VM fields.
     #[error("executor migration rejected: {0}")]
     Rejected(#[source] VMError),
+    /// A live obligation (escrow or lock custody, or an AMX participation) still depends on the
+    /// installed executor's authorization.
+    #[error("executor migration would strand live obligations")]
+    LiveCustody,
     /// The transaction retains the first local refusal. This notice owns no cause and cannot
     /// become a completed rejection; the outer State terminal must export the original once.
     #[error("local executor migration did not complete; original refusal retained in State")]
@@ -5395,6 +5399,22 @@ fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 impl Executor {
+    /// Identity of the exact installed executor code captured by deferred runtime consent.
+    /// Loaded instances, compilation caches and runtime-pool history do not affect execution
+    /// semantics and never enter this commitment. The executor data model is installed by
+    /// this same raw bytecode; later ordinary parameter and permission updates remain State.
+    pub(crate) fn runtime_consent_hash(&self) -> iroha_crypto::Hash {
+        const DOMAIN: &[u8] = b"iroha:runtime:executor-consent:v1\0";
+        match self {
+            Self::Initial => iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]]),
+            Self::UserProvided(loaded) => iroha_crypto::Hash::new_from_chunks(&[
+                DOMAIN,
+                &[1],
+                loaded.raw_executor.bytecode().as_ref(),
+            ]),
+        }
+    }
+
     fn resolve_pipeline_gas_asset_definition(
         state_transaction: &StateTransaction<'_, '_>,
         gas_asset_id_str: &str,
@@ -5805,32 +5825,40 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         Self::validate_root_fee_policy(state_transaction)?;
         let original_parameters = root_fees::execution_parameters(state_transaction).clone();
-        let original_fees = original_parameters.root_fees().ok_or_else(|| {
-            ValidationFail::InternalError("original committed root fee policy is absent".into())
-        })?;
-        let cfg =
-            root_fees::effective(&state_transaction.world, original_fees).map_err(|error| {
-                match error {
+        let original_fees = root_fees::captured_execution_policy(
+            &original_parameters,
+            &state_transaction.nexus.fees,
+        )
+        .map_err(|reason| ValidationFail::InternalError(reason.into()))?;
+        let cfg = match root_fees::effective(&state_transaction.world, original_fees) {
+            Ok(cfg) => cfg,
+            Err(error) => {
+                return Err(match error {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                         state_transaction.defer_execution(reason)
                     }
                     crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
                         nexus_fee_admission_error_to_validation_fail(error)
                     }
-                }
-            })?;
-        let private_scope = root_fees::private_scope(
+                });
+            }
+        };
+        let private_scope = match root_fees::private_scope(
             &state_transaction.world,
             state_transaction.current_dataspace_id,
-        )
-        .map_err(|error| match error {
-            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                state_transaction.defer_execution(reason)
+        ) {
+            Ok(scope) => scope,
+            Err(error) => {
+                return Err(match error {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        state_transaction.defer_execution(reason)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                        nexus_fee_admission_error_to_validation_fail(error)
+                    }
+                });
             }
-            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
-                nexus_fee_admission_error_to_validation_fail(error)
-            }
-        })?;
+        };
         if private_scope.is_some() && sponsor.is_some() {
             return Err(ValidationFail::NotPermitted(
                 "private-root fee sponsors require a scoped vault owner".into(),
@@ -5845,19 +5873,23 @@ impl Executor {
         } else {
             NexusFeePayer::Payer
         };
-        let asset_def = root_fees::currency(
+        let asset_def = match root_fees::currency(
             &state_transaction.world,
             &cfg,
             state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(|error| match error {
-            crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
-                state_transaction.defer_execution(reason)
+        ) {
+            Ok(asset) => asset,
+            Err(error) => {
+                return Err(match error {
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                        state_transaction.defer_execution(reason)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                        nexus_fee_admission_error_to_validation_fail(error)
+                    }
+                });
             }
-            crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
-                nexus_fee_admission_error_to_validation_fail(error)
-            }
-        })?;
+        };
         let actual_charge = FeeChargeBound {
             kind: FeeChargeKind::Nexus,
             asset_definition_id: asset_def.clone(),
@@ -5990,19 +6022,21 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         if !is_initial_genesis_context(state_transaction) {
             let original_parameters = root_fees::execution_parameters(state_transaction).clone();
-            let original_fees = original_parameters.root_fees().ok_or_else(|| {
-                ValidationFail::InternalError("original committed root fee policy is absent".into())
-            })?;
-            root_fees::effective(&state_transaction.world, original_fees).map_err(|error| {
-                match error {
+            let original_fees = root_fees::captured_execution_policy(
+                &original_parameters,
+                &state_transaction.nexus.fees,
+            )
+            .map_err(|reason| ValidationFail::InternalError(reason.into()))?;
+            root_fees::effective(&state_transaction.world, original_fees)
+                .map(|_| ())
+                .map_err(|error| match error {
                     crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
                         state_transaction.defer_execution(reason)
                     }
                     crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
                         nexus_fee_admission_error_to_validation_fail(error)
                     }
-                }
-            })?;
+                })?;
         }
         Ok(())
     }
@@ -7510,6 +7544,17 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         #[cfg(test)]
         signed_source_observation::record(transaction);
+        // The first instruction-dependent step (`specs/live_runtime_upgrades.md` §5.2): every
+        // release stops at the same top-level envelope execution can never apply (unbound, or
+        // kept opaque), before scope, fee, privacy, ballot or any other work that depends on what
+        // an instruction is. Transaction validation already walked the same envelopes against the
+        // same selection (`StateBlock::execute_signed_transaction_in_overlay`); this keeps the
+        // guarantee for every caller of the executor.
+        crate::runtime::envelope::admit_envelopes(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            transaction.instructions(),
+        )?;
         root_scope::ensure_executable_scope(state_transaction, transaction.instructions())?;
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
@@ -8667,6 +8712,19 @@ impl Executor {
         if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_)) {
             state_transaction.clear_direct_parliament_candidate_testing();
         }
+        // Resolution comes before any check that depends on what the instruction is: an
+        // envelope execution can never apply (an unbound wire ID, or one this release kept
+        // opaque) is refused with the same stable rejection by every release and every executor,
+        // and a restriction or containment holds on every path below, including the controlled
+        // lock, linked-FI and multisig paths that bypass the native dispatch table
+        // (`specs/live_runtime_upgrades.md` §5.2, §7.1).
+        crate::runtime::envelope::resolve_envelope(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            instruction,
+            || crate::runtime::obligations::step(instruction, &state_transaction.world),
+        )
+        .map_err(ValidationFail::InstructionFailed)?;
         root_scope::ensure_instruction_scope(instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
             state_transaction,
@@ -9208,6 +9266,7 @@ impl Executor {
     /// # Errors
     ///
     /// - The caller is outside initial genesis and does not hold `CanUpgradeExecutor`;
+    /// - A live escrow or lock still needs the installed executor's settlement authority;
     /// - Failed to load `raw_executor`;
     /// - Failed to prepare the IVM runtime;
     /// - Failed to execute the entrypoint of the IVM bytecode.
@@ -9227,6 +9286,15 @@ impl Executor {
                 .map_err(|_| ExecutorMigrationError::Rejected(VMError::PermissionDenied))?
         {
             return Err(ExecutorMigrationError::Rejected(VMError::PermissionDenied));
+        }
+        // A replacement can deny the original completion instructions or delete their
+        // permissions when its data model is installed. Even identical bytecode reruns
+        // migration and can change those permissions. Every live obligation (escrow, lock or
+        // AMX participation) keeps the authorization it was admitted under. TODO(§7.2): permit
+        // replacement only through captured completion executor authority or a certified
+        // obligation transfer.
+        if !crate::runtime::obligations::LiveObligations::of(&state_transaction.world).is_empty() {
+            return Err(ExecutorMigrationError::LiveCustody);
         }
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor).map_err(|error| {
@@ -10565,6 +10633,31 @@ pub mod executor_norito {
                 Executor::Initial => {}
                 _ => panic!("expected Initial variant"),
             }
+        }
+        #[test]
+        fn runtime_consent_hash_binds_installed_code_without_runtime_cache_identity() {
+            let first = denying_executor_for_testing("consent one");
+            let same = denying_executor_for_testing("consent one");
+            let other = denying_executor_for_testing("consent two");
+            assert_eq!(first.runtime_consent_hash(), same.runtime_consent_hash());
+            assert_ne!(first.runtime_consent_hash(), other.runtime_consent_hash());
+            assert_ne!(
+                first.runtime_consent_hash(),
+                Executor::Initial.runtime_consent_hash()
+            );
+            let Executor::UserProvided(loaded) = &first else {
+                panic!("user executor")
+            };
+            let expected = first.runtime_consent_hash();
+            let parameters = iroha_data_model::parameter::SmartContractParameters::default();
+            let _lease = loaded
+                .checkout_runtime_for_gas_limit(
+                    parameters.fuel().get(),
+                    parameters.memory().get(),
+                    &executor_test_budget(),
+                )
+                .unwrap();
+            assert_eq!(first.runtime_consent_hash(), expected);
         }
         #[test]
         fn net_state_hash_binds_raw_executor_and_ignores_loaded_runtime_cache() {

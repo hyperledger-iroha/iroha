@@ -375,9 +375,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::kaigi::RegisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::UnregisterKaigiRelay>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>,
-    dispatch_instruction::<runtime_upgrade::ProposeRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::ActivateRuntimeUpgrade>,
-    dispatch_instruction::<runtime_upgrade::CancelRuntimeUpgrade>,
+    dispatch_instruction::<runtime_upgrade::AttestRuntimeSupportV1>,
+    dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -867,17 +866,65 @@ define_instruction_handlers! {
         iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1
     > => CoreAuthorized,
 }
+/// Handlers of additions after the baseline that rebind an earlier wire ID to their own code
+/// (`specs/live_runtime_upgrades.md` §4, "Fix behaviour within an interface's contract"), by
+/// addition module and wire ID.
+///
+/// A release that declares such an addition (`crate::runtime::catalog::additions`) registers its
+/// handlers here; `every_rebinding_addition_registers_its_handlers` requires one for every rebound
+/// wire ID. While a selection binds the wire ID to the baseline bundle, the baseline handler keeps
+/// executing it: the binding, not the release, decides which code runs.
+static ADDITION_HANDLERS: std::sync::LazyLock<
+    std::collections::BTreeMap<
+        &'static str,
+        std::collections::BTreeMap<&'static str, InstructionHandler>,
+    >,
+> = std::sync::LazyLock::new(std::collections::BTreeMap::new);
+
+/// The handler that executes `instruction` for the `implementation` its root binds (§5.2).
+///
+/// An addition that rebinds the instruction's wire ID answers it with its own handler; every other
+/// implementation of this release, the baseline bundle and the additions that add instructions,
+/// executes the instruction type's native handler.
+fn native_handler(
+    implementation: Option<iroha_data_model::runtime::definition::DefinitionId>,
+    instruction: &InstructionBox,
+) -> Option<InstructionHandler> {
+    if let Some(implementation) = implementation
+        && let Ok(catalog) = crate::runtime::release_catalog()
+        && let Some(module) = catalog.native_module(&implementation)
+        && let Some(handlers) = ADDITION_HANDLERS.get(module)
+        && let Some(wire_id) = iroha_data_model::isi::instruction_wire_id(instruction)
+        && let Some(handler) = handlers.get(wire_id)
+    {
+        return Some(*handler);
+    }
+    NATIVE_INSTRUCTIONS
+        .get(instruction)
+        .map(|native| native.handler)
+}
+
+/// Execute one instruction under the selection its root executes at this height (§5.2).
+///
+/// Resolution comes first: every release stops at the same envelope with the same stable
+/// rejection, before any check that depends on the instruction's type. An envelope this release
+/// kept opaque never executes; once its wire ID resolves it fails with `malformed_payload`.
 pub(crate) fn execute_borrowed_instruction(
     instruction: &InstructionBox,
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
+    let implementation = crate::runtime::envelope::resolve_envelope(
+        state_transaction.world.runtime_selection.get(),
+        state_transaction._curr_block.height().get(),
+        instruction,
+        || crate::runtime::obligations::step(instruction, &state_transaction.world),
+    )?;
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;
     iroha_logger::debug!(isi=%instruction, "Executing");
-    if let Some(result) = NATIVE_INSTRUCTIONS
-        .get(instruction)
-        .and_then(|native| (native.handler)(instruction, authority, state_transaction))
+    if let Some(result) = native_handler(implementation, instruction)
+        .and_then(|handler| handler(instruction, authority, state_transaction))
     {
         return result;
     }
@@ -900,6 +947,56 @@ mod registry_dispatch_tests {
     use std::collections::BTreeSet;
     fn has_dispatch_handler(type_name: &str) -> bool {
         registered_native_instruction_type_names().contains(&type_name)
+    }
+    #[test]
+    fn every_rebinding_addition_registers_its_handlers() {
+        let catalog = crate::runtime::release_catalog().expect("release catalog");
+        for addition in &catalog.additions {
+            for wire_id in addition.rebinds.keys() {
+                assert!(
+                    ADDITION_HANDLERS
+                        .get(addition.module)
+                        .is_some_and(|handlers| handlers.contains_key(wire_id)),
+                    "addition {} rebinds {wire_id} without its own handler",
+                    addition.module
+                );
+            }
+        }
+        for module in ADDITION_HANDLERS.keys() {
+            assert!(
+                catalog
+                    .additions
+                    .iter()
+                    .any(|addition| addition.module == *module),
+                "handlers registered for {module}, which is not an addition of this release"
+            );
+        }
+    }
+    #[test]
+    fn the_bound_implementation_selects_the_handler() {
+        let instruction = InstructionBox::from(iroha_data_model::isi::Log::new(
+            iroha_data_model::level::Level::INFO,
+            "routed".into(),
+        ));
+        let native = NATIVE_INSTRUCTIONS
+            .get(&instruction)
+            .map(|native| native.handler as usize);
+        assert!(native.is_some(), "Log has a native handler");
+        let bundle = crate::runtime::release_catalog()
+            .expect("release catalog")
+            .baseline
+            .bindings[0]
+            .implementation;
+        assert_eq!(
+            native_handler(Some(bundle), &instruction).map(|handler| handler as usize),
+            native,
+            "the baseline bundle executes the native handler"
+        );
+        assert_eq!(
+            native_handler(None, &instruction).map(|handler| handler as usize),
+            native,
+            "a private primitive executes the native handler"
+        );
     }
     #[test]
     fn native_instruction_table_matches_an_ordered_registration_scan() {
@@ -1758,6 +1855,64 @@ mod tests {
                 .contains(&trigger_permission)
         );
         Ok(())
+    }
+    #[test]
+    async fn the_selection_decides_whether_an_added_instruction_executes() -> Result<()> {
+        use crate::runtime::{
+            catalog::{
+                additions::test_additions::{LOG, LOG_MODULE, LOG_WIRE_ID},
+                test_catalog,
+            },
+            change_set::PublishedDefinitions,
+        };
+        use iroha_data_model::runtime::lifecycle::RuntimeRejectionV1;
+        test_catalog::with_additions(&[LOG], || -> Result<()> {
+            let state = authenticated_instruction_state(Vec::new());
+            let network = *state.network_id_ref();
+            let log = InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::level::Level::INFO,
+                "added after the baseline".into(),
+            ));
+            let header = ordinary_instruction_header(&state);
+            let height = header.height().get();
+            let mut state_block = state.block(header);
+            {
+                let mut state_transaction = state_block.transaction();
+                let err = execute_borrowed_instruction(&log, &ALICE_ID, &mut state_transaction)
+                    .expect_err("an addition executes only once a change set activates it");
+                assert_eq!(
+                    err,
+                    InstructionExecutionError::Runtime(RuntimeRejectionV1::DefinitionInactive {
+                        wire_id: LOG_WIRE_ID.to_owned(),
+                    })
+                );
+            }
+            let catalog = crate::runtime::release_catalog()?;
+            let current = state_block.world.runtime_selection.get().clone();
+            let change = catalog.activation(
+                LOG_MODULE,
+                &current,
+                &PublishedDefinitions(&state_block.world.runtime_definitions),
+                network,
+                height,
+                [0; 32],
+            )?;
+            let applied = change.apply(
+                &current,
+                &PublishedDefinitions(&state_block.world.runtime_definitions),
+            )?;
+            for (definition, descriptor) in applied.published {
+                state_block
+                    .world
+                    .runtime_definitions
+                    .insert(definition, descriptor);
+            }
+            *state_block.world.runtime_selection.get_mut() = applied.selection;
+            let mut state_transaction = state_block.transaction();
+            execute_borrowed_instruction(&log, &ALICE_ID, &mut state_transaction)
+                .expect("the addition's implementation executes its instruction");
+            Ok(())
+        })
     }
     #[test]
     async fn default_executor_rejects_invalid_instruction_placeholders() -> Result<()> {

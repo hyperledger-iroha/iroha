@@ -47,21 +47,43 @@ for (const [name, Client] of CLIENTS) {
     assert.equal(calls, 0);
   });
 
-  test(`${name}: account capabilities reject retired, missing, and inconsistent wire shapes`, async () => {
+  test(`${name}: account capabilities ignore metadata without choosing a signer or reordering algorithms`, async () => {
+    for (const allowed_signing of [["bls_normal", "ed25519", "secp256k1"], ["secp256k1"]]) {
+      const advertised = { ...CAPABILITIES, allowed_signing };
+      const client = new Client("https://torii.example", {
+        fetchImpl: async () => json({
+          ...advertised,
+          default_signing: "ed25519",
+          metadata: { operator: "example", revision: 1, supported: true, notes: [null] },
+        }),
+      });
+      assert.deepEqual(await client.getAccountCapabilities(), advertised);
+    }
+  });
+
+  test(`${name}: account capabilities require each discovery field despite unrelated metadata`, async () => {
+    for (const field of Object.keys(CAPABILITIES)) {
+      const advertised = { ...CAPABILITIES, default_signing: "ed25519", metadata: CAPABILITIES };
+      delete advertised[field];
+      const client = new Client("https://torii.example", { fetchImpl: async () => json(advertised) });
+      await assert.rejects(client.getAccountCapabilities(), undefined, field);
+    }
+  });
+
+  test(`${name}: account capabilities reject missing and inconsistent required fields`, async () => {
     const invalid = [
-      null, [], { ...CAPABILITIES, extra: true }, { ...CAPABILITIES, network_id: undefined },
+      null, [], { ...CAPABILITIES, network_id: undefined },
       { ...CAPABILITIES, schema_version: 2 }, { ...CAPABILITIES, schema_version: "1" },
       { ...CAPABILITIES, network_id: "809574f5-fee7-5e69-bfcf-52451e42d50f" },
       { ...CAPABILITIES, network_id: NETWORK_ID.toLowerCase() },
       { ...CAPABILITIES, network_id: ` ${NETWORK_ID}` }, { ...CAPABILITIES, network_id: {} },
       { ...CAPABILITIES, network_prefix: "369" }, { ...CAPABILITIES, network_prefix: -1 },
       { ...CAPABILITIES, network_prefix: 65536 }, { ...CAPABILITIES, network_prefix: 0.5 },
-      { ...CAPABILITIES, allowed_signing: [] }, { ...CAPABILITIES, allowed_signing: ["secp256k1", "ed25519"] },
+      { ...CAPABILITIES, allowed_signing: [] },
+      { ...CAPABILITIES, allowed_signing: [], default_signing: "ed25519" },
       { ...CAPABILITIES, allowed_signing: ["ed25519", "ed25519"] },
       { ...CAPABILITIES, allowed_signing: ["ed25519", "Ed25519"] },
       { ...CAPABILITIES, allowed_signing: ["ed25519", "future-algorithm"] },
-      { ...CAPABILITIES, default_signing: "secp256k1" },
-      { ...CAPABILITIES, default_hash: "blake2b-256", default_signing: undefined },
     ];
     for (const value of invalid) {
       const client = new Client("https://torii.example", { fetchImpl: async () => json(value) });
@@ -72,6 +94,8 @@ for (const [name, Client] of CLIENTS) {
   test(`${name}: account capabilities reject duplicate JSON keys and invalid UTF-8`, async () => {
     for (const body of [
       JSON.stringify(CAPABILITIES).replace('"schema_version":1', '"schema_version":1,"schema_version":1'),
+      JSON.stringify(CAPABILITIES).replace('"network_prefix":369', '"network_prefix":369,"network_prefix":42'),
+      JSON.stringify(CAPABILITIES).replace('"allowed_signing":[', '"allowed_signing":[],"allowed_signing":['),
       new Uint8Array([0xc0, 0xaf]),
     ]) {
       const client = new Client("https://torii.example", {
@@ -168,9 +192,11 @@ test("browser account capability timeout covers stalled response bodies", { time
   assert.equal(cancelled, true);
 });
 
-test("account capabilities preserve canonical tag order without an implicit signer", () => {
-  for (const allowed_signing of [["secp256k1"], ["bls_normal", "bls_small", "ml-dsa"]]) {
+test("account capabilities preserve unique canonical names without an order or signer preference", () => {
+  for (const allowed_signing of [["secp256k1"], ["bls_normal", "bls_small", "ml-dsa"], ["ml-dsa", "bls_normal"]]) {
     assert.deepEqual(normalizeAccountCapabilitiesV1({ ...CAPABILITIES, allowed_signing }).allowed_signing, allowed_signing);
   }
-  assert.throws(() => normalizeAccountCapabilitiesV1({ ...CAPABILITIES, allowed_signing: ["ml-dsa", "bls_normal"] }));
+  for (const allowed_signing of [["ed25519", "secp256k1", "ed25519"], ["ed25519 "]]) {
+    assert.throws(() => normalizeAccountCapabilitiesV1({ ...CAPABILITIES, allowed_signing }));
+  }
 });

@@ -174,7 +174,8 @@ fn select_current_state(
             .world
             .privacy_consensus_policy
             .get()
-            .current_limits.retained_root_count,
+            .current_limits
+            .retained_root_count,
         &state_transaction.world.privacy_commitments,
         &state_transaction.world.privacy_roots,
         &state_transaction.world.privacy_root_heads,

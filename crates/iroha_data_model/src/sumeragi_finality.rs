@@ -1183,6 +1183,21 @@ impl SumeragiFinalityVerifier {
             self.decisions.pop_first();
         }
     }
+    /// Start another proof walk from this owner's same independently selected signed genesis.
+    ///
+    /// Consumes only local verification progress. The exact genesis, chain, root scope,
+    /// original committee and consensus instance remain unchanged; no response selects
+    /// new authority. The returned verifier must authenticate height one's execution
+    /// again before accepting any successor. This does not rewind ledger state or
+    /// establish that a pending transaction is absent, rejected or safe to replace.
+    ///
+    /// A bounded pending-payment reader can use this when a corrected locator needs a
+    /// decision outside its retained window, and persist its new authenticated progress.
+    #[must_use]
+    pub fn into_genesis_verifier(mut self) -> Self {
+        self.decisions.clear();
+        self
+    }
     /// Oldest decision still retained from this authenticated contiguous prefix.
     /// Historical witness verification also needs its parent (except at genesis).
     /// This is local retention metadata, never evidence of ledger absence or rejection.

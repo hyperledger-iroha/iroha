@@ -305,6 +305,17 @@ extension ToriiClient {
         ToriiCollection(client: self, route: .assetDefinition(assetDefinitionId, suffix: "holders"))
     }
 
+    /// Every committed movement of one asset definition, newest first, from the node's movement
+    /// index (`/v1/assets/{definition_id}/movements`): one `ToriiAssetMovementRow` per movement,
+    /// KAGEMUSHA Loads, Unloads, fee claims and charges included. Filter on
+    /// `ToriiAssetMovementRow.Fields.fromAccountId` and `.toAccountId` for one account's movements.
+    /// A history collection, like `transactions`: a page examines a bounded number of rows, so it
+    /// may hold fewer than `limit` and still continue. While the node catches up with the committed
+    /// tip it answers `503 asset_movements_indexing` with `Retry-After`.
+    public func assetMovements(of assetDefinitionId: String) -> ToriiCollection<ToriiAssetMovementRow> {
+        ToriiCollection(client: self, route: .assetDefinition(assetDefinitionId, suffix: "movements"), isHistory: true)
+    }
+
     /// Every committed transaction, newest first (`POST /v1/transactions/query`).
     ///
     /// A history collection: `sort`, `includeTotal` and `aggregate` are
@@ -936,5 +947,145 @@ public struct ToriiAccountHistoryRow: ToriiIdentifiedRow, Equatable {
         case accountId = "account_id", counterpartyAccountId = "counterparty_account_id"
         case assetId = "asset_id", assetDefinitionId = "asset_definition_id"
         case txHash = "tx_hash", timestampMs = "timestamp_ms", resultOk = "result_ok"
+    }
+}
+
+/// Canonical non-negative decimal text: ASCII digits, no sign, exponent, leading or trailing zeros.
+private func isCanonicalMovementAmount(_ text: String) -> Bool {
+    func digits<S: StringProtocol>(_ part: S) -> Bool {
+        !part.isEmpty && part.utf8.allSatisfy { (48...57).contains($0) }
+    }
+    let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count <= 2, digits(parts[0]), parts[0] == "0" || !parts[0].hasPrefix("0") else { return false }
+    return parts.count == 1 || (digits(parts[1]) && !parts[1].hasSuffix("0"))
+}
+
+/// What one asset movement moved (`/v1/assets/{definition_id}/movements`), in the order Torii
+/// documents the kinds.
+public enum ToriiAssetMovementKind: String, Sendable, Equatable, CaseIterable {
+    /// An instruction transfer, applied batch receipt or executed multisig transfer.
+    case transfer = "TRANSFER"
+    /// Value created for an account.
+    case mint = "MINT"
+    /// Value destroyed from an account.
+    case burn = "BURN"
+    /// A KAGEMUSHA Load: payer to reserve.
+    case offlineLoad = "OFFLINE_LOAD"
+    /// A paid KAGEMUSHA Unload: reserve to the unloading account.
+    case offlineUnload = "OFFLINE_UNLOAD"
+    /// A paid KAGEMUSHA fee claim: reserve to the fee beneficiary.
+    case offlineFee = "OFFLINE_FEE"
+    /// The online charge of a KAGEMUSHA Load (payer to the charge beneficiary) or of a paid Unload
+    /// (reserve to the charge beneficiary).
+    case offlineCharge = "OFFLINE_CHARGE"
+
+    /// A KAGEMUSHA movement, read from the ledger records of the transaction that moved the value.
+    public var isOffline: Bool {
+        switch self {
+        case .transfer, .mint, .burn: false
+        case .offlineLoad, .offlineUnload, .offlineFee, .offlineCharge: true
+        }
+    }
+}
+
+/// One committed movement of an asset definition, from the node's movement index.
+///
+/// Decoding is exact, like the JS SDK's `decodeAssetMovementRow`: every field must be present, and
+/// an unknown kind, a non-canonical amount, a null account outside `MINT`/`BURN`, an `id` other than
+/// `<tx_hash>:<movement_index>` or a failed KAGEMUSHA row is rejected. A failed transaction keeps
+/// its attempted movements with `resultOk == false`; sum only successful rows for balances.
+public struct ToriiAssetMovementRow: ToriiIdentifiedRow, Equatable {
+    /// `<tx_hash>:<movement_index>`.
+    public let id: String
+    public let kind: ToriiAssetMovementKind
+    /// Creation time of the transaction, Unix milliseconds.
+    public let timestampMs: UInt64
+    /// Nil only for `.mint`.
+    public let fromAccountId: String?
+    /// Nil only for `.burn`.
+    public let toAccountId: String?
+    public let assetDefinitionId: String
+    /// Exact canonical decimal text.
+    public let amount: String
+    public let txHash: String
+    /// Signer of the transaction.
+    public let authority: String
+    public let blockHeight: UInt64
+    public let blockIndex: UInt64
+    /// Position among the transaction's movements.
+    public let movementIndex: UInt64
+    public let resultOk: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, amount, authority
+        case timestampMs = "timestamp_ms", fromAccountId = "from_account_id", toAccountId = "to_account_id"
+        case assetDefinitionId = "asset_definition_id", txHash = "tx_hash"
+        case blockHeight = "block_height", blockIndex = "block_index", movementIndex = "movement_index"
+        case resultOk = "result_ok"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func corrupt(_ key: CodingKeys, _ message: String) -> DecodingError {
+            DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: message)
+        }
+        let kindText = try container.decode(String.self, forKey: .kind)
+        guard let kind = ToriiAssetMovementKind(rawValue: kindText) else {
+            throw corrupt(.kind, "`kind` must be one of "
+                + ToriiAssetMovementKind.allCases.map(\.rawValue).joined(separator: ", ") + ", got `\(kindText)`")
+        }
+        self.kind = kind
+        /// Present, and null exactly for `absentFor`.
+        func account(_ key: CodingKeys, absentFor: ToriiAssetMovementKind) throws -> String? {
+            guard container.contains(key) else { throw corrupt(key, "`\(key.stringValue)` is required") }
+            let account = try container.decodeIfPresent(String.self, forKey: key)
+            if kind == absentFor {
+                guard account == nil else { throw corrupt(key, "`\(key.stringValue)` must be null for \(absentFor.rawValue)") }
+            } else if account?.isEmpty ?? true {
+                throw corrupt(key, "`\(key.stringValue)` may be null only for \(absentFor.rawValue)")
+            }
+            return account
+        }
+        fromAccountId = try account(.fromAccountId, absentFor: .mint)
+        toAccountId = try account(.toAccountId, absentFor: .burn)
+        amount = try container.decode(String.self, forKey: .amount)
+        guard isCanonicalMovementAmount(amount) else {
+            throw corrupt(.amount, "`amount` must be canonical decimal text, got `\(amount)`")
+        }
+        txHash = try container.decode(String.self, forKey: .txHash)
+        guard txHash.utf8.count == 64, txHash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw corrupt(.txHash, "`tx_hash` must be 64 lowercase hex digits")
+        }
+        timestampMs = try container.decode(UInt64.self, forKey: .timestampMs)
+        blockHeight = try container.decode(UInt64.self, forKey: .blockHeight)
+        guard blockHeight >= 1 else { throw corrupt(.blockHeight, "`block_height` must be at least 1") }
+        blockIndex = try container.decode(UInt64.self, forKey: .blockIndex)
+        movementIndex = try container.decode(UInt64.self, forKey: .movementIndex)
+        id = try container.decode(String.self, forKey: .id)
+        guard id == "\(txHash):\(movementIndex)" else { throw corrupt(.id, "`id` must be `<tx_hash>:<movement_index>`") }
+        assetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
+        authority = try container.decode(String.self, forKey: .authority)
+        guard !assetDefinitionId.isEmpty, !authority.isEmpty else {
+            throw corrupt(.authority, "`asset_definition_id` and `authority` must be non-empty")
+        }
+        resultOk = try container.decode(Bool.self, forKey: .resultOk)
+        guard resultOk || !kind.isOffline else {
+            throw corrupt(.resultOk, "\(kind.rawValue) rows come only from successful transactions")
+        }
+    }
+
+    /// Filterable fields. History collections cannot be sorted. Bounds on `blockHeight` in the
+    /// filter's top-level conjunction also bound the node's walk.
+    public enum Fields {
+        public static let id = ToriiField("id")
+        public static let kind = ToriiField("kind")
+        public static let timestampMs = ToriiField("timestamp_ms")
+        public static let fromAccountId = ToriiField("from_account_id")
+        public static let toAccountId = ToriiField("to_account_id")
+        public static let amount = ToriiField("amount")
+        public static let txHash = ToriiField("tx_hash")
+        public static let authority = ToriiField("authority")
+        public static let blockHeight = ToriiField("block_height")
+        public static let resultOk = ToriiField("result_ok")
     }
 }

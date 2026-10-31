@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,10 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalSorafsProviderGovernance,
     GovernanceProposalValidationFeePayoutLifecycle,
     GovernanceProposalValidationFeePolicy,
+    GovernanceRuntimeChangeSet,
+    GovernanceRuntimeNotice,
+    GovernanceRuntimeUpgradeAction,
+    GovernanceRuntimeUpgradeActionKind,
 )
 
 CONTRACT_ADDRESS = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
@@ -144,6 +149,28 @@ def _policy() -> dict[str, object]:
     }
 
 
+def _runtime_change_set(effective_height: int) -> dict[str, object]:
+    return {
+        "network": NETWORK_ID,
+        "root": {"kind": "Universal", "content": None},
+        "predecessor": "5a" * 32,
+        "successor": "6b" * 32,
+        "effective_height": effective_height,
+        "publish": [],
+        "transitions": [],
+        "qualification": "3c" * 32,
+    }
+
+
+def _runtime_upgrade(action: dict[str, object]) -> dict[str, object]:
+    return {
+        "proposal_operator": CANONICAL_OWNER,
+        "action": action,
+        "notice": {"blocks": 3_600, "ms": 1_209_600_000, "approval_cushion_ms": 86_400_000},
+        "proposed_ms": 1_700_000_000_000,
+    }
+
+
 def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
     return [
         (
@@ -159,21 +186,7 @@ def _variants() -> list[tuple[str, dict[str, object], type[object]]]:
         ),
         (
             "RuntimeUpgrade",
-            {
-                "manifest": {
-                    "name": "runtime-v1",
-                    "description": "first release",
-                    "abi_version": 1,
-                    "abi_hash": [34] * 32,
-                    "added_syscalls": [],
-                    "added_pointer_types": [],
-                    "start_height": 10,
-                    "end_height": 20,
-                    "sbom_digests": [],
-                    "slsa_attestation": "",
-                    "provenance": [],
-                }
-            },
+            _runtime_upgrade({"kind": "Schedule", "content": _runtime_change_set(240)}),
             GovernanceProposalRuntimeUpgrade,
         ),
         (
@@ -360,16 +373,28 @@ def test_proposal_kind_rejects_unknown_and_retired_shapes(payload: object) -> No
 
 def test_attempt_proposal_u64_numbers_obey_the_exact_json_boundary() -> None:
     maximum = (1 << 53) - 1
-    runtime = copy.deepcopy(_variants()[1][1])
-    runtime["manifest"]["start_height"] = maximum - 1  # type: ignore[index]
-    runtime["manifest"]["end_height"] = maximum  # type: ignore[index]
+    runtime = _runtime_upgrade({"kind": "Schedule", "content": _runtime_change_set(maximum)})
+    runtime["notice"] = {"blocks": maximum, "ms": maximum, "approval_cushion_ms": maximum}
+    runtime["proposed_ms"] = maximum
     GovernanceProposalKind.from_payload({"kind": "RuntimeUpgrade", "payload": runtime})
 
-    runtime["manifest"]["end_height"] = maximum + 1  # type: ignore[index]
-    with pytest.raises(TypeError, match="9007199254740991"):
-        GovernanceProposalKind.from_payload(
-            {"kind": "RuntimeUpgrade", "payload": runtime}
-        )
+    over_bound = [
+        ("effective_height", ("action", "content", "effective_height")),
+        ("notice.blocks", ("notice", "blocks")),
+        ("notice.ms", ("notice", "ms")),
+        ("notice.approval_cushion_ms", ("notice", "approval_cushion_ms")),
+        ("proposed_ms", ("proposed_ms",)),
+    ]
+    for label, path in over_bound:
+        oversized = copy.deepcopy(runtime)
+        target: dict[str, object] = oversized
+        for key in path[:-1]:
+            target = target[key]  # type: ignore[assignment]
+        target[path[-1]] = maximum + 1
+        with pytest.raises(TypeError, match=rf"{label} must be an integer in 0\.\.9007199254740991"):
+            GovernanceProposalKind.from_payload(
+                {"kind": "RuntimeUpgrade", "payload": oversized}
+            )
 
     musubi = copy.deepcopy(_variants()[5][1])
     musubi["value"]["target"]["home_dataspace"] = maximum + 1  # type: ignore[index]
@@ -377,6 +402,123 @@ def test_attempt_proposal_u64_numbers_obey_the_exact_json_boundary() -> None:
         GovernanceProposalKind.from_payload(
             {"kind": "MusubiRegistryGovernance", "payload": musubi}
         )
+
+
+def test_runtime_upgrade_schedule_types_the_change_set_envelope() -> None:
+    change_set = _runtime_change_set(240)
+    change_set["publish"] = [{"kind": "Interface", "content": {"wire_id": "example"}}]
+    proposal = GovernanceProposalKind.from_payload(
+        {
+            "kind": "RuntimeUpgrade",
+            "payload": _runtime_upgrade({"kind": "Schedule", "content": change_set}),
+        }
+    )
+
+    payload = proposal.payload
+    assert isinstance(payload, GovernanceProposalRuntimeUpgrade)
+    assert payload.proposal_operator == CANONICAL_OWNER
+    assert payload.notice == GovernanceRuntimeNotice(3_600, 1_209_600_000, 86_400_000)
+    assert payload.proposed_ms == 1_700_000_000_000
+    assert payload.action.kind is GovernanceRuntimeUpgradeActionKind.SCHEDULE
+    assert payload.action.change_set_id is None
+    scheduled = payload.action.change_set
+    assert isinstance(scheduled, GovernanceRuntimeChangeSet)
+    assert scheduled.network_id == NETWORK_ID
+    assert scheduled.predecessor == "5a" * 32
+    assert scheduled.successor == "6b" * 32
+    assert scheduled.effective_height == 240
+    assert scheduled.change_set["publish"][0]["content"]["wire_id"] == "example"
+    assert set(scheduled.change_set) == set(change_set)
+
+
+def test_runtime_upgrade_cancel_names_the_scheduled_change_set() -> None:
+    proposal = GovernanceProposalKind.from_payload(
+        {
+            "kind": "RuntimeUpgrade",
+            "payload": _runtime_upgrade({"kind": "Cancel", "content": "dd" * 32}),
+        }
+    )
+
+    action = proposal.payload.action  # type: ignore[union-attr]
+    assert action == GovernanceRuntimeUpgradeAction(
+        GovernanceRuntimeUpgradeActionKind.CANCEL, None, "dd" * 32
+    )
+
+
+def _retired_runtime_manifest(payload: dict[str, object]) -> None:
+    payload.clear()
+    payload["manifest"] = {"name": "runtime-v1", "abi_version": 1, "start_height": 10}
+
+
+def _set_runtime_action(**action: object) -> Callable[[dict[str, object]], None]:
+    def mutate(payload: dict[str, object]) -> None:
+        payload["action"] = action
+
+    return mutate
+
+
+def _set_runtime_change_set_field(field: str, value: object) -> Callable[[dict[str, object]], None]:
+    def mutate(payload: dict[str, object]) -> None:
+        payload["action"]["content"][field] = value  # type: ignore[index]
+
+    return mutate
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (_retired_runtime_manifest, "missing required field `action`"),
+        (
+            lambda payload: payload.__setitem__("manifest", {}),
+            "contains unknown field `manifest`",
+        ),
+        (
+            _set_runtime_action(kind="Activate", content="dd" * 32),
+            "action.kind must be Schedule or Cancel",
+        ),
+        (
+            _set_runtime_action(kind="Cancel", content="0x" + "dd" * 31),
+            "action.content must be exactly 32 lowercase hexadecimal bytes",
+        ),
+        (_set_runtime_action(kind="Cancel"), "missing required field `content`"),
+        (
+            _set_runtime_change_set_field("root", {"kind": "DataSpace", "content": 7}),
+            "root must be the universal root",
+        ),
+        (
+            _set_runtime_change_set_field("root", {"kind": "Universal"}),
+            "root is missing required field `content`",
+        ),
+        (
+            _set_runtime_change_set_field("successor", "6B" * 32),
+            "successor must be exactly 32 lowercase hexadecimal bytes",
+        ),
+        (
+            _set_runtime_change_set_field("network", "hash:" + "A5" * 32 + "#0000"),
+            "network is not a canonical Iroha hash",
+        ),
+        (
+            _set_runtime_change_set_field("transitions", None),
+            "transitions must be an array",
+        ),
+        (
+            _set_runtime_change_set_field("manifest", {}),
+            "contains unknown field `manifest`",
+        ),
+        (
+            lambda payload: payload["notice"].pop("approval_cushion_ms"),  # type: ignore[attr-defined]
+            "notice is missing required field `approval_cushion_ms`",
+        ),
+    ],
+)
+def test_runtime_upgrade_rejects_retired_and_malformed_payloads(
+    mutate: Callable[[dict[str, object]], object], message: str
+) -> None:
+    payload = _runtime_upgrade({"kind": "Schedule", "content": _runtime_change_set(240)})
+    mutate(payload)
+
+    with pytest.raises(TypeError, match=message):
+        GovernanceProposalKind.from_payload({"kind": "RuntimeUpgrade", "payload": payload})
 
 
 def test_closed_nested_action_tags_reject_unknown_values() -> None:

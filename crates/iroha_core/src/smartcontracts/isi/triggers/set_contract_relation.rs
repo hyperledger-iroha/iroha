@@ -212,7 +212,10 @@ impl Work {
         clippy::result_large_err,
         reason = "Preserve the original trigger codec and publication refusal owners without allocating on the failure path"
     )]
-    pub(super) fn next<I: Iterator>(&mut self, rows: &mut I) -> Result<Option<I::Item>, TriggerContractError> {
+    pub(super) fn next<I: Iterator>(
+        &mut self,
+        rows: &mut I,
+    ) -> Result<Option<I::Item>, TriggerContractError> {
         self.prepay(CURSOR_NEXT)?;
         #[cfg(test)]
         {

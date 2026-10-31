@@ -5,16 +5,19 @@ new patches follow the same default gates.
 
 ## Quickstart targets
 
+- Run `make doctor` once to check the machine: Rust toolchain, ripgrep, Python and the
+  comparison branch.
 - Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute:
-  1. `cargo fmt --all`
-  2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
-  3. `cargo build --workspace --locked`
-  4. `cargo test --workspace --locked`
-  5. `swift test` from `IrohaSwift/`
-- `cargo test --workspace` is long-running (often hours). For quick iterations,
-  use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift`, then run the full
-  sequence before shipping.
-- If `cargo test --workspace` stalls on build directory locks, rerun with
+  1. `cargo fmt --all -- --check`
+  2. classification of the changed packages against the branch named in
+     `ci/default_base_ref`
+  3. `--locked` clippy, build and tests for the affected packages
+  4. `python3.12 scripts/test_swift_local.py` when the Swift SDK is affected
+- Use `--base REF` to compare against another branch, and `--full` to run every Rust
+  lane and the Swift suite, which is long-running (often hours). Changes to scripts,
+  workflows, fixtures or root build files select everything, because their reach is
+  not known. Use `--skip-tests` or `--skip-swift` for quick iterations.
+- If a run stalls on build directory locks, rerun with
   `scripts/dev_workflow.sh --target-dir target/codex-tests` (or set
   `CARGO_TARGET_DIR` to an isolated path) to avoid contention.
 - All cargo steps use `--locked` to respect the repository policy of keeping
@@ -25,8 +28,9 @@ new patches follow the same default gates.
 
 - `make check-agents-guardrails` (or `ci/check_agents_guardrails.sh`) fails if a
   branch modifies `Cargo.lock`, introduces new workspace members, or adds new
-  dependencies. The script compares the working tree and `HEAD` against
-  `origin/main` by default; set `AGENTS_BASE_REF=<ref>` to override the base.
+  dependencies. The script compares the working tree and `HEAD` against the branch
+  named in `ci/default_base_ref`, as every guard here does; set
+  `AGENTS_BASE_REF=<ref>` to override the base.
 - `make check-dependency-discipline` (or `ci/check_dependency_discipline.sh`)
   diffs `Cargo.toml` dependencies against the base and fails on new crates; set
   `DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2>` to acknowledge intentional

@@ -300,16 +300,22 @@ fn canonical_arithmetic_auxiliary_runs_stay_within_existing_native_batch() {
 #[test]
 #[ignore = "actual maximum bound sources, native dispatch and log22 commitment/opening parity; optimized qualification"]
 fn actual_arithmetic_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
-    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Arithmetic);
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Arithmetic, 5);
 }
 
 #[test]
 #[ignore = "actual maximum value auxiliary dispatch, seeded commitment/DEEP/opening parity"]
 fn actual_value_auxiliary_dispatch_preserves_seeded_commitments_deep_and_openings() {
-    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256ValueBus);
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256ValueBus, 5);
 }
 
-fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
+#[test]
+#[ignore = "actual bound log16 sources and every adjacent registration boundary"]
+fn actual_log16_auxiliary_dispatch_preserves_every_registration_boundary() {
+    actual_auxiliary_dispatch_case_v1(SegmentAdapterIdV1::P256Window, 3);
+}
+
+fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1, group: usize) {
     use crate::privacy_engines::zk_x509::{
         main_assembly::build_zk_x509_main_trace_assembly_v1,
         relation::{
@@ -373,7 +379,7 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         .registered_segments
         .iter()
         .find(|registration| {
-            registration.segment.adapter == adapter && registration.trace_group == 5
+            registration.segment.adapter == adapter && registration.trace_group == group
         })
         .copied()
         .unwrap();
@@ -383,30 +389,67 @@ fn actual_auxiliary_dispatch_case_v1(adapter: SegmentAdapterIdV1) {
         .native_columns_v1(
             &layout,
             MainTraceColumnKindV1::Aux,
-            5,
+            group,
             boundary - 3..boundary + 5,
         )
         .unwrap();
     for (offset, actual) in crossed.iter().enumerate() {
         let (registration, local) = registered_main_group_column_v1(
             &layout,
-            5,
+            group,
             MainTraceColumnKindV1::Aux,
             boundary - 3 + offset,
         )
         .unwrap();
         assert_eq!(
             **actual,
-            *bound.native_aux_column_v1(registration, local).unwrap()
+            *sources
+                .native_column_v1(&layout, MainTraceColumnKindV1::Aux, registration, local)
+                .unwrap()
         );
     }
     drop(crossed);
     for range in [0..0, 0..9, usize::MAX..usize::MAX] {
         assert!(
             sources
-                .native_columns_v1(&layout, MainTraceColumnKindV1::Aux, 5, range)
+                .native_columns_v1(&layout, MainTraceColumnKindV1::Aux, group, range)
                 .is_err()
         );
+    }
+    if group == 3 {
+        let registrations = layout
+            .registered_segments
+            .iter()
+            .filter(|registration| registration.trace_group == group)
+            .collect::<Vec<_>>();
+        for registration in registrations.iter().take(registrations.len() - 1) {
+            let boundary = registration.aux_end().unwrap();
+            let columns = sources
+                .native_columns_v1(
+                    &layout,
+                    MainTraceColumnKindV1::Aux,
+                    group,
+                    boundary - 3..boundary + 5,
+                )
+                .unwrap();
+            assert_eq!(columns.len(), 8);
+            for (offset, actual) in columns.iter().enumerate() {
+                let (registration, local) = registered_main_group_column_v1(
+                    &layout,
+                    group,
+                    MainTraceColumnKindV1::Aux,
+                    boundary - 3 + offset,
+                )
+                .unwrap();
+                assert_eq!(
+                    **actual,
+                    *sources
+                        .native_column_v1(&layout, MainTraceColumnKindV1::Aux, registration, local)
+                        .unwrap()
+                );
+            }
+        }
+        return;
     }
     // Use two adjacent real auxiliary columns on the unchanged native19/common22
     // domains. These exact seeded masks feed real Merkle roots and opening replay.

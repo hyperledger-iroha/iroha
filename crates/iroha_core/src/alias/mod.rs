@@ -155,7 +155,8 @@ fn authority_has_permission(
         .map(std::string::ToString::to_string)
         .collect();
     let account_present = world.accounts().get(authority).is_some();
-    iroha_logger::warn!(
+    // An account without this permission is an ordinary answer, not a node problem.
+    iroha_logger::debug!(
         authority = %authority,
         account_present,
         target_name = %target.name(),

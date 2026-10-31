@@ -391,7 +391,7 @@ def build_summary(refs: Sequence[EnvReference]) -> Dict[str, Dict[str, object]]:
 
 def write_json(output: Path, refs: Sequence[EnvReference]) -> None:
     data = {
-        "generated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
         "root": REPO_ROOT.name,
         "total_refs": len(refs),

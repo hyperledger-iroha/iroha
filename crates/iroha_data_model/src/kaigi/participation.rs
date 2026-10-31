@@ -16,7 +16,7 @@ use norito::{
     Decode, Encode,
     derive::{JsonDeserialize, JsonSerialize},
 };
-use std::{collections::BTreeSet, fmt};
+use std::fmt;
 
 /// One original account's current participation sequence in a permanent call.
 #[derive(
@@ -146,16 +146,21 @@ impl KaigiPrivateParticipationLedgerV1 {
         {
             return Err(KaigiPrivateParticipationErrorV1::InvalidState);
         }
-        let mut commitments = BTreeSet::new();
-        if self
-            .entries
-            .iter()
-            .filter_map(|entry| entry.active_commitment)
-            .any(|commitment| !commitments.insert(commitment))
-        {
+        let commitments = self.sorted_active_commitments();
+        if commitments.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(KaigiPrivateParticipationErrorV1::InvalidState);
         }
         Ok(())
+    }
+
+    fn sorted_active_commitments(&self) -> Vec<KaigiAuthorizationScalarV1> {
+        let mut commitments = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.active_commitment)
+            .collect::<Vec<_>>();
+        commitments.sort_unstable();
+        commitments
     }
 
     /// Check that every live subject owns exactly one current roster entry.
@@ -169,13 +174,11 @@ impl KaigiPrivateParticipationLedgerV1 {
         roster: &[KaigiAuthorizationScalarV1],
     ) -> Result<(), KaigiPrivateParticipationErrorV1> {
         self.validate()?;
-        let active: BTreeSet<_> = self
-            .entries
-            .iter()
-            .filter_map(|entry| entry.active_commitment)
-            .collect();
-        let observed: BTreeSet<_> = roster.iter().copied().collect();
-        if roster.len() != observed.len() || active != observed {
+        let mut observed = roster.to_vec();
+        observed.sort_unstable();
+        // `validate` already rejected duplicate live commitments, so equality
+        // with the sorted live set also rejects duplicate roster entries.
+        if observed != self.sorted_active_commitments() {
             return Err(KaigiPrivateParticipationErrorV1::InvalidState);
         }
         Ok(())

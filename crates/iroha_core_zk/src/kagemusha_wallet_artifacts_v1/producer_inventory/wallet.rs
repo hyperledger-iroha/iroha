@@ -156,6 +156,60 @@ impl AuthenticatedProducerInventoryV1 {
         originals: &mut dyn OriginalSourceV1,
         config: ReadConfig,
     ) -> Result<QualifiedWalletSourcesV1, WalletSourcesErrorV1> {
+        self.qualify_compiled(
+            installed,
+            native_finality,
+            originals,
+            config,
+            false,
+            |_| {},
+            |_| {},
+        )
+    }
+
+    /// Qualify like [`Self::qualify_wallet_builtin`], and also require every
+    /// member's actual current source to reconstruct its pinned source fingerprint.
+    ///
+    /// This is the comparison each proof rebuild makes on a phone, made here for
+    /// the whole graph with no commitment work. A build or installation check runs
+    /// it so that a circuit changed without new keys fails before it ships. The
+    /// observers see each Q program and route start and complete in index order,
+    /// so a refusal names the program or route whose source differs.
+    ///
+    /// # Errors
+    /// As [`Self::qualify_wallet_builtin`]; a member whose actual source differs
+    /// from its installed key fails with that member's source error.
+    pub fn qualify_wallet_builtin_verifying_sources(
+        self,
+        installed: &InstalledVerifierPackV1,
+        native_finality: &SumeragiFinalityVerifier,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        q_progress: impl FnMut(QQualificationProgressV1),
+        route_progress: impl FnMut(OperationQualificationProgressV1),
+    ) -> Result<QualifiedWalletSourcesV1, WalletSourcesErrorV1> {
+        self.qualify_compiled(
+            installed,
+            native_finality,
+            originals,
+            config,
+            true,
+            q_progress,
+            route_progress,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn qualify_compiled(
+        self,
+        installed: &InstalledVerifierPackV1,
+        native_finality: &SumeragiFinalityVerifier,
+        originals: &mut dyn OriginalSourceV1,
+        config: ReadConfig,
+        verify_sources: bool,
+        q_progress: impl FnMut(QQualificationProgressV1),
+        route_progress: impl FnMut(OperationQualificationProgressV1),
+    ) -> Result<QualifiedWalletSourcesV1, WalletSourcesErrorV1> {
         let mut clock = OpeningClockV1::start();
         require_installation(
             self.installation(),
@@ -169,6 +223,11 @@ impl AuthenticatedProducerInventoryV1 {
             &super::builtin::profile_bytes(self.inventory(), installed.verifier().scheme())?,
             None,
         )?;
+        let profile = if verify_sources {
+            profile.verifying_sources()
+        } else {
+            profile
+        };
         let admission = super::builtin::Admission::Builtin(&profile);
         let scope = SourceScopeV1::from_scheme(installed.verifier().scheme())?;
         let sigma_parameters = [
@@ -186,12 +245,7 @@ impl AuthenticatedProducerInventoryV1 {
         )?;
         let sigma = clock.lap();
         let q = self.qualify_q_programs_with_admission(
-            installed,
-            &sigmas,
-            originals,
-            config,
-            |_| {},
-            admission,
+            installed, &sigmas, originals, config, q_progress, admission,
         )?;
         let q_stage = clock.lap();
         // Batch-local: dropped when this qualification returns, never retained.
@@ -201,7 +255,7 @@ impl AuthenticatedProducerInventoryV1 {
             &q,
             originals,
             config,
-            |_| {},
+            route_progress,
             admission,
             &descriptors,
         )?;

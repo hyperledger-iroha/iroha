@@ -1605,26 +1605,36 @@ SCCP_LC_SLACK_MS)`; at execution they run against the parent state with
 - **Ingress** (Torii and P2P) checks, in this order: exact lengths and parsing
   (step 1); the record lookup and E0 (steps 2–3); step 5 without the signature
   (the E1/E2 classification or the anchor lookup and witness path);
-  deduplication against state (step 7); an LRU of the last 4 096 submissions
-  that reached the pairing, keyed by `(g, m, signers, SHA-256(σ))`, which drops
-  exact repeats; a node-wide token bucket of 8 pairings per second with a
-  burst of 32; and only then the pairing (step 4). A submission enters the LRU
-  only once it holds a pairing token, and leaves it again when the pairing
-  meets a local refusal (allocation, cancellation, deadline or unavailable
-  source). A refused signature therefore never shadows the genuine certificate
-  of the same `(g, m, signers)`, and neither a rate refusal nor a local
-  failure can deny a later genuine retry: the forgers themselves must not be
-  able to suppress the evidence of their forgery. Refused submissions never
-  reach the queue. Per-peer rate limits stay.
+  deduplication against state (step 7); deduplication against the queue: a
+  queued transaction that carries the same `(g, m, signers)` holds its pending
+  claim (§4.19), so the submission is refused whatever its signature; an LRU
+  of up to 4 096 submissions whose pairing is running or refused the
+  signature, keyed by `(g, m, signers, SHA-256(σ))`, which drops exact
+  repeats; a node-wide token bucket of 8 pairings per second with a burst of
+  32; and only then the pairing (step 4). A submission enters the LRU only
+  once it holds a pairing token, and leaves it again when the pairing meets a
+  local refusal (allocation, cancellation, deadline or unavailable source) or
+  verifies the signature. Genuine evidence is thus remembered only by state
+  that lasts exactly as long as its reason: the pending claim while a
+  transaction carrying it is queued, and step 7 once that transaction
+  commits. A transaction that leaves the queue uncommitted (expiry, eviction,
+  or a refusal after the pairing) leaves nothing behind, so the next
+  submission reaches the pairing again however often anyone repeated the
+  evidence meanwhile. A refused signature never shadows the genuine
+  certificate of the same `(g, m, signers)`, and neither a rate refusal nor a
+  local failure can deny a later genuine retry: the forgers themselves must
+  not be able to suppress the evidence of their forgery. Refused submissions
+  never reach the queue. Per-peer rate limits stay.
 - **The node's own keeper is not throttled.** The LRU and the bucket are
   shared by every remote submitter, so a distributed flood of fabricated
   evidence that passes the cheap checks could keep the bucket empty and delay
   genuine evidence. Submissions of the node's in-node keeper (§4.13.4,
   `Queue::push_local_keeper_with_state`) therefore skip both and still run
-  every other ingress check and the full pairing. The keeper verifies each
-  discovered certificate before it submits it and is paced by its bounded
-  destination watch; it retires a certificate that step 7 finds duplicate.
-  Torii, P2P gossip and every other source keep the throttled path.
+  every other ingress check, including the queue deduplication, and the full
+  pairing. The keeper verifies each discovered certificate before it submits
+  it and is paced by its bounded destination watch; it retires a certificate
+  that step 7 finds duplicate. Torii, P2P gossip and every other source keep
+  the throttled path.
 - **R-EX.** A block that contains a `ForgeryEvidence` transaction that fails at
   execution is `Invalid`. The verdict is deterministic, from the signed content
   and the parent state. An honest builder runs steps 1–7 against the certified
@@ -6631,7 +6641,7 @@ resource and process failures are errors, never killed mutations.
 | SC20: L5 destination progress (§4.8) | HC251 keeps clearance work on its bounded pending index; HC322 omits original destination clearance | Current-candidate causal qualification required |
 | SC21: immutable registration attribution and penalty coordinates | HC230, HC250 and HC305 bind captured members to original global registrations; HC318 substitutes forged height; HC319 substitutes the current peer-key mapping | Current-candidate causal qualification required |
 | SC24: pending evidence and anchor retention (§4.11) | HC292, HC293 | None for these registered pruning faults |
-| SC25: per-revision forgery hold (§4.10) | HC283 protects registration after forgery; HC285 protects monotone attestation; HC323 omits the forgery-floor hold; HC489 lets unresolved signers evade the hold | Current-candidate causal qualification required |
+| SC25: per-revision forgery hold (§4.10) | HC283 protects registration after forgery; HC285 protects monotone attestation; HC323 omits the forgery-floor hold; HC496 lets unresolved signers evade the hold | Current-candidate causal qualification required |
 
 HC276–HC290, HC292–HC293 and HC295–HC307 additionally cover exact CREATE2 binding, the proposal launch gate,
 permanent quarantine and forged-mint payload binding, reconciliation reservation
@@ -6639,9 +6649,9 @@ and refused-credit accounting, fast-pause seat/quorum/expiry/lift/suspension,
 signed instruction custody, bounded control enactment, original-parent due work,
 clock budget feasibility, bundled advance expectations and local verifier
 refusal. HC326 rejects substituted TON minter, wallet or bucket code even
-after the caller recomputes its matching StateInit address. HC488 makes the
+after the caller recomputes its matching StateInit address. HC495 makes the
 §4.15 balanced-entry guard accept a transition whose escrow balance and
-recorded backing changed differently. HC489 makes §4.9 step 7 call evidence
+recorded backing changed differently. HC496 makes §4.9 step 7 call evidence
 with no new slashable signer a duplicate before any record names its
 generation. These are
 source-owned hooks, not aliases for every open SC row.
@@ -6674,9 +6684,9 @@ still missing is named separately from external authority and audit gates.
 |---|---|
 | Payload codec, amounts, transfer leaf, commitment tree, history accumulator (§3.1–§3.5) | Implemented. The sole 199-byte control leaf binds both pause tracks and the exact cause; Rust/Python fixtures and applicable Solidity/Tolk replays cover payloads, tree/history paths and confusion negatives. |
 | `RecordSccpMessage`, signed-only execution and the ABI closure for contract-originated sends (§4.4) | Implemented. Original-parent degradation, forgery/quarantine and pause checks precede monetary, nonce and leaf writes. Tests cover signed instruction custody, nested/repeated dispatch refusal and rollback. |
-| Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Every value instruction and Parliament enactment runs under the §4.15 balanced-entry guard (HC488). Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
+| Inbound prove and settle, self-claim, bounce, holds, liability shortfall, escrow guards, voids, refunds, strands and FASTPQ-bounded refunds (§4.12, §4.15, §4.16) | Implemented consumers with original proof/work custody, exact payload binding, pending-refund reservation, floor-rounded U256 reconciliation payouts and refusal without advancing claims. Every value instruction and Parliament enactment runs under the §4.15 balanced-entry guard (HC495). Component tests cover accounting and rollback. End-to-end monetary enactment requires the external qualified Parliament ballot. |
 | Exempt eligibility predicate and charge-on-failure (§4.19) | Implemented. Shared original-parent predicates, class quotas, keeper advances, Keepalive and R-EX have queue/execution and charge-on-failure tests. |
-| Light clients for Ethereum, BSC and TON; profiles, aged-proof builders and RPC hygiene (§4.13, §8) | Implemented verifiers/builders and Parliament-enacted profile activation, with bootstrap, advance, inclusion, equivocation and profile-switch tests. External gates: BSC/TON live-RPC captures and verified real light-client fork dates. Synthetic and transport fixtures do not complete those captures. |
+| Light clients for Ethereum, BSC and TON; profiles, aged-proof builders and RPC hygiene (§4.13, §8) | Implemented verifiers/builders and Parliament-enacted profile activation, with bootstrap, advance, inclusion, equivocation and profile-switch tests. Read-only Ethereum/BSC/TON bootstrap and verified advance captures replay through the native verifiers. Monetary deployment and verified parameters for each future light-client fork remain open; captures do not qualify settlement. |
 | Light-client keeper task | Implemented key generation, independent advances, due Keepalive, bounded destination watches and L5 progress. Tests cover evidence retention, endpoint rotation and unavailable duties. Live deployment and source-network progress qualification remain external. |
 | Parliament SCCP payload, subjects, attempts, `OnlyGenesis` grant and CLI (§4.14.3, §4.14.5) | Implemented actions, subject heads and atomic staged route installation, including destination-word reservation and activation events. Tests cover installation, rollback and both launch gates. Parliament validates its certificate and derives its id; SCCP consumes only that id, the effect hash and casting-open `GovernanceAnchorV1` (`s0`). The genuine ballot/anchor producer is external and its absence refuses enactment. |
 | Torii read routes and Rust SDK (§6) | Implemented native finality, committee, message/control/history, anchor, hold, fast-pause, reconciliation and coalition-floor views with request admission and retained custody. Evidence projection borrows validated records into fallible bounded response encoding; tests cover malformed shapes and restrictive input decode limits without panics. |
@@ -6702,23 +6712,62 @@ still missing is named separately from external authority and audit gates.
 
 **Allocation boundary.** Original-pool custody is implemented for the penalty,
 forgery, certified-prefix, BLS and snapshot paths listed above. Settlement
-preflight retains owned asset identifiers and quantities, including its cumulative
-source-control amount, and uses shared asset/UID policy scratch. Those allocations
-do not yet establish original-pool admission or physical-refusal handling. This
-SCCP settlement boundary is distinct from the generic S8/H3 custody owned by
-the Sumeragi workstream. Any added local resource refusal must remain a local
-Failed outcome and must not become a deterministic pending-credit reason.
+preflight now retains original-pool owners for its asset identifiers, converted
+and cumulative credit quantities, and checked balance results. Preparation precedes
+implicit recipient registration; capacity and allocator refusals from these owners
+propagate without becoming a deterministic pending-credit reason. UID preflight uses the
+same ordered holdings and calendar checks as execution without encoding unused
+usage writes. Scope discovery borrows the original aliases and retains its two
+smallest distinct data space ids inline. Transaction-aware SNS, asset metadata,
+UID/enrollment/FI, retail, FX custody, SoraFS reserve and moderation record reads
+preserve original decoder refusals
+instead of returning a deterministic credit refusal. Canonical transaction reads
+of UID/enrollment/FI, retail and SoraFS policy state preserve the canonical header
+and scope rules. Native execution admits one shared pair of policy decoder
+controls before opening World and reuses their physical backing with distinct
+attempt identities. Standalone transactions admit their pair after validating
+the frame header. Native UID binding reads retain an original-pool preparation
+bank outside disposable World transactions:
+it owns one admitted raw path/row capture, both decoder controls and the actual
+single-key or multisig account graph. Every retry compares the current State row
+and canonical key before returning the fixed UID. Completed and partial read
+occurrences survive rollback. Unfinished metadata appends and exact empty
+path/row backing are retained before the next World acquisition; empty backing
+is filled only by a matching authoritative read. A fully captured decoder can
+advance before that acquisition, without granting a UID or rejection before the
+actual current-row check. The inline bank mutex preserves poisoning on unwind. Cancellation retires the original backing. Native successor
+authentication also retains the original parent receipt and independently
+signed genesis; both the header check and pristine schedule capture recheck the
+current State cut, physical source slots and transported context. World control
+admission includes its refund scope in the same atomic concrete demand.
+Standalone callers have no native retry job and retire their one-shot decode.
+Settlement release input construction admits the complete bounded account/key,
+charge-ledger and quantity demand atomically before materializing any prefix.
+These owners cover specific retry stages. Schedule capture, later World maps,
+scoped settlement preflight prefixes and other execution allocations can still retire
+before their original refusal reaches the scheduler. Complete scheduler
+no-self-wake qualification remains open with that execution-owner boundary. Shared decoded policies, UID rosters/maps, policy
+encoding and remaining retail scratch still require original-pool custody and
+complete physical-refusal handling; the complete settlement boundary remains open. This work is distinct from the
+generic S8/H3 State custody owned by the Sumeragi workstream.
 
 **Order of work.** Qualify the current combined candidate: workspace compilation/tests/lint,
 registered mutations with named causal kills, native four-peer targets and
 cross-language replay. The reference, native producers/readers, route
 installation, narrow Parliament consumer interface and destination tooling
-already have source and tests. Integrate the Parliament owner's qualified
-post-quantum ballot and authenticated shared pass without opening either gate
-early. External release work comprises EIP-2537 glue, Tolk binding,
+already have source and tests. Parliament's coordinated credential/seal/corpus
+State migration and authenticated shared pass are unfinished internal engineering
+([E2](parliament_ballot_implementation_goals.md)); qualification alone cannot
+replace that implementation. Complete and qualify both without opening either
+gate early. External release work comprises ballot qualification and independent
+review, EIP-2537 glue, Tolk binding,
 consensus-transcript, X-producer/clock-guard, liability and reconciliation audits;
-BSC/TON live-RPC captures and real profile fork dates; and Ethereum/BSC/TON
-mainnet deployments and value canaries. Only genuine ballot-authorized routes
+provider retention and availability, verified parameters for each future profile
+fork, and Ethereum/BSC/TON mainnet deployments and value canaries. The developer
+mainnet tests retain exact bootstrap/advance verifier inputs and clocks for all
+three networks and replay them offline. Ordinary EVM transaction inclusion is
+checked separately from SCCP event binding; positive monetary evidence still
+requires a genuine deployed route. Only genuine ballot-authorized routes
 can qualify the monetary, hold-release and full fast-pause scenarios of §11.4.
 
 **Later.** SDK parity (§8) and MCP `iroha.*` read tools; destination-state

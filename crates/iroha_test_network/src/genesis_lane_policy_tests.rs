@@ -179,18 +179,37 @@ fn with_genesis_block_respects_npos_consensus_mode() {
 }
 
 #[test]
-fn with_genesis_block_rejects_private_inputs_without_an_active_native_lane() {
-    let panic = std::panic::catch_unwind(|| {
-        let _ = build_with_isolated_permit(custom_npos_genesis_builder(true));
-    })
-    .expect_err("a signed policy cannot retroactively grant an active native genesis route");
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())
-        .expect("native route rejection diagnostic");
+fn with_genesis_block_provisions_private_inputs_before_their_native_lane_opens() {
+    // Authenticated global genesis alone may execute outside its root data space, so it can
+    // fund a child data space before the signed policy opens that lane for later blocks.
+    let network = build_with_isolated_permit(custom_npos_genesis_builder(true));
+    let produced = network.genesis();
     assert!(
-        message.contains("Network source has no exact active native lane"),
-        "{message}"
+        produced
+            .0
+            .output_results()
+            .all(|result| result.as_ref().is_ok()),
+        "the private genesis input must execute on the universal genesis route"
     );
+    let private_mints = produced
+        .0
+        .external_transactions()
+        .filter_map(|transaction| match transaction.instructions() {
+            Executable::Instructions(instructions) => Some(instructions),
+            _ => None,
+        })
+        .flatten()
+        .filter(|instruction| {
+            matches!(
+                instruction.as_any().downcast_ref::<MintBox>(),
+                Some(MintBox::Asset(mint))
+                    if matches!(
+                        mint.destination.scope(),
+                        AssetBalanceScope::Dataspace(dataspace)
+                            if *dataspace == DataSpaceId::new(1)
+                    )
+            )
+        })
+        .count();
+    assert_eq!(private_mints, 1, "the fixture authors one private input");
 }

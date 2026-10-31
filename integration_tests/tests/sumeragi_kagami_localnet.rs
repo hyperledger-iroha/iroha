@@ -21,8 +21,7 @@ use tokio::time::sleep;
 const LOCALNET_PEERS: u16 = 4;
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_POLL: Duration = Duration::from_millis(200);
-const LOCALNET_BLOCK_TIME_MS: u64 = 2_000;
-const LOCALNET_COMMIT_TIME_MS: u64 = 2_000;
+const LOCALNET_BLOCK_CADENCE_MS: u64 = 2_000;
 const LOG_TAIL_LINES: usize = 80;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
@@ -127,6 +126,8 @@ impl KagamiLocalnet {
                 .wrap_err_with(|| format!("clone log file {}", log_path.display()))?;
             let mut cmd = Command::new(irohad_bin);
             cmd.arg("--config").arg(&config_path);
+            // Every validator of a fresh chain anchors its key with a first safety record.
+            cmd.arg("--sumeragi-assert-fresh-key");
             cmd.current_dir(out_dir);
             cmd.env("SNAPSHOT_STORE_DIR", &snapshot_dir);
             if std::env::var_os("RUST_LOG").is_none() {
@@ -193,8 +194,7 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
     let peers = LOCALNET_PEERS.to_string();
     let api_port = base_api_port.to_string();
     let p2p_port = base_p2p_port.to_string();
-    let block_time = LOCALNET_BLOCK_TIME_MS.to_string();
-    let commit_time = LOCALNET_COMMIT_TIME_MS.to_string();
+    let block_cadence = LOCALNET_BLOCK_CADENCE_MS.to_string();
     let out_dir = out_dir.to_string_lossy().to_string();
     let mut command = Command::new(kagami_bin);
     command
@@ -214,10 +214,8 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
         .arg(api_port)
         .arg("--base-p2p-port")
         .arg(p2p_port)
-        .arg("--block-time-ms")
-        .arg(block_time)
-        .arg("--commit-time-ms")
-        .arg(commit_time)
+        .arg("--block-cadence-ms")
+        .arg(block_cadence)
         .arg("--out-dir")
         .arg(out_dir);
     let output = test_process::output_with_timeout(&mut command, test_process::process_timeout())

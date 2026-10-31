@@ -299,7 +299,7 @@ fn checked_in_node_example_parses_with_real_public_bindings() {
         ("SEED_PEER", format!("{VALIDATOR_PUBLIC}@127.0.0.1:1337")),
         ("SEED_PUBLIC_KEY", VALIDATOR_PUBLIC.to_owned()),
         ("SEED_POP", VALIDATOR_POP.to_owned()),
-        ("PUBLIC_ADDRESS", "addr:127.0.0.1:1337#8F78".to_owned()),
+        ("PUBLIC_ADDRESS", "127.0.0.1:1337".to_owned()),
         ("GENESIS_PUBLIC_KEY", GENESIS_PUBLIC.to_owned()),
         ("GENESIS_HASH", EXPECTED_HASH.to_owned()),
         (
@@ -332,6 +332,12 @@ fn checked_in_node_example_parses_with_real_public_bindings() {
     assert_eq!(binding.unwrap().role, ProfileRole::Validator);
     assert_eq!(*config.common.chain_discriminant.value(), 369);
     assert!(config.soracloud_runtime.production_mode);
+    // The template's plain `host:port` addresses parse like their checked literals.
+    assert_eq!(
+        config.network.public_address.value().to_string(),
+        "127.0.0.1:1337"
+    );
+    assert_eq!(config.torii.address.value().to_string(), "127.0.0.1:8080");
 }
 
 #[test]
@@ -878,6 +884,119 @@ fn data_dir_service_paths_respect_layered_enablement_and_explicit_paths() {
             discard(reader);
         }
     }
+}
+
+/// A flat `data_dir` node with an inline validator key, the given extra top-level keys and the
+/// given `[streaming]` keys.
+fn flat_identity_node(top: &str, streaming: &str) -> String {
+    format!(
+        "chain = \"0\"\n\
+         data_dir = \"data\"\n\
+         public_key = \"{VALIDATOR_PUBLIC}\"\n\
+         private_key = \"{VALIDATOR_PRIVATE}\"\n\
+         trusted_peers_pop = [{{ public_key = \"{VALIDATOR_PUBLIC}\", pop_hex = \"{VALIDATOR_POP}\" }}]\n\
+         {top}\n\
+         [network]\naddress = \"addr:127.0.0.1:1337#8F78\"\npublic_address = \"addr:127.0.0.1:1337#8F78\"\n\
+         [torii]\naddress = \"addr:127.0.0.1:8080#8942\"\n\
+         [genesis]\npublic_key = \"{GENESIS_PUBLIC}\"\nexpected_hash = \"{EXPECTED_HASH}\"\n\
+         [streaming]\n{streaming}\n"
+    )
+}
+
+#[test]
+fn local_identities_are_the_completed_unpinned_transport_and_streaming_keys() {
+    let dir = NodeDir::new("local_identities");
+    let both = [NodeSecretFile::Transport, NodeSecretFile::Streaming];
+    let cases: [(&str, &str, &[NodeSecretFile]); 7] = [
+        ("", "", &both),
+        // A configured public key pins the identity: its file must be supplied.
+        (
+            &format!("soranet_transport_public_key = \"{TRANSPORT_PUBLIC}\""),
+            "",
+            &[NodeSecretFile::Streaming],
+        ),
+        (
+            "",
+            &format!("identity_public_key = \"{STREAMING_PUBLIC}\""),
+            &[NodeSecretFile::Transport],
+        ),
+        // Inline keys and explicit key files are not completed.
+        (
+            &format!("soranet_transport_private_key = \"{TRANSPORT_PRIVATE}\""),
+            "",
+            &[NodeSecretFile::Streaming],
+        ),
+        (
+            "soranet_transport_private_key_file = \"data/secrets/transport.key\"",
+            "",
+            &[NodeSecretFile::Streaming],
+        ),
+        (
+            "",
+            &format!("identity_private_key = \"{STREAMING_PRIVATE}\""),
+            &[NodeSecretFile::Transport],
+        ),
+        (
+            "",
+            "identity_private_key_file = \"data/secrets/streaming.key\"",
+            &[NodeSecretFile::Transport],
+        ),
+    ];
+    for (index, (top, streaming, expected)) in cases.into_iter().enumerate() {
+        let path = dir.write(
+            &format!("identity{index}.toml"),
+            &flat_identity_node(top, streaming),
+        );
+        let reader = open(&path).unwrap_or_else(|report| panic!("{report:?}"));
+        assert_eq!(reader.local_identities(), expected, "case {index}");
+        discard(reader);
+    }
+    // Without `data_dir` nothing is completed.
+    let path = dir.write(
+        "no_data_dir.toml",
+        &flat_identity_node("", "").replace("data_dir = \"data\"\n", ""),
+    );
+    let reader = open(&path).unwrap_or_else(|report| panic!("{report:?}"));
+    assert!(reader.local_identities().is_empty());
+    discard(reader);
+    // A profile node file completes both, never the validator key.
+    let path = dir.write("profile.toml", &profile_node(&dir, "validator", ""));
+    let reader = open(&path).unwrap_or_else(|report| panic!("{report:?}"));
+    assert_eq!(reader.local_identities(), both);
+    discard(reader);
+}
+
+#[test]
+fn local_identity_record_is_the_key_file_the_parser_reads() {
+    let dir = NodeDir::new("local_identity_record");
+    let transport = LocalIdentity::generate().unwrap();
+    let streaming = LocalIdentity::generate().unwrap();
+    assert_ne!(transport.public_key(), streaming.public_key());
+    for identity in [&transport, &streaming] {
+        let record = std::str::from_utf8(identity.record()).unwrap();
+        let literal = record.strip_suffix('\n').expect("one trailing newline");
+        assert!(!literal.contains('\n'));
+        let private = literal.parse::<ExposedPrivateKey>().unwrap();
+        assert_eq!(private.0.algorithm(), Algorithm::Ed25519);
+        assert_eq!(private.try_to_multihash_string().unwrap(), literal);
+    }
+    for (file, identity) in [
+        (NodeSecretFile::Transport, &transport),
+        (NodeSecretFile::Streaming, &streaming),
+    ] {
+        let record = std::str::from_utf8(identity.record()).unwrap();
+        dir.secret(file, record.trim_end_matches('\n'));
+    }
+    let path = dir.write("generated.toml", &flat_identity_node("", ""));
+    let (config, _) = parse(&path);
+    assert_eq!(
+        config.common.soranet_transport_key_pair.public_key(),
+        transport.public_key()
+    );
+    assert_eq!(
+        config.streaming.key_material.identity().public_key(),
+        streaming.public_key()
+    );
 }
 
 #[test]

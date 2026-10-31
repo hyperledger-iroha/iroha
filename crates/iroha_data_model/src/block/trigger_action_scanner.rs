@@ -11,12 +11,12 @@
 //! semantics remain separate.
 //! It never constructs an owned Action, executable, filter, metadata map or JSON tree.
 
+#[path = "action_frame_argument_record.rs"]
+mod argument_record;
 #[path = "action_frame_cursor.rs"]
 mod cursor;
 #[path = "action_frame_custody.rs"]
 mod custody;
-#[path = "action_frame_argument_record.rs"]
-mod argument_record;
 
 use crate::{
     account::prepared_decode::{AccountDecodeError, AccountDestination},

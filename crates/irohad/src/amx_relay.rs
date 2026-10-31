@@ -8,6 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
     io::Read as _,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -42,10 +43,14 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_model_base::metadata::Metadata;
 use sha2::{Digest as _, Sha256};
 
+mod admission;
 mod expiry;
 mod ledger;
+mod pending_custody;
+use admission::{AdmissionPosition, FreshAdmissions};
 use expiry::{ExpiryProgress, ExpiryRecovery};
 use ledger::{RelayAccount, RelayLedger};
+use pending_custody::{CustodyError, PendingCustody, PendingObservationLease};
 
 const ID_DOMAIN: &[u8] = b"iroha:native-amx-relay:v1\0";
 // Service policy: authenticated rejections permit bounded fee-funded replacement.
@@ -85,61 +90,80 @@ impl ScanPosition {
 #[derive(Default)]
 struct HandoffOrder {
     pending: BTreeMap<NetworkId, ScanPosition>,
+    completed: BTreeMap<NetworkId, ScanPosition>,
     blocked: BTreeSet<NetworkId>,
 }
 impl HandoffOrder {
     fn permits(&mut self, position: ScanPosition) -> bool {
-        if self.pending.get(&position.target).is_some_and(|pending| {
-            pending.context != position.context
-                || (pending.height == position.height
+        if [
+            self.pending.get(&position.target),
+            self.completed.get(&position.target),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|saved| {
+            saved.context != position.context
+                || (saved.height == position.height
                     && position.boundary
-                    && pending.identity != position.identity)
+                    && saved.identity != position.identity)
         }) {
             // A changed original history or root binding cannot inherit a cursor.
             self.pending.remove(&position.target);
+            self.completed.remove(&position.target);
             self.blocked.remove(&position.target);
         }
         if self.blocked.contains(&position.target) {
             return false;
         }
-        // Earlier handoffs already authenticated in this process must not replace
-        // a later unfinished recovery cursor on each source rescan. A process
-        // restart discards this scheduling cursor and reauthenticates from H2.
+        // A successful later adjacent handoff already required the original earlier authority
+        // chain. Skip old business work in this process, never its unresolved exact carriers.
+        // Restart discards these scheduling hints and reauthenticates from H2.
         !position.boundary
-            || self
-                .pending
+            || (self
+                .completed
                 .get(&position.target)
-                .is_none_or(|pending| position.height >= pending.height)
+                .is_none_or(|completed| position.height > completed.height)
+                && self
+                    .pending
+                    .get(&position.target)
+                    .is_none_or(|pending| position.height >= pending.height))
     }
     fn observed(&mut self, position: ScanPosition, applied: bool) {
         if !position.boundary {
             return;
         }
         if applied {
-            self.pending.remove(&position.target);
+            if self
+                .completed
+                .get(&position.target)
+                .is_none_or(|completed| {
+                    completed.context == position.context && position.height >= completed.height
+                })
+            {
+                self.completed.insert(position.target, position);
+            }
+            if self.pending.get(&position.target).is_some_and(|pending| {
+                pending.context == position.context && pending.identity == position.identity
+            }) {
+                self.pending.remove(&position.target);
+                self.blocked.remove(&position.target);
+            }
         } else {
+            if self
+                .completed
+                .get(&position.target)
+                .is_some_and(|completed| {
+                    completed.context == position.context && position.height <= completed.height
+                })
+            {
+                return;
+            }
             self.pending.insert(position.target, position);
             self.blocked.insert(position.target);
         }
     }
     fn restart_scan(&mut self) {
         self.blocked.clear();
-    }
-}
-
-// Fix one finite authenticated source frontier per sweep. Continuous new traffic
-// must not postpone a blocked historical handoff's next recovery observation.
-#[derive(Default)]
-struct ScanEnd(Option<u64>);
-impl ScanEnd {
-    fn for_pass(&mut self, observed_tip: u64) -> u64 {
-        if cfg!(all(test, sumeragi_daemon_mutation = "HC332")) {
-            return observed_tip;
-        }
-        *self.0.get_or_insert(observed_tip)
-    }
-    fn restart(&mut self) {
-        self.0 = None;
     }
 }
 
@@ -302,6 +326,8 @@ fn build_route(
     config: AmxRelayRoute,
     storage: Arc<dyn WorkflowStorage>,
     reads: usize,
+    journal_dir: &Path,
+    pending_walks: usize,
 ) -> Result<Route> {
     let verifier = trust(&config)?;
     let account_config = iroha::config::Config::load_file(&config.account_config)?;
@@ -314,6 +340,13 @@ fn build_route(
             "AMX account file differs from explicit authority, network or chain pins"
         ));
     }
+    let custody = Arc::new(PendingCustody::open(
+        finality_directory(journal_dir, config.network_id)?,
+        account_config.key_pair.clone(),
+        config.authority.clone(),
+        verifier.clone(),
+        pending_walks,
+    )?);
     let client = Arc::new(Client::builder(account_config).build()?);
     let account = client.account_client()?;
     let context = Arc::new(AccountWorkflowContext::new(account.clone())?);
@@ -326,6 +359,7 @@ fn build_route(
         config.scope,
         config.fee_payment.clone(),
         reads,
+        custody,
     ));
     let engine = WorkflowEngine::new(
         storage,
@@ -343,6 +377,19 @@ fn build_route(
         engine,
         instance,
     })
+}
+
+// Keep authenticated progress outside the workflow directory's closed file inventory.
+// Appending to the complete basename preserves distinct custom journal names and extensions.
+fn finality_directory(journal_dir: &Path, network: NetworkId) -> Result<PathBuf> {
+    let mut name = journal_dir
+        .file_name()
+        .ok_or_else(|| eyre!("AMX journal directory must have a final path component"))?
+        .to_os_string();
+    name.push(".finality");
+    Ok(journal_dir
+        .with_file_name(name)
+        .join(hex::encode(network.as_bytes())))
 }
 
 // The opaque source authenticates the original X; its registered target and exact local
@@ -399,57 +446,137 @@ fn debit_approval(
 }
 
 impl Route {
-    // A business Decision ends new expiry work, while an existing exact carrier
-    // still needs read-only outcome recovery. This path cannot sign or dispatch.
+    fn original_plan(
+        &self,
+        intent: &NativeAmxRelayIntentV1,
+    ) -> Result<(
+        WorkflowPlanV1,
+        iroha_crypto::Hash,
+        Option<iroha_crypto::Hash>,
+    )> {
+        let descriptor = intent.descriptor();
+        if descriptor.target_network() != self.config.network_id
+            || descriptor.target_scope() != self.config.scope
+            || descriptor.target_instance() != self.instance
+        {
+            return Err(eyre!(
+                "AMX source differs from the independently pinned destination"
+            ));
+        }
+        let instruction = ledger::instruction_digest(intent.instruction())?;
+        let handoff = if matches!(
+            descriptor.source(),
+            NativeAmxRelaySourceV1::EpochBoundary { .. }
+        ) {
+            Some(
+                ledger::handoff_effect(intent.instruction())?.ok_or_else(|| {
+                    eyre!("original epoch boundary does not contain a handoff effect")
+                })?,
+            )
+        } else {
+            None
+        };
+        Ok((plan(descriptor, instruction)?, instruction, handoff))
+    }
+
+    fn has_pending(&self, intent: &NativeAmxRelayIntentV1) -> Result<bool> {
+        let (plan, instruction, handoff) = self.original_plan(intent)?;
+        self.ledger
+            .has_pending(plan.request_context_digest, instruction, handoff)
+    }
+
+    // Reserve before expiry observation, retaining this exact lease through the attempt.
+    fn admit(&self, intent: &NativeAmxRelayIntentV1) -> Result<PendingObservationLease> {
+        let (plan, instruction, handoff) = self.original_plan(intent)?;
+        let approval = debit_approval(intent.descriptor(), intent.instruction())?;
+        self.ledger
+            .begin_observation(plan.request_context_digest, instruction, approval, handoff)
+    }
+
+    fn admitted_plan(
+        &self,
+        intent: &NativeAmxRelayIntentV1,
+        lease: &PendingObservationLease,
+    ) -> Result<(WorkflowPlanV1, bool)> {
+        let (plan, instruction, handoff) = self.original_plan(intent)?;
+        self.ledger
+            .check_observation(lease, plan.request_context_digest, instruction, handoff)?;
+        Ok((plan, handoff.is_some()))
+    }
+
+    // A verified business Decision ends new expiry work but cannot close unknown carrier fees.
     async fn recover_decided_expiry(
         &self,
         intent: &NativeAmxRelayIntentV1,
         cadence: Duration,
+        lease: &PendingObservationLease,
     ) -> Result<()> {
-        let descriptor = intent.descriptor();
-        if descriptor.target_network() != self.config.network_id
-            || descriptor.target_scope() != self.config.scope
-            || descriptor.target_instance() != self.instance
-        {
-            return Err(eyre!(
-                "AMX expiry recovery differs from independently pinned route"
-            ));
-        }
-        let instruction = ledger::instruction_digest(intent.instruction())?;
-        self.ledger.begin_observation(instruction, None)?;
-        expiry::recover_carrier(
-            &self.engine,
-            self.ledger.as_ref(),
-            plan(descriptor, instruction)?,
-            cadence,
-        )
-        .await
+        let (plan, _) = self.admitted_plan(intent, lease)?;
+        expiry::recover_carrier(&self.engine, self.ledger.as_ref(), plan, cadence).await?;
+        self.ledger.finish_observation(lease).await
     }
 
-    async fn deliver(&self, intent: NativeAmxRelayIntentV1, cadence: Duration) -> Result<()> {
-        let descriptor = intent.descriptor();
-        let instruction_digest = ledger::instruction_digest(intent.instruction())?;
-        if descriptor.target_network() != self.config.network_id
-            || descriptor.target_scope() != self.config.scope
-            || descriptor.target_instance() != self.instance
-        {
+    // An authority barrier blocks signing and dispatch, never original carrier observation.
+    // This path does not convert a later authenticated handoff into an older carrier outcome.
+    async fn recover_pending(
+        &self,
+        intent: &NativeAmxRelayIntentV1,
+        cadence: Duration,
+        lease: &PendingObservationLease,
+    ) -> Result<()> {
+        let (plan, boundary) = self.admitted_plan(intent, lease)?;
+        if boundary && self.ledger.recover_handoff(intent.instruction()).await? {
+            expiry::recover_carrier(&self.engine, self.ledger.as_ref(), plan, cadence).await?;
+            return self.ledger.finish_observation(lease).await;
+        }
+        let handle = self.engine.workflow(plan)?;
+        if handle.progress()?.is_none() {
             return Err(eyre!(
-                "AMX source selects a destination different from independently pinned route"
+                "AMX original pending admission has no signed carrier yet"
             ));
         }
-        let approval = debit_approval(intent.descriptor(), intent.instruction())?;
-        self.ledger
-            .begin_observation(instruction_digest, approval)?;
+        let progress = handle
+            .recover(
+                None,
+                &WorkflowRunOptions {
+                    observation_timeout: cadence,
+                    poll_interval: cadence,
+                    retransmit_identical_bytes: false,
+                    retry_rejected_step: false,
+                },
+            )
+            .await?;
+        let identity = progress
+            .steps
+            .first()
+            .and_then(|step| step.identities.last())
+            .and_then(|attempt| attempt.identity.as_ref())
+            .ok_or_else(|| eyre!("AMX pending admission still needs an original carrier"))?;
         if matches!(
-            descriptor.source(),
-            NativeAmxRelaySourceV1::EpochBoundary { .. }
-        ) && self.ledger.recover_handoff(intent.instruction()).await?
-        {
-            // Independently authenticated effect, possibly another relayer's carrier.
-            // This neither decodes terminal journal state nor closes an unknown carrier.
-            return Ok(());
+            self.ledger.committed_outcome(identity).await,
+            CommittedOutcome::Applied { .. }
+        ) {
+            self.ledger.finish_observation(lease).await
+        } else {
+            Err(eyre!(
+                "AMX pending carrier awaits successful execution before authority permits new work"
+            ))
         }
-        let plan = plan(descriptor, instruction_digest)?;
+    }
+
+    async fn deliver(
+        &self,
+        intent: NativeAmxRelayIntentV1,
+        cadence: Duration,
+        lease: &PendingObservationLease,
+    ) -> Result<()> {
+        let (plan, boundary) = self.admitted_plan(&intent, lease)?;
+        if boundary && self.ledger.recover_handoff(intent.instruction()).await? {
+            // Independently authenticated effect, possibly another relayer's carrier.
+            // Its success cannot close an unknown local signed carrier or its fees.
+            expiry::recover_carrier(&self.engine, self.ledger.as_ref(), plan, cadence).await?;
+            return self.ledger.finish_observation(lease).await;
+        }
         let digest = plan.request_context_digest;
         let handle = self.engine.workflow(plan)?;
         let (_, instruction) = intent.into_parts();
@@ -478,7 +605,7 @@ impl Route {
             .and_then(|attempt| attempt.identity.as_ref())
             .ok_or_else(|| eyre!("completed AMX workflow has no exact carrier identity"))?;
         match self.ledger.committed_outcome(identity).await {
-            CommittedOutcome::Applied { .. } => Ok(()),
+            CommittedOutcome::Applied { .. } => self.ledger.finish_observation(lease).await,
             _ => Err(eyre!(
                 "AMX delivery awaits freshly authenticated successful execution"
             )),
@@ -504,8 +631,14 @@ pub fn start(
         .into_iter()
         .map(|route| {
             let key = route.network_id;
-            build_route(route, storage.clone(), config.max_finality_proof_reads)
-                .map(|route| (key, route))
+            build_route(
+                route,
+                storage.clone(),
+                config.max_finality_proof_reads,
+                &config.journal_dir,
+                config.max_pending_finality_walks,
+            )
+            .map(|route| (key, route))
         })
         .collect::<Result<BTreeMap<NetworkId, Route>>>()?;
     let runtime = tokio::runtime::Handle::current();
@@ -552,14 +685,14 @@ fn start_route(
 ) -> Child {
     let task = tokio::task::spawn_blocking(move || {
         let mut height = 2u64;
-        let mut scan_end = ScanEnd::default();
+        let mut admissions = FreshAdmissions::default();
         let mut handoff_order = HandoffOrder::default();
         let clock = SystemWorkflowClock::new();
         let target = route.config.network_id;
         let mut expiry_recovery = ExpiryRecovery::default();
         while !shutdown.is_sent() {
             let view = state.view();
-            let tip = scan_end.for_pass(view.block_hashes().len() as u64);
+            let tip = admissions.frontier(view.block_hashes().len() as u64);
             for _ in 0..max_source_heights_per_pass {
                 if shutdown.is_sent() || height > tip {
                     break;
@@ -571,61 +704,129 @@ fn start_route(
                         break;
                     }
                 };
+                let mut ordinal = 0u64;
                 loop {
                     if shutdown.is_sent() {
                         return;
                     }
                     match original.complete_next() {
                         Ok(Some(intent)) => {
-                            let position = match ledger::instruction_digest(intent.instruction())
-                                .and_then(|digest| {
-                                    ScanPosition::from_descriptor(intent.descriptor(), digest)
-                                }) {
-                                Ok(position) => position,
-                                Err(error) => {
-                                    iroha_logger::warn!(height, %error, "AMX source scan identity unavailable");
-                                    break;
+                            // Count every original yielded source, including filtered intents.
+                            let source_ordinal = ordinal;
+                            let Some(next) = ordinal.checked_add(1) else {
+                                iroha_logger::error!(
+                                    height,
+                                    "AMX source ordinal exceeds its bound"
+                                );
+                                return;
+                            };
+                            ordinal = next;
+                            let position = loop {
+                                match ledger::instruction_digest(intent.instruction()).and_then(
+                                    |digest| {
+                                        ScanPosition::from_descriptor(intent.descriptor(), digest)
+                                    },
+                                ) {
+                                    Ok(position) => break position,
+                                    Err(error) => {
+                                        iroha_logger::warn!(height, %error, "AMX source scan identity unavailable");
+                                        // Keep this same opaque source through local identity refusal.
+                                        if wait(&runtime, &shutdown, cadence) {
+                                            return;
+                                        }
+                                    }
                                 }
                             };
-                            if !handoff_order.permits(position) {
-                                // An earlier handoff has no authenticated successful outcome.
-                                // Do not spend fresh identities on a later epoch/record yet.
+                            let admission = AdmissionPosition {
+                                height: position.height,
+                                ordinal: source_ordinal,
+                                plan: position.identity,
+                            };
+                            // Authenticated existing custody is classified before scheduling hints.
+                            // Neither absence here nor a cursor grants a new signature or an outcome.
+                            let pending = match route.has_pending(&intent) {
+                                Ok(pending) => pending,
+                                Err(error) => {
+                                    admission_refused(&mut admissions, admission, &error);
+                                    handoff_order.permits(position);
+                                    handoff_order.observed(position, false);
+                                    iroha_logger::warn!(height, %error, "AMX pending custody cannot be classified");
+                                    continue;
+                                }
+                            };
+                            let permitted = handoff_order.permits(position);
+                            if !permitted && !pending {
+                                admissions.skip(admission);
                                 continue;
                             }
-                            let decided = match expiry_recovery.observe(
-                                &view,
-                                &intent,
-                                clock.now_unix_ms(),
-                                max_finality_proof_reads,
-                                &runtime,
-                                &shutdown,
-                                cadence,
-                            ) {
-                                Ok(ExpiryProgress::Ordinary | ExpiryProgress::Ready) => false,
-                                Ok(ExpiryProgress::Decided) => true,
-                                Ok(ExpiryProgress::Waiting) => {
-                                    continue;
-                                }
+                            let now = clock.now_unix_ms();
+                            let ready = intent
+                                .descriptor()
+                                .ready_at_ms()
+                                .is_none_or(|wake| now >= wake);
+                            if !pending
+                                && !position.boundary
+                                && !admissions.consider(admission, ready)
+                            {
+                                continue;
+                            }
+                            let lease = match route.admit(&intent) {
+                                Ok(lease) => lease,
                                 Err(error) => {
-                                    iroha_logger::warn!(height, %error, "AMX expiry recovery remains resumable");
+                                    admission_refused(&mut admissions, admission, &error);
+                                    if permitted {
+                                        handoff_order.observed(position, false);
+                                    }
+                                    iroha_logger::warn!(height, %error, "AMX original admission remains resumable");
                                     continue;
                                 }
                             };
-                            // The same original State view/job stays alive until the move-only
-                            // instruction is consumed or explicitly retired after this attempt.
+                            admissions.admitted(admission);
+                            // Read-only original-carrier recovery can bypass the authority barrier.
+                            // It does not update HandoffOrder, even when an older carrier finishes.
+                            let decided = if permitted {
+                                match expiry_recovery.observe(
+                                    &view,
+                                    &intent,
+                                    now,
+                                    max_finality_proof_reads,
+                                    &runtime,
+                                    &shutdown,
+                                    cadence,
+                                ) {
+                                    Ok(ExpiryProgress::Ordinary | ExpiryProgress::Ready) => false,
+                                    Ok(ExpiryProgress::Decided) => true,
+                                    Ok(ExpiryProgress::Waiting) => continue,
+                                    Err(error) => {
+                                        iroha_logger::warn!(height, %error, "AMX expiry recovery remains resumable");
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                false
+                            };
+                            // Same State view, opaque source and observation lease survive the read
+                            // and its delivery. Shutdown never reports a successful observation.
                             let result = runtime.block_on(async {
                                 tokio::select! {
-                                    () = shutdown.receive() => Ok(()),
+                                    () = shutdown.receive() => None,
                                     result = async {
-                                        if decided {
-                                            route.recover_decided_expiry(&intent, cadence).await
+                                        if !permitted {
+                                            route.recover_pending(&intent, cadence, &lease).await
+                                        } else if decided {
+                                            route.recover_decided_expiry(&intent, cadence, &lease).await
                                         } else {
-                                            route.deliver(intent, cadence).await
+                                            route.deliver(intent, cadence, &lease).await
                                         }
-                                    } => result,
+                                    } => Some(result),
                                 }
                             });
-                            handoff_order.observed(position, result.is_ok());
+                            let Some(result) = result else {
+                                return;
+                            };
+                            if permitted {
+                                handoff_order.observed(position, result.is_ok());
+                            }
                             if let Err(error) = result {
                                 iroha_logger::warn!(height, %error, "AMX workflow remains resumable");
                             }
@@ -644,7 +845,7 @@ fn start_route(
             drop(view);
             if height > tip {
                 height = 2;
-                scan_end.restart();
+                admissions.finish_sweep();
                 handoff_order.restart_scan();
             }
             if wait(&runtime, &shutdown, cadence) {
@@ -653,6 +854,31 @@ fn start_route(
         }
     });
     Child::new(task, OnShutdown::Drain)
+}
+
+// Physical/local refusal retains the next fresh source's place. A malformed original may be
+// skipped for this admission round, but that never produces a ledger outcome or retry permit.
+fn retains_fresh_admission(error: &eyre::Report) -> bool {
+    matches!(
+        error.downcast_ref::<CustodyError>(),
+        Some(
+            CustodyError::Capacity
+                | CustodyError::Busy
+                | CustodyError::Conflict
+                | CustodyError::Io(_)
+                | CustodyError::Signing(_)
+        )
+    )
+}
+
+fn admission_refused(
+    admissions: &mut FreshAdmissions,
+    position: AdmissionPosition,
+    error: &eyre::Report,
+) {
+    if !retains_fresh_admission(error) {
+        admissions.skip(position);
+    }
 }
 
 fn wait(runtime: &tokio::runtime::Handle, shutdown: &ShutdownSignal, duration: Duration) -> bool {
@@ -667,6 +893,32 @@ mod tests {
         account::AccountId, block::consensus::SumeragiRootScope,
         sumeragi_finality::test_fixtures::NativeFinalityFixture,
     };
+
+    #[test]
+    fn pending_finality_directory_preserves_the_complete_journal_name_and_route() {
+        let network = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"pending-path"),
+        ));
+        let other = NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"another-pending-path"),
+        ));
+        let first = finality_directory(Path::new("storage/original.journal"), network).unwrap();
+        assert_eq!(
+            first,
+            Path::new("storage/original.journal.finality").join(hex::encode(network.as_bytes()))
+        );
+        assert!(!first.starts_with("storage/original.journal"));
+        assert_ne!(
+            first,
+            finality_directory(Path::new("storage/original.other"), network).unwrap()
+        );
+        assert_ne!(
+            first,
+            finality_directory(Path::new("storage/original.journal"), other).unwrap()
+        );
+        assert!(finality_directory(Path::new(""), network).is_err());
+        assert!(finality_directory(Path::new(std::path::MAIN_SEPARATOR_STR), network).is_err());
+    }
 
     #[test]
     fn relay_source_schema_roundtrips_and_binds_both_source_variants() {
@@ -724,14 +976,14 @@ mod tests {
 
     #[test]
     fn growing_source_tip_cannot_starve_pending_original_handoff_retry() {
-        let mut scan_end = ScanEnd::default();
+        let mut admissions = FreshAdmissions::default();
         let mut height = 2;
         let mut retries = Vec::new();
         let mut independent_heights = Vec::new();
         // One selected source height per pass and one additional certified height
         // per observation reproduce the starvation of an ever-moving frontier.
         for pass in 0..8 {
-            let tip = scan_end.for_pass(3 + pass);
+            let tip = admissions.frontier(3 + pass);
             if height <= tip {
                 if height == 2 {
                     retries.push(pass);
@@ -742,7 +994,7 @@ mod tests {
             }
             if height > tip {
                 height = 2;
-                scan_end.restart();
+                admissions.finish_sweep();
             }
         }
         assert_eq!(
@@ -815,7 +1067,54 @@ mod tests {
             order.permits(record),
             "authenticated delivery permits later sequential authority work"
         );
-        order.observed(pending, false);
+        let later = ScanPosition {
+            height: 30,
+            identity: [30; 32],
+            ..pending
+        };
+        assert!(
+            !order.permits(pending),
+            "completed handoff is only an in-process scheduling skip"
+        );
+        assert!(
+            !order.permits(ScanPosition {
+                height: 15,
+                identity: [15; 32],
+                ..early
+            }),
+            "successful adjacent later handoff already required earlier original authority"
+        );
+        assert!(order.permits(later));
+        order.observed(later, false);
+        order.observed(early, true);
+        assert_eq!(
+            order.completed.get(&first).unwrap().height,
+            20,
+            "older recovered carrier cannot regress latest successful handoff"
+        );
+        assert_eq!(
+            order.pending.get(&first).unwrap().height,
+            30,
+            "older recovered carrier cannot close a later pending handoff"
+        );
+        assert!(!order.permits(record));
+        order.restart_scan();
+        assert!(!order.permits(pending));
+        assert!(order.permits(later));
+        order.observed(later, true);
+        assert_eq!(order.completed.len(), 1);
+        assert_eq!(order.completed.get(&first).unwrap().height, 30);
+        assert!(order.pending.is_empty());
+        assert!(order.blocked.is_empty());
+        assert!(
+            order.permits(ScanPosition {
+                identity: [31; 32],
+                ..later
+            }),
+            "same-height substituted boundary invalidates the completed scheduling hint"
+        );
+        assert!(order.completed.is_empty());
+        order.observed(later, true);
         order.restart_scan();
         assert!(
             order.permits(ScanPosition {
@@ -834,10 +1133,59 @@ mod tests {
             "changed original carrier discards the old scheduling cursor"
         );
         assert!(order.pending.is_empty());
+        assert!(order.completed.is_empty());
         assert!(
             HandoffOrder::default().permits(early),
             "restart authenticates original history again"
         );
+    }
+
+    #[test]
+    fn physical_admission_refusal_retains_place_without_granting_an_outcome() {
+        let first = AdmissionPosition {
+            height: 70,
+            ordinal: 0,
+            plan: [1; 32],
+        };
+        let next = AdmissionPosition {
+            height: 80,
+            ordinal: 0,
+            plan: [2; 32],
+        };
+        for refusal in [
+            CustodyError::Capacity,
+            CustodyError::Busy,
+            CustodyError::Conflict,
+            CustodyError::Io(std::io::Error::other("original publication unavailable")),
+        ] {
+            let refusal = eyre::Report::new(refusal);
+            assert!(retains_fresh_admission(&refusal));
+            let mut admissions = FreshAdmissions::default();
+            admissions.frontier(80);
+            assert!(admissions.consider(first, true));
+            admission_refused(&mut admissions, first, &refusal);
+            assert!(
+                !admissions.finish_sweep(),
+                "transient inventory or reservation failure retains exact fair place"
+            );
+            assert!(!admissions.consider(next, true));
+            assert!(admissions.consider(first, true));
+            admission_refused(
+                &mut admissions,
+                first,
+                &eyre::Report::new(CustodyError::Binding),
+            );
+            assert!(
+                admissions.consider(next, true),
+                "malformed selected original does not strand unrelated work"
+            );
+        }
+        assert!(!retains_fresh_admission(&eyre::Report::new(
+            CustodyError::Binding
+        )));
+        assert!(!retains_fresh_admission(&eyre!(
+            "malformed original business terms"
+        )));
     }
 
     #[test]

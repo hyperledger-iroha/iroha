@@ -431,16 +431,16 @@ Operators can curate Kaigi calls directly from the CLI:
 
 ```bash
 # Register a session
-iroha kaigi create --domain streaming.universal --call-name daily --host <i105-account-id> \
+iroha app kaigi create --domain streaming.universal --call-name daily --host <i105-account-id> \
   --privacy-mode transparent --room-policy public \
   --relay-manifest manifests/torii.json
 
 # Join/leave flows for participants
-iroha kaigi join --domain streaming.universal --call-name daily --participant <i105-account-id>
-iroha kaigi leave --domain streaming.universal --call-name daily --participant <i105-account-id>
+iroha app kaigi join --domain streaming.universal --call-name daily --participant <i105-account-id>
+iroha app kaigi leave --domain streaming.universal --call-name daily --participant <i105-account-id>
 
 # Record billable usage (milliseconds + gas)
-iroha kaigi record-usage --domain streaming.universal --call-name daily \
+iroha app kaigi record-usage --domain streaming.universal --call-name daily \
   --duration-ms 120000 --billed-gas 1500
 ```
 
@@ -566,7 +566,7 @@ advertises the same bundle profile:
 [streaming.codec]
 cabac_mode = "disabled"                # only change after ENABLE_CABAC builds pass legal review
 trellis_blocks = []                    # keep empty until the claim-avoidance profile ships
-rans_tables_path = "codec/rans/tables/rans_seed0.toml"
+rans_tables_path = "codec/rans/tables/rans_seed0.toml"  # optional: omit to use the compiled-in canonical tables
 entropy_mode = "rans_bundled"          # allowed values: rans | rans_bundled
 bundle_width = 2                       # bundled profile requires 2..=3 (per bundled table set)
 bundle_accel = "cpu_simd"              # allowed values: none | cpu_simd | gpu (requires bundled entropy)
@@ -605,14 +605,16 @@ not alter the emitted bitstream.
 
 The parser in `crates/iroha_config/src/parameters/user.rs` rejects invalid
 combinations—bundled mode clamps the width to `2..=4` and `bundle_accel` only accepts
-selections are rejected outright. `rans_tables_path` must point at the canonical
-`SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml` by default); refresh
+selections are rejected outright. `rans_tables_path` is optional: omitted, the node uses the
+canonical `SignedRansTablesV1` artefact compiled into the binary (byte-identical to
+`codec/rans/tables/rans_seed0.toml`), so no table file ships with a node. A configured
+path must point at a `SignedRansTablesV1` artefact; refresh
 the tables with `python3 tools/rans/gen_tables.py --bundle-width 4 --seed <seed> --output codec/rans/tables/rans_seed<seed>.toml --verify`
 when governance publishes a new seed, and use `cargo xtask verify-tables --tables codec/rans/tables/<file>.toml`
 to audit existing artefacts. The TOML must decode directly to the exact
 `SignedRansTablesV1` shape: stringified or repaired JSON fragments and unwrapped
-payload bodies are rejected. `StreamingHandle::apply_codec_config` loads the file at
-start-up, records the checksum, and threads the bundle width/acceleration preference
+payload bodies are rejected. `StreamingHandle::apply_codec_config` loads the configured file
+(or the compiled-in tables) at start-up, records the checksum, and threads the bundle width/acceleration preference
 into the runtime.
 
 #### Capability negotiation and manifests

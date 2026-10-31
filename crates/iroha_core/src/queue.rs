@@ -78,7 +78,7 @@ use iroha_data_model::{
     isi::{
         InstructionBox,
         error::Mismatch,
-        runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        runtime_upgrade::{AttestRuntimeSupportV1, ContainRuntimeV1},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
             FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -444,7 +444,8 @@ pub struct Queue {
     /// Admission keys of every queued fee-exempt SCCP transaction (`specs/sccp.md` §4.19),
     /// maintained atomically with `txs` under `push_remove_lock`.
     pending_sccp_exempt: parking_lot::Mutex<SccpPendingIndexV1>,
-    /// Node-wide SCCP seen triples and pairing bucket, shared by every ingress handle.
+    /// Node-wide SCCP forgery repeat cache (pairings in flight and refused signatures) and
+    /// pairing bucket, shared by every ingress handle.
     forgery_ingress: parking_lot::Mutex<Option<forgery_ingress::ForgeryIngressState>>,
     /// Authoritative cached routing plan per entrypoint hash.
     routing_plans: DashMap<EntrypointHash, RoutingPlan>,
@@ -1057,6 +1058,10 @@ pub enum Error {
         /// Exact local invariant failure.
         reason: String,
     },
+    // The first top-level envelope with an unbound wire ID or kept opaque, with the stable
+    // rejection execution would commit (`specs/live_runtime_upgrades.md` §5.2).
+    /// The committed runtime selection does not admit the transaction: {0}
+    RuntimeRejected(iroha_data_model::runtime::lifecycle::RuntimeRejectionV1),
 }
 
 impl From<RoutingResolveError> for Error {
@@ -1140,6 +1145,13 @@ trait QueueAdmissionStateAccess {
             iroha_data_model::parameter::system::TransactionNeverIncludable,
         >,
     >;
+    /// The rejection of the first top-level envelope of `transaction` the committed selection
+    /// would refuse: an unbound wire ID or an envelope kept opaque
+    /// (`specs/live_runtime_upgrades.md` §5.2).
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>;
     /// Classify an external signed transaction's SCCP exemption against committed state
     /// (`specs/sccp.md` §4.19).
     fn sccp_exempt_admission(
@@ -1221,6 +1233,21 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             self.ledger_time_ms,
             self.next_block_height,
             transaction,
+        )
+    }
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+        let signed = match transaction.entrypoint() {
+            TransactionEntrypoint::External(signed) => signed,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::AnonymousBallot(_) => return None,
+        };
+        crate::runtime::envelope::first_unadmitted_envelope(
+            self.view.world().runtime_selection.get(),
+            signed.instructions(),
         )
     }
     fn sccp_exempt_admission(
@@ -2245,15 +2272,15 @@ impl Queue {
         let contains = |instruction: &InstructionBox| {
             instruction
                 .as_any()
-                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .downcast_ref::<AttestRuntimeSupportV1>()
                 .is_some()
                 || instruction
                     .as_any()
-                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .downcast_ref::<ContainRuntimeV1>()
                     .is_some()
                 || instruction
                     .as_any()
-                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
                     .is_some()
         };
         match tx.as_accepted().executable() {
@@ -4119,6 +4146,12 @@ impl Queue {
                 checked,
             ));
         }
+        // Honest proposers never carry an envelope the committed selection does not admit; it
+        // would only commit `definition_inactive` or `malformed_payload`
+        // (`specs/live_runtime_upgrades.md` §5.2).
+        if let Some(rejection) = state_access.first_inactive_envelope(checked.as_accepted()) {
+            return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
+        }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
         let _ = self.cull_expired_entries_if_due();
@@ -5806,7 +5839,6 @@ pub mod tests {
         account::{AccountDetails, AccountValue},
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
-        isi::runtime_upgrade::ProposeRuntimeUpgrade,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
             AuditControls, DataSpaceCatalog, DataSpaceMetadata, JurisdictionSet, LaneCatalog,
@@ -5817,7 +5849,6 @@ pub mod tests {
         parameter::TransactionParameters,
         prelude::*,
         proof::{ProofAttachment, ProofBox},
-        runtime::RuntimeUpgradeManifest,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
             SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
@@ -9507,6 +9538,7 @@ pub mod tests {
         include!("queue/resident_owner_tests.rs");
     }
     include!("queue/current_admission_tests.rs");
+    include!("queue/runtime_envelope_admission_tests.rs");
     include!("queue/keepalive_tests.rs");
     include!("queue/domain_admission_tests.rs");
     include!("queue/resource_contract_tests.rs");

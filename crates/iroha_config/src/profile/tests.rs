@@ -1229,7 +1229,6 @@ fn signed_staking_recipe_survives_fee_exemption_authoring_and_duplicate_retry() 
     );
 }
 
-
 /// Emit exact public compiled-profile inputs for independently replayable golden refreshes.
 /// The capture does not update expectations or certify a network or a release.
 #[test]

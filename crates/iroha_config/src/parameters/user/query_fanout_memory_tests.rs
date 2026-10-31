@@ -1,5 +1,86 @@
 // Focused tests for Torii cross-dataspace fanout memory configuration.
 #[test]
+fn native_finality_ceiling_uses_only_the_existing_fanout_pool() {
+    for (aggregate, expected) in [
+        (64_000_000, 48_000_000),
+        (512_000_000, 384_000_000),
+        (1_024_000_000, 384_000_000),
+    ] {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .unwrap()
+            .insert(
+                "query_fanout_max_retained_bytes".into(),
+                Value::Integer(aggregate),
+            );
+        let torii = load_root(table).torii;
+        assert_eq!(torii.query_fanout_max_working_set_bytes.get(), 48_000_000);
+        assert_eq!(torii.finality_max_working_set_bytes.get(), 384_000_000);
+        let actual = defaults::torii::finality_working_set_bytes(
+            torii.query_fanout_max_retained_bytes.get(),
+            torii.finality_max_working_set_bytes.get(),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert!(
+            actual + aggregate as u64 / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1
+                <= aggregate as u64
+        );
+    }
+    let mut table = base_table();
+    table
+        .get_mut("torii")
+        .and_then(Value::as_table_mut)
+        .unwrap()
+        .insert(
+            "finality_max_working_set_bytes".into(),
+            Value::Integer(192_000_000),
+        );
+    let torii = load_root(table).torii;
+    assert_eq!(torii.finality_max_working_set_bytes.get(), 192_000_000);
+    assert_eq!(
+        defaults::torii::finality_working_set_bytes(
+            torii.query_fanout_max_retained_bytes.get(),
+            torii.finality_max_working_set_bytes.get(),
+        ),
+        Some(192_000_000)
+    );
+}
+
+#[test]
+fn native_finality_ceiling_rejects_zero_or_non_byte_values() {
+    for invalid in [
+        Value::Integer(0),
+        Value::Integer(-1),
+        Value::Float(f64::INFINITY),
+    ] {
+        let mut table = base_table();
+        table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .unwrap()
+            .insert("finality_max_working_set_bytes".into(), invalid);
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("the original finality ceiling must be a finite positive byte count");
+        assert!(format!("{error:?}").contains("finality_max_working_set_bytes"));
+    }
+    assert_eq!(
+        defaults::torii::finality_working_set_bytes(0, u64::MAX),
+        None
+    );
+    assert_eq!(
+        defaults::torii::finality_working_set_bytes(u64::MAX, 0),
+        None
+    );
+    assert_eq!(
+        defaults::torii::finality_working_set_bytes(u64::MAX, u64::MAX),
+        Some(u64::MAX - u64::MAX / defaults::torii::QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1)
+    );
+}
+
+#[test]
 fn query_fanout_pool_may_be_smaller_than_the_general_body_cap() {
     let mut table = base_table();
     let torii = table

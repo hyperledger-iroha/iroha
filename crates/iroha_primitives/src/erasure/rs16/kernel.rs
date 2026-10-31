@@ -207,17 +207,19 @@ fn scalar(coefficients: &[u16], sources: &[&[u8]], destination: &mut [u8], accum
     }
     for (index, (coefficient, source)) in coefficients.iter().zip(sources).enumerate() {
         let tables = ByteTables::new(*coefficient);
-        let pairs = destination.chunks_exact_mut(2).zip(source.chunks_exact(2));
+        let pairs = destination
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(source.as_chunks::<2>().0);
         if index == 0 && !accumulate {
             for (output, input) in pairs {
-                let product = tables.mul(u16::from_le_bytes([input[0], input[1]]));
-                output.copy_from_slice(&product.to_le_bytes());
+                *output = tables.mul(u16::from_le_bytes(*input)).to_le_bytes();
             }
         } else {
             for (output, input) in pairs {
-                let product = tables.mul(u16::from_le_bytes([input[0], input[1]]))
-                    ^ u16::from_le_bytes([output[0], output[1]]);
-                output.copy_from_slice(&product.to_le_bytes());
+                let product = tables.mul(u16::from_le_bytes(*input)) ^ u16::from_le_bytes(*output);
+                *output = product.to_le_bytes();
             }
         }
     }

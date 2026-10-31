@@ -17,7 +17,7 @@ pub(super) const MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1: usize = 1 << 30;
 // Independent current-profile payload pin: masks, cuts, maximum registration,
 // replay batch, CA coefficients/metadata, and two complete cache batches.
 #[cfg(test)]
-pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_696_297_592
+pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_872_458_392
     + core::mem::size_of::<super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1>(
     );
 
@@ -378,6 +378,8 @@ impl MainProverBufferPlanV1 {
             // Reserve all public columns before the first source or entropy draw.
             super::main_retained_rfc::MainRetainedRfcV1::forecast_all_v1(layout)?,
             P256MainBaseSourceV1::allocation_forecast_v1()?,
+            ZkX509ShaBatchSegmentBaseSourceV1::native_base_cache_forecast_all_v1()
+                .map_err(map_main_sha_source_error_v1)?,
             ZkX509ShaBatchSegmentAuxSourceV1::native_aux_cache_forecast_all_v1()
                 .map_err(map_main_sha_source_error_v1)?,
             ZkX509ShaBatchFixedProviderV1::allocation_forecast_v1(shape)
@@ -413,6 +415,26 @@ impl MainProverBufferPlanV1 {
             &[assembly_payload, MAIN_NATIVE_SOURCE_ALLOWANCE_BYTES_V1],
             MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1,
         )
+    }
+
+    /// Admit joined transforms after the global source admission, charging the
+    /// larger of complete original-commitment and finalization lifetimes.
+    /// Registration quotient matrices and their local cache are absent in both
+    /// caller phases; their headroom may hold device staging until it drains.
+    /// Source, scratch, runtime and public-power reservations remain unchanged.
+    pub(super) fn joined_transform_admission_v1(
+        &self,
+        assembly_payload: usize,
+    ) -> Result<usize, ZkX509StarkErrorV1> {
+        let global = self.check_before_sources_v1(assembly_payload)?;
+        let joint = main_ca_resources::MainCaJointBufferPlanV1::from_common_v1(*self)?;
+        let live = joint
+            .required_v1(main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments)?
+            .max(joint.required_v1(main_ca_resources::MainCaBufferPhaseV1::Finalization)?);
+        global
+            .checked_sub(self.maximum_live_buffers)
+            .and_then(|reserved| reserved.checked_add(live))
+            .ok_or(ZkX509StarkErrorV1::ProofTooLarge)
     }
 
     /// Check actual source capacities before mask sampling, composition or FRI.
@@ -461,7 +483,9 @@ impl MainProverBufferPlanV1 {
         sum(&[self.maximum_live_buffers, required])
     }
 
-    /// Reuse only already admitted arithmetic headroom. Source/scratch/runtime
+    /// Reuse only already admitted arithmetic headroom. The private cache's
+    /// actual capacities are deducted before any public fixed prefix is kept.
+    /// Source/scratch/runtime
     /// allowances and the global maximum remain reserved at their original size.
     pub(super) fn quotient_cache_plan_v1(
         &self,
@@ -679,6 +703,7 @@ impl MainProverBufferPlanV1 {
         for phase in [
             main_ca_resources::MainCaBufferPhaseV1::OriginalCommitments,
             main_ca_resources::MainCaBufferPhaseV1::Registration,
+            main_ca_resources::MainCaBufferPhaseV1::ShaUnion,
             main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
             main_ca_resources::MainCaBufferPhaseV1::Finalization,
         ] {

@@ -123,9 +123,19 @@ pub struct TriggerLifecycleActionFrameV1 {
 
 /// Exact persisted retry values, with a closed schema and required JSON fields.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode,
-    norito::NoritoSchema, iroha_schema::IntoSchema,
-    crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
 )]
 #[norito_schema(name = "iroha_data_model::block::execution_output::TriggerLifecycleRetryStateV1")]
 #[norito(deny_unknown_fields)]

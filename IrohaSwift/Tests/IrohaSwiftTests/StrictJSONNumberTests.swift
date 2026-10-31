@@ -43,11 +43,51 @@ final class StrictJSONNumberTests: XCTestCase {
         )
     }
 
-    func testRuntimeUpgradeHeightRejectsRoundedUInt64Maximum() {
-        let payload = Data(#"{"ActivatedAt":18446744073709551616}"#.utf8)
+    func testRuntimeChangeSetStatusHeightRejectsRoundedUInt64Maximum() {
+        let payload = Data(#"{"kind":"Activated","content":18446744073709551616}"#.utf8)
 
         XCTAssertThrowsError(
-            try JSONDecoder().decode(ToriiRuntimeUpgradeStatus.self, from: payload)
+            try JSONDecoder().decode(ToriiRuntimeChangeSetStatus.self, from: payload)
         )
+    }
+
+    func testRuntimeChangeSetStatusHeightRequiresAnExactUnquotedIntegerToken() throws {
+        func decodeExact(_ json: String) throws -> ToriiRuntimeChangeSetStatus {
+            let data = Data(json.utf8)
+            let decoder = JSONDecoder()
+            decoder.userInfo[exactJSONNumberLexemesUserInfoKey] =
+                try ExactJSONNumberLexemeScanner.scan(data)
+            return try decoder.decode(ToriiRuntimeChangeSetStatus.self, from: data)
+        }
+
+        for content in ["4200.0", "4.2e3", "\"4200\"", "-1", "18446744073709551616"] {
+            XCTAssertThrowsError(
+                try decodeExact("{\"kind\":\"Lapsed\",\"content\":\(content)}"),
+                content
+            )
+        }
+        // A status height is a block height, not a first-release proposal number.
+        XCTAssertEqual(
+            try decodeExact(#"{"kind":"Lapsed","content":18446744073709551615}"#),
+            .lapsed(height: .max)
+        )
+    }
+
+    func testRuntimeNoticeRejectsValuesBeyondTheExactJSONMaximum() throws {
+        let maximum = Data(#"{"blocks":9007199254740991,"ms":0,"approval_cushion_ms":1}"#.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(ToriiRuntimeNotice.self, from: maximum).blocks,
+            9_007_199_254_740_991
+        )
+        for json in [
+            #"{"blocks":9007199254740992,"ms":0,"approval_cushion_ms":1}"#,
+            #"{"blocks":1,"ms":9007199254740992,"approval_cushion_ms":1}"#,
+            #"{"blocks":1,"ms":0,"approval_cushion_ms":18446744073709551615}"#,
+        ] {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiRuntimeNotice.self, from: Data(json.utf8)),
+                json
+            )
+        }
     }
 }

@@ -179,8 +179,7 @@ impl StateParameters {
     /// # Errors
     /// Rejects the uninitialized pre-genesis owner without inventing a default.
     pub fn require_crypto_policy(&self) -> Result<&CryptoAdmissionPolicyV1, &'static str> {
-        self.crypto
-            .as_ref()
+        self.crypto_policy()
             .ok_or("ordinary crypto policy has not been initialized by authenticated genesis")
     }
 
@@ -197,8 +196,7 @@ impl StateParameters {
     pub fn require_staking_policy(
         &self,
     ) -> Result<&PublicLaneStakingPolicy, PublicLaneStakingPolicyError> {
-        self.staking
-            .as_ref()
+        self.staking_policy()
             .ok_or(PublicLaneStakingPolicyError::MissingParameter)
     }
 

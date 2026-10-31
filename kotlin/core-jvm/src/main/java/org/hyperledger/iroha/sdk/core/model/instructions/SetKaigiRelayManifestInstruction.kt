@@ -5,7 +5,7 @@ class SetKaigiRelayManifestInstruction internal constructor(
     @JvmField val callId: KaigiInstructionUtils.CallId,
     @JvmField val relayManifest: KaigiInstructionUtils.RelayManifest?,
     arguments: Map<String, String>,
-) : InstructionTemplate {
+) : KaigiWireInstructionV1 {
 
     override val arguments: Map<String, String> =
         KaigiInstructionUtils.immutableArguments(arguments)

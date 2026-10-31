@@ -42,18 +42,16 @@ fn reserve_accounts_are_distinct_non_signing_public_points_bound_to_network_oper
 
 #[test]
 fn owner_seed_is_initial_only_and_uses_the_explicit_address_profile() {
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let seed = Some(b"owner-seed-test".as_slice());
-    let manager = localnet_ephemeral_identity(seed, b"manager").unwrap();
-    let http = localnet_ephemeral_identity(seed, b"http").unwrap();
-    let onboarding = localnet_ephemeral_identity(seed, b"onboarding").unwrap();
+    let manager = ephemeral_identity(seed, b"manager").unwrap();
+    let http = ephemeral_identity(seed, b"http").unwrap();
     let generated = generate(
         LocalnetServiceProfile::StreamTokenAuthorities,
         temporary.path(),
         seed,
         &manager,
         &http,
-        &onboarding,
     )
     .unwrap()
     .unwrap();
@@ -101,7 +99,7 @@ fn owner_seed_is_initial_only_and_uses_the_explicit_address_profile() {
 #[test]
 fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     {
@@ -172,7 +170,7 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     ];
     let mut reserve_grants = BTreeSet::new();
     let root = prepared.context.client_config.parent().unwrap();
-    let block = read_signed_genesis(&root.join("genesis.signed.nrt")).unwrap();
+    let block = iroha_genesis::read_signed_genesis(&root.join("genesis.signed.nrt")).unwrap();
     block.validate_output_merkle_cache().unwrap();
     assert!(block.output_results().all(|result| result.as_ref().is_ok()));
     assert_eq!(
@@ -276,8 +274,7 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
         assert!(registered.contains(account));
     }
     let inventory =
-        PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
-            .unwrap();
+        PrivateDirectory::open_exact(root.join(RUNTIME_DIRECTORY).join(DIRECTORY)).unwrap();
     let expected_files = BTreeSet::from(
         [MANIFEST, NETWORK_DIRECTORY, PROVIDERS_DIRECTORY].map(std::ffi::OsString::from),
     );
@@ -354,11 +351,9 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     let metadata = iroha_genesis::signed_genesis_consensus_metadata(&block).unwrap();
     for peer in &prepared.peers {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
-        let config = parse_localnet_peer_config(
-            std::str::from_utf8(&bytes).unwrap(),
-            Some(&peer.config_path),
-        )
-        .unwrap();
+        let config =
+            config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
+                .unwrap();
         assert_eq!(
             config.gov.sorafs_provider_owners,
             manifest
@@ -392,9 +387,9 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
     // Prove the cheap retained projection against actual signed native genesis execution and
     // query the provider owner from that same staged World, without a fixture-injected row.
     let bytes = iroha_fs::read_private(&prepared.peers[0].config_path, 1024 * 1024).unwrap();
-    let config = parse_localnet_peer_config(
+    let config = config::parse_peer_config(
         std::str::from_utf8(&bytes).unwrap(),
-        Some(&prepared.peers[0].config_path),
+        &prepared.peers[0].config_path,
     )
     .unwrap();
     let genesis = RawGenesisTransaction::from_path(root.join("genesis.json")).unwrap();
@@ -534,7 +529,7 @@ fn managed_authority_genesis_registers_grants_funds_and_keeps_services_disabled(
 #[test]
 fn retained_owner_seed_rejects_config_drift_and_reopens_exact_original() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     let root = prepared.context.client_config.parent().unwrap();
@@ -597,9 +592,9 @@ fn retained_owner_seed_rejects_config_drift_and_reopens_exact_original() {
                     );
                 }
                 3 => {
-                    let config = parse_localnet_peer_config(
+                    let config = config::parse_peer_config(
                         std::str::from_utf8(&original).unwrap(),
-                        Some(&peer.config_path),
+                        &peer.config_path,
                     )
                     .unwrap();
                     gov.insert(
@@ -615,7 +610,7 @@ fn retained_owner_seed_rejects_config_drift_and_reopens_exact_original() {
             directory
                 .write_atomic(&filename, changed.as_bytes(), PublishMode::Replace)
                 .unwrap();
-            parse_localnet_peer_config(&changed, Some(&peer.config_path))
+            config::parse_peer_config(&changed, &peer.config_path)
                 .expect("tampered owner/policy config is syntactically and structurally valid");
             assert!(
                 prepared.stream_token_authorities().is_err(),
@@ -640,12 +635,11 @@ fn retained_owner_seed_rejects_config_drift_and_reopens_exact_original() {
 #[test]
 fn retained_authority_inventory_and_credentials_reject_substitution() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let root = prepared.context.client_config.parent().unwrap();
     let inventory =
-        PrivateDirectory::open_exact(root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY))
-            .unwrap();
+        PrivateDirectory::open_exact(root.join(RUNTIME_DIRECTORY).join(DIRECTORY)).unwrap();
     let original = inventory.read(MANIFEST, MAX_MANIFEST).unwrap();
     let signed_genesis =
         iroha_fs::read_private(root.join("genesis.signed.nrt"), SIGNED_GENESIS_MAX_BYTES_V1)
@@ -855,33 +849,48 @@ fn retained_authority_inventory_and_credentials_reject_substitution() {
 }
 
 #[test]
-fn authority_profile_rejects_raw_private_and_public_selection_before_output() {
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+fn storage_layer_requires_the_managed_loopback_committee_before_output() {
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let out = temporary.path().join("not-created");
-    let mut options = LocalnetOptions {
-        service_profile: LocalnetServiceProfile::StreamTokenAuthorities,
-        sora_profile: None,
+    let options = |peers: u16, consensus_mode, public_host: &str| LocalnetOptions {
         perf_profile: None,
-        peers: NonZeroU16::new(4).unwrap(),
+        peers: NonZeroU16::new(peers).unwrap(),
         seed: None,
         bind_host: "127.0.0.1".into(),
-        public_host: "127.0.0.1".into(),
+        public_host: public_host.into(),
         base_api_port: 8080,
         base_p2p_port: 1337,
         out_dir: out.clone(),
         extra_accounts: 0,
         assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
+        consensus_mode,
     };
-    assert!(generate_localnet(&options, &mut BufWriter::new(Vec::new())).is_err());
+    let storage = Mode::Managed {
+        publication_root: None,
+        service_profile: LocalnetServiceProfile::StreamTokenAuthorities,
+    };
+    for refused in [
+        options(7, SumeragiConsensusMode::Permissioned, "127.0.0.1"),
+        options(4, SumeragiConsensusMode::Npos, "127.0.0.1"),
+        options(4, SumeragiConsensusMode::Permissioned, "localhost"),
+    ] {
+        assert!(Request::new(&refused, None, None, storage).is_err());
+    }
     assert!(!out.exists());
-    assert!(validate_selection(&options, true, true).is_err());
-    options.sora_profile = Some(SoraProfile::PrivateSbp);
-    assert!(generate_managed_localnet(&options).is_err());
-    assert!(!out.exists());
-    options.sora_profile = None;
-    validate_selection(&options, true, false).unwrap();
-    options.service_profile = LocalnetServiceProfile::Standard;
-    validate_selection(&options, false, false).unwrap();
+    let stock = options(4, SumeragiConsensusMode::Permissioned, "127.0.0.1");
+    assert!(Request::new(&stock, None, None, storage).is_ok());
+    // Operator bundles never carry the storage layer; plain managed networks take any committee.
+    let standard = Mode::Managed {
+        publication_root: None,
+        service_profile: LocalnetServiceProfile::Standard,
+    };
+    let other = options(7, SumeragiConsensusMode::Npos, "localhost");
+    assert!(Request::new(&other, None, None, standard).is_ok());
+    assert_eq!(
+        Request::new(&other, None, None, Mode::Bundle)
+            .unwrap()
+            .service_profile(),
+        LocalnetServiceProfile::Standard
+    );
 }

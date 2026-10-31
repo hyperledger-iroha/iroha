@@ -9,6 +9,48 @@ fn pairing_layout() -> Layout {
 }
 
 #[test]
+fn maximum_query_committee_layout_matches_original_constructor_and_inherited_refusal() {
+    let pairs: Vec<_> = (0..iroha_data_model::sumeragi::epoch::MAX_VALIDATORS)
+        .map(|index| tests::key_pair(index as u8))
+        .collect();
+    let members = tests::query_members(&pairs);
+    let demand = query_committee_allocation_bytes(&members).unwrap();
+    assert_eq!(maximum_query_committee_allocation_bytes(), Some(demand));
+    let mut admitted = 0;
+    let crypto = BlsCrypto::for_query_committee(&members, &mut |bytes| {
+        admitted += bytes;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(admitted, demand);
+    assert_eq!(crypto.admitted_len(), members.len());
+    let outer = norito::core::DecodeBudgetContext::new(norito::DecodeLimits::new(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        demand - 1,
+        64,
+    ));
+    let result = outer.with(|| {
+        BlsCrypto::for_query_committee(&members, &mut |bytes| {
+            norito::core::classify_decode_attempt(|| norito::core::reserve_decode_allocation(bytes))
+                .map_err(|error| error.into_local_refusal().unwrap().into())
+        })
+    });
+    let Err(QueryCommitteeError::Resource(original)) = result else {
+        panic!("one byte short must retain the original decoder refusal");
+    };
+    assert_eq!(
+        original.decode_refusal().unwrap().resource_error(),
+        norito::core::DecodeResourceError::TotalAllocationExceeded {
+            limit: (demand - 1) as u64,
+            attempted: demand as u64,
+        }
+    );
+    assert_eq!(outer.consumed_allocated_bytes(), 0);
+}
+
+#[test]
 fn query_pairing_allocator_refusal_keeps_physical_cause_without_release_wait() {
     let pairs: Vec<_> = (1..=4).map(tests::key_pair).collect();
     let members = tests::query_members(&pairs);

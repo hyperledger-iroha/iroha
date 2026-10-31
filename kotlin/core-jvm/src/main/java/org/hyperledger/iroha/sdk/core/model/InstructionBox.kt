@@ -215,7 +215,7 @@ private fun wireKindForName(wireName: String): InstructionKind {
         normalized.startsWith("iroha.set_parameter") -> InstructionKind.SET_PARAMETER
         normalized.startsWith("iroha.execute_trigger") -> InstructionKind.EXECUTE_TRIGGER
         normalized.startsWith("iroha.log") -> InstructionKind.LOG
-        normalized.startsWith("iroha.runtime_upgrade") || normalized.startsWith("iroha.upgrade") -> InstructionKind.UPGRADE
+        normalized.startsWith("iroha.upgrade") -> InstructionKind.UPGRADE
         else -> InstructionKind.CUSTOM
     }
 }

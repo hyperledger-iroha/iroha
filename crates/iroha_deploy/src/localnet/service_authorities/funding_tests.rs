@@ -26,9 +26,9 @@ fn fixture() -> (
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     let root = prepared.context.client_config.parent().unwrap();
     let config_bytes = iroha_fs::read_private(&prepared.peers[0].config_path, 1024 * 1024).unwrap();
-    let config = parse_localnet_peer_config(
+    let config = config::parse_peer_config(
         std::str::from_utf8(&config_bytes).unwrap(),
-        Some(&prepared.peers[0].config_path),
+        &prepared.peers[0].config_path,
     )
     .unwrap();
     let genesis = RawGenesisTransaction::from_path(root.join("genesis.json")).unwrap();

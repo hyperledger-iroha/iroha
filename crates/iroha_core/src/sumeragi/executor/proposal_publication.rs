@@ -190,6 +190,9 @@ impl Worker<'_> {
                     decoded: None,
                     returned_refusal: None,
                     amx_legs: None,
+                    uid_bindings: None,
+                    successor_context: Default::default(),
+                    policy_decode_controls: None,
                     parent_service:
                         super::super::certified_chain::ParentServicePreparation::default(),
                 }),
@@ -266,6 +269,9 @@ mod tests {
                 decoded: None,
                 returned_refusal: None,
                 amx_legs: None,
+                uid_bindings: None,
+                successor_context: Default::default(),
+                policy_decode_controls: None,
                 parent_service:
                     super::super::super::certified_chain::ParentServicePreparation::default(),
             };

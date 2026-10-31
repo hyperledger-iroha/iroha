@@ -41,11 +41,41 @@ def test_all_five_native_targets_run_real_owners_and_installed_release_smoke():
     assert "--matrix target/devex-native/matrix.json --smoke" in commands
     assert "installed_private_root_lifecycle_and_listener_isolation -- --exact --ignored --test-threads=1" in commands
     assert "installed_parent_attachment_private_contracts_and_payload_isolation -- --exact --ignored --test-threads=1" in commands
-    assert "openssl version" in commands
-    assert "import ssl, sys; assert sys.version_info >= (3, 10)" in commands
+    assert "import sys; assert sys.version_info >= (3, 10)" in commands
+    assert "openssl version" not in commands
+    assert "import ssl" not in commands
     assert "--profile local-release" not in workflow
     assert not re.search(r"continue-on-error|allow_failure|cargo.*--target", workflow)
     assert all(len(pin) == 40 for pin in re.findall(r"uses: [^@\n]+@([^\s]+)", workflow))
+
+
+def test_standalone_private_attachment_uses_its_own_packaged_runtime():
+    workflow = _workflow()
+    start = workflow.index("      - name: Exercise standalone Kagami installed flows")
+    end = workflow.index("      - name: Build complete release bundle and exercise all deployment inputs")
+    step = workflow[start:end]
+    runtime = "${{ github.workspace }}/target/devex-kagami-native/kagami-${{ matrix.bundle_host }}-release/bin"
+    # Both controllers must override the job's preselected Mochi runtime.
+    assert f"IROHA_DEVEX_BUNDLE_BIN: {runtime}" in step
+    assert f"IROHA_TEST_RUNTIME_DIRECTORY: {runtime}" in step
+    assert "cargo test --locked --release -p iroha_deploy --lib managed::tests::attachment_installed::installed_parent_attachment_private_contracts_and_payload_isolation -- --exact --ignored --test-threads=1 --nocapture" in " ".join(step.split())
+
+
+def test_real_desktop_walkthrough_uses_extracted_native_runtime_and_retains_only_public_screens():
+    workflow = _workflow()
+    extracted = workflow.index("      - name: Extract the Mochi deliverable into a fresh installed directory")
+    walkthrough = workflow.index("      - name: Exercise real Mochi desktop actions against the extracted runtime")
+    private = workflow.index("      - name: Exercise native private validators, persistence and listener isolation")
+    assert extracted < walkthrough < private
+    step = workflow[walkthrough:private]
+    assert 'export MOCHI_PREVIEW_RUNTIME="$IROHA_DEVEX_BUNDLE_BIN"' in step
+    assert "MOCHI_PREVIEW_OUT: ${{ github.workspace }}/target/devex-native/mochi-preview" in step
+    assert "cargo test --locked --release -p mochi-ui --features gui --bin mochi gui::preview_tests::live_walkthrough_with_a_real_generation -- --exact --ignored --test-threads=1 --nocapture" in " ".join(step.split())
+    assert "set -euo pipefail" in step
+    upload = workflow.split("      - name: Retain public bundle inventory and host report", 1)[1]
+    assert "target/devex-native/mochi-preview/live/*.ppm" in upload
+    assert "MOCHI_LIVE_DIAGNOSTICS" not in upload
+    assert "RUNNER_TEMP" not in upload
 
 
 @pytest.mark.parametrize(

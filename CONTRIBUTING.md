@@ -18,8 +18,8 @@ New to our project? [Make your first contribution](#your-first-code-contribution
 
 ### TL;DR
 
-- Find [ZenHub](https://app.zenhub.com/workspaces/iroha-v2-60ddb820813b9100181fc060/board?repos=181739240).
-- Fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
+- Find an [open issue](https://github.com/hyperledger-iroha/iroha/issues).
+- Run `make doctor` to check your machine, then fork [Iroha](https://github.com/hyperledger-iroha/iroha/tree/main).
 - Fix your issue of choice.
 - Ensure you follow our [style guides](#style-guides) for code and documentation.
 - Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
@@ -31,10 +31,10 @@ New to our project? [Make your first contribution](#your-first-code-contribution
   `make check-proc-macro-ui` (or
   `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh
   `.stderr` fixtures when diagnostics change to keep messages stable.
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to execute fmt/clippy/build/test with `--locked` plus `swift test`; expect `cargo test --workspace` to take hours and use `--skip-tests` only for quick local loops. See `specs/dev_workflow.md` for the full runbook.
+- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`) to check formatting, then lint, build and test with `--locked` only the packages your branch affects, plus the Swift suite when it is affected. It compares against the branch named in `ci/default_base_ref`; `--base REF` selects another and `--full` runs everything, which can take hours. See `specs/dev_workflow.md` for the full runbook.
 - Enforce guardrails with `make check-agents-guardrails` to block `Cargo.lock` edits and new workspace crates, `make check-dependency-discipline` to fail on new dependencies unless explicitly allowed, and `make check-missing-docs` to prevent new `#[allow(missing_docs)]` shims, missing crate-level docs on touched crates, or new public items without doc comments (the guard refreshes `specs/agents/missing_docs_inventory.{json,md}` via `scripts/inventory_missing_docs.py`). Add `make check-tests-guard` so changed functions fail unless unit tests reference them (inline `#[cfg(test)]`/`#[test]` blocks or crate `tests/`; existing coverage counts) and `make check-docs-tests-metrics` so roadmap changes are paired with docs, tests, and metrics/dashboards. Keep TODO enforcement via `make check-todo-guard` so TODO markers are not dropped without accompanying docs/tests. `make check-env-config-surface` regenerates the env-toggle inventory and now fails when new **production** env shims appear relative to `AGENTS_BASE_REF`; set `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional additions in the migration tracker. `make check-serde-guard` refreshes the serde inventory and fails on stale snapshots or new production `serde`/`serde_json` hits; set `SERDE_GUARD_ALLOW=1` only with an approved migration plan. Keep large deferrals visible via TODO breadcrumbs and follow-up tickets instead of deferring silently. Run `make check-std-only` to enforce the IVM-only, native `std` build policy on the complete current tree without an override and `make check-status-sync` to ensure `roadmap.md` open items remain open-only and that roadmap/status changes land together; set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`. For a single invocation, use `make agents-preflight` to run all guardrails together.
-- Run local serialization guards before pushing: `make guards`.
-  - This denies direct `serde_json` in production code, disallows new direct serde deps outside allowlist, and prevents ad‑hoc AoS/NCB helpers outside `crates/norito`.
+- Run the source guards before pushing: `make guards`. It runs all of them and lists every failure.
+  - These deny direct `serde_json` in production code, disallow new direct serde deps outside the allowlist, prevent ad‑hoc AoS/NCB helpers outside `crates/norito`, and check the first-release and ZK inventories against the tree.
 - Optionally dry-run Norito feature matrix locally: `make norito-matrix` (uses a fast subset).
   - For full coverage, run `scripts/run_norito_feature_matrix.sh` without `--fast`.
   - To include a downstream smoke per combo (default crate `iroha_data_model`): `make norito-matrix-downstream` or `scripts/run_norito_feature_matrix.sh --fast --downstream [crate]`.
@@ -44,8 +44,8 @@ New to our project? [Make your first contribution](#your-first-code-contribution
 
 ### AGENTS workflow quickstart
 
-- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `specs/dev_workflow.md`). It wraps `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build/test --workspace --locked` (tests can take several hours), and `swift test`.
-- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations; rerun the full sequence before opening a pull request.
+- Run `make dev-workflow` (wrapper around `scripts/dev_workflow.sh`, documented in `specs/dev_workflow.md`). It checks formatting, classifies what changed against the branch in `ci/default_base_ref`, and runs locked clippy, build and tests for the affected packages, plus the Swift suite when affected.
+- Use `scripts/dev_workflow.sh --skip-tests` or `--skip-swift` for faster iterations, and `--full` for every Rust lane (which can take hours).
 - Guardrails: avoid touching `Cargo.lock`, adding new workspace members, introducing new dependencies, adding new `#[allow(missing_docs)]` shims, omitting crate-level docs, skipping tests when changing functions, dropping TODO markers without docs/tests, or introducing prohibited `no_std`/Wasm/WASI build or runtime support. Run `make check-agents-guardrails` (or `AGENTS_BASE_REF=origin/main bash ci/check_agents_guardrails.sh`) plus `make check-dependency-discipline`, `make check-missing-docs` (refreshes `specs/agents/missing_docs_inventory.{json,md}`), `make check-tests-guard` (fails when production functions change without unit-test evidence—either tests change in the diff or existing tests must reference the function), `make check-docs-tests-metrics` (fails when roadmap changes lack docs/tests/metrics updates), `make check-todo-guard`, `make check-env-config-surface` (fails on stale inventories or new production env toggles; override with `ENV_CONFIG_GUARD_ALLOW=1` only after updating docs), and `make check-serde-guard` (fails on stale serde inventories or new production serde hits; override with `SERDE_GUARD_ALLOW=1` only with an approved migration plan) locally for early signal, `make check-std-only` for the std-only guard, and keep `roadmap.md`/`status.md` in sync with `make check-status-sync` (set `STATUS_SYNC_ALLOW_UNPAIRED=1` only for rare status-only typo fixes after pinning `AGENTS_BASE_REF`). Use `make agents-preflight` if you want a single command to run all guards before opening a PR.
 
 ### Reporting Bugs
@@ -96,8 +96,7 @@ not to be able to mint negative values
 
 While we are proactive in preventing security problems, it is possible that you might come across a security vulnerability before we do.
 
-- Before the First Major Release (2.0) all vulnerabilities are considered bugs, so feel free to submit them as bugs [following the instructions above](#reporting-bugs).
-- After the First Major Release, use our [bug bounty program](https://hackerone.com/hyperledger) to submit vulnerabilities and get your reward.
+- Follow the [security policy](./SECURITY.md) to report a vulnerability.
 
 :exclamation: To minimize the damage caused by an unpatched security vulnerability, you should disclose the vulnerability directly to Hyperledger as soon as possible and **avoid disclosing the same vulnerability publicly** for a reasonable period of time.
 
@@ -270,14 +269,15 @@ RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
 
 The tokio console port can be configured through `logger.tokio_console_addr`. The log level must be `TRACE`; set `logger.level` in the TOML supplied to `--config`. The `LOG_TOKIO_CONSOLE_ADDR` and `LOG_LEVEL` aliases apply only to the no-config development path and explicit test readers.
 
-Example of running Iroha with tokio console support using `scripts/test_env.sh`:
+Example of running Iroha with tokio console support from a generated bundle:
 
 ```bash
 # 1. Compile Iroha
 RUSTFLAGS="--cfg tokio_unstable" cargo build --features tokio-console
-# 2. Run Iroha with TRACE log level
-LOG_LEVEL=TRACE ./scripts/test_env.sh setup
-# 3. Access Iroha. Peers will be available on ports 5555, 5556, ...
+# 2. Generate peer configs, then set logger.level = "TRACE" and logger.tokio_console_addr in each
+target/debug/kagami localnet generate --out-dir ./console-net
+# 3. Start the peers and connect to the address you configured
+bash ./console-net/start.sh
 tokio-console http://127.0.0.1:5555
 ```
 
@@ -310,14 +310,6 @@ E.g. using perf (available only on linux):
 sudo perf record -g -p <PID>
 # to analyze profile
 sudo perf report
-```
-
-To be able to observe profile of the executor during Iroha profiling, executor should be compiled without stripping symbols.
-It can be done by running:
-
-```bash
-# compile executor without optimizations
-cargo run --bin kagami -- ivm build ./path/to/executor --out-file executor.to
 ```
 
 With profiling feature enabled Iroha exposes endpoint to scrap pprof profiles:

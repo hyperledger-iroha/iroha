@@ -5,24 +5,8 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd -- "${ROOT}"
 
-resolve_base() {
-	if [[ -n "${AGENTS_BASE_REF:-}" ]]; then
-		if git rev-parse --verify "${AGENTS_BASE_REF}" >/dev/null 2>&1; then
-			echo "${AGENTS_BASE_REF}"
-			return
-		fi
-		echo "warning: AGENTS_BASE_REF=${AGENTS_BASE_REF} not found; falling back to defaults." >&2
-	fi
-
-	for candidate in origin/main origin/master main master; do
-		if git rev-parse --verify "${candidate}" >/dev/null 2>&1; then
-			echo "${candidate}"
-			return
-		fi
-	done
-
-	echo "HEAD^"
-}
+# shellcheck source=ci/lib/base_ref.sh
+source "${ROOT}/ci/lib/base_ref.sh"
 
 base_ref="$(resolve_base)"
 base_commit="$(git merge-base "${base_ref}" HEAD 2>/dev/null || git rev-parse "${base_ref}")"
@@ -243,7 +227,7 @@ Guardrail failures detected.
 - Drop new workspace members or obtain approval for additional crates.
 - Remove or seek approval for newly added dependencies in Cargo.toml files.
 - Keep SoraNet privacy ingest endpoints behind enforce_soranet_privacy_ingest and SoraFS storage pins behind sorafs_pin_policy, updating docs when authz changes.
-Set AGENTS_BASE_REF=<ref> to compare against a specific base (default origin/main).
+Set AGENTS_BASE_REF=<ref> to compare against a specific base (default: the branch in ci/default_base_ref).
 HINT
 	exit 1
 fi

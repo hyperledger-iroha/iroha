@@ -60,6 +60,202 @@ fn historical_schedule_comes_from_native_execution_ancestry_without_rechecking_l
     );
 }
 
+#[test]
+fn descending_global_authority_rechecks_original_sources_with_linear_frame_work() {
+    const TIP: u64 = 12;
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    for _ in 1..TIP {
+        chain.commit(Vec::new());
+    }
+    let provider = NativeGlobalAvailability::new(
+        chain.state().clone(),
+        chain.instance(),
+        Arc::new(BlsCrypto::new()),
+    )
+    .unwrap();
+    chain.kura().history_checkpoints().clear();
+    chain.kura().reset_canonical_query_reads_for_test();
+    let ((), counts) = crate::sumeragi::certified_chain::relation_counts::measure(|| {
+        for height in (2..=TIP).rev() {
+            let actual = provider.height_config(height).unwrap().unwrap();
+            assert!(actual.epoch.contains(height));
+        }
+    });
+    assert!(
+        counts.qcs.is_empty(),
+        "local QCs cannot supply execution authority"
+    );
+    for parent in 1..TIP {
+        assert!(
+            counts.frames.contains(&parent),
+            "every original parent must be read"
+        );
+    }
+    let maximum = 2 * (TIP as usize - 1);
+    assert!(
+        counts.frames.len() <= maximum,
+        "descending global authority must not restart at the tip for each original parent: {} frames exceed {maximum}",
+        counts.frames.len(),
+    );
+    assert_eq!(
+        chain.kura().canonical_query_reads_for_test().0,
+        counts.frames.len(),
+        "the relation count must include the actual original native frame reads",
+    );
+}
+
+#[test]
+fn global_startup_history_reads_original_frames_linearly_and_keeps_header_order() {
+    use crate::sumeragi::{
+        block_store::{KuraBlockStore, Staging},
+        driver::assemble_startup_history,
+    };
+    const TIP: u64 = 12;
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    for _ in 1..TIP {
+        chain.commit(Vec::new());
+    }
+    let crypto = Arc::new(BlsCrypto::new());
+    let schedule = Arc::new(
+        NativeGlobalAvailability::new(chain.state().clone(), chain.instance(), crypto.clone())
+            .unwrap(),
+    );
+    let store = KuraBlockStore::new(
+        chain.kura().clone(),
+        crypto,
+        1,
+        chain.root_scope(),
+        Staging::new(),
+        chain.state().ivm_execution_budget(),
+        schedule,
+    );
+    let genesis = chain.committed(1);
+    chain.kura().history_checkpoints().clear();
+    let (result, counts) = crate::sumeragi::certified_chain::relation_counts::measure(|| {
+        assemble_startup_history(&store, 1, (genesis.core_hash(), genesis.result()), TIP)
+    });
+    let history = result.unwrap();
+    assert_eq!(history.tip.height, TIP);
+    assert_eq!(
+        history
+            .recent_headers
+            .iter()
+            .map(|header| header.height)
+            .collect::<Vec<_>>(),
+        (2..=TIP).collect::<Vec<_>>(),
+        "Init retains its original ascending header order",
+    );
+    let maximum = 2 * (TIP as usize - 1);
+    assert!(
+        counts.frames.len() <= maximum,
+        "startup must read descending original parents without repeating the tip: {} frames exceed {maximum}",
+        counts.frames.len(),
+    );
+}
+
+#[test]
+fn warmed_global_authority_rechecks_original_parent_frame_before_returning() {
+    use std::num::NonZeroUsize;
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    for _ in 1..4 {
+        chain.commit(Vec::new());
+    }
+    let provider = NativeGlobalAvailability::new(
+        chain.state().clone(),
+        chain.instance(),
+        Arc::new(BlsCrypto::new()),
+    )
+    .unwrap();
+    let original = provider.height_config(4).unwrap().unwrap();
+    let parent = NonZeroUsize::new(3).unwrap();
+    chain.kura().corrupt_native_frame_for_test(parent);
+    assert!(
+        matches!(provider.height_config(4), Err(Attempt::Rejected(_))),
+        "a warmed identity must not authorize changed original frame bytes",
+    );
+    chain.kura().corrupt_native_frame_for_test(parent);
+    let (restored, counts) =
+        crate::sumeragi::certified_chain::relation_counts::measure(|| provider.height_config(4));
+    assert_eq!(restored.unwrap(), Some(original));
+    assert!(counts.frames.contains(&3));
+    assert!(counts.qcs.is_empty());
+}
+
+#[test]
+fn changed_native_tip_restarts_global_authority_from_original_current_ancestry() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    for _ in 1..6 {
+        chain.commit(Vec::new());
+    }
+    let provider = NativeGlobalAvailability::new(
+        chain.state().clone(),
+        chain.instance(),
+        Arc::new(BlsCrypto::new()),
+    )
+    .unwrap();
+    assert!(provider.height_config(6).unwrap().is_some());
+    chain.commit(Vec::new());
+    let (actual, counts) =
+        crate::sumeragi::certified_chain::relation_counts::measure(|| provider.height_config(5));
+    assert!(actual.unwrap().is_some());
+    assert_eq!(
+        counts.frames,
+        vec![7, 6, 5, 4],
+        "a changed full native tip cannot borrow the previous cursor's authority",
+    );
+    assert!(counts.qcs.is_empty());
+}
+
+#[test]
+fn warmed_global_authority_preserves_original_pool_refusal_and_exact_retry() {
+    use iroha_allocation::{AllocationBudget, AllocationRefusal};
+    use iroha_data_model::block::SharedSignedBlock;
+    use std::task::{Context, Waker};
+
+    let _retirement_pin = crossbeam_epoch::pin();
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    for _ in 1..4 {
+        chain.commit(Vec::new());
+    }
+    let provider = NativeGlobalAvailability::new(
+        chain.state().clone(),
+        chain.instance(),
+        Arc::new(BlsCrypto::new()),
+    )
+    .unwrap();
+    let original = provider.height_config(4).unwrap();
+    let budget = chain.state().ivm_execution_budget();
+    let original_limit = budget.limit_bytes();
+    let mut registration = crate::unit_test_support::release_registration(&budget);
+    let held = budget.try_reserve_bytes(1).unwrap();
+    budget.set_limit_bytes(budget.reserved_bytes());
+    let expected: crate::execution_attempt::ExecutionDeferred = SharedSignedBlock::reserve(&budget)
+        .err()
+        .expect("original source shell refusal")
+        .into();
+    let error = provider.height_config(4).unwrap_err();
+    let Attempt::Deferred(actual) = error else {
+        panic!("warmed original source refusal must remain Deferred: {error:?}");
+    };
+    assert_eq!(actual.reason(), expected.reason());
+    assert_eq!(actual.allocation_refusal(), expected.allocation_refusal());
+    assert_eq!(actual.decode_refusal(), expected.decode_refusal());
+    assert_eq!(actual.phase(), expected.phase());
+    let Some(AllocationRefusal::Capacity { release, .. }) = actual.allocation_refusal() else {
+        panic!("the actual original State pool must retain its release owner");
+    };
+    let mut context = Context::from_waker(Waker::noop());
+    assert!(registration.poll_wait(release, &mut context).is_pending());
+    let foreign = AllocationBudget::new(1);
+    drop(foreign.try_reserve_bytes(1).unwrap());
+    assert!(registration.poll_wait(release, &mut context).is_pending());
+    drop(held);
+    assert!(registration.poll_wait(release, &mut context).is_ready());
+    registration.cancel();
+    budget.set_limit_bytes(original_limit);
+    assert_eq!(provider.height_config(4).unwrap(), original);
+}
+
 pub(super) fn fixed_lane_chain() -> (
     CertifiedTestChain,
     iroha_data_model::sumeragi_lanes::SumeragiLaneRecord,

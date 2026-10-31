@@ -87,7 +87,8 @@ fn finish_original(
         )
     };
     state.finish_lane_geometry_publication(
-        &current,(&incarnations, &activation_heights),
+        &current,
+        (&incarnations, &activation_heights),
         lineage_root,
         baseline,
         None,
@@ -403,7 +404,8 @@ mod original_watch_release_tests {
             }
             state
                 .finish_lane_geometry_publication(
-                    &current,(&incarnations, &heights),
+                    &current,
+                    (&incarnations, &heights),
                     lineage,
                     Some(baseline),
                     enclosing.then(|| physical.lease()),

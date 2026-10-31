@@ -91,17 +91,18 @@ const torii = new ToriiClient(TAIRA_TESTNET_PROFILE.toriiBaseUrl, {
 
 Before an account exists, `ToriiClient.getAccountCapabilities({ signal })` and
 the browser client's matching method read public `GET /v1/accounts/capabilities`.
-The closed `AccountCapabilitiesV1` JSON response contains `schema_version: 1`,
-the canonical `network_id`, a u16 `network_prefix`, the current `allowed_signing`
-admission set in canonical algorithm-tag order. Select a locally supported signer
+The `AccountCapabilitiesV1` JSON response requires `schema_version: 1`,
+the canonical `network_id`, a u16 `network_prefix`, and the current `allowed_signing`
+admission set of unique canonical algorithm names. Select a locally supported signer
 from that set; there is no protocol default or implicit Ed25519 member. Array
 ordering and the node's default hash do not express signing preferences.
 Compare the returned network identity with the user's selected network before
 creating an identity. This advert is endpoint discovery, not signed network
 evidence or permission to submit a transaction.
 
-These SDK calls omit configured credentials, reject redirects, accept only the
-exact V1 JSON shape, enforce a 4 KiB streamed response limit, and support abort
+These SDK calls omit configured credentials, reject redirects, validate the required
+V1 fields, ignore unrelated metadata within the existing strict JSON numeric and
+structural constraints, enforce a 4 KiB streamed response limit, and support abort
 through body consumption. The route accepts no query or request body. Standard
 Torii listener access controls still apply. `GET /v1/node/capabilities` is public
 as well: `getNodeCapabilities()` reads it without credentials, and the
@@ -115,7 +116,8 @@ npm run test:local -- --target-dir /absolute/iroha/target/cargo-fast/<existing-l
 ```
 
 The runner requires macOS, Python 3.12, full Xcode selected through
-`DEVELOPER_DIR` or `xcode-select`, stock Rust 1.93.1 and Node. Select an existing
+`DEVELOPER_DIR` or `xcode-select`, the stock Rust toolchain pinned in the repository's
+`rust-toolchain.toml`, and Node. Select an existing
 canonical Cargo lane under `target/cargo-fast` or `target/qualification`; the
 runner does not create a Cargo target. It builds the current native artifact,
 verifies custody, runs the entire `unit` profile and verifies the same producer
@@ -518,6 +520,35 @@ band reader tests and pins the reader's intermediates on the golden captures, an
 `test/petalMerge.test.js` the merge sets. Run them on their own with
 `node --test test/petal.test.js test/petalKana.test.js test/petalMerge.test.js`.
 
+## Native confidential-payment sessions
+
+`@iroha/iroha-js/private-settlement` exposes the native pending-payment owner
+through the verified Node binding. `createPrivateSettlementHost(limits)` requires
+explicit session, original-source, artifact and prepared-material byte limits.
+`host.open(descriptorBytes)` admits the native file descriptor; signing inputs,
+reservations and governed openings remain in native file custody. The descriptor
+must contain independently selected genesis and schema pins. See the
+[native owner](../../crates/iroha_private_settlement/README.md) for the file layouts.
+
+After `await operation.ready()`, `operation.run()` prepares and runs the native
+payment workflow. `operation.recover({ maxFinalityProofReads: 0 })` permits no new
+proof reads. Recovery never provisions inputs; `operation.stageFiles(bytes)` is
+an explicit, separate native command. `prepare()` and `prepared()` expose the
+same native preparation and cached-material operations. Retransmission and
+replacement after authenticated rejection require explicit run options.
+
+The returned outcome is opaque. Inspect `kind`, `failureCode` and redacted
+`progress`; `data()` exports bounded canonical Norito prepared materials or a
+terminal receipt. Exported data alone is not an independent finality proof and
+cannot create a verified outcome. Call `data()` before host shutdown. Always
+await `operation.close()` and `host.shutdown()` before destroying the native
+runtime. Session close drains its accepted commands; host shutdown also drains
+accepted result exports and refuses new ones. Neither operation cancels monetary
+effects or releases escrow.
+
+Source adapter tests cover admission, zero-read forwarding and immediate close
+behavior. Installed-binding and real-network qualification remain open.
+
 ## Atomic private settlement transport
 
 `@iroha/iroha-js/atomic-private-settlement` is a browser-safe, witness-free
@@ -913,7 +944,7 @@ typed `networkId`, canonical `callId` and original `hostId`, exact current
 the stored raw `hostCommitment`, and mutable `blinding` bytes. It rejects an
 opening that does not match the stored host C before proving, and returns
 `{ hostCommitment, usageCommitment, preRosterRoot, proof }` only after Core verifies
-the final 25-row usage relation. The supplied blinding is cleared on every call.
+the final 21-row usage relation. The supplied blinding is cleared on every call.
 Use `usageCommitment` and `proof` in `buildRecordKaigiUsageInstruction` with those
 same public metrics. Native authorization and usage cache only each fixed
 circuit's public proving material; caller secrets remain owned by the invocation.
@@ -925,14 +956,6 @@ transaction identifies the participant; a proof binds its opening to the
 retained original account and current action, while ledger validation enforces
 membership and rekey lineage. Local proof construction alone does not establish
 network admission or production qualification.
-
-Private Kaigi entrypoint builders require a caller-supplied `feeSpend` produced
-by a production confidential wallet or prover. The JavaScript SDK does not
-synthesize a fee spend from an action hash, amount, and verifier key because
-those values do not include the spend key, input-note witnesses, Merkle path,
-or output-note witnesses required for a valid confidential transfer. The
-`ConfidentialProver` creates local proof artifacts when the caller supplies
-complete witness material; it is not an automatic Private Kaigi fee-spend adapter.
 
 For local wallet proving, use `ConfidentialProver` with a network, canonical asset
 ID and mutable 32-byte spend key. `proveTransfer()` and `proveRedemption()` select
@@ -3467,8 +3490,38 @@ registry. Keep signer material runtime-only.
 
 `streamKaigiRelayEvents` yields strongly-typed SSE payloads so you can feed
 operators dashboards without reimplementing filtering/normalisation logic. Its
-SSE handshake remains a separate streaming protocol from the signed snapshot
-reads.
+SSE handshake is signed by an account rather than an operator: configure
+`canonicalRequestAuth` on the client or pass `canonicalAuth`.
+
+### Running a private call
+
+`generateKaigiBlindingV1()` samples the private opening of one participation.
+Keep it under owner-only custody and pass a fresh copy to each proof, because each
+proof clears the buffer it receives. A private create binds the deterministic
+`KAIGI_EMPTY_ROSTER_ROOT_HEX_V1`; every later action reads its context first:
+
+```js
+const standing = await torii.getKaigiCallParticipation(callId);
+const artifacts = buildKaigiAuthorizationProofV1({
+  networkId,
+  callId: { domainId, callName },
+  hostId,
+  subjectId: standing.original_account_id,
+  participationSequence: BigInt(standing.sequence),
+  action: "join",
+  preRosterRoot: Buffer.from(standing.roster_root_hex, "hex"),
+  blinding: Uint8Array.from(blinding),
+});
+```
+
+`getKaigiCallParticipation` is signed and reports only the signing account's own
+standing, from one committed state. It withholds `host_account_id` until the
+account is the host or has a retained participation, so a first join takes the host
+from the invitation. A proof binds the exact roster root, so an action that loses a
+race with another roster change is rejected. The public status route carries no
+rejection reason, so after a `Rejected` status read the standing again: if
+`roster_root_hex` moved, prove again. `streamKaigiCallEvents` also reports `relay_manifest_updated`, after which
+participants should re-read the manifest from `getKaigiCall`, and `usage_updated`.
 
 ## ISO 20022 Bridge
 
@@ -4554,40 +4607,93 @@ if (snapshot) {
 
 ### Runtime and capability helpers
 
-`ToriiClient` now covers the runtime capability endpoints so SDK consumers can surface ABI
-versioning data without crafting raw HTTP calls. Use `getNodeCapabilities()` to inspect ABI
+`ToriiClient` covers the runtime capability endpoints and the governed runtime change-set
+lifecycle (`specs/live_runtime_upgrades.md` §6). Use `getNodeCapabilities()` to inspect ABI
 support and cryptography acceleration flags, `getRuntimeAbiActive()`/`getRuntimeAbiHash()` to
-mirror the compiler guardrails, `getRuntimeMetrics()` for aggregate counters, and
-`listRuntimeUpgrades()` to page through recorded manifests. The helper trio
-`proposeRuntimeUpgrade()`, `activateRuntimeUpgrade()`, and `cancelRuntimeUpgrade()` post the
-runtime JSON endpoints and return transaction skeletons (`wire_id` + payload hex) that you can
-sign via `TxBuilder`, so rollout automation no longer needs bespoke HTTP clients.
+mirror the compiler guardrails, and `getRuntimeMetrics()` for the recorded change sets counted by
+status (`scheduled`, `activated`, `lapsed`, `canceled`).
+
+The runtime changes only through change sets. A `ChangeSetV1` moves the universal root from one
+selection (`predecessor`) to the next (`successor`) at `effective_height`, publishing new
+immutable definitions and applying transitions. The change-set helpers are operator routes: they
+require an immutable `OperatorSigningContext` and sign every request.
+
+- `listRuntimeUpgrades()` returns the committed selection (`selectionIdHex` and the opaque
+  `selection`), the validator `committee` and `committeeDigestHex` that support attestations bind,
+  and every recorded change set by effective height, then identity. A new change set names as its
+  predecessor the selection it will meet: the committed one, advanced by every change set scheduled
+  to take effect before it. Each item types `idHex`, `effectiveHeight`, `predecessorHex`,
+  `successorHex`, `status` (`Scheduled`, or `Activated`, `Lapsed` or `Cancelled` with the
+  `height` at which that happened) and the frozen `notice`. The complete `ChangeSetRecordV1` stays
+  available as `record`, with integers above `Number.MAX_SAFE_INTEGER` as bigint.
+- `proposeRuntimeUpgrade(changeSet, { provenance })` posts the exact `ChangeSetV1` JSON object as
+  `change_set` with the trusted release signers' `ChangeSetEndorsementV1` objects as `provenance`,
+  and returns the drafted SORA Parliament proposal that schedules it. While the universal root
+  commits a `runtime_provenance_policy_v1`, the proposal needs endorsements from its threshold of
+  distinct trusted signers (each produced by `iroha runtime upgrade endorse`); a root without that
+  policy takes none, and `provenance` defaults to `[]`. Before sending, the SDK requires the exact
+  snake_case field set, the universal root, 32-byte lowercase hex identities and an
+  `effective_height` of at most `Number.MAX_SAFE_INTEGER`; pass larger integers inside published
+  definitions or transitions as bigint.
+- `cancelRuntimeUpgrade(idHex)` returns the drafted proposal that withdraws a scheduled change set.
+- `attestRuntimeUpgrade(idHex)` asks the node to sign its support for a scheduled change set with
+  its own validator key. The node refuses unless its release executes the successor selection and
+  its key is a committee member; the draft holds exactly one `iroha.runtime.support.attest.v1`
+  instruction to submit.
+- `getRuntimeRelease()` reports the node's build, its release digest, and whether its release
+  executes the committed selection and each scheduled successor, naming the first definition it
+  lacks (`ToriiRuntimeReleaseSupport`).
+
+Each propose or cancel draft contains exactly one
+`iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal` instruction (`wire_id` and the
+framed `payload_hex`) for your wallet or key store to sign and submit; admission happens when the
+signed proposal executes. There is no activation call: an approved change set activates at the
+start of its effective block once the validator committee has attested support and the frozen
+notice has elapsed, and otherwise lapses.
 
 ```js
-const torii = new ToriiClient("http://localhost:8080");
+import { NetworkId, OperatorSigningContext, ToriiClient } from "@iroha/iroha-js";
+
+const torii = new ToriiClient(toriiUrl, {
+  localSigningContext,
+  operatorSigningContext: new OperatorSigningContext(
+    NetworkId.parse(exactNetworkId),
+    runtimeOperatorSigner,
+  ),
+});
 const caps = await torii.getNodeCapabilities();
 console.log("ABI version", caps.abiVersion);
 console.log("Allowed curve IDs", caps.crypto.curves.allowedCurveIds);
 console.log("Allowed curve bitmap", caps.crypto.curves.allowedCurveBitmap);
 
-const abi = await torii.getRuntimeAbiActive();
+const abi = await torii.getRuntimeAbiActive({ canonicalAuth });
 console.log(`Runtime ABI v${abi.abiVersion}`);
+const { upgradeEventsTotal } = await torii.getRuntimeMetrics({ canonicalAuth });
+console.log(`scheduled=${upgradeEventsTotal.scheduled} lapsed=${upgradeEventsTotal.lapsed}`);
 
-const upgrades = await torii.listRuntimeUpgrades();
-for (const item of upgrades) {
-  console.log(`${item.idHex} -> ${item.record.status.kind}`);
+const runtime = await torii.listRuntimeUpgrades();
+console.log(`selection ${runtime.selectionIdHex}, committee of ${runtime.committee.length}`);
+for (const item of runtime.items) {
+  const at = item.status.kind === "Scheduled" ? "" : ` at ${item.status.height}`;
+  console.log(`${item.idHex} effective ${item.effectiveHeight}: ${item.status.kind}${at}`);
 }
 
-const manifest = {
-  name: "ABI v1 maintenance",
-  description: "Schedule a no-ABI-change runtime rollout",
-  abiVersion: 1,
-  abiHash: "0123...cdef",
-  startHeight: 10_000,
-  endHeight: 10_500,
-};
-const draft = await torii.proposeRuntimeUpgrade(manifest);
-console.log(draft.tx_instructions);
+// Nothing is scheduled before this change set, so it meets the committed selection. The
+// endorsements come from the trusted release signers of the committed provenance policy.
+const draft = await torii.proposeRuntimeUpgrade({
+  network: exactNetworkId,
+  root: { kind: "Universal", content: null },
+  predecessor: runtime.selectionIdHex,
+  successor: successorSelectionIdHex,
+  effective_height: 120_000,
+  publish: [],
+  transitions: [{ kind: "Activate", content: definitionIdHex }],
+  qualification: qualificationDigestHex,
+}, { provenance: releaseSignerEndorsements });
+const [{ wire_id: wireId, payload_hex: payloadHex }] = draft.tx_instructions;
+
+const withdrawal = await torii.cancelRuntimeUpgrade(scheduledChangeSetIdHex);
+console.log(withdrawal.tx_instructions[0].wire_id);
 ```
 
 ### Network time helpers

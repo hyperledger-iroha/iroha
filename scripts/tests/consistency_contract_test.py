@@ -63,6 +63,9 @@ def test_schema_uses_active_advanced_command() -> None:
     assert "cargo run --bin kagami -- schema" not in hook
     assert "> ./specs/references/schema.json" not in hook
     assert "genesis_schema.json" not in hook
+    # A redirect would blank the tracked snapshot whenever the build fails.
+    assert "> ./crates/iroha_kagami/CommandLineHelp.md" not in hook
+    assert "consistency.sh --update cli-help" in hook
 
 
 @pytest.mark.parametrize(

@@ -5,7 +5,7 @@ fn consensus_caps(fingerprint: [u8; 32]) -> ConsensusConfigCaps {
         execution_policy_hash: [0xB0; 32],
         nexus_policy_digest: [0xC1; 32],
         native_config_fingerprint: fingerprint,
-        ivm_gas_schedule_hash: [0xD2; 32],
+        host_profiles: crate::HostProfileSet::new([[0xD2; 32]]).expect("one profile"),
     }
 }
 #[test]

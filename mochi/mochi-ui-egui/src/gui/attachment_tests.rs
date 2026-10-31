@@ -27,15 +27,19 @@ fn workspace() -> (tempfile::TempDir, DeveloperWorkspace) {
 
 fn prepare_selected(workspace: &DeveloperWorkspace) -> ManagedNetwork {
     // As in mochi-core's workspace tests, the native test executable is not Kagami's
-    // worker. Genuine preparation must reach the original worker-start timeout; this
+    // worker. Genuine preparation reaches an owned-child exit during listener handoff; this
     // fixture never reports a ready localnet or an authenticated remote attachment.
     let failure = workspace.create_localnet("original").unwrap_err();
+    let expected = format!(
+        "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+        ManagedError::Timeout(Duration::from_secs(30))
+    );
     assert!(
         matches!(
             failure.downcast_ref::<ManagedError>(),
-            Some(ManagedError::Timeout(timeout)) if *timeout == Duration::from_secs(30)
+            Some(ManagedError::Invalid(message)) if message == &expected
         ),
-        "genuine preparation must retain the original startup failure: {failure}"
+        "genuine preparation must retain the owned worker's listener handoff failure: {failure}"
     );
     workspace.select("original").unwrap();
     workspace.network(None).unwrap()

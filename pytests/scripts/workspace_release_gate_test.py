@@ -56,7 +56,7 @@ REQUIRED_NUMERIC_TEST_COMMANDS = (
 
 NEXTEST_CONFIG = ROOT / ".config" / "nextest.toml"
 NEXTEST_INSTALL_ACTION = (
-    "uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177"
+    "uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037"
 )
 RELEASE_GATE_FETCH = "cargo fetch --locked"
 RELEASE_GATE_COMMAND = (
@@ -1614,8 +1614,8 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once(
                 workflow,
-                "    branches: [main]\n",
-                "    branches: [main]\n    paths-ignore: ['**/*.md']\n",
+                "    branches: [main, optimizations]\n",
+                "    branches: [main, optimizations]\n    paths-ignore: ['**/*.md']\n",
             ),
             "PR workflow must classify every change before selectively skipping jobs",
         ),

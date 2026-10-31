@@ -46,7 +46,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "57f6ba80eb0573d6f3161e51112be325f7b1465cc498eaeab4b61eb8725b0469";
+    "9997dfeb6c511130341a586a1065edd429b62f62acad8f995483d2458083230d";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -991,7 +991,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     let actual_rollout_plan_sha256 = hex::encode(sha256(CANONICAL_ROLLOUT_PLAN_V1));
     if actual_rollout_plan_sha256 != ROLLOUT_PLAN_SHA256_V1 {
         bail!(
-            "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}"
+            "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}; run scripts/update_taira_privacy_rollout_pins.py"
         );
     }
     validate_rollout_plan_v1(CANONICAL_ROLLOUT_PLAN_V1)?;
@@ -1188,6 +1188,9 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         "cargo_lock_sha256",
         &hex::encode(sha256(CANONICAL_CARGO_LOCK_V1)),
         "privacy rollout plan",
+    )
+    .wrap_err(
+        "privacy rollout plan `cargo_lock_sha256` differs from the compiled Cargo.lock; run scripts/update_taira_privacy_rollout_pins.py",
     )?;
     let matrix = privacy_exact12_matrix_bytes_v1()
         .map_err(|source| eyre!("failed to derive the native exact-12 matrix: {source}"))?;

@@ -1041,6 +1041,7 @@ mod tests {
                     iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
                 query_fanout_max_working_set_bytes:
                     iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES,
+                finality_max_working_set_bytes: iroha_config::parameters::defaults::torii::FINALITY_MAX_WORKING_SET_BYTES,
                 sccp_history_cache_max_bytes: iroha_config::parameters::defaults::torii::SCCP_HISTORY_CACHE_MAX_BYTES,
                 app_api_routed_read_body_read_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
@@ -1397,6 +1398,7 @@ mod tests {
                 resources: iroha_config::parameters::actual::SnapshotResourcePolicy::default(),
                 verification_public_key: None,
                 signing_private_key: None,
+                upgrade_checkpoint: Default::default(),
             },
             telemetry_profile: iroha_config::parameters::actual::TelemetryProfile::Disabled,
             telemetry: None,
@@ -1768,8 +1770,6 @@ mod tests {
                             .expect("valid default JDG signature scheme")
                     })
                     .collect(),
-                runtime_upgrade_provenance:
-                    iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
                 viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
                 sorafs_pin_fee_asset_id:

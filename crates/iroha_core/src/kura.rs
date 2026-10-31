@@ -107,7 +107,8 @@ const BOUND_PROGRESS_APPEND_INTENT_DIGEST_DOMAIN: &[u8] =
     b"iroha:kura:bound-progress-append-intent:v1\0";
 const MAX_BLOCK_COMMIT_MARKER_BYTES: usize = 1024;
 const VERIFIED_SNAPSHOT_TAIL_FILE_NAME: &str = "verified_snapshot_tail.norito";
-const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
+/// The store-root lock file; a copy of a store takes its own lock instead of copying this one.
+pub(crate) const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 /// Retired pre-release rollback marker. No first-release code writes or recovers it;
 /// its presence is rejected so operators must remove stale state explicitly.
 const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
@@ -407,6 +408,9 @@ pub struct Kura {
     _store_root_lock_file: Option<std::fs::File>,
     /// Retains the temporary storage directory used by isolated Kura instances.
     temp_store_dir: Option<tempfile::TempDir>,
+    /// Last block of this chain that the previous node release executed, when this release took
+    /// over the running network there (`state::upgrade_checkpoint`).
+    upgrade_checkpoint: std::sync::OnceLock<crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
 }
 #[derive(Debug)]
 struct KuraInstanceIdentityMarker;
@@ -1122,6 +1126,31 @@ impl Kura {
             .prefix("iroha-staging-kura-")
             .tempdir()
             .map_err(|error| Error::IO(error, std::env::temp_dir()))?;
+        Self::adopt_temporary_with_configured_lane_catalog(
+            config,
+            lane_config,
+            configured_lane_catalog,
+            temp_store_dir,
+        )
+    }
+
+    /// Open the store a caller placed in the temporary directory `temp_store_dir` as isolated
+    /// temporary staging, such as a copy of another store (`iroha3d --check-replay`).
+    ///
+    /// The copy is opened as `config` opens a store, with the same configured-catalog
+    /// authentication as [`Self::new_with_configured_lane_catalog`], and the returned Kura owns
+    /// the directory: dropping it removes the copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured lane catalog cannot open an authenticated Kura in the
+    /// directory.
+    pub fn adopt_temporary_with_configured_lane_catalog(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_lane_catalog: &LaneCatalog,
+        temp_store_dir: tempfile::TempDir,
+    ) -> Result<Arc<Self>> {
         let mut temporary_config = config.clone();
         temporary_config.store_dir = WithOrigin::inline(temp_store_dir.path().to_path_buf());
         let (mut kura, _) = Self::new_with_configured_lane_catalog(
@@ -1601,6 +1630,7 @@ impl Kura {
             #[cfg(test)]
             total_disk_usage_scan_paused: AtomicBool::new(false),
             temp_store_dir: None,
+            upgrade_checkpoint: std::sync::OnceLock::new(),
         });
 
         if config.init_mode == InitMode::Strict {
@@ -1818,6 +1848,7 @@ impl Kura {
             #[cfg(test)]
             total_disk_usage_scan_paused: AtomicBool::new(false),
             temp_store_dir: Some(temp_store_dir),
+            upgrade_checkpoint: std::sync::OnceLock::new(),
         })
     }
     /// Attach a telemetry sink for storage and durable finality reporting.
@@ -6644,6 +6675,27 @@ impl Kura {
     /// Return whether this process deliberately skipped historical startup audits.
     pub const fn emergency_fast_startup_enabled(&self) -> bool {
         self.auxiliary_history_deferred
+    }
+    /// Record the upgrade checkpoint of this chain before any State is restored from it.
+    ///
+    /// # Errors
+    /// A different checkpoint was already recorded.
+    pub fn set_upgrade_checkpoint(
+        &self,
+        checkpoint: crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
+    ) -> Result<(), &'static str> {
+        let recorded = self.upgrade_checkpoint.get_or_init(|| checkpoint.clone());
+        if *recorded == checkpoint {
+            Ok(())
+        } else {
+            Err("Kura already records a different upgrade checkpoint")
+        }
+    }
+    /// The upgrade checkpoint of this chain, when this release took it over from a predecessor.
+    pub fn upgrade_checkpoint(
+        &self,
+    ) -> Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1> {
+        self.upgrade_checkpoint.get()
     }
     /// Read the one canonical hash needed to bind a restored snapshot in emergency Fast mode.
     ///

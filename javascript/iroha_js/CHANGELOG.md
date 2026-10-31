@@ -4,6 +4,29 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- `attestRuntimeUpgrade(idHex)` has the node sign its support for a scheduled runtime change set with
+  its own validator key (`POST /v1/runtime/upgrades/attest/{id}`) and admits exactly one
+  `iroha.runtime.support.attest.v1` draft. `getRuntimeRelease()` reads `GET /v1/runtime/release` as
+  `ToriiRuntimeReleaseSupport`: the build, the release digest, and whether the release executes the
+  committed selection and each scheduled successor, naming the first missing definition. Both sign with
+  the client's `OperatorSigningContext`.
+
+- Runtime upgrades use governed change sets (`specs/live_runtime_upgrades.md` §6) and the manifest API is
+  removed. `listRuntimeUpgrades()` returns the `/v1/runtime/upgrades` snapshot (`ToriiRuntimeUpgradesSnapshot`):
+  the committed `selectionIdHex` and `selection`, the attesting `committee` and `committeeDigestHex`, and
+  items typing `idHex`, `effectiveHeight`, `predecessorHex`, `successorHex`, `status` (`Scheduled`, or
+  `Activated`, `Lapsed`, `Cancelled` with a height) and `notice`, with the complete record kept losslessly
+  as `record`. `proposeRuntimeUpgrade(changeSet, { provenance })` posts `{ change_set, provenance }`: an exact
+  universal-root `ChangeSetV1` and the trusted release signers' `ChangeSetEndorsementV1` objects the
+  committed `runtime_provenance_policy_v1` requires (`ToriiRuntimeChangeSetEndorsement`); it and
+  `cancelRuntimeUpgrade(idHex)` return exactly one `ProposeRuntimeUpgradeProposal` draft. The three calls
+  sign with the client's `OperatorSigningContext`, which these operator routes require.
+  `activateRuntimeUpgrade` is removed: an approved change set activates at the start of its effective
+  block. `getRuntimeMetrics()` counts `scheduled`, `activated`, `lapsed` and `canceled` change sets. The
+  governance `RuntimeUpgrade` payload is `{ proposal_operator, action, notice, proposed_ms }`, where
+  `action` schedules a `ChangeSetV1` or cancels a change-set id and every number-encoded u64 is at most
+  `Number.MAX_SAFE_INTEGER`. The manifest, SBOM, SLSA and provenance types are removed.
+
 - `PetalScanSession` reads a capture's turn lanes after its bands when it has time to spare: when the
   capture's work and the session's last turn try fit a 30 fps camera's frame time (`PETAL_CAPTURE_BUDGET_MS`),
   timed with `performance.now()`. A slow phone core never has the time, so it still leaves them to the shown

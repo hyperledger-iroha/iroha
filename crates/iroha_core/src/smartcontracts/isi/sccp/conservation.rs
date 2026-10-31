@@ -67,7 +67,7 @@ impl ValueGuard {
     /// Fails when a route's escrow balance and recorded backing changed by different amounts,
     /// a route disappeared, or a revision's liability grew past its `max_wrapped_supply`.
     pub fn verify(self, world: &(impl WorldReadOnly + ?Sized)) -> Result<(), Error> {
-        if cfg!(all(test, sumeragi_core_mutation = "HC488")) {
+        if cfg!(all(test, sumeragi_core_mutation = "HC495")) {
             return Ok(());
         }
         let after = positions(world)?;

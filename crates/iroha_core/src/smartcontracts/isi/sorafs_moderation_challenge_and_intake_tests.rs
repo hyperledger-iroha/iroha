@@ -1,3 +1,192 @@
+fn sccp_retained_challenge_fixture(finalized: bool) -> Fixture {
+    let mut fixture = Fixture::new(1);
+    let challenger = account(&fixture.outsider);
+    fixture
+        .run(2_500, |tx| {
+            RaiseSorafsModerationChallenge::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                "challenge-1".to_owned(),
+                ModerationChallengeKindV1::EvidenceMismatch,
+                None,
+                [0x51; 32],
+                "wrong evidence".to_owned(),
+            )
+            .execute(&challenger, tx)
+        })
+        .unwrap();
+    if finalized {
+        let manager = fixture.manager_id();
+        fixture
+            .run(2_900, |tx| {
+                ResolveSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-1".to_owned(),
+                    ModerationChallengeDecisionV1::Accepted,
+                )
+                .execute(&manager, tx)
+            })
+            .unwrap();
+        fixture
+            .run(FINALIZE_AT, |tx| {
+                FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                    .execute(&manager, tx)
+            })
+            .unwrap();
+    }
+    fixture
+}
+
+#[test]
+fn sccp_unrelated_moderation_challenge_decode_refusal_defers_full_precheck() {
+    use crate::smartcontracts::isi::sccp::{escrow, store, test_support};
+    use iroha_data_model::{
+        bridge::SccpNetworkV1,
+        isi::{Mint, Register},
+        sccp::{escrow::sccp_taira_xor_asset_definition_id, registry::SccpRouteActivationV1},
+    };
+    let fixture = sccp_retained_challenge_fixture(false);
+    let manager = fixture.manager_id();
+    let recipient = test_support::authority(72);
+    let mut block = fixture.state.block(header(fixture.next_height, 2_600));
+    let mut tx =
+        block.transaction_for_fastpq_testing(iroha_crypto::Hash::new("sccp-moderation-precheck"));
+    let xor = sccp_taira_xor_asset_definition_id();
+    if tx.world.asset_definition(&xor).is_err() {
+        Register::asset_definition(AssetDefinition::numeric(
+            xor.clone(),
+            "XOR",
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .execute(&manager, &mut tx)
+        .unwrap();
+    }
+    Register::account(Account::new(recipient.clone()))
+        .execute(&manager, &mut tx)
+        .unwrap();
+    Mint::asset_quantity(
+        escrow::xor_quantity(10 * test_support::ONE_XOR).unwrap(),
+        AssetId::of(xor.clone(), manager.clone()),
+    )
+    .execute(&manager, &mut tx)
+    .unwrap();
+    let network = SccpNetworkV1::EthereumMainnet;
+    test_support::install_value_route(
+        &mut tx,
+        network,
+        1,
+        SccpRouteActivationV1::Bidirectional,
+        100 * test_support::ONE_XOR,
+    );
+    escrow::lock(
+        &mut tx,
+        network,
+        &manager,
+        10 * test_support::ONE_XOR,
+        [0x71; 32],
+    )
+    .unwrap();
+    let mut route = store::routes::get(tx.world(), &network).unwrap().clone();
+    route.revisions.get_mut(&1).unwrap().liability = 10 * test_support::ONE_XOR;
+    let source = route.escrow.clone();
+    store::routes::insert(&mut tx, network, route).unwrap();
+    escrow::precheck_release(&tx, network, &recipient, test_support::ONE_XOR)
+        .expect("unrelated live moderation custody does not block a valid SCCP release");
+    assert!(!tx.is_execution_deferred());
+    let key = challenge_key("case-1", "round-1", "challenge-1");
+    let original = tx.world.smart_contract_state.get(&key).unwrap().clone();
+    tx.world.smart_contract_state.insert(key.clone(), vec![0]);
+    escrow::precheck_release(&tx, network, &recipient, test_support::ONE_XOR).unwrap_err();
+    assert!(
+        !tx.is_execution_deferred(),
+        "corrupt state is a deterministic refusal"
+    );
+    tx.world.smart_contract_state.insert(key, original);
+    let before: Vec<_> = tx
+        .world
+        .smart_contract_state
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    norito::with_decode_limits_scope(
+        DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+        || escrow::precheck_release(&tx, network, &recipient, test_support::ONE_XOR),
+    )
+    .unwrap_err();
+    assert!(tx.is_execution_deferred());
+    assert!(matches!(
+        tx.borrow_execution_deferral()
+            .unwrap()
+            .decode_refusal()
+            .unwrap()
+            .resource_error(),
+        norito::core::DecodeResourceError::NestingDepthExceeded { limit: 0, .. }
+    ));
+    let after: Vec<_> = tx
+        .world
+        .smart_contract_state
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    assert_eq!(before, after);
+    assert_eq!(
+        test_support::xor_balance(tx.world(), &source),
+        10 * test_support::ONE_XOR
+    );
+    assert_eq!(test_support::xor_balance(tx.world(), &recipient), 0);
+    assert_eq!(store::pending_count(tx.world(), &(network, 1)), (0, 0));
+    test_support::assert_escrow_invariant(tx.world(), "unrelated moderation local refusal");
+}
+
+#[test]
+fn sccp_moderation_nested_challenge_case_and_outcome_readers_keep_original_refusal() {
+    for stage in 0..3 {
+        let fixture = sccp_retained_challenge_fixture(true);
+        let mut block = fixture
+            .state
+            .block(header(fixture.next_height, FINALIZE_AT + 1));
+        let tx = block
+            .transaction_for_fastpq_testing(iroha_crypto::Hash::new("sccp-moderation-readers"));
+        let world = tx.world();
+        let read = || match stage {
+            0 => read_challenge_with_owner(
+                world,
+                "case-1",
+                "round-1",
+                "challenge-1",
+                None,
+                Some(world),
+            )
+            .map(|value| assert!(value.is_some())),
+            1 => read_case_with_owner(world, "case-1", "round-1", None, Some(world))
+                .map(|value| assert!(value.is_some())),
+            _ => read_outcome_with_owner(world, "case-1", "round-1", None, Some(world))
+                .map(|value| assert!(value.is_some())),
+        };
+        read().expect("retained finalized challenge, case and outcome are valid");
+        assert!(!tx.is_execution_deferred());
+        norito::with_decode_limits_scope(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+            read,
+        )
+        .unwrap_err();
+        assert!(
+            tx.is_execution_deferred(),
+            "reader {stage} lost its original refusal"
+        );
+        assert!(matches!(
+            tx.borrow_execution_deferral()
+                .unwrap()
+                .decode_refusal()
+                .unwrap()
+                .resource_error(),
+            norito::core::DecodeResourceError::NestingDepthExceeded { limit: 0, .. }
+        ));
+    }
+}
+
 #[test]
 fn accepted_challenge_blocks_reveal_and_closes_without_penalties() {
     let mut fixture = Fixture::new(1);

@@ -1,0 +1,4 @@
+# The branch contributors integrate with. The local guards and scripts/dev_workflow.sh compare
+# against it unless AGENTS_BASE_REF or --base says otherwise. Change this one line when the
+# integration branch moves.
+origin/optimizations

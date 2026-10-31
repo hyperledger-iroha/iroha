@@ -7,7 +7,7 @@ private val UNREGISTER_KAIGI_RELAY_ARGUMENTS = setOf("action", "relay_id")
 class UnregisterKaigiRelayInstruction(
     @JvmField val relayId: String,
     arguments: Map<String, String>? = null,
-) : InstructionTemplate {
+) : KaigiWireInstructionV1 {
 
     private val _arguments: Map<String, String> =
         KaigiInstructionUtils.immutableArguments(

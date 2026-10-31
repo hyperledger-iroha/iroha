@@ -343,7 +343,7 @@
      "contains": "[static.zk."
     },
     {
-     "path": "crates/iroha_deploy/src/localnet.rs",
+     "path": "crates/iroha_deploy/src/sora_network.rs",
      "contains": "zk.insert(\"halo2\""
     }
    ],
@@ -401,11 +401,11 @@
      "contains": "compute_genesis_confidential_policy_hash"
     },
     {
-     "path": "crates/iroha_deploy/src/localnet.rs",
+     "path": "crates/iroha_deploy/src/sora_network.rs",
      "contains": "compute_genesis_confidential_policy_hash"
     },
     {
-     "path": "crates/iroha_deploy/src/localnet/private_root.rs",
+     "path": "crates/iroha_deploy/src/sora_network/private_root.rs",
      "contains": "compute_genesis_confidential_policy_hash"
     },
     {
@@ -1202,7 +1202,8 @@
     ["crates/iroha_core/src/release_identity.rs", "env_read", "VERGEN_CARGO_TARGET_TRIPLE", 1],
     ["crates/iroha_core/src/release_identity.rs", "env_read", "VERGEN_GIT_SHA", 1],
     ["crates/iroha_js_host/src/lib.rs", "env_read", "IROHA_GIT_COMMIT_HASH", 1],
-    ["crates/iroha_kagami/src/main.rs", "env_read", "IROHA_GIT_COMMIT_HASH", 1]
+    ["crates/iroha_kagami/src/main.rs", "env_read", "IROHA_GIT_COMMIT_HASH", 1],
+    ["crates/iroha_kagami/src/main.rs", "env_read", "VERGEN_GIT_SHA", 1]
    ]
   },
   {
@@ -1515,9 +1516,10 @@
    "sites": [
     ["crates/iroha_cli/src/client_config.rs", "env_read", "HOME", 1],
     ["crates/iroha_cli/src/client_config.rs", "env_read", "USERPROFILE", 1],
-    ["crates/iroha_deploy/src/localnet.rs", "env_read", "CARGO_TARGET_DIR", 1],
+    ["crates/iroha_deploy/src/localnet/bundle.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "LOCALAPPDATA", 1],
     ["crates/iroha_deploy/src/managed/workspace.rs", "env_read", "XDG_STATE_HOME", 1],
+    ["crates/iroha_deploy/src/sora_network.rs", "env_read", "CARGO_TARGET_DIR", 1],
     ["crates/iroha_test_network/src/config.rs", "env_read", "IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR", 1],
     ["crates/iroha_test_network/src/disposable_runtime_provider_broker.rs", "env_read", "TEMPDIR_IN_ENV", 1],
     ["crates/iroha_test_network/src/lib.rs", "env_read", "<expression>", 1],
@@ -1933,7 +1935,6 @@
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.parliament_sortition_pulse_delay_blocks", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.parliament_timed_ovn.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.plain_voting_enabled", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.runtime_upgrade_provenance.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.slash_double_vote_bps", 2],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.slash_ineligible_proof_bps", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "governance.slash_invalid_proof_bps", 4],
@@ -1998,21 +1999,46 @@
    "sites": []
   },
   {
+   "id": "cfg.nexus.private_settlement_frozen_v1",
+   "kind": "node_local_config",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_config/src/parameters/actual.rs",
+   "symbol": "fn frozen_v1() -> Self",
+   "gates": "The original private-settlement fields inside the signed V1 SORA Nexus consensus-policy preimage.",
+   "decided_by": "Literal immutable V1 baseline bytes; current private validity comes from the authenticated private_settlement_policy_v1 Parameters extension or its explicit native absence semantics.",
+   "attribution": "read",
+   "note": "These fifteen preimage fields retain their original nominal layout and position so source ownership changes do not reinterpret authenticated genesis metadata. They read no node settings or mutable defaults. In particular the original sidecar-capacity words remain fixed commitment bytes, while current sidecar capacity is local. This fixed baseline does not reconstruct or qualify arbitrary earlier non-default configurations or live-obligation histories.",
+   "sites": [],
+   "anchors": [
+    {
+     "path": "crates/iroha_config/src/parameters/actual.rs",
+     "function": "frozen_v1",
+     "contains": "max_participants: 255"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_config/src/parameters/actual/tests.rs",
+     "name": "frozen_private_settlement_v1_matches_original_commitment_bytes_and_position"
+    }
+   ]
+  },
+  {
    "id": "cfg.nexus.bounds",
    "kind": "node_local_config",
    "status": "open",
    "owner": "F.4",
    "path": "crates/iroha_config/src/parameters/actual.rs",
    "symbol": "pub fn nexus_consensus_policy_preimage_with_runtime_policies(",
-   "gates": "Ten [nexus] limits: atomic private settlement participants, carrier, proof, capsule and sidecar sizes (P.20 owns their boundary tests), uploaded-model plaintext bytes and chunk count (C.9), DA ingest quota count and bytes.",
+   "gates": "Four remaining [nexus] limits: uploaded-model plaintext bytes and chunk count (C.9), and DA ingest quota count and bytes.",
    "decided_by": "Typed committed parameters, read through the State view.",
    "attribution": "read",
-   "open_reason": "The committed-parameter mechanism exists (zk_validity_policy_v1). This family still reaches validation through the State copy installed from node configuration at startup; moving it needs its own typed committed parameter, the staged-genesis and deployment generators that author it, and regenerated deployment configurations.",
+   "open_reason": "Uploaded-model and DA validity bounds remain in the State projection of node configuration and require typed committed owners with regenerated authoring artifacts and current-candidate validation. Private-settlement validity bounds use PrivateSettlementPolicyV1 in the typed private_settlement_policy_v1 custom Parameters extension, with immutable native semantics for authenticated absence; node settings retain only local sidecar storage capacities.",
+   "note": "Private-settlement participant, carrier, proof and capsule bounds are consumed from PrivateSettlementPolicyV1.current_limits in the authenticated Parameters cell in Core and Torii. A malformed present custom payload never selects the absence profile. Their phase windows and pending drain are recorded under private_settlement.committed_windows. The signed V1 SORA Nexus consensus-policy preimage preserves its original fixed bytes across this owner move; current node-local sidecar record and byte capacities do not supply validity authority.",
    "sites": [
     ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_chunk_count_per_model", 2],
-    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_plaintext_bytes_per_model", 2],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_carrier_bytes", 3],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_participants", 2]
+    ["crates/iroha_core/src/smartcontracts/isi/soracloud.rs", "node_policy_read", "uploaded_models.max_plaintext_bytes_per_model", 2]
    ]
   },
   {
@@ -2072,10 +2098,10 @@
    "owner": "F.4",
    "path": "crates/iroha_config/src/parameters/actual.rs",
    "symbol": "NexusConsensusPolicyPreimageV1",
-   "gates": "The remaining Nexus consensus-policy preimage fields and recorded readers: lane, data space and routing identities, validator activation/capacity, lease and endorsement timing, settlement relation identity and windows, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version. Staking monetary terms have a separate original committed owner.",
+   "gates": "The remaining Nexus consensus-policy preimage fields and recorded readers: lane, data space and routing identities, validator activation/capacity, lease and endorsement timing, governance modules, fusion and autoscale policy, DA attester sampling and the preimage version. Staking monetary terms and private-settlement validity have separate committed owners.",
    "decided_by": "Committed State (the Nexus runtime catalog and lane policy already are; these values follow them).",
    "attribution": "read",
-   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement, autoscale and private-settlement settings. PublicLaneStakingPolicy now owns monetary terms in original committed Parameters; that migration does not close these separate validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
+   "open_reason": "The remaining recorded readers still consume the State projection of node configuration, including validator capacity, endorsement and autoscale settings. PublicLaneStakingPolicy owns monetary terms in original committed Parameters, and PrivateSettlementPolicyV1 in the typed custom Parameters extension owns private-settlement validity. Those migrations do not close the remaining validity inputs. Current-candidate native validation, original-parameter resource custody and whole-node parity remain unfinished.",
    "sites": [
     ["crates/iroha_core/src/block.rs", "node_policy_read", "da.*", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sns.rs", "node_policy_read", "endorsement.quorum", 1],
@@ -2084,18 +2110,15 @@
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "dataspace_fee_sponsor_program_ids", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.committee_keys", 1],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "node_policy_read", "endorsement.quorum", 3],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.*", 1],
-    ["crates/iroha_core/src/state.rs", "node_policy_read", "atomic_private_settlement.max_expiry_blocks", 2],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "autoscale.per_lane_target_tps", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "da.*", 1],
     ["crates/iroha_core/src/state.rs", "node_policy_read", "staking.*", 2],
     ["crates/iroha_core/src/state/output_publication.rs", "node_policy_read", "autoscale.*", 1],
     ["crates/iroha_core/src/state/runtime_catalog_commit.rs", "node_policy_read", "autoscale.*", 1],
-    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_validators", 1],
-    ["crates/iroha_torii/src/private_settlement.rs", "node_policy_read", "atomic_private_settlement.*", 1]
+    ["crates/iroha_core/src/sumeragi/penalties.rs", "node_policy_read", "staking.max_validators", 1]
    ],
-   "note": "The 18 retired node-policy rows were read against their replacement owners. Transaction execution borrows StateTransaction::staking_monetary_policy from original block Parameters (or the authenticated original genesis policy); slash caps, share/unbond bounds, currency and custody use this owner. Read-only preparation, coalition collateral and parent penalty planning borrow their captured World Parameters; absence refuses. SCCP checks both original and current committed monetary policy for retained-liability coherence. No transaction-local update substitutes original execution policy. max_validators still reads nexus.staking and remains recorded/open. Source reconciliation is not staking or whole-node qualification.",
+   "note": "The 18 retired node-policy rows were read against their replacement owners. Transaction execution borrows StateTransaction::staking_monetary_policy from original block Parameters (or the authenticated original genesis policy); slash caps, share/unbond bounds, currency and custody use this owner. Read-only preparation, coalition collateral and parent penalty planning borrow their captured World Parameters; absence refuses. SCCP checks both original and current committed monetary policy for retained-liability coherence. No transaction-local update substitutes original execution policy. max_validators still reads nexus.staking and remains recorded/open. Source reconciliation is not staking or whole-node qualification. Private-settlement profile/policy versions are fixed by the native model, and validity sizes, participant counts, auditor thresholds, padding, retention and phase windows use committed private-settlement limits. Pending changes retain an exclusive committed drain boundary; continuations preserve existing obligations. No legacy node-policy reader remains for this family.",
    "anchors": [
     {
      "path": "crates/iroha_core/src/state.rs",
@@ -2124,8 +2147,10 @@
    "gates": "The complete root monetary schedule, exact currency, sink, sponsor custody and Global claim exemptions.",
    "decided_by": "The mandatory root_fees_v1 parameter, validated and atomically projected by StateParameters. Each block freezes its predecessor projection; restore rebuilds it from original canonical Parameters. H1 authors exactly one original policy and retains both signed policy digest checks. Currency and sponsor custody are immutable after H1; other authorized terms apply next block. Node fee and fee-relay worker configuration are removed.",
    "attribution": "read",
-   "open_reason": "The moved execution readers, including SoraCloud fee currency and sink resolution, now borrow the original committed StateParameters fee policy; quote readers borrow their supplied committed World. Two remaining detector rows retain fee projection consumers in Torii. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
+   "open_reason": "Execution and quote readers borrow committed StateParameters fee policy. The three detector occurrences in executor.rs and executor/root_fees.rs pass nexus.fees to captured_execution_policy only as the alternate for test-only mutation HC396. Production requires original.root_fees() and refuses its absence; the alternate is never a fallback. Two Torii fee projection consumers remain recorded. Current-candidate native compilation, generated digests/fixtures, retained-parameter resource custody and combined network qualification remain pending; no complete F.4 or monetary qualification is claimed.",
    "sites": [
+    ["crates/iroha_core/src/executor.rs", "node_policy_read", "fees", 2],
+    ["crates/iroha_core/src/executor/root_fees.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/game.rs", "node_policy_read", "fees", 1],
     ["crates/iroha_torii/src/lib.rs", "node_policy_read", "fees", 2]
    ],
@@ -3245,7 +3270,7 @@
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/q.rs", "qualification", "qualification", 42],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/q/session.rs", "qualification", "qualification", 30],
     ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/sigma.rs", "qualification", "qualification", 24],
-    ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/wallet.rs", "qualification", "qualification", 73],
+    ["crates/iroha_core_zk/src/kagemusha_wallet_artifacts_v1/producer_inventory/wallet.rs", "qualification", "qualification", 83],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker.rs", "qualification", "qualification", 1],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/issuer_worker_configuration.rs", "qualification", "qualification", 2],
     ["crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/owner.rs", "qualification", "qualification", 1],
@@ -3637,7 +3662,7 @@
     ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 2],
     ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 50],
     ["crates/iroha_data_model/src/privacy/proofs.rs", "global_manifest", "exact12", 1],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 20],
+    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 21],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 3],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 130],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "release_manifest", 13],
@@ -5378,8 +5403,9 @@
    "gates": "JavaScript SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
+    ["javascript/iroha_js/src/governanceProposalV1.js", "sdk_availability", "qualification", 4],
     ["javascript/iroha_js/src/parliamentApiV1.js", "sdk_availability", "qualification", 2]
    ]
   },
@@ -5407,8 +5433,6 @@
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "exact12", 77],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt", "sdk_availability", "readiness", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/SubmitPrivacyZkX509CertificateV1.kt", "sdk_availability", "exact12", 1],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "exact12", 1],
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "qualification", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "sdk_availability", "release_manifest", 1],
     ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt", "sdk_availability", "exact12", 4]
    ]
@@ -5470,9 +5494,10 @@
    "gates": "Kotlin/Java/Android SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
-    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt", "sdk_availability", "qualification", 2]
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentApiV1.kt", "sdk_availability", "qualification", 2],
+    ["kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ParliamentProposalValidatorV1.kt", "sdk_availability", "qualification", 2]
    ]
   },
   {
@@ -5537,8 +5562,9 @@
    "gates": "Python SDK: parliament API models.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients.",
+   "note": "`CompleteQualification` is a public transition kind of the Parliament procedure and \"Qualification\" the label of its stage, both committed governance State. Where the word `readiness` occurs, it names the projection of `GET /v1/gov/capabilities` (network identity, ABI version, supported proposal kinds, body sizes), a read of committed governance State. The SDK decodes these values; no qualification record is involved. The timed-OVN TLE models with their qualified dealer sets were removed from the clients. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
+    ["python/iroha_torii_client/governance_proposals.py", "sdk_availability", "qualification", 3],
     ["python/iroha_torii_client/parliament_api.py", "sdk_availability", "qualification", 2],
     ["python/iroha_torii_client/parliament_api.py", "sdk_availability", "readiness", 3]
    ]
@@ -5597,7 +5623,7 @@
    "gates": "Swift SDK: words that a detector matches in names and comments.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_swift.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. KagemushaWalletApplePlatformV1.swift and KagemushaWalletAppleSystemV1.swift mention in comments that platform rollback qualification stays open; no code reads a qualification record. The X.509 signing-preparation and KAGEMUSHA fold-progress readiness hits are API documentation: they grant no release readiness or monetary completion.",
+   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_swift.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. KagemushaWalletApplePlatformV1.swift and KagemushaWalletAppleSystemV1.swift mention in comments that platform rollback qualification stays open; no code reads a qualification record. The X.509 signing-preparation and KAGEMUSHA fold-progress readiness hits are API documentation: they grant no release readiness or monetary completion. The runtime change-set proposal models name `qualification`, the 32-byte digest of the composition the proposer tested and validators attest to (specs/live_runtime_upgrades.md §6); the SDK checks its hex shape, and Core binds it into the committed change set. It is a field of committed governance State, not a qualification record.",
    "sites": [
     ["IrohaSwift/Sources/IrohaSwift/AccelerationSettings.swift", "sdk_availability", "qualification", 2],
     ["IrohaSwift/Sources/IrohaSwift/ConnectClient.swift", "sdk_availability", "qualification", 1],
@@ -5610,7 +5636,7 @@
     ["IrohaSwift/Sources/IrohaSwift/NativeAcceleration.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/Petal/PetalDecoder.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/RetailFeeV1.swift", "sdk_availability", "qualification", 8],
-    ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "qualification", 6],
+    ["IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "sdk_availability", "qualification", 8],
     ["IrohaSwift/Sources/IrohaSwift/ToriiSumeragiModels.swift", "sdk_availability", "readiness", 2],
     ["IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift", "sdk_availability", "qualification", 1],
     ["IrohaSwift/Sources/IrohaSwift/ValidatorStakingNoritoV1.swift", "sdk_availability", "qualification", 2],
@@ -5712,12 +5738,13 @@
    "gates": "SCCP RegisterRoute requires original native committee/deployment authority and completed Parliament and reconciliation launch relations.",
    "decided_by": "Outside the ZK delivery plan; actual canonical authority and launch relations must be implemented before registration.",
    "attribution": "read",
-   "note": "RegisterRoute validates original Global/NetworkId/instance identity, retained generation pins and successor chains, canonical-time margins, TON StateInit with locked code and the exact locked EVM CREATE2 address. It still refuses missing Parliament and reconciliation launch authority; a valid pin or deployment shape is not permission to register. Readiness projections in SDK, CLI and native metadata expose these implementation and committed-state requirements without granting authority. parliament_binding_ballot_available and sccp_reconciliation_available remain false; no launch qualification is claimed.",
+   "note": "RegisterRoute validates original Global/NetworkId/instance identity, retained generation pins and successor chains, canonical-time margins, TON StateInit with locked code and the exact locked EVM CREATE2 address. It still refuses missing Parliament and reconciliation launch authority; a valid pin or deployment shape is not permission to register. Readiness projections in SDK, CLI and native metadata expose these implementation and committed-state requirements without granting authority. parliament_binding_ballot_available and sccp_reconciliation_available remain false; no launch qualification is claimed. The Taira doctor's `--parliament` check reads the same public readiness projection through a signer-free client as a diagnostic (taira_doctor_accounts.rs); it authorizes nothing.",
    "sites": [
     ["crates/iroha/src/blocking/sccp.rs", "qualification", "readiness", 3],
     ["crates/iroha/src/client/sccp.rs", "qualification", "readiness", 4],
     ["crates/iroha_cli/src/sccp/governance.rs", "qualification", "qualification", 1],
     ["crates/iroha_cli/src/sccp/governance.rs", "qualification", "readiness", 3],
+    ["crates/iroha_cli/src/taira_doctor_accounts.rs", "qualification", "readiness", 2],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/governance_metadata.rs", "qualification", "readiness", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/governance_metadata/diagnostics.rs", "qualification", "readiness", 5],
     ["crates/iroha_torii/src/sccp.rs", "qualification", "readiness", 1],
@@ -5792,6 +5819,68 @@
    ]
   },
   {
+   "id": "private_settlement.committed_windows",
+   "kind": "wall_clock",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+   "symbol": "pub fn private_settlement_admission_deadline_v1(",
+   "gates": "Native private-payment phase durations, signed expiry spans and pending policy drain boundaries.",
+   "decided_by": "The validated PrivateSettlementPolicyV1 extracted from the authenticated Parameters cell and optional PrivacyProtocolPolicyV1 at the same World cut, compared with signed context/expiry heights and the executing block height. Exact parameter absence has immutable native V1 semantics; malformed presence is refused.",
+   "attribution": "read",
+   "note": "audit_timeout_blocks, prepare_timeout_blocks and commit_timeout_blocks are positive committed block counts whose checked sum cannot exceed max_expiry_blocks. exclusive_deadline and private_settlement_admission_deadline_v1 select the earliest committed effective_at_height for private-policy changes or native relation closure. No wall clock is read. Core Prepare-lock admission and Torii manifest admission consume the same policy function; genuine continuations keep their original obligations. This source classification does not qualify complete private-settlement execution or recovery.",
+   "sites": [
+    ["crates/iroha_data_model/src/privacy/private_settlement_policy.rs", "time_budget", "deadline", 5],
+    ["crates/iroha_data_model/src/privacy/private_settlement_policy.rs", "time_budget", "timeout", 12]
+   ],
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/state.rs",
+     "function": "apply_private_settlement_prepare_locks_v1",
+     "contains": "self.private_settlement_policy_v1()?"
+    },
+    {
+     "path": "crates/iroha_torii/src/private_settlement.rs",
+     "function": "active_config_at_view",
+     "contains": "PrivateSettlementPolicyV1::from_parameters"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_data_model/src/privacy/private_settlement_policy.rs",
+     "name": "original_drain_is_checked_and_admission_deadline_is_exclusive"
+    }
+   ]
+  },
+  {
+   "id": "core.state_view_waiter",
+   "kind": "wall_clock",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_core/src/state/view_acquisition.rs",
+   "symbol": "pub struct StateViewWaiter",
+   "gates": "An admitted query worker waits for the original busy State owner within its caller deadline and stop flag.",
+   "decided_by": "The original ReleaseWait permits a fresh State acquisition; the clock only bounds the local wait and supplies no State or finality authority.",
+   "attribution": "read",
+   "note": "StateViewWaiter::wait checks stop and the unchanged absolute deadline before polling the original release. Spurious or foreign wakes cannot extend it. Expiry returns false and cancels the waiter registration; finality interval reads retain the original Busy refusal or cancellation. Every retry reacquires State owners. This is query-service resource control, not transaction validity or a protocol timeout.",
+   "sites": [
+    ["crates/iroha_core/src/state/view_acquisition.rs", "core_wall_clock", "instant", 1]
+   ],
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/state/view_acquisition.rs",
+     "function": "wait",
+     "contains": ".checked_duration_since(Instant::now())"
+    },
+    {
+     "path": "crates/iroha_core/src/state/finality_proof_interval.rs",
+     "function": "wait_for_release",
+     "contains": "StateViewError::Busy(release)",
+     "count": 2
+    }
+   ]
+  },
+  {
    "id": "consensus.proof_destination_budget",
    "kind": "wall_clock",
    "status": "not_a_gate",
@@ -5801,10 +5890,10 @@
    "gates": "Local portable-proof destination construction stops after its caller deadline.",
    "decided_by": "CertifiedChain and the independent verifier establish finality from original committed material; a destination grants no authority.",
    "attribution": "read",
-   "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline.",
+   "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline. Native-frame destinations check the same deadline before moving charged wire ownership and while filling the committee. A busy State capture waits on its original release through StateViewWaiter under that deadline and cancellation flag; expiration retains the original local refusal rather than certifying a result.",
    "sites": [
-    ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 4],
-    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 13],
+    ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 5],
+    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 18],
     ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "wall_clock", "instant", 1]
    ]
   },
@@ -6135,11 +6224,6 @@
       "governance.slash_ineligible_proof_bps",
       "governance.alias_teu_minimum",
       "governance.jdg_signature_schemes",
-      "governance.runtime_upgrade_provenance.mode",
-      "governance.runtime_upgrade_provenance.require_sbom",
-      "governance.runtime_upgrade_provenance.require_slsa",
-      "governance.runtime_upgrade_provenance.trusted_signers",
-      "governance.runtime_upgrade_provenance.signature_threshold",
       "governance.viral.incentive_pool_account",
       "governance.viral.escrow_account",
       "governance.viral.reward_asset_definition_id",
@@ -6313,14 +6397,28 @@
    "catalog": "nexus_consensus_policy_v1",
    "groups": [
     {
-     "entry": "cfg.nexus.bounds",
+     "entry": "cfg.nexus.private_settlement_frozen_v1",
      "fields": [
+      "atomic_private_settlement.proof_profile_version",
       "atomic_private_settlement.max_participants",
-      "atomic_private_settlement.max_carrier_bytes",
+      "atomic_private_settlement.max_expiry_blocks",
+      "atomic_private_settlement.audit_timeout_blocks",
+      "atomic_private_settlement.prepare_timeout_blocks",
+      "atomic_private_settlement.commit_timeout_blocks",
+      "atomic_private_settlement.capsule_padding_classes_bytes",
       "atomic_private_settlement.max_proof_bytes",
       "atomic_private_settlement.max_capsule_bytes",
+      "atomic_private_settlement.max_carrier_bytes",
+      "atomic_private_settlement.sidecar_retention_blocks",
       "atomic_private_settlement.sidecar_max_records",
       "atomic_private_settlement.sidecar_max_total_bytes",
+      "atomic_private_settlement.default_min_auditor_approvals",
+      "atomic_private_settlement.permitted_policy_versions"
+     ]
+    },
+    {
+     "entry": "cfg.nexus.bounds",
+     "fields": [
       "uploaded_models.max_plaintext_bytes_per_model",
       "uploaded_models.max_chunk_count_per_model",
       "da.ingest_quota_max_count_per_account",
@@ -6349,15 +6447,6 @@
       "hf_shared_leases.drain_grace.nanoseconds",
       "endorsement.committee_keys",
       "endorsement.quorum",
-      "atomic_private_settlement.proof_profile_version",
-      "atomic_private_settlement.default_min_auditor_approvals",
-      "atomic_private_settlement.permitted_policy_versions",
-      "atomic_private_settlement.max_expiry_blocks",
-      "atomic_private_settlement.audit_timeout_blocks",
-      "atomic_private_settlement.prepare_timeout_blocks",
-      "atomic_private_settlement.commit_timeout_blocks",
-      "atomic_private_settlement.sidecar_retention_blocks",
-      "atomic_private_settlement.capsule_padding_classes_bytes",
       "governance.default_module",
       "governance.modules.name",
       "governance.modules.module_type",
@@ -6666,9 +6755,9 @@
   }
  },
  "summary": {
-  "entries": 232,
-  "sites": 1502,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 115, "open": 40, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 136, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 235,
+  "sites": 1505,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 118, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 139, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

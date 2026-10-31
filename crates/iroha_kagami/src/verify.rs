@@ -421,10 +421,21 @@ mod tests {
             .flatten()
             .expect("fixture NPoS snapshot");
         npos.xor_asset_definition_id = asset_definition_id.clone();
+        // A Global root pays fees in its NPoS XOR. Keep the fixture coherent so a candidate
+        // reaches the public binding checks instead of the earlier fee-currency refusal.
+        let mut fees =
+            iroha_data_model::block::consensus::RootFeePolicy::from_parameters(&parameters)
+                .expect("valid fixture fee policy")
+                .expect("fixture fee policy");
+        fees.fee_asset_id = asset_definition_id.clone();
         manifest
             .into_builder()
             .append_parameter(iroha_data_model::parameter::Parameter::Custom(
                 npos.into_custom_parameter(),
+            ))
+            .append_parameter(iroha_data_model::parameter::Parameter::Custom(
+                fees.into_custom_parameter()
+                    .expect("complete fixture fee authoring"),
             ))
             .next_transaction()
             .append_instruction(Register::asset_definition(

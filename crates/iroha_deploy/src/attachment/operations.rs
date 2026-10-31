@@ -200,6 +200,9 @@ impl AttachmentStore {
                                 "parent preparation differs from exact request",
                             )
                         })?;
+                    if preparation.unprepared_status() == Some(OperationStatus::Expired) {
+                        return Ok(self.progress(Some(OperationStatus::Expired)));
+                    }
                     let needs_prepare = match preparation.phase() {
                         iroha_wallet::operations::NativePreparationPhase::Missing
                         | iroha_wallet::operations::NativePreparationPhase::RequestOnly
@@ -244,6 +247,9 @@ impl AttachmentStore {
                                 "parent preparation differs from exact request",
                             )
                         })?;
+                    if preparation.unprepared_status() == Some(OperationStatus::Expired) {
+                        return Ok(self.progress(Some(OperationStatus::Expired)));
+                    }
                     let needs_prepare = match preparation.phase() {
                         iroha_wallet::operations::NativePreparationPhase::Missing
                         | iroha_wallet::operations::NativePreparationPhase::RequestOnly

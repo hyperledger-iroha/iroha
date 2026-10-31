@@ -2,35 +2,13 @@
 
 use iroha_data_model::privacy::{
     PrivacyCompiledProfileSnapshotV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-    PrivacyProtocolLimitsValidationError, PrivacyProtocolPolicyV1,
+    PrivacyProtocolLimitsValidationError, PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1,
     PrivacyProtocolPolicyValidationErrorV1,
 };
 use mv::storage::StorageReadOnly;
-use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1};
-
-/// Canonical key for an optional committed resource policy.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, norito::NoritoSchema,
-)]
-#[norito_schema(name = "iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1")]
-pub struct PrivacyProtocolPolicyKeyV1 {
-    protocol_id: PrivacyProtocolIdV1,
-}
-impl PrivacyProtocolPolicyKeyV1 {
-    /// Construct the sole key for the selected protocol.
-    #[must_use]
-    pub const fn new(protocol_id: PrivacyProtocolIdV1) -> Self {
-        Self { protocol_id }
-    }
-    /// Protocol selected by the storage key.
-    #[must_use]
-    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
-        self.protocol_id
-    }
-}
 
 /// Move-only selected implementation and ordinary resource limits.
 ///

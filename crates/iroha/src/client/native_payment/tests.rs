@@ -1,7 +1,7 @@
 //! Durable SDK operation controls using genuine QCs over synthetic execution outputs.
 //! World execution and live network qualification belong to the cross-component suite.
 
-use super::observation::{CarrierLocation, PaymentLocator};
+use super::observation::{CarrierLocation, PaymentLocator, PaymentProof};
 use super::*;
 use crate::workflow::{
     CommittedOutcome, DispatchOutcome, FileWorkflowStorage, SignedStepTransaction,
@@ -21,6 +21,7 @@ use std::{
 };
 
 struct Source {
+    finality_root: Arc<tempfile::TempDir>,
     proofs: BTreeMap<u64, SumeragiFinalityProof>,
     locator: PaymentLocator,
     visible: AtomicBool,
@@ -52,7 +53,7 @@ impl PaymentSource for Source {
     fn proof(
         &self,
         height: NonZeroU64,
-    ) -> WorkflowFuture<'_, Result<SumeragiFinalityProof, NativePaymentObservationError>> {
+    ) -> WorkflowFuture<'_, Result<PaymentProof, NativePaymentObservationError>> {
         Box::pin(async move {
             self.proof_reads.fetch_add(1, Ordering::Relaxed);
             if self.fail_read.load(Ordering::Relaxed) {
@@ -63,6 +64,7 @@ impl PaymentSource for Source {
             self.proofs
                 .get(&height.get())
                 .cloned()
+                .map(|proof| PaymentProof::Fixture(Box::new(proof)))
                 .ok_or(NativePaymentObservationError::CandidateMismatch)
         })
     }
@@ -166,6 +168,7 @@ fn fixture(
     let request =
         NativePaymentRequest::new(intent, transaction.fee_payment_intent().clone()).unwrap();
     let source = Arc::new(Source {
+        finality_root: Arc::new(tempfile::tempdir().unwrap()),
         proofs: BTreeMap::from([
             (1, native.genesis_proof().clone()),
             (2, native.latest().clone()),
@@ -188,6 +191,16 @@ fn fixture(
     });
     (native, request, transaction, source)
 }
+fn test_finality(source: &Source) -> Arc<FileNativePaymentFinality> {
+    Arc::new(
+        FileNativePaymentFinality::open(
+            source.finality_root.path().join("pending"),
+            &[81; 32],
+            MAX_NATIVE_PAYMENT_FINALITY_BYTES,
+        )
+        .unwrap(),
+    )
+}
 fn operation(
     request: NativePaymentRequest,
     transaction: SignedTransaction,
@@ -205,9 +218,11 @@ fn operation(
         dispatches: AtomicUsize::new(0),
         source: source.clone(),
     });
+    let finality = test_finality(&source);
     let handle = NativePaymentOperation::create(
         request,
         storage,
+        finality,
         NativePaymentSession::new(native.verifier(), std::num::NonZeroUsize::new(64).unwrap())
             .unwrap(),
         account.clone(),
@@ -530,9 +545,10 @@ async fn native_payment_final_tip_receipt_survives_restart_without_dispatch() {
         operation_for_restart(request, transaction, source.clone(), &native, storage);
     let recovered = resumed.recover(&options()).await.unwrap();
     assert!(recovered.receipt.is_some());
-    assert!(
-        source.proof_reads.load(Ordering::Relaxed) > before,
-        "decoded completion must trigger fresh proof verification"
+    assert_eq!(
+        source.proof_reads.load(Ordering::Relaxed),
+        before,
+        "the original authenticated checkpoint is natively reverified without another network read"
     );
     assert_eq!(account.signs.load(Ordering::Relaxed), 0);
     assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
@@ -689,11 +705,40 @@ async fn native_payment_original_recovery_binds_intent_fees_and_stored_completio
     .unwrap();
     let root = tempfile::tempdir().unwrap();
     let (operation, account) = operation_for_restart(
-        changed,
-        transaction,
-        source,
+        changed.clone(),
+        transaction.clone(),
+        source.clone(),
         &native,
         Arc::new(FileWorkflowStorage::open_or_create(root.path().join("payment")).unwrap()),
+    );
+    assert!(matches!(
+        operation.resume(&options()).await.unwrap_err(),
+        NativePaymentError::Observation { cause, .. } if matches!(cause.as_ref(),
+            NativePaymentObservationError::FinalityCustody(NativePaymentFinalityStorageError::Binding))
+    ));
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+
+    // A fresh gateway has no authenticated pending record to compare. Its independent
+    // fee authorization must still reject the original transaction's verified receipt.
+    let fresh_source = Arc::new(Source {
+        finality_root: Arc::new(tempfile::tempdir().unwrap()),
+        proofs: source.proofs.clone(),
+        locator: source.locator,
+        visible: AtomicBool::new(true),
+        carrier_height: source.carrier_height,
+        exact_absence: AtomicBool::new(false),
+        fail_read: AtomicBool::new(false),
+        proof_reads: AtomicUsize::new(0),
+        submitted: AtomicBool::new(false),
+    });
+    let fresh = tempfile::tempdir().unwrap();
+    let (operation, account) = operation_for_restart(
+        changed,
+        transaction,
+        fresh_source,
+        &native,
+        Arc::new(FileWorkflowStorage::open_or_create(fresh.path().join("payment")).unwrap()),
     );
     assert!(matches!(
         operation.resume(&options()).await.unwrap_err(),
@@ -815,12 +860,14 @@ async fn native_payment_rejected_retry_recovers_original_without_relabeling_carr
     source.carrier_height = Some(3);
     let source = Arc::new(source);
     let root = tempfile::tempdir().unwrap();
+    let storage =
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("payment")).unwrap());
     let (handle, account) = operation(
-        request,
-        retry,
+        request.clone(),
+        retry.clone(),
         source.clone(),
         &native,
-        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("payment")).unwrap()),
+        storage.clone(),
     );
     let limited = NativePaymentRunOptions {
         max_finality_proof_reads: NonZeroU16::new(1).unwrap(),
@@ -830,6 +877,14 @@ async fn native_payment_rejected_retry_recovers_original_without_relabeling_carr
         handle.submit(&limited).await.unwrap_err(),
         NativePaymentError::Observation { cause, .. } if matches!(cause.as_ref(), NativePaymentObservationError::ReadBudgetExhausted)
     ));
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 1);
+    drop(handle);
+    drop(account);
+    drop(storage);
+    let cold = NativeFinalityFixture::start(native.chain_id());
+    let storage =
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("payment")).unwrap());
+    let (handle, account) = operation(request, retry, source.clone(), &cold, storage);
     let settled = handle.resume(&options()).await.unwrap();
     assert_eq!(settled.receipt.transaction_hash(), original.hash());
     assert_eq!(
@@ -837,7 +892,8 @@ async fn native_payment_rejected_retry_recovers_original_without_relabeling_carr
         WorkflowStatusV1::Failed,
         "rejected retry remains rejected"
     );
-    assert_eq!(account.dispatches.load(Ordering::Relaxed), 1);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
     assert!(
         !source.visible.load(Ordering::Relaxed),
         "recovery used authenticated rejection's original locator"

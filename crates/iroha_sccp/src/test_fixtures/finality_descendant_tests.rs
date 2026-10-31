@@ -120,13 +120,9 @@ fn signed_genesis_has_no_fabricated_commit_certificate_or_epoch_boundary() {
     let genesis = verifier
         .verify_retained_decision(chain.genesis_proof())
         .unwrap();
-    assert!(
-        genesis
-            .block()
-            .commit_certificate()
-            .unwrap()
-            .commit_qc()
-            .is_empty()
+    assert_eq!(
+        genesis.block().commit_certificate().unwrap().commit_qc(),
+        []
     );
     assert!(genesis.commitment().schedule.boundary.is_none());
     let next = chain.certify(candidate(&chain, "authenticate genesis parent result"));

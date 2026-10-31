@@ -72,6 +72,12 @@ internal object ParliamentProposalValidatorV1 {
             "fast_pause_renew_lead_ms" to 0L..JSON_SAFE_MAX,
             "fast_pause_hold_ms" to 0L..2_505_600_000L,
         )
+    /** Exact `ChangeSetV1` field set; its contents pass through to node admission. */
+    private val RUNTIME_CHANGE_SET_FIELDS =
+        setOf(
+            "network", "root", "predecessor", "successor", "effective_height",
+            "publish", "transitions", "qualification",
+        )
     private val KEBAB = Regex("[a-z0-9]+(?:-[a-z0-9]+)*")
     private val ALPHANUMERIC_PRERELEASE = Regex("(?=.*[A-Za-z-])[A-Za-z0-9-]+")
 
@@ -133,47 +139,33 @@ internal object ParliamentProposalValidatorV1 {
         canonicalSignature(value["signature"], "$label.signature")
     }
 
+    /**
+     * Admits the closed governed change-set proposal (`specs/live_runtime_upgrades.md` §6):
+     * schedule one `ChangeSetV1` or cancel one scheduled change-set id, with the notice and
+     * proposal time the node froze at admission. The SDK checks every envelope field set and
+     * first-release exact JSON integer; the node authenticates the change set's network, root,
+     * selections, publications, transitions and qualification digest.
+     */
     private fun runtimeUpgrade(value: Map<String, Any?>) {
-        exact(value, setOf("proposal_operator", "manifest"), "RuntimeUpgrade")
+        exact(value, setOf("proposal_operator", "action", "notice", "proposed_ms"), "RuntimeUpgrade")
         account(value["proposal_operator"], "RuntimeUpgrade.proposal_operator")
-        val manifest = objectValue(value["manifest"], "RuntimeUpgrade.manifest")
-        exact(
-            manifest,
-            setOf(
-                "name", "description", "abi_version", "abi_hash", "added_syscalls",
-                "added_pointer_types", "start_height", "end_height", "sbom_digests",
-                "slsa_attestation", "provenance",
-            ),
-            "RuntimeUpgrade.manifest",
-        )
-        text(manifest["name"], "manifest.name")
-        string(manifest["description"], "manifest.description")
-        require(uint(manifest["abi_version"], "manifest.abi_version") == BigInteger.ONE) {
-            "manifest.abi_version must equal 1"
+        val action = objectValue(value["action"], "RuntimeUpgrade.action")
+        exact(action, setOf("kind", "content"), "RuntimeUpgrade.action")
+        when (text(action["kind"], "RuntimeUpgrade.action.kind")) {
+            "Schedule" -> {
+                val changeSet = objectValue(action["content"], "RuntimeUpgrade.action.content")
+                exact(changeSet, RUNTIME_CHANGE_SET_FIELDS, "RuntimeUpgrade.action.content")
+                uint(changeSet["effective_height"], "RuntimeUpgrade.action.content.effective_height")
+            }
+            "Cancel" -> lowerHex32(action["content"], "RuntimeUpgrade.action.content")
+            else -> throw IllegalArgumentException("RuntimeUpgrade.action.kind must be Schedule or Cancel")
         }
-        bytes(manifest["abi_hash"], 32, "manifest.abi_hash", false)
-        val syscalls = list(manifest["added_syscalls"], "manifest.added_syscalls")
-        val pointers = list(manifest["added_pointer_types"], "manifest.added_pointer_types")
-        syscalls.forEachIndexed { index, item ->
-            require(uint(item, "manifest.added_syscalls[$index]") <= BigInteger.valueOf(0xffff))
-        }
-        pointers.forEachIndexed { index, item ->
-            require(uint(item, "manifest.added_pointer_types[$index]") <= BigInteger.valueOf(0xffff))
-        }
-        require(syscalls.isEmpty() && pointers.isEmpty()) { "V1 ABI delta lists must be empty" }
-        val start = uint(manifest["start_height"], "manifest.start_height")
-        val end = uint(manifest["end_height"], "manifest.end_height")
-        require(end > start) { "manifest.end_height must exceed start_height" }
-        list(manifest["sbom_digests"], "manifest.sbom_digests").forEachIndexed { index, item ->
-            val digest = objectValue(item, "manifest.sbom_digests[$index]")
-            exact(digest, setOf("algorithm", "digest"), "manifest.sbom_digests[$index]")
-            text(digest["algorithm"], "manifest.sbom_digests[$index].algorithm")
-            canonicalBase64(digest["digest"], "manifest.sbom_digests[$index].digest")
-        }
-        canonicalBase64(manifest["slsa_attestation"], "manifest.slsa_attestation")
-        list(manifest["provenance"], "manifest.provenance").forEachIndexed { index, item ->
-            manifestProvenance(objectValue(item, "manifest.provenance[$index]"), "manifest.provenance[$index]")
-        }
+        val notice = objectValue(value["notice"], "RuntimeUpgrade.notice")
+        exact(notice, setOf("blocks", "ms", "approval_cushion_ms"), "RuntimeUpgrade.notice")
+        uint(notice["blocks"], "RuntimeUpgrade.notice.blocks")
+        uint(notice["ms"], "RuntimeUpgrade.notice.ms")
+        uint(notice["approval_cushion_ms"], "RuntimeUpgrade.notice.approval_cushion_ms")
+        uint(value["proposed_ms"], "RuntimeUpgrade.proposed_ms")
     }
 
     /**

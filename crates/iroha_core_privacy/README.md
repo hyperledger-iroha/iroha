@@ -89,10 +89,28 @@ the public bounds. This avoids a full device transform for a sparse query.
 Bounded P-256 value replay returns only its requested columns while preserving
 the original product traversal and terminal checks. These optimizations retain
 the same polynomial values, proof format, transcript and resource limits.
+Joined query replay retains sibling-pair Merkle roots, reducing the maximum
+replayed set to 272 rows. Selected pairs and every retained root are verified
+before returning the original root and frontier; upper tree reductions use
+bounded parallel tiles. The larger private cuts remain in every phase's budget.
+For native-log15/16/18/19 query batches of eight columns, an interleaved CPU
+transform shares public traversal and twiddle powers across the columns and
+evaluates only that smaller set. Its full scratch still occupies eight field
+columns and clears on every exit. Singleton batches retain device admission;
+backend selection depends only on the measured public geometry.
+Composition mixes scalar residues into Fp4 with exact widened accumulators and
+bounded carry correction. SHA base replay projects only the requested cells;
+P-256 writer replay projects public inactive rows without building full rows.
+Both source paths retain their validation and terminal checks.
 The memory plan derives its peak from complete MAIN/CA phase lifetimes,
 including retained Merkle cuts, and explicitly reserves two bounded coefficient
 replay batches for caching. Admission and cache capacity therefore do not rely
 on incidental padding in the hash-state representation.
+Joined transforms reuse only the headroom of absent registration owners, after
+global admission. Metal's exact-root forecast charges its sole unpublished
+staging allocation and no-copy view, the complete pool and twiddle caches, and
+the existing dispatch and process reserves. Paired global FFT stages reduce
+device memory passes while preserving resource barriers and publish-after-wait.
 
 The ignored release tests `common22_prefix_fft_reports_full_output_parity_and_timings`
 and `value_auxiliary_compact_projection_cost_diagnostic` compare these kernels

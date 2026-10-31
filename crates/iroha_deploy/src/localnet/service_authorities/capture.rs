@@ -10,10 +10,9 @@ use std::{
 
 const MAX_CONFIG: usize = 1024 * 1024;
 const MAX_IDENTITY: usize = 512;
-const MAX_NODE_KEY: usize = 4096;
 const MAX_RANS: usize = 64 * 1024;
 const MAX_TOTAL: usize = 70 * 1024 * 1024;
-const INPUT_COUNT: usize = 77;
+const INPUT_COUNT: usize = 75;
 const DIRECTORY_COUNT: usize = 11;
 const GENERATION: usize = 0;
 const RUNTIME: usize = 1;
@@ -198,7 +197,7 @@ impl CapturedProfile {
             directories.push(CapturedDirectory::new(directory, inventory)?);
             Ok(())
         };
-        append(GENERATION, LOCALNET_RUNTIME_DIRECTORY, None)?;
+        append(GENERATION, RUNTIME_DIRECTORY, None)?;
         append(
             RUNTIME,
             DIRECTORY,
@@ -274,14 +273,6 @@ impl CapturedProfile {
             ConfigFileAccess::Public,
             &mut total,
         )?;
-        for name in ["onboarding-signer.key", "ledger-signer.key"] {
-            directories[RUNTIME].capture(
-                name,
-                MAX_NODE_KEY,
-                ConfigFileAccess::Private,
-                &mut total,
-            )?;
-        }
         directories[AUTHORITY].capture(
             MANIFEST,
             MAX_MANIFEST,

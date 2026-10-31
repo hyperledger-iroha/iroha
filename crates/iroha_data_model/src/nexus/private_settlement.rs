@@ -9,6 +9,8 @@
 //! redacted debug output and must never be embedded in blocks, public receipts,
 //! logs, events, metrics, or errors.
 
+mod carrier_envelope;
+pub use carrier_envelope::private_settlement_required_continuation_bytes_v1;
 mod confidential_encoding;
 mod context;
 pub use context::*;
@@ -1410,13 +1412,18 @@ impl PrivateSettlementAuditNoteOpeningV1 {
     }
 
     fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
-        if self.commitment.is_zero() {
+        if self.commitment.is_zero() || self.memo_digest.iter().all(|byte| *byte == 0) {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
+        self.validate_original_opening()
+    }
+
+    // Output memo and commitment belong to the native preparation stage. Every original
+    // opening field is checked identically before and after that deterministic derivation.
+    fn validate_original_opening(&self) -> Result<(), PrivateSettlementValidationError> {
         let has_zero_private_field = self.spending_authority.iter().all(|byte| *byte == 0)
             || self.rho.iter().all(|byte| *byte == 0)
-            || self.blinding.iter().all(|byte| *byte == 0)
-            || self.memo_digest.iter().all(|byte| *byte == 0);
+            || self.blinding.iter().all(|byte| *byte == 0);
         if self.active {
             if self.value == 0 || has_zero_private_field || self.dummy_domain.is_some() {
                 return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
@@ -1734,6 +1741,12 @@ impl Drop for PrivateSettlementAuditPlaintextV1 {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AuditOutputStage {
+    BeforePreparation,
+    Prepared,
+}
+
 impl PrivateSettlementAuditPlaintextV1 {
     /// Wipe every secret-bearing field before discarding this plaintext.
     ///
@@ -1933,6 +1946,13 @@ impl PrivateSettlementAuditPlaintextV1 {
     ///
     /// Returns a typed error without exposing any sensitive field value.
     pub fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
+        self.validate_openings(AuditOutputStage::Prepared)
+    }
+
+    fn validate_openings(
+        &self,
+        output_stage: AuditOutputStage,
+    ) -> Result<(), PrivateSettlementValidationError> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1 {
             return Err(PrivateSettlementValidationError::UnsupportedVersion {
                 actual: self.version,
@@ -1978,7 +1998,7 @@ impl PrivateSettlementAuditPlaintextV1 {
         if self.payer_authorization.body != self.payer_authorization_body(&authorized_nullifiers)? {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
-        self.validate_output_authorizations()?;
+        self.validate_output_authorizations(output_stage)?;
         if !self.outputs[0].note.active
             || self.outputs[0].note.value != self.amount
             || self.outputs[2].note.active != (self.sponsor_reimbursement_amount != 0)
@@ -1997,22 +2017,28 @@ impl PrivateSettlementAuditPlaintextV1 {
         if input_total.is_none() || input_total != output_total {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
-        let distinct_commitments = self
+        let mut distinct_commitments = self
             .inputs
             .iter()
             .map(|input| input.commitment)
-            .chain(self.outputs.iter().map(|output| output.note.commitment))
             .collect::<BTreeSet<_>>();
-        if distinct_commitments.len()
-            != PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 + PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
-        {
+        let expected = if output_stage == AuditOutputStage::Prepared {
+            distinct_commitments.extend(self.outputs.iter().map(|output| output.note.commitment));
+            PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 + PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
+        } else {
+            PRIVATE_SETTLEMENT_INPUT_SLOTS_V1
+        };
+        if distinct_commitments.len() != expected {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
         Ok(())
     }
 
     // Check output ownership after the fixed-slot and payer-authorization guards.
-    fn validate_output_authorizations(&self) -> Result<(), PrivateSettlementValidationError> {
+    fn validate_output_authorizations(
+        &self,
+        output_stage: AuditOutputStage,
+    ) -> Result<(), PrivateSettlementValidationError> {
         let expected_roles = [
             PrivateSettlementAuditOutputRoleV1::SettlementRecipient,
             PrivateSettlementAuditOutputRoleV1::PayerChange,
@@ -2038,7 +2064,10 @@ impl PrivateSettlementAuditPlaintextV1 {
             {
                 return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
             }
-            output.note.validate()?;
+            match output_stage {
+                AuditOutputStage::BeforePreparation => output.note.validate_original_opening()?,
+                AuditOutputStage::Prepared => output.note.validate()?,
+            }
         }
         Ok(())
     }
@@ -2066,6 +2095,29 @@ impl PrivateSettlementAuditPlaintextV1 {
         manifest: &PrivateSettlementProofIntentV1,
     ) -> Result<(), PrivateSettlementValidationError> {
         self.validate()?;
+        self.validate_intent_binding(manifest)
+    }
+
+    /// Validate original authorization inputs before native output preparation.
+    ///
+    /// Every original term, input commitment, output opening and authorization body is checked.
+    /// Only derived output memos/commitments and their final uniqueness are deferred to native
+    /// preparation; this grants no proof, membership or signature-verification authority.
+    /// The final plaintext validator remains strict.
+    /// # Errors
+    /// Malformed original opening/terms, unauthorized body substitution or a foreign intent.
+    pub fn validate_preparation_against_proof_intent(
+        &self,
+        manifest: &PrivateSettlementProofIntentV1,
+    ) -> Result<(), PrivateSettlementValidationError> {
+        self.validate_openings(AuditOutputStage::BeforePreparation)?;
+        self.validate_intent_binding(manifest)
+    }
+
+    fn validate_intent_binding(
+        &self,
+        manifest: &PrivateSettlementProofIntentV1,
+    ) -> Result<(), PrivateSettlementValidationError> {
         manifest.validate()?;
         let leg = manifest
             .legs

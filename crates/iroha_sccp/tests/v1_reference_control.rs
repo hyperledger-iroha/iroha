@@ -1882,7 +1882,7 @@ fn environment_pins_k0_and_proves_its_blocks() {
     let own = env.control_proof(1010, 0);
     assert_eq!((own.control_nonce, own.leaf_index), (7, 0));
     assert_eq!(own.path.len(), 1);
-    assert!(own.block.history_path.is_empty());
+    assert_eq!(own.block.history_path, Vec::<[u8; 32]>::new());
     assert_eq!(own.block.sccp_root, env.header(1010).sccp_root);
     let message = env.message_proof(1010, 1);
     assert_eq!(message.leaf_index, 1);

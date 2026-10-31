@@ -119,7 +119,9 @@ pub(in crate::state) fn capture(
     };
     validate_original_asset_definitions(
         &original.rows,
-        &original.domains,(&original.contexts, &original.by_domain, &original.by_owner),(&original.transitions, &original.counts),
+        &original.domains,
+        (&original.contexts, &original.by_domain, &original.by_owner),
+        (&original.transitions, &original.counts),
         &original.homes,
         &original.incarnations,
         max_work,

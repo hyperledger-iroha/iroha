@@ -1443,11 +1443,17 @@ mod tests {
         let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
         {
             let mut transaction = block.transaction();
-            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
-                .expect("the actual original policy matches the registered namespace");
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("the actual original policy matches the registered namespace");
             transaction.nexus.fees.fee_asset_id = different.clone();
-            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
-                .expect("the local genesis-authoring recipe is not runtime authority");
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("the local genesis-authoring recipe is not runtime authority");
             let mut pending = transaction.root_fee_policy().unwrap().clone();
             pending.fee_asset_id = different.clone();
             // Deliberately bypass normal currency-immutability admission in this test:
@@ -1467,8 +1473,11 @@ mod tests {
                     .fee_asset_id,
                 different
             );
-            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
-                .expect("pending parameters cannot replace predecessor custody");
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("pending parameters cannot replace predecessor custody");
             transaction.apply();
         }
         {
@@ -1507,17 +1516,22 @@ mod tests {
                 ))
                 .unwrap();
             transaction.nexus.fees.fee_asset_id = different.clone();
-            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
-                .expect("a fabricated genesis header cannot select current monetary state");
+            ensure_original_policy_payment_asset(
+                &mut transaction,
+                crate::sns::SnsNamespace::Domain,
+            )
+            .expect("a fabricated genesis header cannot select current monetary state");
         }
         // Conversely, an incompatible original policy cannot be repaired by a matching recipe.
         configure_test_fee_asset(&fixture.state, &different);
         let mut block = fixture.state.block(next_header_at(&fixture.state, 1));
         let mut transaction = block.transaction();
         transaction.nexus.fees.fee_asset_id = fixture.payment_asset;
-        let error =
-            ensure_original_policy_payment_asset(&mut transaction, crate::sns::SnsNamespace::Domain)
-                .expect_err("only the actual original fee policy may authorize the namespace asset");
+        let error = ensure_original_policy_payment_asset(
+            &mut transaction,
+            crate::sns::SnsNamespace::Domain,
+        )
+        .expect_err("only the actual original fee policy may authorize the namespace asset");
         let message = error.to_string();
         assert!(message.contains("SNS policy payment asset"), "{message}");
         assert!(
@@ -1525,7 +1539,6 @@ mod tests {
             "{message}"
         );
     }
-
 
     /// An actual renewal cannot repair original monetary mismatch from current/local recipes.
     #[test]

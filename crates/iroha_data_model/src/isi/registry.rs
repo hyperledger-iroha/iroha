@@ -31,10 +31,45 @@ pub(super) fn default_encoding_entry(
 ) -> Option<super::InstructionEncodingEntry> {
     wire_ids::encoding_entry(type_name)
 }
+/// Wire identity and declared payload schema of one built-in instruction.
+#[derive(Clone, Copy)]
+pub struct BuiltInInstructionSchema {
+    /// Canonical wire ID.
+    pub wire_id: &'static str,
+    /// Declared Norito nominal identity of the payload type.
+    pub payload: fn() -> std::borrow::Cow<'static, str>,
+    /// Registered tolerantly: an instruction this release adds after the frozen baseline, whose
+    /// envelopes decode as opaque rather than fail when their frame is not canonical
+    /// (`specs/live_runtime_upgrades.md` §5.2). Baseline instructions never are.
+    pub tolerant: bool,
+}
+
+impl core::fmt::Debug for BuiltInInstructionSchema {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BuiltInInstructionSchema")
+            .field("wire_id", &self.wire_id)
+            .field("payload", &(self.payload)())
+            .field("tolerant", &self.tolerant)
+            .finish()
+    }
+}
+
+/// Every built-in instruction of this release, in registry order. The live-upgrade baseline
+/// publishes one interface definition for each (`specs/live_runtime_upgrades.md` §3.1).
+pub fn built_in_instruction_schemas() -> impl Iterator<Item = BuiltInInstructionSchema> {
+    wire_ids::ALL.iter().map(|entry| BuiltInInstructionSchema {
+        wire_id: entry.wire_id,
+        payload: entry.payload,
+        tolerant: entry.tolerant,
+    })
+}
+
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
-/// Sponsor-program revision validation uses this fail-closed lookup before an
-/// immutable native-instruction selector can be staged.
+/// The answer depends on the release, so it must never decide whether a transaction, block or
+/// state change is valid: releases that differ in what they register would disagree
+/// (`specs/live_runtime_upgrades.md` §5.2). Validity follows the root's selection and the
+/// release-independent [`crate::isi::is_well_formed_wire_id`].
 #[must_use]
 pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
@@ -372,8 +407,8 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 413;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 413;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 410;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 410;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -419,9 +454,9 @@ mod tests {
         use sha2::{Digest, Sha256};
 
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "7b2a802db23d9f4e69770e3d67da01898f5727672cffbb081971669513483e66";
+            "0878c86dfd5911475d6eaa045713fc04f4292758cab6d36f9c43d5c12032e9ee";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "cb249a5052b431d51fbe197b0673a0317d193119f07da160ad17a212bfee16af";
+            "e33ca2c42a90dbf12e39f5f769b87ae99b13cd3addb007f7e22cf8db9bcc5850";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()

@@ -199,6 +199,7 @@ fn paid_full_return_preserves_original_and_recovers_both_at_final_tip_without_ne
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("original"),
             )?),
+            payment_finality(stores.join("original-finality"))?,
             verifier(&wire, &trust)?,
         )?;
         let paid = rt.block_on(original_operation.submit(&options))?;
@@ -230,6 +231,7 @@ fn paid_full_return_preserves_original_and_recovers_both_at_final_tip_without_ne
         let return_operation = receiver_gateway.account_client().native_payment_return(
             return_request,
             Arc::new(FileWorkflowStorage::open_or_create(stores.join("reverse"))?),
+            payment_finality(stores.join("reverse-finality"))?,
             verifier(&wire, &trust)?,
         )?;
         let returned = rt.block_on(return_operation.submit(&options))?;
@@ -282,6 +284,7 @@ fn paid_full_return_preserves_original_and_recovers_both_at_final_tip_without_ne
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("original"),
             )?),
+            payment_finality(stores.join("original-finality"))?,
             verifier(&wire, &trust)?,
         )?;
         let original = rt
@@ -307,6 +310,7 @@ fn paid_full_return_preserves_original_and_recovers_both_at_final_tip_without_ne
         let resumed_return = receiver_gateway.account_client().native_payment_return(
             restored_return.clone(),
             Arc::new(FileWorkflowStorage::open_or_create(stores.join("reverse"))?),
+            payment_finality(stores.join("reverse-finality"))?,
             verifier(&wire, &trust)?,
         )?;
         let recovered = rt
@@ -352,6 +356,7 @@ fn paid_full_return_preserves_original_and_recovers_both_at_final_tip_without_ne
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("fresh-return-gateway"),
             )?),
+            payment_finality(stores.join("fresh-return-gateway-finality"))?,
             verifier(&wire, &trust)?,
         )?;
         let repeated = rt.block_on(repeated.resume(&options))?;

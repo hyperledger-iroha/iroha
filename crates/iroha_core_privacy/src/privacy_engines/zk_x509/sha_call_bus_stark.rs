@@ -75,6 +75,8 @@ use thiserror::Error;
 mod frame_prefix;
 #[path = "sha_native_aux_cache.rs"]
 mod native_aux_cache;
+#[path = "sha_native_base_cache.rs"]
+mod native_base_cache;
 #[path = "sha_projection_bus.rs"]
 pub(crate) mod projection_bus;
 pub(crate) use frame_prefix::{ShaFrameByteV1, sha_frame_byte_v1};
@@ -1054,16 +1056,7 @@ fn widened_sha_batch_base_row_v1<Word: ShaWordCapacityBaseRowsV1>(
     index: usize,
 ) -> Result<[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1], ZkX509ShaCallBusStarkErrorV1> {
     // Reject fallible public-shape checks before copying any private row.
-    let raw_length = if let Some(consumer) = consumer {
-        Some(
-            word.message_len_v1()
-                .checked_sub(consumer.message_prefix_bytes)
-                .filter(|length| *length <= consumer.message_capacity_bytes)
-                .ok_or(ZkX509ShaCallBusStarkErrorV1::LengthOrPadding)?,
-        )
-    } else {
-        None
-    };
+    let raw_length = sha_batch_raw_length_v1(word.message_len_v1(), consumer)?;
     let word_base = word.base_row_v1(index)?;
     let mut base = [F::ZERO; ZK_X509_SHA_BATCH_BASE_WIDTH_V1];
     base[..SHA_WORD_CAPACITY_BASE_WIDTH_V1].copy_from_slice(word_base);
@@ -1074,6 +1067,19 @@ fn widened_sha_batch_base_row_v1<Word: ShaWordCapacityBaseRowsV1>(
         }
     }
     Ok(base)
+}
+fn sha_batch_raw_length_v1(
+    message_len: usize,
+    consumer: Option<ZkX509ShaRfcConsumerChannelsV1>,
+) -> Result<Option<usize>, ZkX509ShaCallBusStarkErrorV1> {
+    consumer
+        .map(|consumer| {
+            message_len
+                .checked_sub(consumer.message_prefix_bytes)
+                .filter(|length| *length <= consumer.message_capacity_bytes)
+                .ok_or(ZkX509ShaCallBusStarkErrorV1::LengthOrPadding)
+        })
+        .transpose()
 }
 fn widened_sha_batch_fixed_row_v1<Word: ShaWordCapacityBaseRowsV1>(
     manifest: ZkX509ShaCallManifestV1,
@@ -2273,6 +2279,7 @@ pub struct ZkX509ShaBatchSegmentBaseSourceV1<'a> {
     witnesses: &'a [ZkX509ShaCallWitnessV1; ZK_X509_SHA_CALL_COUNT_V1],
     replay: ZkX509ShaSegmentReplayV1,
     bound: bool,
+    retained_base: Option<native_base_cache::ShaNativeBaseCacheV1>,
 }
 impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
     /// Validate the schedule, complete witness set, and physical segment
@@ -2290,7 +2297,58 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             witnesses,
             replay,
             bound: false,
+            retained_base: None,
         })
+    }
+    /// Heap allowance for the four compact original native base caches. Inline
+    /// headers are charged by MAIN's enclosing source forecast.
+    pub(crate) fn native_base_cache_forecast_all_v1() -> Result<usize, ZkX509ShaCallBusStarkErrorV1>
+    {
+        native_base_cache::ShaNativeBaseCacheV1::heap_forecast_v1(ZK_X509_SHA_SEGMENT_ROWS_V1)?
+            .checked_mul(ZK_X509_SHA_SEGMENT_COUNT_V1)
+            .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)
+    }
+    /// Retain every original cell once, before masks or binding, under MAIN's
+    /// admitted source allowance. Witnesses remain immutably borrowed for the
+    /// lifetime of this owner and its bound successor.
+    pub(crate) fn retain_native_base_v1(&mut self) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        self.ensure_base_phase_v1()?;
+        if self.retained_base.is_some() {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Phase);
+        }
+        let cache = native_base_cache::ShaNativeBaseCacheV1::build_v1(
+            ZK_X509_SHA_SEGMENT_ROWS_V1,
+            |visitor| {
+                self.for_each_base_call_using_v1(
+                    |first, call| {
+                        for row in 0..call.logical_rows() {
+                            let original = zeroize::Zeroizing::new(call.base_row(row)?);
+                            visitor(first + row, &original)?;
+                        }
+                        Ok(())
+                    },
+                    |manifest, witness| {
+                        build_zk_x509_sha_batch_call_base_source_v1(
+                            manifest,
+                            witness,
+                            self.schedule.shape().disclosed_attributes,
+                        )
+                    },
+                )?;
+                for row in self.replay.active_rows()..ZK_X509_SHA_SEGMENT_ROWS_V1 {
+                    visitor(row, &[F::ZERO; ZK_X509_SHA_BATCH_BASE_WIDTH_V1])?;
+                }
+                Ok(())
+            },
+        )?;
+        self.retained_base = Some(cache);
+        Ok(())
+    }
+    /// Actual compact row allocation, separate from borrowed witness storage.
+    pub(crate) fn retained_base_heap_bytes_v1(&self) -> usize {
+        self.retained_base
+            .as_ref()
+            .map_or(0, native_base_cache::ShaNativeBaseCacheV1::heap_bytes_v1)
     }
     /// Canonical registration instance.
     pub(crate) const fn segment(&self) -> usize {
@@ -2334,7 +2392,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
     }
     /// Replay at most eight adjacent base columns in one bounded call traversal.
     /// Every destination is validated before construction; failed batches clear
-    /// all destinations and retain no eager segment matrix.
+    /// all destinations. MAIN's compact immutable cache avoids rebuilding calls.
     pub(crate) fn fill_base_columns_v1(
         &self,
         segment: usize,
@@ -2372,14 +2430,43 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             targets[0],
         )?;
         let mut fills = sha_column_fill_batch_v1(targets)?;
-        self.for_each_base_fixed_row_using_v1(
-            |row, base, _| {
-                for (offset, fill) in fills.iter_mut().enumerate() {
-                    fill.write_v1(row, base[first_column + offset]);
+        if let Some(cache) = &self.retained_base {
+            cache.fill_columns_v1(first_column, &mut fills)?;
+            return finish_sha_column_fill_batch_v1(fills);
+        }
+        self.for_each_base_call_using_v1(
+            |first_row, call| {
+                // The source owns validated, immutable word rows. Project only
+                // requested base cells; fixed AIR rows are independent of this
+                // output and are replayed by the verifier-owned fixed provider.
+                let raw_length = zeroize::Zeroizing::new(
+                    sha_batch_raw_length_v1(call.word.message_len(), call.rfc_consumer)?
+                        .unwrap_or(0),
+                );
+                for call_row in 0..call.logical_rows() {
+                    let word = call.word.base_row(call_row)?;
+                    for (offset, fill) in fills.iter_mut().enumerate() {
+                        let column = first_column + offset;
+                        let value = if column < SHA_WORD_CAPACITY_BASE_WIDTH_V1 {
+                            word[column]
+                        } else {
+                            F(u64::from(
+                                ((*raw_length >> (column - ZK_X509_SHA_LENGTH_BITS_START_V1)) & 1)
+                                    != 0,
+                            ))
+                        };
+                        fill.write_v1(first_row + call_row, value);
+                    }
                 }
+                Ok(())
             },
             build_call,
         )?;
+        for row in self.replay.active_rows()..ZK_X509_SHA_SEGMENT_ROWS_V1 {
+            for fill in &mut fills {
+                fill.write_v1(row, F::ZERO);
+            }
+        }
         finish_sha_column_fill_batch_v1(fills)
     }
     /// Replay one verifier-fixed column before X5B1 into an exact native segment-sized target.
@@ -2459,6 +2546,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             )
         })
     }
+    #[cfg(test)]
     fn for_each_base_fixed_row_using_v1(
         &self,
         mut visitor: impl FnMut(
@@ -2466,6 +2554,38 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             [F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
             [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
         ),
+        build_call: impl FnMut(
+            ZkX509ShaCallManifestV1,
+            &ZkX509ShaCallWitnessV1,
+        )
+            -> Result<ZkX509ShaBatchCallBaseSourceV1, ZkX509ShaCallBusStarkErrorV1>,
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        self.for_each_base_call_using_v1(
+            |first_row, call| {
+                for call_row in 0..call.logical_rows() {
+                    let segment_row = first_row + call_row;
+                    let mut fixed = call.fixed_row(call_row)?;
+                    fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1] = F(u64::from(segment_row == 0));
+                    fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1] =
+                        F(u64::from(segment_row + 1 == self.replay.active_rows()));
+                    visitor(segment_row, call.base_row(call_row)?, fixed);
+                }
+                Ok(())
+            },
+            build_call,
+        )?;
+        for segment_row in self.replay.active_rows()..ZK_X509_SHA_SEGMENT_ROWS_V1 {
+            let padding = physical_padding_row_v1(segment_row);
+            visitor(segment_row, padding.base, padding.fixed);
+        }
+        Ok(())
+    }
+    fn for_each_base_call_using_v1(
+        &self,
+        mut visitor: impl FnMut(
+            usize,
+            &ZkX509ShaBatchCallBaseSourceV1,
+        ) -> Result<(), ZkX509ShaCallBusStarkErrorV1>,
         mut build_call: impl FnMut(
             ZkX509ShaCallManifestV1,
             &ZkX509ShaCallWitnessV1,
@@ -2503,31 +2623,21 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
                 .get(usize::from(manifest.call))
                 .ok_or(ZkX509ShaCallBusStarkErrorV1::Topology)?;
             let call = build_call(manifest, witness)?;
-            for global_row in call_start..call_end {
-                let call_row = global_row
-                    .checked_sub(call_start)
-                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
-                let segment_row = global_row
-                    .checked_sub(segment_start)
-                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
-                let mut fixed = call.fixed_row(call_row)?;
-                fixed[ZK_X509_SHA_FIXED_SEGMENT_FIRST_V1] = F(u64::from(segment_row == 0));
-                fixed[ZK_X509_SHA_FIXED_SEGMENT_LAST_V1] =
-                    F(u64::from(segment_row + 1 == self.replay.active_rows()));
-                visitor(segment_row, call.base_row(call_row)?, fixed);
-                emitted = emitted
-                    .checked_add(1)
-                    .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            let first_row = call_start
+                .checked_sub(segment_start)
+                .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
+            if call.manifest != manifest
+                || call.logical_rows() != manifest.maximum_logical_rows()
+                || first_row != emitted
+            {
+                return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
             }
-        }
-        for segment_row in self.replay.active_rows()..ZK_X509_SHA_SEGMENT_ROWS_V1 {
-            let padding = physical_padding_row_v1(segment_row);
-            visitor(segment_row, padding.base, padding.fixed);
+            visitor(first_row, &call)?;
             emitted = emitted
-                .checked_add(1)
+                .checked_add(call.logical_rows())
                 .ok_or(ZkX509ShaCallBusStarkErrorV1::Resource)?;
         }
-        if emitted != ZK_X509_SHA_SEGMENT_ROWS_V1 {
+        if emitted != self.replay.active_rows() {
             return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
         }
         Ok(())
@@ -2554,6 +2664,7 @@ impl<'a> ZkX509ShaBatchSegmentBaseSourceV1<'a> {
             binding: Some(*binding),
             row_stream_emitted: false,
             retained_aux: None,
+            retained_base: self.retained_base.take(),
         })
     }
     #[cfg(test)]
@@ -2584,8 +2695,15 @@ pub struct ZkX509ShaBatchSegmentAuxSourceV1<'a> {
     binding: Option<ZkX509CredentialPreAuxBindingV1>,
     row_stream_emitted: bool,
     retained_aux: Option<native_aux_cache::ShaNativeAuxCacheV1>,
+    retained_base: Option<native_base_cache::ShaNativeBaseCacheV1>,
 }
 impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
+    /// The original compact base allocation moves here without copying at X5B1.
+    pub(crate) fn retained_base_heap_bytes_v1(&self) -> usize {
+        self.retained_base
+            .as_ref()
+            .map_or(0, native_base_cache::ShaNativeBaseCacheV1::heap_bytes_v1)
+    }
     /// Heap allowance for all four fixed native auxiliary caches. Inline owner
     /// storage is already included in the enclosing MAIN source forecast.
     pub(crate) fn native_aux_cache_forecast_all_v1() -> Result<usize, ZkX509ShaCallBusStarkErrorV1>
@@ -2662,11 +2780,26 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
         if fixed.schedule != *self.schedule {
             return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
         }
+        validate_sha_column_batch_extent_v1(
+            first_column,
+            ZK_X509_SHA_BATCH_BASE_WIDTH_V1,
+            targets,
+        )?;
+        if segment != self.replay.segment() {
+            return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+        }
+        validate_sha_segment_replay_plan_v1(self.schedule, self.replay)?;
+        if let Some(cache) = &self.retained_base {
+            let mut fills = sha_column_fill_batch_v1(targets)?;
+            cache.fill_columns_v1(first_column, &mut fills)?;
+            return finish_sha_column_fill_batch_v1(fills);
+        }
         let source = ZkX509ShaBatchSegmentBaseSourceV1 {
             schedule: self.schedule,
             witnesses: self.witnesses,
             replay: self.replay,
             bound: false,
+            retained_base: None,
         };
         source.fill_base_columns_using_v1(segment, first_column, targets, |manifest, witness| {
             fixed.call_base_source_v1(manifest, witness)
@@ -2888,13 +3021,17 @@ impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
     }
     /// Clear the retained rows, private terminals and opaque binding, then close replay.
     pub(crate) fn zeroize_private_v1(&mut self) {
+        self.retained_base = None;
         self.retained_aux = None;
         self.binding = None;
         self.row_stream_emitted = true;
     }
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
-        self.binding.is_none() && self.row_stream_emitted && self.retained_aux.is_none()
+        self.binding.is_none()
+            && self.row_stream_emitted
+            && self.retained_aux.is_none()
+            && self.retained_base.is_none()
     }
     #[cfg(test)]
     const fn row_stream_emitted_for_test_v1(&self) -> bool {
@@ -3941,7 +4078,9 @@ fn algebraic_security_bits_v1() -> (f64, f64, f64) {
 }
 #[cfg(test)]
 mod tests {
+    include!("sha_base_projection_tests.rs");
     include!("sha_native_aux_cache_source_tests.rs");
+    include!("sha_native_base_cache_source_tests.rs");
     include!("sha_fixed_schedule_reuse_tests.rs");
     include!("sha_fixed_matrix_reuse_tests.rs");
     #[test]
@@ -4705,6 +4844,7 @@ mod tests {
         assert!(
             core::mem::size_of::<ZkX509ShaBatchSegmentBaseSourceV1<'_>>()
                 < core::mem::size_of::<Vec<F>>() * 4
+                    + core::mem::size_of::<Option<native_base_cache::ShaNativeBaseCacheV1>>()
         );
         assert!(
             // The enclosing source forecast now charges the optional native
@@ -4714,6 +4854,7 @@ mod tests {
                 < core::mem::size_of::<ZkX509CredentialPreAuxBindingV1>()
                     + core::mem::size_of::<Vec<F>>() * 4
                     + core::mem::size_of::<Option<native_aux_cache::ShaNativeAuxCacheV1>>()
+                    + core::mem::size_of::<Option<native_base_cache::ShaNativeBaseCacheV1>>()
         );
         let mut partial = vec![F(0xA5); 8];
         assert!(matches!(

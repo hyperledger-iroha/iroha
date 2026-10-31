@@ -178,7 +178,11 @@ fn gas_record_shared_kernel_matches_captured_derive_fields_and_error_precedence(
 #[test]
 fn gas_rate_optional_fields_preserve_absence_null_and_duplicate_precedence() {
     let address = asset(16);
-    let fields = ["twap_local_per_xor", "liquidity_profile", "volatility_class"];
+    let fields = [
+        "twap_local_per_xor",
+        "liquidity_profile",
+        "volatility_class",
+    ];
     for mask in 0_u8..8 {
         let mut entries = vec![
             format!(r#""asset":"{address}""#),
@@ -209,9 +213,8 @@ fn gas_rate_optional_fields_preserve_absence_null_and_duplicate_precedence() {
     for field in fields {
         // A present null is still present: reject the duplicate before trying
         // to parse its invalid boolean value or applying any semantic defaults.
-        let source = format!(
-            r#"{{"asset":"{address}","units_per_gas":0,"{field}":null,"{field}":false}}"#
-        );
+        let source =
+            format!(r#"{{"asset":"{address}","units_per_gas":0,"{field}":null,"{field}":false}}"#);
         let expected = json::from_str::<CapturedRate>(&source)
             .unwrap_err()
             .into_core_error();

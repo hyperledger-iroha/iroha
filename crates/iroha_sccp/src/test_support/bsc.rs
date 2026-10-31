@@ -417,6 +417,6 @@ mod tests {
         let modified = chain.with_receipts_root(1_999, [7; 32]);
         assert_ne!(modified.header(2_000).hash, second.hash);
         assert_eq!(modified.header(1_998).hash, chain.header(1_998).hash);
-        assert!(!chain.attestation(0, 3, 10).is_empty());
+        assert_ne!(chain.attestation(0, 3, 10), []);
     }
 }

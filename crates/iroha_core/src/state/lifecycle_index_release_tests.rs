@@ -181,13 +181,18 @@ fn compatible_manifest_refresh_defers_real_read_release_without_publication() {
         let generation = state.state_view_generation();
         let privacy = state.lane_privacy_registry.read().clone();
         assert_eq!(
-            state.install_lane_manifests_if_consensus_compatible(&candidate).is_ok(),
+            state
+                .install_lane_manifests_if_consensus_compatible(&candidate)
+                .is_ok(),
             !refuse
         );
         ready(&mut watches, &probe);
         assert_eq!(state.state_view_generation(), generation);
         assert!(Arc::ptr_eq(&state.lane_manifests.read(), &original));
-        assert!(LanePrivacyRegistry::ptr_eq(&state.lane_privacy_registry.read(), &privacy));
+        assert!(LanePrivacyRegistry::ptr_eq(
+            &state.lane_privacy_registry.read(),
+            &privacy
+        ));
         assert_eq!(
             state.lane_manifests.read().consensus_policy_digest(),
             original.consensus_policy_digest()
@@ -245,14 +250,22 @@ fn actual_privacy_graph_refunds_after_state_and_index_guards_on_replace_and_unwi
         let state = Arc::new(blank_test_state());
         let nexus = state.nexus_snapshot();
         let empty = Arc::new(LaneManifestRegistry::from_config(
-            &nexus.lane_catalog, &nexus.governance, &nexus.registry,
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
         ));
         let mut statuses = empty.statuses();
-        statuses[0].privacy_commitments.push(LanePrivacyCommitment::merkle(
-            LaneCommitmentId::new(1), MerkleCommitment::from_root_bytes([0x12; 32], 16),
-        ));
+        statuses[0]
+            .privacy_commitments
+            .push(LanePrivacyCommitment::merkle(
+                LaneCommitmentId::new(1),
+                MerkleCommitment::from_root_bytes([0x12; 32], 16),
+            ));
         let populated = Arc::new(LaneManifestRegistry::from_statuses(
-            statuses.into_iter().map(|status| (status.lane, status)).collect(),
+            statuses
+                .into_iter()
+                .map(|status| (status.lane, status))
+                .collect(),
         ));
         drop(state.install_lane_manifests_for_testing(&populated));
         assert!(!state.lane_privacy_registry.read().is_empty());
@@ -265,17 +278,30 @@ fn actual_privacy_graph_refunds_after_state_and_index_guards_on_replace_and_unwi
             other => panic!("expected actual occupied State pool: {other:?}"),
         };
         let waker = Waker::from(probe.clone());
-        assert!(registration.poll_wait(&release, &mut Context::from_waker(&waker)).is_pending());
-        if unwind { lifecycle_index_publication::panic_after_manifest_write_for_test(); }
+        assert!(
+            registration
+                .poll_wait(&release, &mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        if unwind {
+            lifecycle_index_publication::panic_after_manifest_write_for_test();
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             state.install_lane_manifests_for_testing(if unwind { &populated } else { &empty });
         }));
         assert_eq!(result.is_err(), unwind);
         probe.check();
         if unwind {
-            assert_eq!(pool.reserved_bytes(), before, "partial successor graph fully refunded");
+            assert_eq!(
+                pool.reserved_bytes(),
+                before,
+                "partial successor graph fully refunded"
+            );
         } else {
-            assert!(pool.reserved_bytes() < before, "last installed populated reader retired");
+            assert!(
+                pool.reserved_bytes() < before,
+                "last installed populated reader retired"
+            );
             assert!(state.lane_privacy_registry.read().is_empty());
         }
     }

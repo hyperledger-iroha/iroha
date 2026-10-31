@@ -8632,11 +8632,15 @@ fn decode_world_fields(
         })?;
     let pedersen_params = take_required(&mut map, "pedersen_params")?;
     let poseidon_params = take_required(&mut map, "poseidon_params")?;
-    let runtime_upgrades = take_required(&mut map, "runtime_upgrades")?;
+    let runtime_change_sets = take_required(&mut map, "runtime_change_sets")?;
+    let runtime_containments = take_required(&mut map, "runtime_containments")?;
+    let runtime_definitions = take_required(&mut map, "runtime_definitions")?;
+    let runtime_selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> =
+        take_required(&mut map, "runtime_selection")?;
     let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_protocol_policies: Storage<
-        crate::privacy_state::PrivacyProtocolPolicyKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1,
         iroha_data_model::privacy::PrivacyProtocolPolicyV1,
     > = take_required(&mut map, "privacy_protocol_policies")?;
     let kagemusha_wallet_ledger: Storage<
@@ -9087,7 +9091,10 @@ fn decode_world_fields(
         private_dataspaces,
         pedersen_params,
         poseidon_params,
-        runtime_upgrades,
+        runtime_change_sets,
+        runtime_containments,
+        runtime_definitions,
+        runtime_selection,
         privacy_consensus_policy,
         privacy_protocol_policies,
         kagemusha_wallet_ledger,
@@ -10383,8 +10390,6 @@ fn default_governance() -> iroha_config::parameters::actual::Governance {
                         .expect("valid default JDG signature scheme")
                 })
                 .collect(),
-        runtime_upgrade_provenance:
-            iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
         viral_incentives: iroha_config::parameters::actual::ViralIncentives::default(),
         sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
         sorafs_pin_fee_asset_id:
@@ -10542,10 +10547,10 @@ mod decode_tests {
         assert_eq!(
             WorldStateAccumulator::capture(&restored.block())
                 .unwrap()
-                .root(),
+                .baseline_root(),
             WorldStateAccumulator::capture(&world.block())
                 .unwrap()
-                .root()
+                .baseline_root()
         );
         {
             let reverted = restored.block_and_revert();
@@ -12224,6 +12229,14 @@ mod decode_tests {
         world
             .smart_contract_state_mut_for_testing()
             .insert(key.clone(), original.clone());
+        let expectation_key = format!(
+            "multisig/proposal-expectation/{}/{proposal_id}",
+            iroha_crypto::HashOf::new(&account),
+        ).parse().unwrap();
+        world.smart_contract_state_mut_for_testing().insert(
+            expectation_key,
+            norito::to_bytes(&iroha_crypto::Hash::new(b"original approved execution closure")).unwrap(),
+        );
         let encoded = json::to_json(&world).unwrap();
         let ivm = IVM::new(0);
         let seed = IvmSeed {

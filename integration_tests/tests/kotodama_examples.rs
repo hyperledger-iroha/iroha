@@ -1,8 +1,8 @@
 //! Kotodama + IVM example runner with optional external tool coverage.
 //!
-//! This integration test attempts to compile and run the example in `examples/hello/hello.ko`
-//! if the external tools `koto` and `ivm_run` are available on PATH (or specified via
-//! environment variables `KOTO_BIN` and `IVM_BIN`). The tests self-skip when those tools are not
+//! This integration test compiles examples under `examples/` and runs an entrypoint locally
+//! if the external tools `koto` and `iroha` are available on PATH (or specified via
+//! environment variables `KOTO_BIN` and `IROHA_BIN`). The tests self-skip when those tools are not
 //! present, so they do not fail CI on hosts without the local Kotodama toolchain.
 //!
 //! Run manually with:
@@ -42,135 +42,96 @@ fn is_executable(p: &Path) -> bool {
 fn is_executable(p: &Path) -> bool {
     p.extension().map(|e| e == "exe").unwrap_or(false)
 }
-#[test]
-fn compile_and_run_hello() {
-    let koto_bin = env::var("KOTO_BIN")
+fn tool(variable: &str, name: &str) -> Option<PathBuf> {
+    let tool = env::var(variable)
         .ok()
         .map(PathBuf::from)
-        .or_else(|| on_path("koto"));
-    if koto_bin.is_none() {
-        eprintln!("Skipping: KOTO_BIN not set and koto not found on PATH");
-        return;
+        .or_else(|| on_path(name));
+    if tool.is_none() {
+        eprintln!("Skipping: {variable} not set and {name} not found on PATH");
     }
-    let koto_bin = koto_bin.unwrap();
-    let ivm_bin = env::var("IVM_BIN")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| on_path("ivm_run"));
-    if ivm_bin.is_none() {
-        eprintln!("Skipping: IVM_BIN not set and ivm_run not found on PATH");
-        return;
-    }
-    let ivm_bin = ivm_bin.unwrap();
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    tool
+}
+fn root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .to_path_buf();
-    let src = root.join("examples/hello/hello.ko");
-    let out = root.join("target/examples/hello.to");
-    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-    // Compile
-    let mut command = Command::new(&koto_bin);
-    command.arg("build").arg(&src).arg("--out").arg(&out);
+        .to_path_buf()
+}
+/// Compile one example into `target/examples` and return the artifact path.
+fn compile(koto: &Path, example: &str) -> PathBuf {
+    let root = root();
+    let source = root.join(format!("examples/{example}/{example}.ko"));
+    let out = root.join(format!("target/examples/{example}.to"));
+    fs::create_dir_all(out.parent().unwrap()).unwrap();
+    let mut command = Command::new(koto);
+    command.arg("build").arg(&source).arg("--out").arg(&out);
     let status =
         status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
     assert!(status.success(), "koto build failed: {status:?}");
-    // Run
-    let mut command = Command::new(&ivm_bin);
-    command.arg(&out).arg("--args").arg("{}");
+    out
+}
+/// Run one entrypoint locally and require the debugger to report success.
+fn debug_call(iroha: &Path, artifact: &Path, entrypoint: &str) {
+    let mut command = Command::new(iroha);
+    command
+        .arg("--config")
+        .arg(root().join("defaults/client.toml"))
+        .arg("--output-format")
+        .arg("json")
+        .args(["contract", "debug-call", "--code-file"])
+        .arg(artifact)
+        .args(["--entrypoint", entrypoint]);
     let output =
-        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn ivm_run");
-    assert!(
-        output.status.success(),
-        "ivm_run failed: status={:?}\nstdout=\n{}\nstderr=\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn iroha");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Hello from Kotodama") || stdout.contains("write_detail"),
-        "unexpected VM output: {stdout}"
+        output.status.success() && stdout.contains("\"ok\": true"),
+        "debug-call failed: status={:?}\nstdout=\n{stdout}\nstderr=\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 #[test]
-fn inspect_hello() {
-    let ivm_tool = env::var("IVM_TOOL_BIN")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| on_path("ivm_tool"));
-    if ivm_tool.is_none() {
-        eprintln!("Skipping: IVM_TOOL_BIN not set and ivm_tool not found on PATH");
+fn compile_and_run_hello() {
+    let (Some(koto), Some(iroha)) = (tool("KOTO_BIN", "koto"), tool("IROHA_BIN", "iroha")) else {
         return;
-    }
-    let ivm_tool = ivm_tool.unwrap();
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let out = root.join("target/examples/hello.to");
-    assert!(
-        out.exists(),
-        "hello.to not found; run compile_and_run_hello first or compile manually"
-    );
-    let mut command = Command::new(&ivm_tool);
-    command.arg("inspect").arg(&out);
-    let output = output_with_timeout(&mut command, process_timeout())
-        .expect("failed to spawn ivm_tool inspect");
-    let out_stdout = String::from_utf8_lossy(&output.stdout);
-    let out_stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "ivm_tool inspect failed: status={:?}\nstdout=\n{out_stdout}\nstderr=\n{out_stderr}",
-        output.status
-    );
+    };
+    let artifact = compile(&koto, "hello");
+    debug_call(&iroha, &artifact, "hajimari");
+}
+#[test]
+fn inspect_hello() {
+    let (Some(koto), Some(iroha)) = (tool("KOTO_BIN", "koto"), tool("IROHA_BIN", "iroha")) else {
+        return;
+    };
+    let artifact = compile(&koto, "hello");
+    let mut command = Command::new(&iroha);
+    command
+        .args([
+            "--output-format",
+            "json",
+            "tools",
+            "ivm",
+            "manifest-gen",
+            "--file",
+        ])
+        .arg(&artifact);
+    let output =
+        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn iroha");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("magic") && stdout.contains("abi_version"),
-        "unexpected inspect output: {stdout}"
+        output.status.success() && stdout.contains("code_hash") && stdout.contains("abi_hash"),
+        "manifest-gen failed: status={:?}\nstdout=\n{stdout}\nstderr=\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 #[test]
 fn compile_and_run_nft() {
-    let koto_bin = env::var("KOTO_BIN")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| on_path("koto"));
-    if koto_bin.is_none() {
-        eprintln!("Skipping: KOTO_BIN not set and koto not found on PATH");
+    let (Some(koto), Some(iroha)) = (tool("KOTO_BIN", "koto"), tool("IROHA_BIN", "iroha")) else {
         return;
-    }
-    let koto_bin = koto_bin.unwrap();
-    let ivm_bin = env::var("IVM_BIN")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| on_path("ivm_run"));
-    if ivm_bin.is_none() {
-        eprintln!("Skipping: IVM_BIN not set and ivm_run not found on PATH");
-        return;
-    }
-    let ivm_bin = ivm_bin.unwrap();
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let src = root.join("examples/nft/nft.ko");
-    let out = root.join("target/examples/nft.to");
-    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
-    let mut command = Command::new(&koto_bin);
-    command.arg("build").arg(&src).arg("--out").arg(&out);
-    let status =
-        status_with_timeout(&mut command, process_timeout()).expect("failed to spawn koto");
-    assert!(status.success(), "koto build failed: {status:?}");
-    let mut command = Command::new(&ivm_bin);
-    command.arg(&out).arg("--args").arg("{}");
-    let output =
-        output_with_timeout(&mut command, process_timeout()).expect("failed to spawn ivm_run");
-    assert!(
-        output.status.success(),
-        "ivm_run failed: status={:?}\nstdout=\n{}\nstderr=\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    };
+    let artifact = compile(&koto, "nft");
+    debug_call(&iroha, &artifact, "create");
 }

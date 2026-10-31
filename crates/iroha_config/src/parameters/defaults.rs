@@ -174,9 +174,12 @@ pub mod data_dir {
     ];
     /// Validator BLS private key (`private_key_file`).
     pub const VALIDATOR_KEY: &str = "validator.key";
-    /// `SoraNet` transport Ed25519 private key (`soranet_transport_private_key_file`).
+    /// `SoraNet` transport Ed25519 private key (`soranet_transport_private_key_file`). A
+    /// node-local identity: `iroha3d` creates it when absent and not pinned
+    /// ([`crate::node_config::NodeConfigReader::local_identities`]).
     pub const TRANSPORT_KEY: &str = "transport.key";
-    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
+    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`). A
+    /// node-local identity like [`TRANSPORT_KEY`].
     pub const STREAMING_KEY: &str = "streaming.key";
     /// Soracloud runtime mutation-signer private key.
     pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
@@ -1314,7 +1317,6 @@ pub mod streaming {
     }
     /// Codec gating defaults.
     pub mod codec {
-        use std::path::PathBuf;
         /// Default CABAC runtime mode (`disabled`).
         pub const CABAC_MODE: &str = "disabled";
         /// Bundled entropy mode advertised by all supported builds (requires `ENABLE_RANS_BUNDLES=1`).
@@ -1327,10 +1329,12 @@ pub mod streaming {
         pub fn trellis_blocks() -> Vec<u16> {
             Vec::new()
         }
-        /// Default deterministic rANS table artefact.
-        pub fn rans_tables_path() -> PathBuf {
-            PathBuf::from("codec/rans/tables/rans_seed0.toml")
-        }
+        /// The canonical `SignedRansTablesV1` artefact (`codec/rans/tables/rans_seed0.toml`).
+        ///
+        /// It is compiled into every build, so a node needs no table file on disk unless
+        /// `streaming.codec.rans_tables_path` selects another artefact.
+        pub const CANONICAL_RANS_TABLES_TOML: &str =
+            include_str!("../../../../codec/rans/tables/rans_seed0.toml");
         /// Default entropy mode string (bundled rANS only).
         pub fn entropy_mode() -> String {
             const {
@@ -2409,6 +2413,8 @@ pub mod torii {
     pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(512_000_000);
     /// Maximum complete working set owned by one query, independent of aggregate concurrency.
     pub const QUERY_FANOUT_MAX_WORKING_SET_BYTES: Bytes = Bytes(48_000_000);
+    /// Complete initial full-native-finality working-set ceiling, sharing the existing fanout pool.
+    pub const FINALITY_MAX_WORKING_SET_BYTES: Bytes = Bytes(384_000_000);
     /// Persistent SCCP history-node backing, independent of transient query leases.
     pub const SCCP_HISTORY_CACHE_MAX_BYTES: Bytes = Bytes(8_000_000);
     /// Minimum aggregate V1 query-memory pool for ingress, retained bodies and one fanout.
@@ -2458,6 +2464,15 @@ pub mod torii {
             .checked_add(QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1)?;
         let working_set = desired.min(max_working_set_bytes).min(fanout_pool);
         (working_set > QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1).then_some(working_set)
+    }
+    /// Bound one initial full-native-finality reservation by its unchanged aggregate pool.
+    /// A smaller result is only a scheduling ceiling; actual native profile admission may refuse.
+    #[must_use]
+    pub fn finality_working_set_bytes(aggregate_bytes: u64, maximum_bytes: u64) -> Option<u64> {
+        let pool =
+            aggregate_bytes.checked_sub(aggregate_bytes / QUERY_MEMORY_INGRESS_POOL_DIVISOR_V1)?;
+        let selected = maximum_bytes.min(pool);
+        (selected > 0).then_some(selected)
     }
     /// Derive the V1 routed-read route-body phase during configuration parsing.
     #[must_use]
@@ -3435,49 +3450,8 @@ pub mod nexus {
         /// Maximum allowed replay retention window (slots) to bound in-memory state.
         pub const REPLAY_RETENTION_SLOTS_MAX: u64 = 4_096;
     }
-    /// Atomic private cross-dataspace settlement defaults.
+    /// Node-local custody defaults for atomic private settlement sidecars.
     pub mod atomic_private_settlement {
-        /// Audited fixed-shape private-note proof profile version.
-        pub const PROOF_PROFILE_VERSION: u16 = 1;
-        /// Maximum dataspace legs admitted in one private atomic bundle.
-        pub const MAX_PARTICIPANTS: u16 = 255;
-        /// Protocol minimum dataspace legs in one private atomic bundle.
-        pub const MIN_PARTICIPANTS: u16 = 2;
-        /// Protocol maximum dataspace legs in one private atomic bundle.
-        pub const MAX_PARTICIPANTS_LIMIT: u16 = 255;
-        /// Maximum distance between admission and bundle expiry, in blocks.
-        pub const MAX_EXPIRY_BLOCKS: u64 = 7_200;
-        /// Maximum time allowed to collect auditor approvals, in blocks.
-        pub const AUDIT_TIMEOUT_BLOCKS: u64 = 1_200;
-        /// Maximum time allowed to collect all Prepare QCs, in blocks.
-        pub const PREPARE_TIMEOUT_BLOCKS: u64 = 1_200;
-        /// Maximum time allowed to collect all Commit QCs, in blocks.
-        pub const COMMIT_TIMEOUT_BLOCKS: u64 = 1_200;
-        /// Canonical padded capsule plaintext classes, in bytes.
-        ///
-        /// XChaCha20-Poly1305 adds a 16-byte authentication tag on the wire.
-        pub const CAPSULE_PADDING_CLASSES_BYTES: [u32; 4] = [4_096, 16_384, 65_536, 262_144];
-        /// Return the default padding classes as an owned configuration value.
-        #[must_use]
-        pub fn capsule_padding_classes_bytes() -> Vec<u32> {
-            CAPSULE_PADDING_CLASSES_BYTES.to_vec()
-        }
-        /// Maximum proof sidecar size admitted for one leg.
-        pub const MAX_PROOF_BYTES: u64 = 8 * 1024 * 1024;
-        /// Hard proof-size ceiling implemented by the V1 data model.
-        pub const MAX_PROOF_BYTES_LIMIT: u64 = 8 * 1024 * 1024;
-        /// Maximum encrypted audit capsule size admitted for one leg.
-        pub const MAX_CAPSULE_BYTES: u64 = 1024 * 1024;
-        /// Hard encrypted-capsule ceiling for the V1 path.
-        pub const MAX_CAPSULE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
-        /// Maximum canonical sponsor-signed direct carrier transaction size.
-        /// Protocol carrier limit. The worst-case 255-leg V1 fixture is below 1 MiB.
-        pub const MAX_CARRIER_BYTES: u64 = 4 * 1024 * 1024;
-        /// Hard global-carrier ceiling for the V1 path.
-        /// V1 cannot admit a carrier larger than its Norito receipt bound.
-        pub const MAX_CARRIER_BYTES_LIMIT: u64 = 4 * 1024 * 1024;
-        /// Minimum durable sidecar retention after admission, in blocks.
-        pub const SIDECAR_RETENTION_BLOCKS: u64 = 1_000_000;
         /// Maximum encrypted settlement records retained by one local sidecar store.
         pub const SIDECAR_MAX_RECORDS: u32 = 256;
         /// Hard record-count ceiling implemented by the V1 sidecar store.
@@ -3487,21 +3461,17 @@ pub mod nexus {
         /// Hard byte ceiling implemented by the V1 sidecar store.
         pub const SIDECAR_MAX_TOTAL_BYTES_LIMIT: u64 =
             12 * 1024 * 1024 * SIDECAR_MAX_RECORDS_LIMIT as u64;
-        /// Governed minimum online auditor threshold accepted for new policies.
-        pub const DEFAULT_MIN_AUDITOR_APPROVALS: u16 = 1;
-        /// Audit-policy schema versions accepted by default.
-        pub const PERMITTED_POLICY_VERSIONS: [u16; 1] = [1];
-        /// Return the default policy versions as an owned configuration value.
-        #[must_use]
-        pub fn permitted_policy_versions() -> Vec<u16> {
-            PERMITTED_POLICY_VERSIONS.to_vec()
-        }
     }
     /// Storage budget defaults for Nexus nodes.
     pub mod storage {
         use iroha_config_base::util::Bytes;
         /// Filesystem capacity reserved as runtime storage headroom (basis points).
         pub const AUTO_STORAGE_HEADROOM_BPS: u16 = 2_000;
+        /// Upper bound on that headroom (64 GiB).
+        ///
+        /// The percentage protects small volumes; uncapped, it would reserve terabytes on large
+        /// disks and refuse to start nodes that have ample free space.
+        pub const AUTO_STORAGE_HEADROOM_MAX_BYTES: u64 = 64 * 1024 * 1024 * 1024;
         /// Block interval between disk budget enforcement scans (0 = every block).
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
@@ -4385,14 +4355,6 @@ pub mod governance {
     pub const MAX_LOCK_OWNERS_PER_REFERENDUM: NonZeroU32 = nonzero!(1_000_u32);
     /// Default JDG signature schemes accepted during attestation validation.
     pub const JDG_SIGNATURE_SCHEMES: &[&str] = &["simple_threshold"];
-    /// Default runtime-upgrade provenance enforcement mode.
-    pub const RUNTIME_UPGRADE_PROVENANCE_MODE: &str = "optional";
-    /// Require SBOM digests for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM: bool = false;
-    /// Require SLSA attestation bytes for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA: bool = false;
-    /// Default signature threshold for runtime-upgrade provenance.
-    pub const RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD: usize = 0;
     /// Default exact TEU balance required for alias admission.
     pub fn alias_teu_minimum() -> Quantity {
         Quantity::zero()
@@ -4918,6 +4880,13 @@ pub mod amx_relay {
     pub const MAX_SOURCE_HEIGHTS_PER_PASS: usize = 32;
     /// Maximum contiguous destination finality proofs read in one observation.
     pub const MAX_FINALITY_PROOF_READS: usize = 64;
+    /// Default ordinary carrier reservations per independently pinned destination.
+    /// Two additional slots are reserved exclusively for one authority handoff group.
+    pub const PENDING_FINALITY_WALKS: usize = 16;
+    /// At least one ordinary carrier may progress alongside the reserved handoff group.
+    pub const MIN_PENDING_FINALITY_WALKS: usize = 1;
+    /// Hard ceiling for ordinary carrier reservations per destination, excluding handoff slots.
+    pub const MAX_PENDING_FINALITY_WALKS: usize = 64;
     /// Maximum separately pinned and funded destinations.
     pub const MAX_ROUTES: usize = 32;
 }

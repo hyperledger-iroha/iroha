@@ -81,7 +81,10 @@ impl ValidBlock {
         }
         let actual_execution = crate::sumeragi::staged_genesis_execution_policy_hash(state)
             .map_err(|error| Self::execution_context_error(error.to_string()))?;
-        let actual_nexus = crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);
+        // Retain the exact derived context: a refusal then carries the fields it differs in.
+        let actual_nexus = iroha_data_model::nexus::NexusAmxContextPreimageV1::new(
+            crate::sumeragi::staged_genesis_nexus_amx_context_preimage(state),
+        );
         Self::require_native_genesis_policy(
             Hash::prehashed(metadata.sumeragi_context.execution_policy_hash),
             actual_execution,
@@ -121,14 +124,16 @@ impl ValidBlock {
         expected_execution: Hash,
         actual_execution: Hash,
         expected_nexus: Hash,
-        actual_nexus: Hash,
+        actual_nexus_preimage: iroha_data_model::nexus::NexusAmxContextPreimageV1,
     ) -> Result<(), BlockValidationError> {
+        let actual_nexus = actual_nexus_preimage.hash();
         if expected_execution != actual_execution || expected_nexus != actual_nexus {
             return Err(BlockValidationError::GenesisPolicyMismatch {
                 expected_execution,
                 actual_execution,
                 expected_nexus,
                 actual_nexus,
+                actual_nexus_preimage,
             });
         }
         Ok(())
@@ -178,28 +183,40 @@ mod native_genesis_policy_tests {
 
     #[test]
     fn signed_genesis_requires_both_exact_policy_commitments() {
+        use iroha_data_model::nexus::NexusAmxContextPreimageV1;
         let execution = Hash::new(b"original execution policy");
-        let nexus = Hash::new(b"original Nexus policy");
+        let nexus = NexusAmxContextPreimageV1::new(b"original Nexus policy".to_vec());
         assert!(
-            ValidBlock::require_native_genesis_policy(execution, execution, nexus, nexus).is_ok()
+            ValidBlock::require_native_genesis_policy(
+                execution,
+                execution,
+                nexus.hash(),
+                nexus.clone()
+            )
+            .is_ok()
         );
-        let foreign = Hash::new(b"substituted policy");
-        for (actual_execution, actual_nexus) in
-            [(foreign, nexus), (execution, foreign), (foreign, foreign)]
-        {
+        let foreign_execution = Hash::new(b"substituted policy");
+        let foreign_nexus = NexusAmxContextPreimageV1::new(b"substituted policy".to_vec());
+        for (actual_execution, actual_nexus) in [
+            (foreign_execution, nexus.clone()),
+            (execution, foreign_nexus.clone()),
+            (foreign_execution, foreign_nexus),
+        ] {
             let error = ValidBlock::require_native_genesis_policy(
                 execution,
                 actual_execution,
-                nexus,
-                actual_nexus,
+                nexus.hash(),
+                actual_nexus.clone(),
             )
             .unwrap_err();
+            // The refusal retains the derived context whose hash it reports.
             assert!(
                 matches!(error, BlockValidationError::GenesisPolicyMismatch {
                 expected_execution, actual_execution: retained_execution,
-                expected_nexus, actual_nexus: retained_nexus,
-            } if expected_execution == execution && expected_nexus == nexus
-                && retained_execution == actual_execution && retained_nexus == actual_nexus)
+                expected_nexus, actual_nexus: retained_nexus, ref actual_nexus_preimage,
+            } if expected_execution == execution && expected_nexus == nexus.hash()
+                && retained_execution == actual_execution && retained_nexus == actual_nexus.hash()
+                && *actual_nexus_preimage == actual_nexus)
             );
         }
     }
@@ -343,6 +360,8 @@ mod native_genesis_policy_tests {
             source,
             &profile,
             &mut genesis_policies,
+            None,
+            None,
         )
         .expect("the original pristine genesis execution owner");
         assert!(

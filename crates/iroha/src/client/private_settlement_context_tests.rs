@@ -234,46 +234,93 @@ async fn account_finality_transport_preserves_exact_height_scope_and_codec_check
             false,
         ),
     ] {
-        let transport = Arc::new(Transport {
-            response: Mutex::new(Some(
-                http::Response::builder()
-                    .status(200)
-                    .header("content-type", media)
-                    .body(norito::encode_canonical(response_proof).unwrap())
-                    .unwrap(),
-            )),
-            requests: Mutex::new(Vec::new()),
-        });
-        let client = client
-            .clone()
-            .with_test_http_transport(DefaultHttpTransport::from_shared(transport.clone()));
-        mark_data_model_compatible(&client);
-        let result = client
-            .account_client()
-            .unwrap()
-            .get_sumeragi_finality_proof_async(NonZeroU64::new(height).unwrap(), scope)
-            .await;
-        assert_eq!(result.is_ok(), success, "{case}: {result:?}");
-        if success {
-            assert_eq!(&result.unwrap(), response_proof);
-        } else if case == "active private scope" {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("a non-global root carries an active finality header")
+        for native_worker in [false, true] {
+            let transport = Arc::new(Transport {
+                response: Mutex::new(Some(
+                    http::Response::builder()
+                        .status(200)
+                        .header("content-type", media)
+                        .body(norito::encode_canonical(response_proof).unwrap())
+                        .unwrap(),
+                )),
+                requests: Mutex::new(Vec::new()),
+            });
+            let client = client
+                .clone()
+                .with_test_http_transport(DefaultHttpTransport::from_shared(transport.clone()));
+            mark_data_model_compatible(&client);
+            let result = if native_worker {
+                let response = client
+                    .account_client()
+                    .unwrap()
+                    .read_sumeragi_finality_proof_response_async(
+                        NonZeroU64::new(height).unwrap(),
+                        scope,
+                    )
+                    .await
+                    .unwrap();
+                let permit = Arc::new(tokio::sync::Semaphore::new(1))
+                    .try_acquire_owned()
+                    .unwrap();
+                run_native_worker(permit, (), move || response.decode_checked())
+                    .await
+                    .unwrap()
+                    .0
+            } else {
+                client
+                    .account_client()
+                    .unwrap()
+                    .get_sumeragi_finality_proof_async(NonZeroU64::new(height).unwrap(), scope)
+                    .await
+            };
+            assert_eq!(result.is_ok(), success, "{case}: {result:?}");
+            if success {
+                assert_eq!(&result.unwrap(), response_proof);
+            } else if case == "active private scope" {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("a non-global root carries an active finality header")
+                );
+            }
+            let requests = transport.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, http::Method::GET);
+            assert_eq!(
+                requests[0].url.path(),
+                format!("/provider/v1/bridge/finality/{height}")
+            );
+            assert_eq!(
+                requests[0].max_response_bytes,
+                SUMERAGI_FINALITY_RESPONSE_MAX_BYTES
             );
         }
-        let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, http::Method::GET);
-        assert_eq!(
-            requests[0].url.path(),
-            format!("/provider/v1/bridge/finality/{height}")
-        );
-        assert_eq!(
-            requests[0].max_response_bytes,
-            SUMERAGI_FINALITY_RESPONSE_MAX_BYTES
-        );
     }
+}
+
+#[test]
+fn opaque_finality_response_keeps_original_deadline_before_native_decode() {
+    let mut client = client_with_base_url("http://context.invalid/provider/".parse().unwrap());
+    client.http_transport = client
+        .http_transport
+        .with_deadline(std::time::Instant::now());
+    let response = SumeragiFinalityProofResponse {
+        client: client.clone(),
+        response: http::Response::builder()
+            .status(200)
+            .body(vec![0xff])
+            .unwrap(),
+        height: NonZeroU64::new(1).unwrap(),
+        scope: iroha_data_model::block::consensus::SumeragiRootScope::Global,
+    };
+    // Changing another client cannot renew the transport owner's original absolute deadline.
+    client.http_transport = DefaultHttpTransport::default();
+    assert!(
+        response
+            .decode_checked()
+            .unwrap_err()
+            .to_string()
+            .contains("activation evidence deadline elapsed")
+    );
 }

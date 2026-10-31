@@ -14,7 +14,8 @@ use core::num::{NonZeroU32, NonZeroU64};
 use super::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
 use crate::privacy::{
     PrivacyConsensusLimitsV1, PrivacyConsensusLimitsValidationError, PrivacyConsensusPolicyV1,
-    PrivacyPolicyValidationErrorV1,
+    PrivacyPolicyValidationErrorV1, PrivateSettlementPolicyV1,
+    PrivateSettlementPolicyValidationErrorV1, PrivateSettlementValidityLimitsV1,
 };
 
 /// Canonical bytes one more signer can add to a signed transaction: its member key in the
@@ -117,6 +118,36 @@ pub enum ResourceCoherenceError {
         /// Prospective framed transaction cap.
         max_transaction_bytes: u64,
     },
+    /// Original native private-payment cleanup must remain representable after tightening.
+    #[error(
+        "private-payment cleanup requires {required_transaction_bytes} transaction bytes, but the cap is {max_transaction_bytes}"
+    )]
+    PrivateSettlementCleanupExceedsTransaction {
+        /// Fixed complete original-authority cleanup envelope.
+        required_transaction_bytes: u64,
+        /// Prospective complete transaction cap.
+        max_transaction_bytes: u64,
+    },
+    /// A native sponsor quorum cannot be invalidated by a lower generic signing count.
+    #[error(
+        "private-payment cleanup requires {required_signatures} signatures, but the cap is {max_signatures}"
+    )]
+    PrivateSettlementCleanupSignatures {
+        /// Fixed native V1 maximum admitted quorum size.
+        required_signatures: u64,
+        /// Prospective generic signing cap.
+        max_signatures: u64,
+    },
+    /// The new private carrier ceiling exceeds the generic transaction cap.
+    #[error(
+        "private carrier cap {max_carrier_bytes} exceeds transaction cap {max_transaction_bytes}"
+    )]
+    PrivateSettlementCarrierExceedsTransaction {
+        /// Committed complete private transaction ceiling.
+        max_carrier_bytes: u64,
+        /// Prospective generic transaction cap.
+        max_transaction_bytes: u64,
+    },
     /// The required context of a maximal privacy action cannot be represented.
     #[error(
         "required context of a {max_action_bytes}-byte privacy action with {max_signatures} signers overflows u64"
@@ -139,6 +170,14 @@ pub enum SuccessorResourceCoherenceError {
         committed_height: u64,
         /// Original typed policy/schedule failure.
         error: PrivacyPolicyValidationErrorV1,
+    },
+    /// The private admission extension has an invalid schedule or original drain.
+    #[error("invalid private-settlement policy after height {committed_height}: {error}")]
+    InvalidPrivateSettlementPolicy {
+        /// Height whose complete candidate is being checked.
+        committed_height: u64,
+        /// Original typed private-policy failure.
+        error: PrivateSettlementPolicyValidationErrorV1,
     },
     /// Both successor heights cannot be represented.
     #[error("two successor heights cannot follow committed height {committed_height}")]
@@ -166,6 +205,10 @@ pub enum SuccessorResourceCoherenceError {
 /// that cap. Select the current or pending limits at each exact effective height;
 /// ordinary increases and decreases follow the same byte and context checks.
 /// Every later chain-cap change must revalidate the still-pending policy.
+/// `private` is `Some` only for an authenticated explicit extension. Its absence preserves
+/// the original generic resource rules. The caller derives `original_private_obligations`
+/// from the same complete World cut, including new locks in a final invocation candidate;
+/// those obligations retain the fixed cleanup envelope through every checked boundary.
 ///
 /// Each boundary's privacy profile is also checked against the committed signature cap:
 /// one maximal action with its required context must fit the transaction cap.
@@ -180,11 +223,24 @@ pub fn validate_successor_resource_limits(
     next_max_block_bytes: NonZeroU32,
     after_next_max_block_bytes: NonZeroU32,
     privacy: &PrivacyConsensusPolicyV1,
+    private: Option<&PrivateSettlementPolicyV1>,
+    original_private_obligations: bool,
 ) -> Result<(), SuccessorResourceCoherenceError> {
     privacy
         .validate_at_committed_height(committed_height)
         .map_err(
             |error| SuccessorResourceCoherenceError::InvalidPrivacyPolicy {
+                committed_height,
+                error,
+            },
+        )?;
+    let explicit_private_policy = private.is_some();
+    let baseline = PrivateSettlementPolicyV1::protocol_default();
+    let private = private.unwrap_or(&baseline);
+    private
+        .validate_at_committed_height(committed_height)
+        .map_err(
+            |error| SuccessorResourceCoherenceError::InvalidPrivateSettlementPolicy {
                 committed_height,
                 error,
             },
@@ -200,13 +256,19 @@ pub fn validate_successor_resource_limits(
         .as_ref()
         .filter(|pending| pending.effective_at_height > after_next)
         .map(|pending| (pending.effective_at_height, after_next_max_block_bytes));
-    for (effective_height, cap) in [
-        (next, next_max_block_bytes),
-        (after_next, after_next_max_block_bytes),
-    ]
-    .into_iter()
-    .chain(later_policy_boundary)
-    {
+    let later_private_boundary = private
+        .pending_update
+        .as_ref()
+        .filter(|pending| pending.effective_at_height > after_next)
+        .map(|pending| (pending.effective_at_height, after_next_max_block_bytes));
+    let mut boundaries = [
+        Some((next, next_max_block_bytes)),
+        Some((after_next, after_next_max_block_bytes)),
+        later_policy_boundary,
+        later_private_boundary,
+    ];
+    boundaries.sort_by_key(|boundary| boundary.map(|(height, _)| height));
+    for (effective_height, cap) in boundaries.into_iter().flatten() {
         let limits = privacy
             .pending_update
             .as_ref()
@@ -216,10 +278,77 @@ pub fn validate_successor_resource_limits(
             .and_then(|()| {
                 validate_privacy_action_context(max_transaction_bytes, max_signatures, limits)
             })
+            .and_then(|()| {
+                let limits = private
+                    .pending_update
+                    .as_ref()
+                    .filter(|pending| pending.effective_at_height <= effective_height)
+                    .map_or(&private.current_limits, |pending| &pending.next_limits);
+                if original_private_obligations {
+                    validate_private_settlement_continuation_context(
+                        max_transaction_bytes,
+                        max_signatures,
+                        limits,
+                    )
+                } else if explicit_private_policy
+                    && limits.max_carrier_bytes > max_transaction_bytes.get()
+                {
+                    Err(
+                        ResourceCoherenceError::PrivateSettlementCarrierExceedsTransaction {
+                            max_carrier_bytes: limits.max_carrier_bytes,
+                            max_transaction_bytes: max_transaction_bytes.get(),
+                        },
+                    )
+                } else {
+                    Ok(())
+                }
+            })
             .map_err(|error| SuccessorResourceCoherenceError::AtHeight {
                 effective_height,
                 error,
             })?;
+    }
+    Ok(())
+}
+
+/// Preserve original native payment completion while validating new carrier admission.
+///
+/// # Errors
+/// Refuses any generic policy that could strand an originally admitted sponsor or envelope.
+/// This fixed floor contains no historical policy registry or local configuration.
+pub fn validate_private_settlement_continuation_context(
+    max_transaction_bytes: NonZeroU64,
+    max_signatures: NonZeroU64,
+    private: &PrivateSettlementValidityLimitsV1,
+) -> Result<(), ResourceCoherenceError> {
+    use crate::privacy::{
+        PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1,
+        PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1,
+    };
+    let required_signatures = PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u64;
+    if max_signatures.get() < required_signatures {
+        return Err(ResourceCoherenceError::PrivateSettlementCleanupSignatures {
+            required_signatures,
+            max_signatures: max_signatures.get(),
+        });
+    }
+    let cleanup_frame = PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1;
+    if max_transaction_bytes.get() < cleanup_frame {
+        return Err(
+            ResourceCoherenceError::PrivateSettlementCleanupExceedsTransaction {
+                required_transaction_bytes: cleanup_frame,
+                max_transaction_bytes: max_transaction_bytes.get(),
+            },
+        );
+    }
+    let carrier_frame = private.max_carrier_bytes;
+    if carrier_frame > max_transaction_bytes.get() {
+        return Err(
+            ResourceCoherenceError::PrivateSettlementCarrierExceedsTransaction {
+                max_carrier_bytes: carrier_frame,
+                max_transaction_bytes: max_transaction_bytes.get(),
+            },
+        );
     }
     Ok(())
 }
@@ -367,6 +496,177 @@ pub fn validate_privacy_chain_limits(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn original_generic_caps_remain_valid_without_private_obligations() {
+        let privacy = PrivacyConsensusPolicyV1 {
+            current_limits: privacy_limits(1, 1, 1),
+            pending_update: None,
+        };
+        let validate = |private: Option<&PrivateSettlementPolicyV1>, obligations| {
+            validate_successor_resource_limits(
+                2,
+                tx(1024 * 1024),
+                tx(1),
+                block(4 * 1024 * 1024),
+                block(4 * 1024 * 1024),
+                &privacy,
+                private,
+                obligations,
+            )
+        };
+        assert_eq!(validate(None, false), Ok(()));
+        assert!(matches!(
+            validate(None, true),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 3,
+                error: ResourceCoherenceError::PrivateSettlementCleanupSignatures { .. },
+            })
+        ));
+        let mut explicit = PrivateSettlementPolicyV1::protocol_default();
+        assert!(matches!(
+            validate(Some(&explicit), false),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 3,
+                error: ResourceCoherenceError::PrivateSettlementCarrierExceedsTransaction { .. },
+            })
+        ));
+        explicit.current_limits.max_carrier_bytes = 1024 * 1024;
+        assert_eq!(validate(Some(&explicit), false), Ok(()));
+    }
+
+    #[test]
+    fn original_private_obligations_keep_cleanup_through_both_successor_caps() {
+        let privacy = PrivacyConsensusPolicyV1 {
+            current_limits: privacy_limits(1, 1, 1),
+            pending_update: None,
+        };
+        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1;
+        let exact_block =
+            u32::try_from(floor).unwrap() + BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
+        assert_eq!(
+            validate_successor_resource_limits(
+                2,
+                tx(floor),
+                tx(16),
+                block(exact_block),
+                block(exact_block),
+                &privacy,
+                None,
+                true
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_successor_resource_limits(
+                2,
+                tx(floor - 1),
+                tx(16),
+                block(exact_block),
+                block(exact_block),
+                &privacy,
+                None,
+                true
+            ),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 3,
+                error: ResourceCoherenceError::PrivateSettlementCleanupExceedsTransaction { .. }
+            })
+        ));
+        assert!(matches!(
+            validate_successor_resource_limits(
+                2,
+                tx(floor),
+                tx(16),
+                block(exact_block),
+                block(exact_block - 1),
+                &privacy,
+                None,
+                true
+            ),
+            Err(SuccessorResourceCoherenceError::AtHeight {
+                effective_height: 4,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn private_extension_schedule_is_checked_independently_of_general_privacy() {
+        let mut private = PrivateSettlementPolicyV1::protocol_default();
+        let mut next = private.current_limits;
+        next.max_carrier_bytes -= 1;
+        private.pending_update = Some(crate::privacy::PrivateSettlementPolicyUpdateV1 {
+            scheduled_at_height: 2,
+            effective_at_height: 3,
+            next_limits: next,
+        });
+        let validate = |private: &PrivateSettlementPolicyV1| {
+            validate_successor_resource_limits(
+                2,
+                NonZeroU64::new(u64::from(u32::MAX)).unwrap(),
+                NonZeroU64::new(16).unwrap(),
+                NonZeroU32::new(u32::MAX).unwrap(),
+                NonZeroU32::new(u32::MAX).unwrap(),
+                &PrivacyConsensusPolicyV1::taira_default(),
+                Some(private),
+                false,
+            )
+        };
+        assert!(matches!(
+            validate(&private),
+            Err(
+                SuccessorResourceCoherenceError::InvalidPrivateSettlementPolicy {
+                    committed_height: 2,
+                    ..
+                }
+            )
+        ));
+        private.pending_update.as_mut().unwrap().effective_at_height =
+            3 + private.current_limits.max_expiry_blocks;
+        // A representable transaction must also fit the complete block context.
+        // This assertion checks that the now-valid private schedule passed its own gate.
+        assert!(!matches!(
+            validate(&private),
+            Err(SuccessorResourceCoherenceError::InvalidPrivateSettlementPolicy { .. })
+        ));
+    }
+
+    #[test]
+    fn native_cleanup_original_signatures_and_complete_envelope_cannot_be_tightened_away() {
+        use crate::privacy::{
+            PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1,
+            PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1,
+        };
+        let limits = crate::privacy::PrivateSettlementValidityLimitsV1::protocol_default();
+        let bytes = NonZeroU64::new(PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1).unwrap();
+        let signers = NonZeroU64::new(PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u64).unwrap();
+        validate_private_settlement_continuation_context(bytes, signers, &limits).unwrap();
+        assert!(matches!(
+            validate_private_settlement_continuation_context(
+                NonZeroU64::new(bytes.get() - 1).unwrap(),
+                signers,
+                &limits
+            ),
+            Err(ResourceCoherenceError::PrivateSettlementCleanupExceedsTransaction { .. })
+        ));
+        assert!(matches!(
+            validate_private_settlement_continuation_context(
+                bytes,
+                NonZeroU64::new(signers.get() - 1).unwrap(),
+                &limits
+            ),
+            Err(ResourceCoherenceError::PrivateSettlementCleanupSignatures { .. })
+        ));
+        assert!(matches!(
+            validate_private_settlement_continuation_context(
+                bytes,
+                NonZeroU64::new(1).unwrap(),
+                &limits
+            ),
+            Err(ResourceCoherenceError::PrivateSettlementCleanupSignatures { .. })
+        ));
+    }
+
     use super::*;
     use crate::privacy::PrivacyConsensusPolicyUpdateV1;
 
@@ -609,8 +909,9 @@ mod tests {
 
     #[test]
     fn pending_privacy_limit_increase_requires_capacity_at_its_effective_height() {
-        let current = privacy_limits(512, 512, 512 * 1024);
-        let next_limits = privacy_limits(1024, 1024, 1024 * 1024);
+        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as u32;
+        let current = privacy_limits(floor + 512, floor + 512, floor + 512 * 1024);
+        let next_limits = privacy_limits(floor + 1024, floor + 1024, floor + 1024 * 1024);
         let policy = PrivacyConsensusPolicyV1 {
             current_limits: current,
             pending_update: Some(PrivacyConsensusPolicyUpdateV1 {
@@ -625,8 +926,9 @@ mod tests {
             signatures(),
         )
         .unwrap());
-        let current_block = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 512 * 1024);
-        let expanded_block = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + 1024 * 1024);
+        let current_block = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + floor + 512 * 1024);
+        let expanded_block =
+            block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + floor + 1024 * 1024);
         assert!(matches!(
             validate_successor_resource_limits(
                 1,
@@ -635,6 +937,8 @@ mod tests {
                 current_block,
                 current_block,
                 &policy,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 3,
@@ -649,6 +953,8 @@ mod tests {
                 current_block,
                 expanded_block,
                 &policy,
+                None,
+                false,
             ),
             Ok(())
         );
@@ -658,9 +964,10 @@ mod tests {
 
     #[test]
     fn later_privacy_increase_checks_the_exact_future_boundary_and_second_successor_cap() {
+        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as u32;
         let reserve = BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
-        let current = privacy_limits(512, 512, 512 * 1024);
-        let next_limits = privacy_limits(1024, 1024, 1024 * 1024);
+        let current = privacy_limits(floor + 512, floor + 512, floor + 512 * 1024);
+        let next_limits = privacy_limits(floor + 1024, floor + 1024, floor + 1024 * 1024);
         let transaction = tx(maximal_action_transaction_bytes(
             next_limits.max_action_bytes,
             signatures(),
@@ -670,7 +977,7 @@ mod tests {
         let one_below = block(exact_cap.get() - 1);
         // Neither the much larger first successor nor the two initially coherent
         // heights can authorize a later budget which exceeds the persistent cap.
-        let first_cap = block(2 * 1024 * 1024);
+        let first_cap = block(floor + 2 * 1024 * 1024);
         for effective_at_height in [4, 100, u64::MAX] {
             let policy = PrivacyConsensusPolicyV1 {
                 current_limits: current,
@@ -689,6 +996,8 @@ mod tests {
                     first_cap,
                     one_below,
                     &policy,
+                    None,
+                    false,
                 ),
                 Err(SuccessorResourceCoherenceError::AtHeight {
                     effective_height: effective_at_height,
@@ -708,6 +1017,8 @@ mod tests {
                     first_cap,
                     exact_cap,
                     &policy,
+                    None,
+                    false,
                 ),
                 Ok(())
             );
@@ -728,6 +1039,8 @@ mod tests {
                     first_cap,
                     exact_cap,
                     &decrease,
+                    None,
+                    false,
                 ),
                 Ok(()),
                 "later ordinary decreases remain valid"
@@ -737,9 +1050,10 @@ mod tests {
 
     #[test]
     fn later_privacy_increase_checks_signed_action_context_and_transaction_budget() {
-        let current = privacy_limits(512, 512, 1024 * 1024);
-        let future = privacy_limits(1024, 1024, 1024 * 1024);
-        let cap = block(2 * 1024 * 1024);
+        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as u32;
+        let current = privacy_limits(floor + 512, floor + 512, floor + 1024 * 1024);
+        let future = privacy_limits(floor + 1024, floor + 1024, floor + 1024 * 1024);
+        let cap = block(floor + 2 * 1024 * 1024);
         let current_required =
             maximal_action_transaction_bytes(current.max_action_bytes, signatures()).unwrap();
         let future_required =
@@ -760,6 +1074,8 @@ mod tests {
                 cap,
                 cap,
                 &policy,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 100,
@@ -779,6 +1095,8 @@ mod tests {
                 cap,
                 cap,
                 &policy,
+                None,
+                false,
             ),
             Ok(())
         );
@@ -798,6 +1116,8 @@ mod tests {
                 cap,
                 cap,
                 &aggregate,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 100,
@@ -822,15 +1142,17 @@ mod tests {
 
     #[test]
     fn lower_genesis_caps_with_tightening_at_height_two_are_coherent() {
-        let cap = block(4 * 1024 * 1024);
+        let cap = block(6 * 1024 * 1024);
         assert_eq!(
             validate_successor_resource_limits(
                 1,
-                tx(3 * 1024 * 1024),
+                tx(5 * 1024 * 1024),
                 signatures(),
                 cap,
                 cap,
                 &genesis_tightening(2),
+                None,
+                false,
             ),
             Ok(())
         );
@@ -847,6 +1169,8 @@ mod tests {
                 cap,
                 cap,
                 &genesis_tightening(3),
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 2,
@@ -872,6 +1196,8 @@ mod tests {
                 next_cap,
                 cap,
                 &PrivacyConsensusPolicyV1::taira_default(),
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 6,
@@ -886,8 +1212,10 @@ mod tests {
             current_limits: privacy_limits(1, 1, 1),
             pending_update: None,
         };
-        // The smallest transaction cap that holds one action with its required context.
-        let fitting = maximal_action_transaction_bytes(1, signatures()).unwrap();
+        // The smallest transaction cap that holds both an action and original native cleanup.
+        let fitting = maximal_action_transaction_bytes(1, signatures())
+            .unwrap()
+            .max(crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1);
         let transaction = u32::try_from(fitting).unwrap();
         let next_cap = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + transaction);
         let after_cap = block(BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES + transaction - 1);
@@ -899,7 +1227,9 @@ mod tests {
                 signatures(),
                 next_cap,
                 after_cap,
-                &privacy
+                &privacy,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 7,
@@ -995,7 +1325,9 @@ mod tests {
                 signatures(),
                 cap,
                 cap,
-                &untightened
+                &untightened,
+                None,
+                false,
             ),
             Ok(())
         );
@@ -1006,7 +1338,9 @@ mod tests {
                 signatures(),
                 cap,
                 cap,
-                &untightened
+                &untightened,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 6,
@@ -1041,7 +1375,9 @@ mod tests {
                 signatures(),
                 cap,
                 cap,
-                &pending
+                &pending,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::AtHeight {
                 effective_height: 6,
@@ -1060,7 +1396,9 @@ mod tests {
                 signatures(),
                 cap,
                 cap,
-                &pending
+                &pending,
+                None,
+                false,
             ),
             Ok(())
         );
@@ -1078,6 +1416,8 @@ mod tests {
                     cap,
                     cap,
                     &PrivacyConsensusPolicyV1::taira_default(),
+                    None,
+                    false,
                 ),
                 Err(SuccessorResourceCoherenceError::HeightOverflow { committed_height })
             );
@@ -1096,7 +1436,9 @@ mod tests {
                 signatures(),
                 cap,
                 cap,
-                &privacy
+                &privacy,
+                None,
+                false,
             ),
             Err(SuccessorResourceCoherenceError::InvalidPrivacyPolicy {
                 committed_height: 2,

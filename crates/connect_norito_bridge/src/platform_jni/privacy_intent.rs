@@ -19,8 +19,7 @@ fn project_instruction(archive: &[u8]) -> Option<Vec<u8>> {
     let instruction =
         norito::decode_canonical_with_limits::<SubmitPrivacyProofV1>(archive, limits).ok()?;
     if instruction.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
-        || instruction.envelope.proof.protocol_id()
-            == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || instruction.envelope.proof.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
         || matches!(
             &instruction.envelope.statement,
             iroha_data_model::privacy::PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
@@ -92,14 +91,19 @@ mod tests {
                 );
                 assert!(project_instruction(&input).is_none());
                 let envelope = norito::decode_canonical(&row.envelope_norito).unwrap();
-                let retired = norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope)).unwrap();
+                let retired =
+                    norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope)).unwrap();
                 assert!(project_instruction(&retired).is_none());
             } else {
                 let typed = norito::decode_canonical::<SubmitPrivacyProofV1>(&input)
                     .expect("typed instruction");
                 assert_eq!(
                     project(&input),
-                    Some(typed.ordered_intent_projection_bytes_v1().expect("projection"))
+                    Some(
+                        typed
+                            .ordered_intent_projection_bytes_v1()
+                            .expect("projection")
+                    )
                 );
             }
             assert!(project(&input[..input.len() - 1]).is_none());
@@ -134,8 +138,7 @@ mod tests {
         let x509: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
             norito::decode_canonical(&x509.envelope_norito).unwrap();
         let generic: SubmitPrivacyProofV1 =
-            norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito)
-                .unwrap();
+            norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito).unwrap();
         for component in 0..3 {
             let mut mixed = generic.clone();
             match component {
@@ -143,9 +146,7 @@ mod tests {
                 1 => mixed.envelope.proof = x509.proof.clone(),
                 _ => mixed.envelope.statement = x509.statement.clone(),
             }
-            assert!(
-                project_instruction(&norito::encode_canonical(&mixed).unwrap()).is_none()
-            );
+            assert!(project_instruction(&norito::encode_canonical(&mixed).unwrap()).is_none());
         }
     }
 

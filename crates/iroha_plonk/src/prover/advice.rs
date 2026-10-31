@@ -18,7 +18,7 @@ use rayon::prelude::*;
 use super::{ProverError, random_values, write_point};
 use crate::{
     keys::ProvingKey,
-    pcs::ipa::{PinnedParams, commit::Secrecy},
+    pcs::ipa::PinnedParams,
     protocol::Shape,
     transcript::{Transcript, TranscriptWrite},
 };
@@ -309,26 +309,20 @@ where
         column[shape.usable_rows..].copy_from_slice(&random);
     }
     advice.blinds = random_values(rng, shape.num_advice);
-    let tables = pk.commitment_tables();
-    let commitments = advice
-        .values
-        .par_iter()
-        .zip(advice.blinds.par_iter())
-        .map(|(values, blind)| {
-            tables
-                .commit_lagrange_cancellable(
-                    params.params(),
-                    values,
-                    blind,
-                    Secrecy::Secret,
-                    budget,
-                    cancellation,
-                )
-                .map(|point| point.to_affine())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // One bounded batch: per-column Rayon tasks would let nested stealing open more
+    // MSM kernels than the shared scratch ceiling admits.
+    let columns: Vec<&[C::ScalarExt]> = advice.values.iter().map(Vec::as_slice).collect();
+    let commitments = pk
+        .commitment_tables()
+        .commit_lagrange_secret_columns_cancellable(
+            params.params(),
+            &columns,
+            &advice.blinds,
+            budget,
+            cancellation,
+        )?;
     for commitment in &commitments {
-        write_point(transcript, commitment)?;
+        write_point(transcript, &commitment.to_affine())?;
     }
     Ok(advice)
 }

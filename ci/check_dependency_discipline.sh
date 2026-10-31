@@ -10,21 +10,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 	exit 1
 fi
 
-resolve_base() {
-	if [[ -n "${AGENTS_BASE_REF:-}" ]]; then
-		git rev-parse --verify "${AGENTS_BASE_REF}" 2>/dev/null && return
-		echo "warning: AGENTS_BASE_REF=${AGENTS_BASE_REF} not found; falling back to defaults." >&2
-	fi
-
-	for candidate in origin/main origin/master main master; do
-		if git rev-parse --verify "${candidate}" >/dev/null 2>&1; then
-			echo "${candidate}"
-			return
-		fi
-	done
-
-	echo "HEAD^"
-}
+# shellcheck source=ci/lib/base_ref.sh
+source "${ROOT}/ci/lib/base_ref.sh"
 
 base_ref="$(resolve_base)"
 base_commit="$(git merge-base "${base_ref}" HEAD 2>/dev/null || git rev-parse "${base_ref}")"

@@ -4,6 +4,8 @@
 //! kernel is selected only when its complete staging allowance fits beyond all
 //! admitted source, replay scratch and runtime reserves. CPU fallback preserves
 //! the same polynomial and does not relax uncertain-completion admission.
+//! Measured small selected sets use CPU Horner or interleaved eight-column pruning
+//! before any full-domain device staging is allocated.
 
 use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
 #[cfg(test)]
@@ -75,7 +77,7 @@ impl MainTraceCosetEvaluatorV1 {
         assembly_payload: usize,
     ) -> Result<Self, ZkX509StarkErrorV1> {
         let admitted = main_resources::MainProverBufferPlanV1::new_v1(layout)?
-            .check_before_sources_v1(assembly_payload)?;
+            .joined_transform_admission_v1(assembly_payload)?;
         let ceiling =
             usize::try_from(super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -197,7 +199,7 @@ impl MainTraceCosetEvaluatorV1 {
 
     // The false instantiation is used only by the native cost diagnostic to
     // compare the original device route with the selected-coordinate policy.
-    fn evaluate_selected_policy_with_v1<const SELECT_HORNER: bool>(
+    fn evaluate_selected_policy_with_v1<const SELECT_CPU: bool>(
         &mut self,
         columns: &[Column],
         native_log: u8,
@@ -240,7 +242,7 @@ impl MainTraceCosetEvaluatorV1 {
         {
             return Err(AggregateStarkErrorV1::NonCanonicalField);
         }
-        let use_horner = SELECT_HORNER
+        let use_horner = SELECT_CPU
             && selected.is_some_and(|indices| {
                 columns.iter().all(|column| {
                     selected_coset::prefer_horner_v1(
@@ -251,30 +253,55 @@ impl MainTraceCosetEvaluatorV1 {
                     )
                 })
             });
-        // Selection follows complete original validation and the outer
-        // uncertain-completion check, before allocating any device words.
-        if self.device_columns == 0 || use_horner {
-            let result = columns
-                .par_iter()
-                .map(|column| {
-                    selected.map_or_else(
-                        || {
-                            masked_trace_coefficients_on_coset_v1(column, native_log, common_log)
-                                .map(Column::from_vec_v1)
-                                .map_err(aggregate::map_transparent_error_v1)
-                        },
-                        |indices| {
-                            if use_horner {
-                                selected_coset::evaluate_horner_v1(
-                                    column, native_log, common_log, indices,
-                                )
-                            } else {
-                                selected_coset::evaluate_v1(column, native_log, common_log, indices)
-                            }
-                        },
+        let use_pruned_fft = SELECT_CPU
+            && selected.is_some_and(|indices| {
+                columns.iter().all(|column| {
+                    selected_coset::prefer_pruned_fft_v1(
+                        native_log,
+                        common_log,
+                        column.len(),
+                        indices.len(),
+                        columns.len(),
                     )
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+            });
+        // Selection follows complete original validation and the outer
+        // uncertain-completion check, before allocating any device words.
+        if self.device_columns == 0 || use_horner || use_pruned_fft {
+            let result = if use_pruned_fft {
+                selected_coset::evaluate_batched_v1(
+                    columns,
+                    native_log,
+                    common_log,
+                    selected.ok_or(AggregateStarkErrorV1::InvalidLayout)?,
+                )?
+            } else {
+                columns
+                    .par_iter()
+                    .map(|column| {
+                        selected.map_or_else(
+                            || {
+                                masked_trace_coefficients_on_coset_v1(
+                                    column, native_log, common_log,
+                                )
+                                .map(Column::from_vec_v1)
+                                .map_err(aggregate::map_transparent_error_v1)
+                            },
+                            |indices| {
+                                if use_horner {
+                                    selected_coset::evaluate_horner_v1(
+                                        column, native_log, common_log, indices,
+                                    )
+                                } else {
+                                    selected_coset::evaluate_v1(
+                                        column, native_log, common_log, indices,
+                                    )
+                                }
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            };
             self.receipt.cpu_columns += columns.len();
             #[cfg(test)]
             prover_observation::completed_transform_v1(false, columns.len());
@@ -328,6 +355,13 @@ impl MainTraceCosetEvaluatorV1 {
             .try_reserve_exact(words.len())
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
         for words in words.iter_mut() {
+            if selected.is_none() {
+                // The completed words become the final clearing field owner.
+                // Validation covers every output before the new owner returns;
+                // no duplicate full column or early wipe is needed.
+                output.push(Column::from_canonical_words_v1(core::mem::take(words))?);
+                continue;
+            }
             let mut column = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
             let output_rows = selected.map_or(rows, <[usize]>::len);
             column
@@ -418,16 +452,15 @@ mod tests {
     #[test]
     fn production_transform_selects_only_admitted_metal_backend() {
         let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+        let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+        let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+        let available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
         let evaluator = MainTraceCosetEvaluatorV1::new_v1(&layout, 288_345_698).unwrap();
         assert_eq!(
             evaluator.device_columns,
             select_device_columns_v1(
                 layout.common_lde_size(),
-                (4_usize << 30)
-                    - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
-                    - 288_345_698
-                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
-                    - PUBLIC_COSET_POWERS_ALLOWANCE_V1,
+                available,
                 fastpq_prover::goldilocks_transform::available_goldilocks_transform_backend_v1(),
             )
         );
@@ -442,16 +475,8 @@ mod tests {
             0
         );
         assert_eq!(
-            select_device_columns_v1(
-                layout.common_lde_size(),
-                (4_usize << 30)
-                    - main_resources::CURRENT_FULL_PROFILE_PEAK_V1
-                    - 288_345_698
-                    - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
-                    - PUBLIC_COSET_POWERS_ALLOWANCE_V1,
-                Some(Backend::Metal),
-            ),
-            2
+            select_device_columns_v1(layout.common_lde_size(), available, Some(Backend::Metal),),
+            4
         );
         assert_eq!(evaluator.receipt_v1(), &MainTransformReceiptV1::default());
     }
@@ -495,9 +520,11 @@ mod tests {
                 - main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
                 - PUBLIC_COSET_POWERS_ALLOWANCE_V1
         );
+        let joined_available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
+        assert!(joined_available > assembly_limit - 288_345_698);
         assert_eq!(
-            select_metal_columns_v1(layout.common_lde_size(), assembly_limit - 288_345_698),
-            2
+            select_metal_columns_v1(layout.common_lde_size(), joined_available),
+            4
         );
         for count in [1, 2, 4] {
             let required =
@@ -517,7 +544,7 @@ mod tests {
     #[test]
     fn bounded_packing_subdispatch_and_conversion_match_independent_coset_values() {
         for count in [1, 3, 8] {
-            for device_columns in [1, 2, 4] {
+            for device_columns in [1, 2, 4, 8] {
                 let columns = columns_v1(count);
                 let mut evaluator = MainTraceCosetEvaluatorV1 {
                     evaluation_rows: 64,
@@ -525,10 +552,13 @@ mod tests {
                     receipt: MainTransformReceiptV1::default(),
                     coset_powers: Some(PublicCosetPowersV1::new_v1(64).unwrap()),
                 };
+                let mut original_allocations = Vec::new();
                 let (output, erased) = inspection::observe_v1(|| {
                     evaluator
                         .evaluate_with_v1(&columns, 4, 6, |batch, root| {
                             assert!(batch.len() <= device_columns);
+                            original_allocations
+                                .extend(batch.iter().map(|column| column.as_ptr().cast::<F>()));
                             transform_goldilocks_columns_v1(
                                 batch,
                                 root,
@@ -540,23 +570,41 @@ mod tests {
                         .unwrap()
                 });
                 let root = goldilocks_primitive_root_v1(6).unwrap();
-                for (coefficients, values) in columns.iter().zip(output) {
-                    for (index, value) in values.iter().enumerate() {
-                        let point = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(index as u128));
-                        let expected = coefficients
-                            .iter()
-                            .rev()
-                            .fold(F::ZERO, |sum, value| sum.mul(point).add(*value));
-                        assert_eq!(*value, expected);
+                assert_eq!(
+                    output
+                        .iter()
+                        .map(|column| column.as_ptr())
+                        .collect::<Vec<_>>(),
+                    original_allocations
+                );
+                let ((), transferred_erased) = aggregate::field_column_erasure::observe_v1(|| {
+                    for (coefficients, values) in columns.iter().zip(output) {
+                        for (index, value) in values.iter().enumerate() {
+                            let point = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(index as u128));
+                            let expected = coefficients
+                                .iter()
+                                .rev()
+                                .fold(F::ZERO, |sum, value| sum.mul(point).add(*value));
+                            assert_eq!(*value, expected);
+                        }
                     }
-                }
+                });
                 assert_eq!(evaluator.receipt.cpu_columns, count);
                 assert_eq!(evaluator.receipt.metal_columns, 0);
                 assert_eq!(
-                    erased.iter().map(|entry| entry.cells).sum::<usize>(),
+                    transferred_erased
+                        .iter()
+                        .map(|entry| entry.cells)
+                        .sum::<usize>(),
                     count * 64
                 );
+                assert_eq!(erased.iter().map(|entry| entry.cells).sum::<usize>(), 0);
                 assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+                assert!(
+                    transferred_erased
+                        .iter()
+                        .all(|entry| entry.nonzero_after == 0)
+                );
             }
         }
     }
@@ -629,20 +677,42 @@ mod tests {
         );
         assert_eq!(calls, 0);
         let columns = columns_v1(3);
-        let (result, cleared) = inspection::observe_v1(|| {
-            evaluator.evaluate_with_v1(&columns, 4, 6, |batch, _| {
-                batch[0][1] = GOLDILOCKS_MODULUS_V1;
-                Ok(Backend::Metal)
-            })
-        });
-        assert!(matches!(
-            result,
-            Err(AggregateStarkErrorV1::NonCanonicalField)
-        ));
-        // All three raw output columns are cleared at their actual ownership
-        // boundaries; canonical validation precedes field-value publication.
-        assert!(cleared.iter().map(|entry| entry.cells).sum::<usize>() >= 3 * 64);
-        assert!(cleared.iter().all(|entry| entry.nonzero_after == 0));
+        for invalid_column in 0..columns.len() {
+            let mut first_column = 0;
+            let ((result, cleared), transferred_cleared) =
+                aggregate::field_column_erasure::observe_v1(|| {
+                    inspection::observe_v1(|| {
+                        evaluator.evaluate_with_v1(&columns, 4, 6, |batch, _| {
+                            if (first_column..first_column + batch.len()).contains(&invalid_column)
+                            {
+                                batch[invalid_column - first_column][1] = GOLDILOCKS_MODULUS_V1;
+                            }
+                            first_column += batch.len();
+                            Ok(Backend::Metal)
+                        })
+                    })
+                });
+            assert!(matches!(
+                result,
+                Err(AggregateStarkErrorV1::NonCanonicalField)
+            ));
+            // All three raw output columns are cleared at their actual ownership
+            // boundaries; canonical validation precedes field-value publication.
+            assert_eq!(
+                cleared.iter().map(|entry| entry.cells).sum::<usize>()
+                    + transferred_cleared
+                        .iter()
+                        .map(|entry| entry.cells)
+                        .sum::<usize>(),
+                3 * 64
+            );
+            assert!(cleared.iter().all(|entry| entry.nonzero_after == 0));
+            assert!(
+                transferred_cleared
+                    .iter()
+                    .all(|entry| entry.nonzero_after == 0)
+            );
+        }
     }
     #[test]
     fn selected_cpu_and_device_adapter_keep_original_row_coordinates_and_fault_checks() {
@@ -764,6 +834,148 @@ mod tests {
                     }
                 });
             }
+        }
+    }
+
+    #[test]
+    fn selected_eight_column_dispatch_keeps_complete_mask_tail_and_erases_fft_scratch() {
+        let rows = 1usize << 22;
+        let selected = [0, rows / 3, rows - 1];
+        let root = goldilocks_primitive_root_v1(22).unwrap();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        for native in [15, 16, 18, 19] {
+            let length = (1usize << native) + MASK_DEGREE + 1;
+            let columns = (0..8)
+                .map(|column| {
+                    let mut input = vec![F::ZERO; length];
+                    input[0] = F(19 + column);
+                    input[length - 1] = F::ONE;
+                    Column::from_vec_v1(input)
+                })
+                .collect::<Vec<_>>();
+            pool.install(|| {
+                let mut evaluator = MainTraceCosetEvaluatorV1 {
+                    evaluation_rows: rows,
+                    device_columns: 4,
+                    receipt: MainTransformReceiptV1::default(),
+                    coset_powers: None,
+                };
+                let ((actual, erased), batched_erased) =
+                    selected_coset::observe_batch_clear_v1(|| {
+                        inspection::observe_v1(|| {
+                            evaluator
+                                .evaluate_selected_with_v1(
+                                    &columns,
+                                    native,
+                                    22,
+                                    Some(&selected),
+                                    |_, _| panic!("measured selected batch reached device staging"),
+                                )
+                                .unwrap()
+                        })
+                    });
+                assert_eq!(evaluator.receipt.cpu_columns, 8);
+                assert_eq!(evaluator.receipt.metal_columns, 0);
+                for (column, output) in actual.iter().enumerate() {
+                    for (&row, &value) in selected.iter().zip(output.iter()) {
+                        let point = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(row as u128));
+                        assert_eq!(
+                            value,
+                            F(19 + column as u64).add(point.pow((length - 1) as u128))
+                        );
+                    }
+                }
+                assert_eq!(
+                    batched_erased
+                        .iter()
+                        .map(|entry| entry.cells)
+                        .sum::<usize>(),
+                    8 * rows
+                );
+                assert_eq!(batched_erased.len(), 1, "one interleaved scratch owner");
+                assert!(batched_erased.iter().all(|entry| entry.nonzero_after == 0));
+                assert_eq!(erased.iter().map(|entry| entry.cells).sum::<usize>(), 0);
+                assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+                let ((), compact_erased) =
+                    aggregate::field_column_erasure::observe_v1(|| drop(actual));
+                assert_eq!(compact_erased.len(), 8, "all returned column owners clear");
+                assert_eq!(
+                    compact_erased
+                        .iter()
+                        .map(|entry| entry.cells)
+                        .sum::<usize>(),
+                    8 * selected.len()
+                );
+                assert!(compact_erased.iter().all(|entry| entry.nonzero_before != 0));
+                assert!(compact_erased.iter().all(|entry| entry.nonzero_after == 0));
+            });
+        }
+    }
+
+    #[test]
+    fn selected_eight_column_dispatch_validates_and_refuses_unmeasured_shapes_before_allocation() {
+        use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+        let rows = 1usize << 22;
+        let mut evaluator = MainTraceCosetEvaluatorV1 {
+            evaluation_rows: rows,
+            device_columns: 4,
+            receipt: MainTransformReceiptV1::default(),
+            coset_powers: None,
+        };
+        for failure in 0..8 {
+            let mut columns = (0..8)
+                .map(|_| Column::from_vec_v1(vec![F::ONE]))
+                .collect::<Vec<_>>();
+            let mut selected = vec![0];
+            let mut selection = true;
+            match failure {
+                0 => {
+                    columns[7] = Column::from_vec_v1(vec![F(GOLDILOCKS_MODULUS_V1)]);
+                }
+                1 => {
+                    selected.clear();
+                }
+                2 => {
+                    selected = vec![1, 1];
+                }
+                3 => {
+                    selected = vec![rows];
+                }
+                4 => {
+                    columns.pop();
+                }
+                5 => {
+                    selected = (0..273).collect();
+                }
+                6 => {
+                    selection = false;
+                }
+                _ => {
+                    columns[7] = Column::from_vec_v1(vec![F::ONE; (1 << 19) + MASK_DEGREE + 2]);
+                }
+            }
+            let ((result, erased), batched_erased) = selected_coset::observe_batch_clear_v1(|| {
+                inspection::observe_v1(|| {
+                    evaluator.evaluate_selected_with_v1(
+                        &columns,
+                        19,
+                        22,
+                        selection.then_some(selected.as_slice()),
+                        |_, _| panic!("invalid or missing power owner dispatched"),
+                    )
+                })
+            });
+            assert!(matches!(result, Err(error) if error == if failure == 0 {
+                AggregateStarkErrorV1::NonCanonicalField
+            } else {
+                AggregateStarkErrorV1::InvalidLayout
+            }));
+            assert!(erased.is_empty());
+            assert!(batched_erased.is_empty());
+            assert_eq!(evaluator.receipt, MainTransformReceiptV1::default());
         }
     }
 

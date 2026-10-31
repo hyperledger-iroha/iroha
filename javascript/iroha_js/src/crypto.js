@@ -10,6 +10,7 @@ import {
   createPrivateKey,
   createPublicKey,
   randomBytes,
+  randomFillSync,
   sign as signRaw,
 } from "node:crypto";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
@@ -20,12 +21,17 @@ import {
 } from "./nativeRuntime.js";
 import { networkIdBytes } from "./networkId.js";
 import {
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
+  sampleKaigiBlindingV1,
+} from "./kaigiScalarV1.js";
+import {
   CRYPTO_ALGORITHMS,
   normalizeCryptoAlgorithm,
 } from "./cryptoAlgorithms.js";
 
 export {
   CRYPTO_ALGORITHMS,
+  KAIGI_EMPTY_ROSTER_ROOT_HEX_V1,
   normalizeCryptoAlgorithm,
 };
 
@@ -818,6 +824,16 @@ function buildKaigiAuthorizationProofV1WithRuntime(nativeRuntime, options) {
   } finally {
     Reflect.apply(clearKaigiBlindingV1, blinding, [0]);
   }
+}
+
+/**
+ * Sample a new private Kaigi blinding. Keep it under owner-only custody: every proof
+ * for the same participation needs its own copy, because each proof clears its input.
+ */
+export function generateKaigiBlindingV1() {
+  return sampleKaigiBlindingV1((bytes) => {
+    randomFillSync(bytes);
+  });
 }
 
 /**

@@ -134,10 +134,10 @@ fn service_inventory_schema_owners_and_owned_borrowed_commitments_are_canonical(
 }
 
 fn fixture() -> (
-    crate::localnet::localnet_test_helpers::PrivateTempDir,
+    crate::custody::test_support::PrivateTempDir,
     PreparedLocalnet,
 ) {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temp = crate::custody::test_support::private_tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = prepare_localnet_at(
         "three-provider-profile",
@@ -270,7 +270,7 @@ fn topology_reordering_duplicates_and_network_rebinding_cannot_replace_original_
             .client_config
             .parent()
             .unwrap()
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY),
     )
     .unwrap();
@@ -360,7 +360,7 @@ fn provider_credentials_cannot_cross_another_original_slot_or_network_purpose() 
             .client_config
             .parent()
             .unwrap()
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY),
     )
     .unwrap();

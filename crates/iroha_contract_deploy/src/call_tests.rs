@@ -52,7 +52,9 @@ fn call_authorization_resolves_only_the_authenticated_permission_declaration() -
         if let Some(expected) = expected {
             let message = missing_call_permission(&expected, &prepared.plan.authority).to_string();
             assert!(message.contains(&norito::json::to_string(&expected)?));
-            assert!(message.contains("iroha account permission grant --id"));
+            assert!(message.contains(
+                "iroha --config <client-config> --fee-payer authority account permission grant --id"
+            ));
         }
     }
     Ok(())
@@ -592,6 +594,9 @@ fn call_failure_cannot_overwrite_applied_or_change_the_exact_hash() -> Result<()
         fn submit(&self, _: &SignedTransaction) -> Result<()> {
             panic!("retained attempts must never be submitted again");
         }
+        fn rejection_reason(&self, _: &SignedTransaction) -> Option<String> {
+            Some("no permission".to_owned())
+        }
         fn wait(&self, hash: HashOf<SignedTransaction>) -> Result<AppliedEvidence> {
             let bound_hash = if self.different_hash {
                 HashOf::from_untyped_unchecked(Hash::new(b"different transaction"))
@@ -654,6 +659,10 @@ fn call_failure_cannot_overwrite_applied_or_change_the_exact_hash() -> Result<()
             assert!(error.to_string().contains("conflicts"));
         } else {
             assert!(error.downcast_ref::<TransactionFinalityFailure>().is_some());
+            assert!(
+                error.to_string().contains("was rejected: no permission"),
+                "{error}"
+            );
         }
     }
     let hash = decode_transaction(&step)?.hash();

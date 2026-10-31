@@ -264,40 +264,6 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 nexus.axt.replay_retention_slots.get()
             ),
             record!(
-                nexus.atomic_private_settlement.proof_profile_version.get(),
-                nexus.atomic_private_settlement.max_participants.get(),
-                nexus.atomic_private_settlement.max_expiry_blocks.get(),
-                nexus.atomic_private_settlement.audit_timeout_blocks.get(),
-                nexus.atomic_private_settlement.prepare_timeout_blocks.get(),
-                nexus.atomic_private_settlement.commit_timeout_blocks.get(),
-                Seq(nexus
-                    .atomic_private_settlement
-                    .capsule_padding_classes_bytes
-                    .iter()
-                    .map(|bytes| bytes.get())),
-                nexus.atomic_private_settlement.max_proof_bytes.get(),
-                nexus.atomic_private_settlement.max_capsule_bytes.get(),
-                nexus.atomic_private_settlement.max_carrier_bytes.get(),
-                nexus
-                    .atomic_private_settlement
-                    .sidecar_retention_blocks
-                    .get(),
-                nexus.atomic_private_settlement.sidecar_max_records.get(),
-                nexus
-                    .atomic_private_settlement
-                    .sidecar_max_total_bytes
-                    .get(),
-                nexus
-                    .atomic_private_settlement
-                    .default_min_auditor_approvals
-                    .get(),
-                Seq(nexus
-                    .atomic_private_settlement
-                    .permitted_policy_versions
-                    .iter()
-                    .copied())
-            ),
-            record!(
                 Ref(&nexus.governance.default_module),
                 Seq(nexus
                     .governance
@@ -426,6 +392,9 @@ mod tests {
         effective.autoscale.enabled = true;
         effective.autoscale.scale_out_window_blocks = std::num::NonZeroU16::new(19).unwrap();
         effective.fees.base_fee = 37_u32.into();
+        effective.atomic_private_settlement.sidecar_max_records = NonZeroU32::new(1).unwrap();
+        effective.atomic_private_settlement.sidecar_max_total_bytes =
+            std::num::NonZeroU64::new(1).unwrap();
         let runtime = runtime(&effective);
         let expected = NexusStaticAuthorityV1::from_actual(
             &effective,
@@ -613,9 +582,6 @@ mod tests {
         let mut changed = baseline.clone();
         changed.routing_policy.default_lane = LaneId::new(1);
         assert_ne!(authority(&changed), original, "routing policy");
-        let mut changed = baseline.clone();
-        changed.atomic_private_settlement.max_expiry_blocks = core::num::NonZeroU64::new(10).unwrap();
-        assert_ne!(authority(&changed), original, "atomic settlement policy");
         let changed = NexusStaticAuthorityV1::from_actual(
             &baseline,
             Some(&baseline.fees),
@@ -664,6 +630,9 @@ mod tests {
         changed.registry.manifest_directory = Some(PathBuf::from("/node/a/manifests"));
         changed.registry.poll_interval = Duration::from_secs(9);
         changed.storage.budget_enforce_interval_blocks = 27;
+        changed.atomic_private_settlement.sidecar_max_records = NonZeroU32::new(1).unwrap();
+        changed.atomic_private_settlement.sidecar_max_total_bytes =
+            std::num::NonZeroU64::new(1).unwrap();
         assert_eq!(authority(&changed), original);
     }
 

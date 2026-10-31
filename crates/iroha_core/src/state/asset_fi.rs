@@ -61,12 +61,40 @@ where
     T: norito::NoritoSerialize,
     for<'de> T: norito::NoritoDeserialize<'de>,
 {
+    read_with_owner(world, key, None)
+}
+
+fn read_with_owner<T>(
+    world: &impl WorldReadOnly,
+    key: &StatePath,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<T>, Error>
+where
+    T: norito::NoritoSerialize,
+    for<'de> T: norito::NoritoDeserialize<'de>,
+{
     world
         .smart_contract_state()
         .get(key)
         .map(|bytes| {
-            norito::decode_canonical(bytes)
-                .map_err(|error| reject(format!("invalid native FI state: {error}")))
+            crate::execution_attempt::canonical_policy_decode(
+                owner,
+                bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .map_err(|error| {
+                let rejected = |error: norito::CanonicalDecodeControlError| {
+                    reject(format!("invalid native FI state: {error}"))
+                };
+                match owner {
+                    Some(owner) => owner.attempt_error_to_instruction_error(
+                        crate::execution_attempt::canonical_decode_control_attempt_error(
+                            error, rejected,
+                        ),
+                    ),
+                    None => rejected(error),
+                }
+            })
         })
         .transpose()
 }
@@ -76,7 +104,17 @@ pub fn fi(
     definition: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Option<AssetFiV1>, Error> {
-    let value: Option<AssetFiV1> = read(world, &fi_key(definition, account))?;
+    fi_with_owner(world, definition, account, None)
+}
+
+/// Read exact FI enrollment without losing the transaction's local decode refusal.
+pub(super) fn fi_with_owner(
+    world: &impl WorldReadOnly,
+    definition: &AssetDefinitionId,
+    account: &AccountId,
+    owner: Option<&WorldTransaction<'_, '_>>,
+) -> Result<Option<AssetFiV1>, Error> {
+    let value: Option<AssetFiV1> = read_with_owner(world, &fi_key(definition, account), owner)?;
     if value.as_ref().is_some_and(|v| {
         v.asset_definition_id != *definition || v.fi_account_id != *account || v.revision == 0
     }) {

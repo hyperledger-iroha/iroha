@@ -16,7 +16,7 @@ fn powers(common: u8) -> Vec<F> {
 
 // This public fixture helper duplicates only the experiment's recursion. It is
 // neither a production implementation nor an admitted alternative proof path.
-fn cached_prune(
+fn cached_prune<const INNER_PARALLEL: bool>(
     values: &mut [F],
     offset: usize,
     destinations: &[usize],
@@ -47,7 +47,7 @@ fn cached_prune(
             }
         }
     };
-    if pairs >= PARALLEL_VALUES_V1 / 2 && rayon::current_num_threads() > 1 {
+    if INNER_PARALLEL && pairs >= PARALLEL_VALUES_V1 / 2 && rayon::current_num_threads() > 1 {
         left[..pairs]
             .par_chunks_mut(PAIRS_PER_TASK_V1)
             .zip(right[..pairs].par_chunks_mut(PAIRS_PER_TASK_V1))
@@ -56,22 +56,30 @@ fn cached_prune(
     } else {
         apply(0, &mut left[..pairs], &mut right[..pairs]);
     }
-    if left_needed && right_needed && pairs >= PARALLEL_VALUES_V1 / 2 {
+    if INNER_PARALLEL && left_needed && right_needed && pairs >= PARALLEL_VALUES_V1 / 2 {
         rayon::join(
-            || cached_prune(left, offset, left_destinations, pairs, powers),
-            || cached_prune(right, offset + half, right_destinations, pairs, powers),
+            || cached_prune::<INNER_PARALLEL>(left, offset, left_destinations, pairs, powers),
+            || {
+                cached_prune::<INNER_PARALLEL>(
+                    right,
+                    offset + half,
+                    right_destinations,
+                    pairs,
+                    powers,
+                )
+            },
         );
     } else {
         if left_needed {
-            cached_prune(left, offset, left_destinations, pairs, powers);
+            cached_prune::<INNER_PARALLEL>(left, offset, left_destinations, pairs, powers);
         }
         if right_needed {
-            cached_prune(right, offset + half, right_destinations, pairs, powers);
+            cached_prune::<INNER_PARALLEL>(right, offset + half, right_destinations, pairs, powers);
         }
     }
 }
 
-fn cached_evaluate(
+fn cached_evaluate<const INNER_PARALLEL: bool>(
     coefficients: &[F],
     native: u8,
     common: u8,
@@ -104,7 +112,7 @@ fn cached_evaluate(
         *target = coefficient.mul(scale);
         scale = scale.mul(F(GOLDILOCKS_GENERATOR_V1));
     }
-    cached_prune(&mut scratch, 0, destinations, coefficients.len(), powers);
+    cached_prune::<INNER_PARALLEL>(&mut scratch, 0, destinations, coefficients.len(), powers);
     let mut output = PrivateTableV1::new(Vec::new(), zeroize_fields_v1);
     output.try_reserve_exact(selected.len()).unwrap();
     assert_eq!(output.capacity(), selected.len());
@@ -139,10 +147,14 @@ fn public_twiddle_stride_experiment_matches_independent_fft_and_mask_boundary_ge
             );
             for selected in [vec![0, rows / 2, rows - 1], (0..rows).collect()] {
                 let order = destinations(common, &selected);
-                let output = cached_evaluate(&coefficients, 1, common, &selected, &roots, &order);
+                let output =
+                    cached_evaluate::<true>(&coefficients, 1, common, &selected, &roots, &order);
+                let coarse =
+                    cached_evaluate::<false>(&coefficients, 1, common, &selected, &roots, &order);
                 let bounded = evaluate_v1(&coefficients, 1, common, &selected).unwrap();
                 for (i, &row) in selected.iter().enumerate() {
                     assert_eq!(output[i], full[row]);
+                    assert_eq!(coarse[i], full[row]);
                     assert_eq!(output[i], bounded[i]);
                 }
             }
@@ -214,7 +226,7 @@ fn registered_public_twiddle_table_cost_keeps_complete_masks_and_query_coordinat
                             .par_iter()
                             .map(|input| {
                                 if cached {
-                                    cached_evaluate(
+                                    cached_evaluate::<true>(
                                         input, native, common, &selected, &roots, &order,
                                     )
                                 } else {
@@ -234,6 +246,95 @@ fn registered_public_twiddle_table_cost_keeps_complete_masks_and_query_coordinat
                 }
                 for (a, b) in results[0].iter().zip(&results[1]) {
                     assert_eq!(&**a, &**b);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "current-cut public-power/coarse pruning timing; no production dispatch selected"]
+fn current_cut_public_twiddle_coarse_cost_keeps_complete_masks_and_query_coordinates() {
+    use std::time::Instant;
+
+    let common = 22;
+    let rows = 1usize << common;
+    let cut_rows = 1 << aggregate::retained_commitment::CUT_LEVEL_V1;
+    let selected = (0..QUERY_COUNT)
+        .flat_map(|query| {
+            let block = (query * 1729 + 17) % (rows / cut_rows);
+            block * cut_rows..(block + 1) * cut_rows
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), QUERY_COUNT * cut_rows);
+    let started = Instant::now();
+    let roots = powers(common);
+    let order = destinations(common, &selected);
+    println!(
+        "selected_twiddle_coarse_setup common={common} selected={} public_power_bytes={} public_index_bytes={} elapsed_ns={}",
+        selected.len(),
+        roots.capacity() * size_of::<F>(),
+        order.capacity() * size_of::<usize>(),
+        started.elapsed().as_nanos(),
+    );
+    for native in [15, 16, 18, 19] {
+        for width in [1, 8] {
+            let inputs = (0..width)
+                .map(|column| {
+                    let values = (0..1usize << native)
+                        .map(|i| F((i * 17 + column * 43 + 13) as u64))
+                        .collect::<Vec<_>>();
+                    let mask = (0..MASK_DEGREE + 1)
+                        .map(|i| F((i * 29 + column * 71 + 7) as u64))
+                        .collect::<Vec<_>>();
+                    Column::from_vec_v1(
+                        masked_trace_coefficients_with_mask_v1(&values, native, &mask).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = inputs
+                .iter()
+                .map(|input| {
+                    let full = Column::from_vec_v1(
+                        masked_trace_coefficients_on_coset_v1(input, native, common).unwrap(),
+                    );
+                    Column::from_vec_v1(selected.iter().map(|&row| full[row]).collect())
+                })
+                .collect::<Vec<_>>();
+            for round in 0..3 {
+                for cached in if round % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let started = Instant::now();
+                    let output = inputs
+                        .par_iter()
+                        .map(|input| {
+                            if cached {
+                                cached_evaluate::<false>(
+                                    input, native, common, &selected, &roots, &order,
+                                )
+                            } else {
+                                evaluate_v1(input, native, common, &selected).unwrap()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let transform_ns = started.elapsed().as_nanos();
+                    for (actual, expected) in output.iter().zip(&expected) {
+                        assert_eq!(actual.as_ref(), expected.as_ref());
+                    }
+                    let clear_started = Instant::now();
+                    drop(output);
+                    let clear_ns = clear_started.elapsed().as_nanos();
+                    println!(
+                        "selected_twiddle_coarse_cost native={native} common={common} width={width} workers={} round={round} cached={cached} selected={} coefficient_count={} transform_gather_scratch_clear_ns={transform_ns} output_clear_ns={clear_ns} parity=exact",
+                        rayon::current_num_threads(),
+                        selected.len(),
+                        inputs[0].len(),
+                    );
                 }
             }
         }

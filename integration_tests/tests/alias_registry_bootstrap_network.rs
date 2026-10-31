@@ -140,7 +140,7 @@ fn staking_custody_account() -> AccountId {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    let definition: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
+    let definition: AssetDefinitionId = TAIRA_XOR_ASSET_DEFINITION_ID
         .parse()
         .expect("canonical network XOR asset");
     assert_eq!(

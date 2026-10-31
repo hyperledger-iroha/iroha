@@ -283,6 +283,68 @@ fn ca_link_replay_transform_degree_and_owner_census_is_source_derived() {
 }
 
 #[test]
+fn private_link_phase_admits_originals_and_quotient_without_duplicate_reservation() {
+    use super::super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1;
+
+    let (layout, _) = plan_v1();
+    let common = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    let joint = main_ca_resources::MainCaJointBufferPlanV1::new_v1(&layout).unwrap();
+    let phase = joint
+        .required_v1(main_ca_resources::MainCaBufferPhaseV1::PrivateLinks)
+        .unwrap();
+    assert!(phase <= common.maximum_live_buffers);
+    let ca = CaAwaitingMainAuxiliaryV1::payload_bound_v1().unwrap();
+    let main = MainCaOriginalAuxiliaryV1::payload_bound_v1();
+    let duplicate = MainCaPrivatePlanV1::quotient_private_bytes_v1() + ca + main;
+    assert!(duplicate > 250_000_000);
+    for assembly in [215_244_730, 288_345_698] {
+        common.check_before_sources_v1(assembly).unwrap();
+        let policy = main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(
+            &layout, assembly,
+        )
+        .unwrap();
+        // The old reservation refused before any quotient work despite the
+        // complete phase already fitting the unchanged arithmetic maximum.
+        assert!(matches!(
+            policy.reserve_additional_v1(duplicate),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        ));
+    }
+    // For the actual full fixture the later DEEP operation retains MAIN24 and
+    // only one deferred extension column, which fits the ordinary policy.
+    main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 215_244_730)
+        .unwrap()
+        .reserve_additional_v1(MainCaPrivatePlanV1::DEEP_PRIVATE_BYTES_V1 + main)
+        .unwrap();
+    // A larger source assembly is still globally admitted. Neither already
+    // charged original owner may be deducted again from its smaller slack.
+    let policy =
+        main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 320_000_000)
+            .unwrap();
+    for duplicate in [
+        main + ca + 8 * NATIVE_ROWS_V1 * 8 + 8192,
+        main + MainCaPrivatePlanV1::DEEP_PRIVATE_BYTES_V1,
+    ] {
+        assert!(matches!(
+            policy.reserve_additional_v1(duplicate),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        ));
+    }
+    joint
+        .check_replay_subphase_v1(
+            main_ca_resources::MainCaBufferPhaseV1::PrivateLinks,
+            8 * NATIVE_ROWS_V1 * 8 + 8192,
+        )
+        .unwrap();
+    joint
+        .check_replay_subphase_v1(
+            main_ca_resources::MainCaBufferPhaseV1::Finalization,
+            MainCaPrivatePlanV1::DEEP_PRIVATE_BYTES_V1,
+        )
+        .unwrap();
+}
+
+#[test]
 fn retained_main_ca_coefficients_bind_deep_remainders_and_clear_owned_storage() {
     use super::super::super::super::private_table::inspection;
     let (layout, plan) = plan_v1();
@@ -317,10 +379,10 @@ fn retained_main_ca_coefficients_bind_deep_remainders_and_clear_owned_storage() 
     let mixes: [E; 24] = core::array::from_fn(|index| {
         E::from_base(F(u64::try_from(index).expect("fixture value fits u64") + 13))
     });
-    let policy =
-        main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 0).unwrap();
+    main_bounded_transform::MainBoundedTransformPolicyV1::for_assembly_v1(&layout, 320_000_000)
+        .unwrap();
     let mut accumulator = vec![E::ZERO; 589_824];
-    plan.accumulate_deep_v1(&retained, point, &values, &mixes, policy, &mut accumulator)
+    plan.accumulate_deep_v1(&layout, &retained, point, &values, &mixes, &mut accumulator)
         .unwrap();
     let expected_constant = (0..24).fold(E::ZERO, |sum, index| {
         let target = point.mul_base(plan.shared.main_openings_v1()[index].multiplier);
@@ -342,8 +404,15 @@ fn retained_main_ca_coefficients_bind_deep_remainders_and_clear_owned_storage() 
     let mut changed = values;
     changed[0] = changed[0].add(E::ONE);
     assert!(
-        plan.accumulate_deep_v1(&retained, point, &changed, &mixes, policy, &mut accumulator)
-            .is_err()
+        plan.accumulate_deep_v1(
+            &layout,
+            &retained,
+            point,
+            &changed,
+            &mixes,
+            &mut accumulator
+        )
+        .is_err()
     );
     assert_eq!(
         accumulator, before,

@@ -2090,41 +2090,56 @@ Query runtime adverts to surface ABI metadata:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let capabilities = try await torii.getNodeCapabilities()
-    let metrics = try await torii.getRuntimeMetrics()
-    let abiActive = try await torii.getRuntimeAbiActive()
+    let capabilities = try await torii.getNodeCapabilities(canonicalAuth: canonicalAuth)
+    let metrics = try await torii.getRuntimeMetrics(canonicalAuth: canonicalAuth)
+    let abiActive = try await torii.getRuntimeAbiActive(canonicalAuth: canonicalAuth)
     print("abi:", capabilities.abiVersion,
           "signed_tx_schema:", capabilities.signedTransactionSchemaHashHex ?? "missing",
           "active:", abiActive.abiVersion,
-          "upgrades:", metrics.upgradeEventsTotal)
+          "scheduled:", metrics.upgradeEventsTotal.scheduled,
+          "activated:", metrics.upgradeEventsTotal.activated)
 }
 ```
 
 Completion-based APIs (`getNodeCapabilities(completion:)`, etc.) are also available when
 Swift concurrency is not an option.
 
-Generate upgrade instructions via the runtime helpers:
+The runtime changes only through governed change sets (`ChangeSetV1`): SORA Parliament
+schedules a change set that moves the committed selection from its predecessor to its
+successor at an effective height. `listRuntimeUpgrades()` returns the committed selection and
+its identity, the attesting committee and digest, and every recorded change set with its
+status (`scheduled`, `activated`, `lapsed` or `cancelled`) and frozen notice; each record also
+keeps its complete JSON. `proposeRuntimeUpgrade(changeSet:provenance:)` and
+`cancelRuntimeUpgrade(idHex:)` draft the Parliament proposal for local signing. While the
+universal root commits a `runtime_provenance_policy_v1`, a proposal that schedules a change set
+needs `ToriiRuntimeChangeSetEndorsement`s from its threshold of distinct trusted release
+signers (`iroha runtime upgrade endorse` prints one); a root without that policy takes none. All three are operator routes and require the
+client's `ToriiOperatorSigningContext` (see the operator context below); without it they fail
+before any request is sent. Nothing activates a change set by request: at the start of its
+effective height it activates when every committee member attested it, its notice elapsed and
+it still applies to the committed selection, and lapses otherwise.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let manifest = ToriiRuntimeUpgradeManifest(
-        name: "Upgrade Foo",
-        description: "Refresh runtime provenance",
-        abiVersion: 1,
-        abiHashHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        addedSyscalls: [],
-        startHeight: 1_000,
-        endHeight: 1_200
+    let snapshot = try await torii.listRuntimeUpgrades()
+    for item in snapshot.items {
+        print(item.idHex, item.record.status, item.record.changeSet.effectiveHeight)
+    }
+
+    // A ChangeSetV1 object whose predecessor is `snapshot.selectionIdHex`; its effective
+    // height must be an exact JSON integer no larger than 2^53 - 1.
+    let changeSet = try ToriiRuntimeChangeSet(
+        json: ToriiJSONValue.decodeExact(from: Data(contentsOf: changeSetURL))
     )
-
-    let proposal = try await torii.proposeRuntimeUpgrade(manifest: manifest)
-    let proposalInstructions = proposal.txInstructions
-
-    let activation = try await torii.activateRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
-    let activationInstructions = activation.txInstructions
-    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: String(repeating: "a", count: 64))
-    let cancellationInstructions = cancellation.txInstructions
-    // Feed the returned `txInstructions` into your transaction builder / submit pipeline.
+    let endorsements = try endorsementURLs.map {
+        try ToriiRuntimeChangeSetEndorsement(json: ToriiJSONValue.decodeExact(from: Data(contentsOf: $0)))
+    }
+    let proposal = try await torii.proposeRuntimeUpgrade(
+        changeSet: changeSet,
+        provenance: endorsements
+    )
+    let cancellation = try await torii.cancelRuntimeUpgrade(idHex: snapshot.items[0].idHex)
+    // Sign and submit `proposal.txInstructions` / `cancellation.txInstructions` locally.
 }
 ```
 

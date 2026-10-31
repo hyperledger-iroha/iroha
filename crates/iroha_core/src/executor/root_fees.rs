@@ -121,7 +121,21 @@ pub(super) fn execution_parameters<'a>(
 pub(super) fn execution_policy<'a>(
     transaction: &'a StateTransaction<'_, '_>,
 ) -> Result<&'a RootFeePolicy, &'static str> {
-    execution_parameters(transaction)
+    captured_execution_policy(execution_parameters(transaction), &transaction.nexus.fees)
+}
+
+/// Select the same policy for admission and charging while borrowing existing owners.
+/// The retained original keeps its funded graph alive across transaction writes;
+/// the process-local owner is used only by the named test mutation.
+pub(super) fn captured_execution_policy<'a>(
+    original: &'a crate::pipeline_gas_policy::RetainedStateParameters,
+    local: &'a RootFeePolicy,
+) -> Result<&'a RootFeePolicy, &'static str> {
+    // SPEC: §13.4 HC396 substitutes process-local terms for the committed projection.
+    if cfg!(all(test, sumeragi_core_mutation = "HC396")) {
+        return Ok(local);
+    }
+    original
         .root_fees()
         .ok_or("original committed root fee policy is absent")
 }
@@ -332,6 +346,10 @@ mod tests {
                 crate::test_allocations::allocations_during(|| {
                     let retained = execution_parameters(&tx).clone();
                     assert!(retained.same_version(&original));
+                    assert!(std::ptr::eq(
+                        captured_execution_policy(&retained, &tx.nexus.fees).unwrap(),
+                        before
+                    ));
                     assert!(std::ptr::eq(execution_policy(&tx).unwrap(), before));
                 }),
                 0
@@ -410,9 +428,9 @@ mod tests {
             InstructionExecutionError::InvariantViolation(_)
         ));
         assert!(
-            error
-                .to_string()
-                .contains("initial genesis execution custody requires its authored root fee policy")
+            error.to_string().contains(
+                "initial genesis execution custody requires its authored root fee policy"
+            )
         );
         assert!(sponsor_vault_custody(&tx).is_err());
         assert_eq!(*execution_policy(&tx).unwrap(), frozen);

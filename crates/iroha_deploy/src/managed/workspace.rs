@@ -191,6 +191,29 @@ impl ManagedStore {
     }
 }
 
+/// Find the project a directory belongs to, so its subdirectories share one managed context.
+///
+/// The nearest ancestor holding `.git` wins. Without one, the outermost ancestor holding
+/// `Musubi.toml` does, which covers members of a Musubi workspace. Otherwise the directory itself
+/// is the workspace. An explicit `--workspace` bypasses this search.
+///
+/// # Errors
+/// The directory must resolve to an existing path. An ancestor that cannot be read just holds no
+/// marker, so a restricted parent directory never stops the search.
+pub fn discover_workspace_root(start: &Path) -> Result<PathBuf> {
+    let start = start.canonicalize()?;
+    let mut package = None;
+    for ancestor in start.ancestors() {
+        if matches!(ancestor.join(".git").try_exists(), Ok(true)) {
+            return Ok(ancestor.to_path_buf());
+        }
+        if matches!(ancestor.join("Musubi.toml").try_exists(), Ok(true)) {
+            package = Some(ancestor);
+        }
+    }
+    Ok(package.unwrap_or(&start).to_path_buf())
+}
+
 /// Resolve a stable per-workspace store below an application-state directory.
 ///
 /// Canonical workspace identity keeps equivalent paths on one context, without placing
@@ -296,6 +319,47 @@ impl ManagedContext {
 mod tests {
     use super::*;
     use iroha_fs::{PrivateDirectory, PublishMode};
+
+    #[test]
+    fn workspace_root_is_the_enclosing_project_and_never_outside_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+
+        // No marker: the directory itself.
+        let plain = base.join("plain/nested");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(discover_workspace_root(&plain).unwrap(), plain);
+
+        // Git repositories own everything below them, including nested packages.
+        let repo = base.join("repo");
+        let nested = repo.join("examples/app/contracts");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+        std::fs::write(repo.join("examples/app/Musubi.toml"), "").unwrap();
+        assert_eq!(discover_workspace_root(&nested).unwrap(), repo);
+        assert_eq!(discover_workspace_root(&repo).unwrap(), repo);
+
+        // A linked worktree's `.git` is a file and starts its own workspace.
+        let worktree = repo.join("worktrees/feature");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: elsewhere").unwrap();
+        assert_eq!(discover_workspace_root(&worktree).unwrap(), worktree);
+
+        // Outside git, the outermost package covers a workspace's members.
+        let packages = base.join("packages");
+        let member = packages.join("members/one/src");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::write(packages.join("Musubi.toml"), "").unwrap();
+        std::fs::write(packages.join("members/one/Musubi.toml"), "").unwrap();
+        assert_eq!(discover_workspace_root(&member).unwrap(), packages);
+
+        // Equivalent subdirectories therefore select one store.
+        let state = base.join("state");
+        assert_eq!(
+            workspace_state_root(&state, &discover_workspace_root(&nested).unwrap()).unwrap(),
+            workspace_state_root(&state, &repo).unwrap()
+        );
+    }
 
     #[test]
     fn installed_runtime_requires_the_complete_sibling_pair() {
@@ -534,9 +598,14 @@ mod tests {
         let error = store
             .ensure_selected(&runtime, None, std::time::Duration::from_secs(60))
             .unwrap_err();
+        // The test executable exits instead of adopting the worker's reserved listeners.
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            Error::Timeout(std::time::Duration::from_secs(60))
+        );
         assert!(
-            matches!(error, Error::Timeout(timeout) if timeout == std::time::Duration::from_secs(60)),
-            "expected original-budget worker-start failure after exact profile selection: {error}"
+            matches!(&error, Error::Invalid(message) if message == &expected),
+            "expected owned worker exit during listener handoff after exact profile selection: {error}"
         );
         assert_eq!(store.prepared(&request.name).unwrap(), retained.prepared);
         assert!(!directory.path().join(".preparing").exists());

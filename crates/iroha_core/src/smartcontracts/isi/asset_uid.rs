@@ -30,9 +30,13 @@ impl Execute for SetAssetUidPolicyV1 {
                 "asset UID policy requires a Global asset definition",
             ));
         }
-        for limit in [value.holding_limit.as_ref(), value.daily_spend_limit.as_ref(), value.daily_outgoing_limit.as_ref()]
-            .into_iter()
-            .flatten()
+        for limit in [
+            value.holding_limit.as_ref(),
+            value.daily_spend_limit.as_ref(),
+            value.daily_outgoing_limit.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             definition
                 .spec()
@@ -65,10 +69,18 @@ impl Execute for SetAssetUidPolicyV1 {
         let mut writes = Vec::new();
         for account in &value.accounts {
             stx.world.account(account)?;
-            if crate::state::asset_fi::fi(stx.world(), &value.asset_definition_id, account)?.is_some()
-                || crate::state::asset_uid_enrollment::system(stx.world(), &value.asset_definition_id, account)?.is_some()
+            if crate::state::asset_fi::fi(stx.world(), &value.asset_definition_id, account)?
+                .is_some()
+                || crate::state::asset_uid_enrollment::system(
+                    stx.world(),
+                    &value.asset_definition_id,
+                    account,
+                )?
+                .is_some()
             {
-                return Err(reject("retail UID membership cannot overlap institutional enrollment"));
+                return Err(reject(
+                    "retail UID membership cannot overlap institutional enrollment",
+                ));
             }
             if stx
                 .world

@@ -1,8 +1,8 @@
 //! Linked full returns through the existing native payment operation.
 
 use super::{
-    AccountClient, NativePaymentError, NativePaymentObservationError, NativePaymentOperation,
-    NativePaymentRequest, NativePaymentRunOptions, VerifiedPaymentReceipt,
+    AccountClient, FileNativePaymentFinality, NativePaymentError, NativePaymentObservationError,
+    NativePaymentOperation, NativePaymentRequest, NativePaymentRunOptions, VerifiedPaymentReceipt,
 };
 use crate::workflow::{WorkflowProgressV1, WorkflowStorage, domain_digest};
 use iroha_crypto::{Hash, HashOf};
@@ -249,9 +249,10 @@ impl AccountClient {
         &self,
         request: NativePaymentFullReturnRequest,
         storage: Arc<dyn WorkflowStorage>,
+        finality: Arc<FileNativePaymentFinality>,
         verifier: SumeragiFinalityVerifier,
     ) -> Result<NativePaymentReturnOperation, NativePaymentError> {
-        let payment = self.native_payment(request.payment.clone(), storage, verifier)?;
+        let payment = self.native_payment(request.payment.clone(), storage, finality, verifier)?;
         Ok(NativePaymentReturnOperation { request, payment })
     }
 }

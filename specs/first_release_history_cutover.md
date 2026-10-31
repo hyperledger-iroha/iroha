@@ -289,9 +289,94 @@ that still encodes the former list produces transactions every node refuses at
 decode. No live network was changed. The inventory has no key for this
 declaration yet; the guard checks only the `abi` one.
 
+Declared cutover, 2026-10-30 (live-upgrade foundation, `live_runtime_upgrades.md`
+§14 step 2): surfaces `state_layout` and `execution_root`, cutover
+`fresh_genesis`. A World of this build is founded on the baseline catalog: it
+holds the tables `runtime_definitions` and the cell `runtime_selection`, and `S`
+of the World root binds the selection's commitment profile and installed storage
+instead of every compiled field. Every World root therefore differs, and a stored
+history from an earlier build does not replay in this binary. The pinned history
+is regenerated and its digest recorded; it now proves the founded baseline. A
+running network does not take a fresh genesis for this cutover: it adopts the
+foundation at a governed checkpoint (`live_runtime_upgrades.md` §13). The required
+adoption import must found the runtime fields on the predecessor's World; that
+import is still unimplemented. No live network was changed.
+
+The lifecycle implementation in `90ea8ea33b` completed the same declared cutover:
+`runtime_change_sets` replaced `runtime_upgrades`, `runtime_containments` was added,
+and the baseline catalog and the three pinned frames were regenerated together.
+The retained fixture's history digest is
+`61150ac3a98554758bc796d305430952d2c3ec66258251330790b3bb8cd2fdf5`.
+The inventory now records that existing capture; the fixture is unchanged from
+`90ea8ea33b`. This corrects the stale inventory digest from the earlier baseline
+capture in `e93b3f9d7f`, without regenerating history to make a replay pass.
+
+The original V1 signing schema retains its atomic-private-settlement record in
+the nested SORA Nexus policy digest and its five named provenance fields in the
+execution-policy digest. Their removal in `e1f137143e` and `3b47f8a49f` changed the
+preimage of that retained history. The single canonical encoder restores their
+original positions, types and frozen baseline values. They are immutable signing
+slots: neither current private-payment limits nor local sidecar capacities alter
+them, and deleted node-local provenance controls remain deleted. Independent byte
+goldens pin the original records. These baseline values do not reconstruct other
+historical configurations with different authenticated signing inputs.
+
+Rust ownership also does not rename an installed storage schema. The Model-owned
+`PrivacyProtocolPolicyKeyV1` keeps the sole original nominal identity
+`iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1`. The ten-field
+`PrivacyConsensusLimitsV1` and three-field `PrivacyProtocolLimitsUpdateV1` retain
+their original layouts. New private-payment limits and captured closure drains
+live in the typed `private_settlement_policy_v1` custom entry of the existing
+`Parameters` cell. Authenticated absence selects its immutable native V1 baseline;
+a malformed present value is refused, and a local codec refusal retains retry
+custody. Bootstrap and replay do not insert an absent extension.
+
+The fixture remains intact and passes cold replay through reopened Kura storage
+with its original certified root and execution tip. The same regression confirms
+that replay does not rewrite any frame and Strict startup rejects a corrupted
+frame. This verifies the retained capture; the governed adoption path must still
+be completed before this candidate can upgrade a running network.
+
+The fixture contains no private-payment obligations. Resource checks preserve
+the original generic-cap and protocol-schedule behavior when the extension and
+staged locks are absent. Histories with original live obligations admitted under
+capacities below the continuation safety floor need separate qualification;
+passing this three-block fixture does not establish their replay.
+
+The handshake change in `173b737010` replaced the compatibility probe's compiled
+`gas_schedule_hash` with `host_profiles`: each immutable host profile binds its
+ABI and metering semantics, and peers must support the profiles selected by the
+committed root. The inventory anchors the metering semantics at their definition,
+`ivm::gas::schedule_hash`, which the baseline host profile binds; dormant extra
+profiles are capabilities, not an execution-semantics change or a reason to
+reset history.
+
 Classify by effect on the stored history, not by intent. When unsure, run the
 pinned-history test and the read-only probes against a store written by the
 previous build.
+
+## Live-upgrade foundation
+
+[`live_runtime_upgrades.md`](live_runtime_upgrades.md) replaces this
+classification on a network that runs it. Until that network's foundation
+genesis, every rule above applies unchanged. After it:
+
+- adding an instruction, event, permission, parameter or storage definition is a
+  governed change set, an ordinary change for the history rather than a
+  `fresh_genesis` cutover;
+- a change to anything a live selection contains ships as a new definition.
+  Dispatch through the root's authenticated selection is the upgrade mechanism,
+  not the version dispatch that rule 1 above prohibits;
+- nodes start from authenticated checkpoints, and a retired definition's code is
+  deleted once the checkpoint startup floor is above its last use. Blocks below
+  the floor stay verifiable by their certificates and are re-executed only with
+  the archived release, as "Obsolete histories" requires.
+
+A network enters the foundation through a fresh genesis or, when it is already
+running, through a one-time adoption at a governed checkpoint that becomes its
+trust anchor (`live_runtime_upgrades.md` §13). Blocks before the anchor are
+verified only with the archived predecessor release, and no bridge or import
+survives the adoption.
 
 ## Obsolete histories
 

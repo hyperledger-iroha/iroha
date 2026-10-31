@@ -53,6 +53,17 @@ def run_command(
     return process
 
 
+def configured_base_ref() -> tuple[str, ...]:
+    """Return the integration branch recorded in ci/default_base_ref, when there is one."""
+
+    try:
+        lines = (REPO_ROOT / "ci" / "default_base_ref").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ()
+    values = [value for value in (line.split("#", 1)[0].strip() for line in lines) if value]
+    return tuple(values[:1])
+
+
 def determine_base_ref() -> str:
     """Determine the Git base reference used for comparisons."""
 
@@ -64,7 +75,7 @@ def determine_base_ref() -> str:
     if github_base_ref:
         return f"origin/{github_base_ref}"
 
-    for candidate in ("origin/master", "origin/main"):
+    for candidate in (*configured_base_ref(), "origin/master", "origin/main"):
         try:
             run_command(
                 ["git", "rev-parse", "--verify", candidate],

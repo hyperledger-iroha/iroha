@@ -51,11 +51,9 @@ fn actual_codec_measured_hook_charges_exact_complete_backing() {
     assert!(owner.belongs_to(&pool));
     // This raw fixture emits no length prefix, so the codec finalizes its header
     // flags to zero even though compact lengths are enabled for serialization.
-    let body = norito::canonical_frame_payload::<crate::trigger::action::Action>(
-        owner.as_bytes(),
-        0,
-    )
-    .unwrap();
+    let body =
+        norito::canonical_frame_payload::<crate::trigger::action::Action>(owner.as_bytes(), 0)
+            .unwrap();
     assert_eq!(body, &[5, 2, 7]); // Framing only; deliberately not a semantic Action.
     assert!(matches!(
         norito::canonical_frame_payload::<crate::trigger::action::Action>(

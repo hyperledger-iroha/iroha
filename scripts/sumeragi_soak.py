@@ -677,15 +677,20 @@ class Localnet:
                 self._rotate_log(peer.index, peer.boot)
 
     def fee_asset_id(self) -> str:
-        """The generated faucet currency used for workload funding.
+        """The fee currency used for workload funding.
 
-        Kagami binds this currency to the signed genesis fee policy. Nodes do not
-        accept runtime fee settings.
+        Kagami binds this currency to the signed genesis root fee policy
+        (``root_fees_v1``); nodes do not accept runtime fee settings.
         """
-        value = toml_string_value(self.config(0).read_text(), "torii.faucet", "asset_definition_id")
-        if value:
+        genesis_path = self.net_dir / "genesis.json"
+        try:
+            genesis = json.loads(genesis_path.read_text())
+            value = genesis["transactions"][0]["parameters"]["custom"]["root_fees_v1"]["payload"]["fee_asset_id"]
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as error:
+            raise RuntimeError(f"{genesis_path} names no signed root fee asset") from error
+        if isinstance(value, str) and value:
             return value
-        raise RuntimeError(f"{self.config(0)} names no generated faucet asset")
+        raise RuntimeError(f"{genesis_path} names no signed root fee asset")
 
     def _cli_output(self, config: Path, arguments: list[str], timeout: float) -> str:
         result = subprocess.run(

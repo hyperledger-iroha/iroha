@@ -105,6 +105,14 @@ pub struct ManagedContractCallReport {
     pub parent: Option<ManagedParentReport>,
 }
 
+/// Make a printed recovery command runnable by naming this context's client configuration.
+fn with_client_config(message: &str, selected: &ManagedContext) -> String {
+    message.replace(
+        iroha_contract_deploy::call::CLIENT_CONFIG_PLACEHOLDER,
+        &format!("'{}'", selected.client_config.display()),
+    )
+}
+
 fn invalid(error: impl std::fmt::Display) -> Error {
     Error::Invalid(error.to_string())
 }
@@ -328,7 +336,7 @@ impl ManagedStore {
                     max_total_fees: BTreeMap::from([(target.fee_asset()?, options.max_fee)]),
                 },
             })
-            .map_err(invalid)?;
+            .map_err(|error| invalid(with_client_config(&error.to_string(), selected)))?;
         target.revalidate_generation(self)?;
         let id = prepared.operation_id().map_err(invalid)?;
         journal_id(&id)?;

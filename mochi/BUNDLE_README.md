@@ -77,8 +77,10 @@ Use `kagami context list`, `context show`, `context use <name>`,
 `localnet up` creates a fresh ledger. Reset does not transfer old funds or
 contract state.
 
-Advanced operator bundle generation is `kagami localnet generate`; managed
-startup needs none of its input files or generated scripts.
+Advanced developer bundle generation is `kagami localnet generate`; managed
+startup needs none of its input files or generated scripts. Sora network
+bundles (Nexus, Taira and the private dataspace presets) come from
+`kagami sora-network generate`.
 
 ## Artifact verification and qualification
 

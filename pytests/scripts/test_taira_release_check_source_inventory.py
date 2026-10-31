@@ -301,7 +301,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
     def test_owner_authority_and_schema_suites_bind_real_bodies_to_native_harnesses(self):
         root = SCRIPT.parents[1]
         self.assertIn('include!("executor_contract_owner_permission_tests.rs");',
-                      (root / "crates/iroha_core/src/executor.rs").read_text())
+                      (root / "crates/iroha_core/src/executor_tests.rs").read_text())
         core_source = root / "crates/iroha_core/src/executor_contract_owner_permission_tests.rs"
         core_names = tuple("executor::tests::" + name for name in re.findall(
             r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(", core_source.read_text()))
@@ -311,6 +311,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
             "executor::tests::contract_owner_delegation_rejects_foreign_transferred_pending_and_parliament_authority",
             "executor::tests::ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it",
             "executor::tests::scoped_permission_delegation_requires_current_declaration_and_exact_instance",
+            "executor::tests::contract_runtime_delegates_only_its_exact_asset_and_trigger_capabilities",
         ))
         groups = {
             "core": core_names,
@@ -374,7 +375,7 @@ class SelectedSourceInventoryTests(unittest.TestCase):
         cli_source = SCRIPT.parents[1] / "crates/iroha_cli/src"
         self.assertRegex((cli_source / "main_shared.rs").read_text(), r"(?m)^mod taira;")
         self.assertRegex((cli_source / "taira.rs").read_text(),
-                         r'#\[path = "taira_parliament_seating\.rs"\]\s*pub\(crate\) mod parliament_seating;')
+                         r'#\[path = "taira_parliament_seating\.rs"\]\s*pub mod parliament_seating;')
         self.assertRegex((cli_source / "taira_parliament_seating.rs").read_text(),
                          r'#\[path = "taira_parliament_seating_tests\.rs"\]\s*mod tests;')
         required = {"kagami": (
@@ -408,16 +409,11 @@ class SelectedSourceInventoryTests(unittest.TestCase):
     def test_generated_genesis_controls_follow_the_deploy_library_owner(self):
         required = (
             "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
-            "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
-            "localnet::tests::localnet_assets_contain_only_explicit_requests",
-            "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
-            "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
-            "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
-            "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-            "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-            "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
-            "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
-            "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
+            "sora_network::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+            "sora_network::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+            "sora_network::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+            "sora_network::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+            "sora_network::tests::private_dataspace_manifests_use_the_selected_lane_alias",
         )
         self.assertEqual(gate.HARNESS_TARGETS["deploy"][1:], (
             "iroha_deploy", "lib", ["-p", "iroha_deploy", "--lib"]))

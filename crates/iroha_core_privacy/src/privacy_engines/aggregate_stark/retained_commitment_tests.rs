@@ -202,12 +202,12 @@ fn malformed_query_order_incomplete_width_and_noncanonical_unselected_values_are
         out.absorb_columns_v1(&values[..8]),
         Err(AggregateStarkErrorV1::NonCanonicalField)
     );
-    for rows in [0, 1, 8, 17, usize::MAX] {
+    for rows in [0, 1, 3, 17, usize::MAX] {
         assert!(RetainedMerkleCutV1::payload_bound_v1(rows).is_err());
     }
     assert_eq!(
         RetainedMerkleCutV1::payload_bound_v1(64).unwrap(),
-        4 * core::mem::size_of::<PrivacyOuterDigestV1>()
+        32 * core::mem::size_of::<PrivacyOuterDigestV1>()
             + core::mem::size_of::<RetainedMerkleCutV1>()
     );
 }
@@ -240,7 +240,7 @@ fn partial_complete_and_unwound_cuts_erase_original_backings() {
         .is_err()
     );
     let observed = CUT_CLEARS.with(|slot| slot.borrow_mut().take().unwrap());
-    assert_eq!(observed, vec![1, 4]);
+    assert_eq!(observed, vec![1, 32]);
 }
 
 #[test]
@@ -319,10 +319,36 @@ fn compact_width_coordinate_count_and_noncanonical_values_reject() {
                 compact.push(compact[0].clone());
             }
             2 => {
-                compact[0][15] = F(u64::MAX);
+                compact[0][CUT_ROWS_V1 - 1] = F(u64::MAX);
             }
             _ => unreachable!(),
         }
         assert!(out.absorb_selected_columns_v1(&compact).is_err());
     }
+}
+
+#[test]
+fn sibling_pair_replay_crosses_parallel_cut_tiles_with_original_frontiers() {
+    let rows = 16_384;
+    let values = columns(rows);
+    let (_, cut) = full(&values, &[]).finish_retaining_cut_v1().unwrap();
+    let indices = [0, 1, 8191, 8192, 8193, rows - 1];
+    let expected = full(&values, &indices).finish().unwrap();
+    for workers in [1, 4, 20] {
+        let actual = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let selected = selected(&values, &indices, &cut);
+                assert_eq!(selected.selected_rows_v1().len(), 8);
+                assert!(selected.selected_rows_v1().len() <= 2 * indices.len());
+                selected.finish_v1().unwrap()
+            });
+        assert_eq!(actual, expected);
+    }
+    // The sibling is not a requested opening, but is authenticated in its pair.
+    let mut changed = values;
+    changed[0][8190] = changed[0][8190].add(F::ONE);
+    assert!(selected(&changed, &indices, &cut).finish_v1().is_err());
 }

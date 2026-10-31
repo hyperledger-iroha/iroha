@@ -338,6 +338,7 @@ fn included_rejected_payment_never_credits_customer_across_restart_and_explicit_
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("original"),
             )?),
+            payment_finality(stores.join("original-finality"))?,
             verifier(&wire, &selected)?,
         )?;
         let first = rt.block_on(paid_rejection(&operation, &options))?;
@@ -379,6 +380,7 @@ fn included_rejected_payment_never_credits_customer_across_restart_and_explicit_
             Arc::new(FileWorkflowStorage::open_or_create(
                 stores.join("original"),
             )?),
+            payment_finality(stores.join("original-finality"))?,
             verifier(&wire, &selected)?,
         )?;
         let recovered = rt.block_on(resumed.recover(&options))?;
@@ -405,6 +407,7 @@ fn included_rejected_payment_never_credits_customer_across_restart_and_explicit_
                 Arc::new(FileWorkflowStorage::open_or_create(
                     stores.join("fresh-gateway"),
                 )?),
+                payment_finality(stores.join("fresh-gateway-finality"))?,
                 verifier(&wire, &selected)?,
             )?;
         let absent_success = rt.block_on(fresh.recover(&options))?;

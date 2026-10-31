@@ -298,6 +298,12 @@ harness = false
 required-features = ["bench"]
 
 [[bench]]
+name = "kaigi"
+path = "benches/kaigi.rs"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
 name = "queries"
 harness = false
 required-features = ["bench", "iroha-core-tests"]

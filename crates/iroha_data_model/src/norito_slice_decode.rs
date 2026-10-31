@@ -57,7 +57,7 @@ impl_canonical_slice_decode! {
     // Also cover event payloads that may appear in option/sequence contexts
     crate::events::data::proof::ProofVerified,
     crate::events::data::proof::ProofRejected,
-    crate::runtime::RuntimeUpgradeId,
+    crate::runtime::lifecycle::ChangeSetId,
 }
 // Kaigi components referenced by query/data-model responses
 impl_canonical_slice_decode! {

@@ -103,7 +103,10 @@ fn refusal<G>(
     field: &'static str,
     blocked_index: usize,
     before: &[(&'static str, String)],
-    (blocker_registration, prefix_registration): (&mut iroha_allocation::release::ReleaseRegistration, &mut iroha_allocation::release::ReleaseRegistration),
+    (blocker_registration, prefix_registration): (
+        &mut iroha_allocation::release::ReleaseRegistration,
+        &mut iroha_allocation::release::ReleaseRegistration,
+    ),
 ) {
     // Retained cleanup precedes the outer fence, as in the real publisher.
     let mut cleanup = StateEffectLocks::new(state);

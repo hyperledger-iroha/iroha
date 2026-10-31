@@ -89,6 +89,7 @@ fn prepare_selected(
     let published_path = directory.path().join(DIRECTORY);
     let stage = fresh_stage(directory)?;
     let prepared = match &root_kind {
+        // Developer networks come from the developer generator; storage is its opt-in layer.
         RootKind::Global => crate::localnet::prepare_localnet_at(
             &request.name,
             stage.path(),
@@ -97,7 +98,7 @@ fn prepare_selected(
             Some(&published_path),
         )?,
         RootKind::Private { spec } => match amx {
-            Some(sources) => crate::localnet::prepare_private_root_with_amx_at(
+            Some(sources) => crate::sora_network::prepare_private_root_with_amx_at(
                 &request.name,
                 stage.path(),
                 ports,
@@ -105,7 +106,7 @@ fn prepare_selected(
                 Some(&published_path),
                 sources,
             )?,
-            None => crate::localnet::prepare_private_root_at(
+            None => crate::sora_network::prepare_private_root_at(
                 &request.name,
                 stage.path(),
                 ports,
@@ -123,7 +124,7 @@ fn prepare_selected(
             .map_err(|_| Error::Invalid("startup timeout is too large".into()))?,
     };
     stage.write_atomic(MANIFEST, &encode(&retained)?, PublishMode::CreateNew)?;
-    crate::localnet::sync_private_tree(stage.path()).map_err(|_| {
+    crate::custody::sync_private_tree(stage.path()).map_err(|_| {
         Error::Invalid("cannot durably stage the complete managed generation".into())
     })?;
     match stage.rename_to_sibling(DIRECTORY, PublishMode::CreateNew) {
@@ -143,6 +144,17 @@ fn prepare_selected(
         &retained.root_kind,
     )?;
     Ok(retained)
+}
+
+/// Record the binaries a retained developer network now runs on. Its identity is unchanged.
+pub(super) fn replace_programs(
+    directory: &PrivateDirectory,
+    retained: &RetainedLocalnet,
+) -> Result<()> {
+    let generation = directory.open_child(DIRECTORY)?;
+    generation.write_atomic(MANIFEST, &encode(retained)?, PublishMode::Replace)?;
+    generation.sync()?;
+    Ok(())
 }
 
 fn reconcile_publication(directory: &PrivateDirectory, expected: &RetainedLocalnet) -> Result<()> {

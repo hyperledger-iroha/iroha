@@ -200,6 +200,74 @@ mod tests {
             "filesystem placement and local worker cadence must not partition validators"
         );
     }
+
+    #[test]
+    fn frozen_private_settlement_v1_matches_original_commitment_bytes_and_position() {
+        // Independently encoded from the declarations/defaults at 90ea8ea33b, using
+        // norito.md: little-endian scalars/u64 counts and compact field/element lengths.
+        // This literal was not captured from the implementation under test.
+        let expected = hex::decode(concat!(
+            "02010002ff0008201c00000000000008b00400000000000008b004000000000000",
+            "08b0040000000000001c0400000000000000040010000004004000000400000100",
+            "0400000400080000800000000000080000100000000000080000400000000000",
+            "0840420f0000000000040001000008000000c0000000000201000b0100000000000000020100",
+        ))
+        .unwrap();
+        assert_eq!(
+            NexusConsensusAtomicPrivateSettlementV1::frozen_v1().encode(),
+            expected,
+            "the signed V1 baseline cannot follow current defaults"
+        );
+
+        let nexus = Nexus::default();
+        let preimage = nexus_consensus_policy_preimage_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut remaining = preimage.as_slice();
+        let mut fields = Vec::new();
+        while !remaining.is_empty() {
+            let (len, prefix) = norito::core::read_len_from_slice_with_flags(remaining, 0x02)
+                .expect("canonical V1 field prefix");
+            let (field, rest) = remaining[prefix..].split_at(len);
+            fields.push(field);
+            remaining = rest;
+        }
+        assert_eq!(fields.len(), 21, "the original V1 field count is frozen");
+        assert_eq!(
+            fields[11], expected,
+            "private settlement stays after AXT and before governance"
+        );
+    }
+
+    #[test]
+    fn private_sidecar_capacity_does_not_change_payment_consensus_identity() {
+        let baseline = Nexus::default();
+        let pipeline = Pipeline::default();
+        let policy = nexus_consensus_policy_digest(&baseline, Some(&baseline.fees)).unwrap();
+        let amx =
+            sumeragi_nexus_amx_context_hash(&baseline, Some(&baseline.fees), &pipeline, &[], &[]);
+        let mut records = baseline.clone();
+        records.atomic_private_settlement.sidecar_max_records = NonZeroU32::new(1).unwrap();
+        let mut bytes = baseline;
+        bytes.atomic_private_settlement.sidecar_max_total_bytes = NonZeroU64::new(1).unwrap();
+        for (label, changed) in [("record capacity", records), ("byte capacity", bytes)] {
+            assert_eq!(
+                nexus_consensus_policy_digest(&changed, Some(&changed.fees)).unwrap(),
+                policy,
+                "local private sidecar {label} must not alter payment consensus identity"
+            );
+            assert_eq!(
+                sumeragi_nexus_amx_context_hash(&changed, Some(&changed.fees), &pipeline, &[], &[]),
+                amx,
+                "local private sidecar {label} must not alter AMX authority"
+            );
+        }
+    }
+
     #[test]
     fn nexus_consensus_policy_digest_excludes_lane_operator_metadata() {
         let mut left = Nexus::default();
@@ -774,6 +842,29 @@ mod tests {
             [0x22; 32],
         )
     }
+    #[test]
+    fn frozen_runtime_provenance_v1_matches_original_commitment_bytes() {
+        // Independently encoded from the five ordered fields at 90ea8ea33b and its
+        // Optional/false/false/empty/zero baseline. Values retain their original types:
+        // u8, bool, bool, Vec<Vec<u8>>, u64, wrapped in the named V1 field sequence.
+        let expected = concat!(
+            "0500000000000000362b2a676f7665726e616e63652e72756e74696d655f757067",
+            "726164655f70726f76656e616e63652e6d6f6465090100000000000000013e3332",
+            "676f7665726e616e63652e72756e74696d655f757067726164655f70726f76656e",
+            "616e63652e726571756972655f73626f6d090100000000000000003e3332676f76",
+            "65726e616e63652e72756e74696d655f757067726164655f70726f76656e616e63",
+            "652e726571756972655f736c736109010000000000000000483635676f7665726e",
+            "616e63652e72756e74696d655f757067726164655f70726f76656e616e63652e74",
+            "7275737465645f7369676e65727310080000000000000000000000000000004c3a",
+            "39676f7665726e616e63652e72756e74696d655f757067726164655f70726f7665",
+            "6e616e63652e7369676e61747572655f7468726573686f6c641008000000000000",
+            "000000000000000000",
+        );
+        let mut policy = ExecutionPolicyFieldsV1::default();
+        policy.push_frozen_runtime_provenance_v1();
+        assert_eq!(hex::encode(policy.fields.encode()), expected);
+    }
+
     #[test]
     fn local_crypto_generation_and_backend_choices_cannot_change_execution_policy_digest() {
         let baseline = super::sora_profile_tests::minimal_root();
@@ -1753,6 +1844,137 @@ mod tests {
             "the fresh Taira catalog routes bpng by target dataspace only"
         );
     }
+    /// The field-level view walks every field the writer emits, names each node value by its
+    /// configuration key, and a changed node value differs in exactly that key.
+    #[test]
+    fn sumeragi_nexus_amx_context_fields_name_each_changed_config_key() {
+        use iroha_data_model::nexus::{
+            NexusAmxContextFieldOriginV1::{Genesis, NodeConfig},
+            diff_nexus_amx_context_v1, nexus_amx_context_fields_v1,
+        };
+        let pipeline = Pipeline::default();
+        let preimage = |nexus: &Nexus,
+                        validators: &[GenesisActiveNexusLaneRecord],
+                        lineage: &[SumeragiLaneLifecycleEntry]| {
+            sumeragi_nexus_amx_context_preimage(
+                nexus,
+                Some(&nexus.fees),
+                &pipeline,
+                validators,
+                lineage,
+            )
+        };
+        for (label, nexus, validators, lineage) in [
+            ("default", Nexus::default(), Vec::new(), Vec::new()),
+            (
+                "sora",
+                sora_three_lane_nexus(),
+                golden_validators(),
+                golden_lineage()[..3].to_vec(),
+            ),
+            (
+                "taira",
+                taira_eight_lane_nexus(),
+                golden_validators(),
+                golden_lineage(),
+            ),
+        ] {
+            let fields = nexus_amx_context_fields_v1(&preimage(&nexus, &validators, &lineage))
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let value = |path: &str| {
+                fields
+                    .iter()
+                    .find(|field| field.path == path)
+                    .map(|field| (field.origin, field.value.clone()))
+            };
+            assert_eq!(
+                value("nexus.lane_count"),
+                Some((
+                    NodeConfig,
+                    nexus.lane_catalog.lane_count().get().to_string()
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.fusion.exit_teu"),
+                Some((NodeConfig, nexus.fusion.exit_teu.to_string())),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.autoscale.scale_out_latency_ratio"),
+                Some((
+                    NodeConfig,
+                    format!("{:?}", nexus.autoscale.scale_out_latency_ratio)
+                )),
+                "{label}"
+            );
+            assert_eq!(
+                value("nexus.da.audit.interval_ms"),
+                Some((NodeConfig, nexus.da.audit.interval.as_millis().to_string())),
+                "{label}"
+            );
+            for dataspace in nexus.dataspace_catalog.entries() {
+                assert_eq!(
+                    value(&format!(
+                        "nexus.dataspace_catalog[id={}].alias",
+                        dataspace.id
+                    )),
+                    Some((NodeConfig, format!("{:?}", dataspace.alias))),
+                    "{label}"
+                );
+            }
+            for field in &fields {
+                let genesis = [
+                    "nexus.lane_lifecycle[",
+                    "nexus.autoscale.last_transition_height",
+                    "root.",
+                    "staged.",
+                    "pipeline.",
+                ]
+                .iter()
+                .any(|prefix| field.path.starts_with(prefix))
+                    || (field.path.starts_with("nexus.lane_catalog[")
+                        && (field.path.ends_with(".version") || field.path.ends_with(".metadata")));
+                let origin = if genesis { Genesis } else { NodeConfig };
+                assert_eq!(field.origin, origin, "{label}: {}", field.path);
+            }
+        }
+        let validators = golden_validators();
+        let lineage = golden_lineage();
+        let taira = taira_eight_lane_nexus();
+        let mut node = taira.clone();
+        node.fusion.exit_teu = node.fusion.exit_teu.checked_add(1).unwrap();
+        node.autoscale.cooldown_blocks = node.autoscale.cooldown_blocks.checked_add(1).unwrap();
+        node.da.rotation.latency_decay /= 2.0;
+        let diffs = diff_nexus_amx_context_v1(
+            &preimage(&taira, &validators, &lineage),
+            &preimage(&node, &validators, &lineage),
+        )
+        .expect("both contexts come from the writer");
+        assert_eq!(
+            diffs
+                .iter()
+                .map(|diff| (diff.path.as_str(), diff.origin, diff.actual.clone()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "nexus.fusion.exit_teu",
+                    NodeConfig,
+                    Some(node.fusion.exit_teu.to_string())
+                ),
+                (
+                    "nexus.autoscale.cooldown_blocks",
+                    NodeConfig,
+                    Some(node.autoscale.cooldown_blocks.to_string())
+                ),
+                (
+                    "nexus.da.rotation.latency_decay",
+                    NodeConfig,
+                    Some(format!("{:?}", node.da.rotation.latency_decay))
+                ),
+            ]
+        );
+    }
     /// Emit the actual default/Sora/Taira test-owner preimages without rewriting golden pins.
     /// Explicit authored fee recipes here are test inputs, never runtime policy fallbacks.
     #[test]
@@ -1839,7 +2061,6 @@ mod tests {
             }
         }
     }
-
 }
 #[cfg(test)]
 mod sora_profile_tests {
@@ -1891,7 +2112,4 @@ enabled = true
     }
     include!("sora_profile_discovery_disabled_test.rs");
     include!("sora_profile_runtime_tests.rs");
-
-
-
 }

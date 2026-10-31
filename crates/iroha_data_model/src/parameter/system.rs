@@ -8,7 +8,6 @@ use core::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     time::Duration,
 };
-use iroha_crypto::Algorithm;
 use iroha_data_model_derive::model;
 use iroha_primitives::{json::Json, numeric::Quantity};
 

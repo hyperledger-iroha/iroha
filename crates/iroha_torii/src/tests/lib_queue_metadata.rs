@@ -88,6 +88,36 @@ mod tests_queue_metadata {
         assert_eq!(envelope.code, "unsupported_transaction_admission");
         assert!(envelope.details.unwrap().retry_after_seconds.is_none());
     }
+    /// An envelope the committed runtime selection does not admit is refused with the stable
+    /// code execution would commit (`specs/live_runtime_upgrades.md` §5.2).
+    #[test]
+    fn runtime_rejected_admission_reports_the_stable_rejection_code() {
+        let rejection =
+            iroha_data_model::runtime::lifecycle::RuntimeRejectionV1::DefinitionInactive {
+                wire_id: "test.unreleased.instruction.v1".to_owned(),
+            };
+        let error = queue::Error::RuntimeRejected(rejection);
+        assert_eq!(
+            Error::status_code_for_queue_error(&error),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(Error::queue_error_summary(&error).0, "definition_inactive");
+        let (reject_code, detail) = queue_rejection_metadata(&error);
+        assert_eq!(reject_code, "PRTRY:RUNTIME_REJECTED");
+        assert!(
+            detail.starts_with("definition_inactive: ")
+                && detail.contains("test.unreleased.instruction.v1"),
+            "{detail}"
+        );
+        let envelope = Error::queue_error_envelope(&error, None);
+        assert_eq!(envelope.code, "definition_inactive");
+        let details = envelope.details.unwrap();
+        assert!(details.retry_after_seconds.is_none());
+        assert_eq!(
+            details.reject_code.as_deref(),
+            Some("PRTRY:RUNTIME_REJECTED")
+        );
+    }
     /// Torii stage of the resource contract (`specs/zk_resource_contract.json`): a transaction
     /// no block can carry is a permanent refusal, not backpressure, and its detail carries the
     /// actual and the permitted bytes.

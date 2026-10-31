@@ -70,11 +70,12 @@ workflow continues to run the complete workspace matrix on `main`, tags, and
 manual release gates. Apply the `ci/full` label to a pull request to force all
 seven routed Rust lanes before merge.
 
-Use the same routing locally:
+Use the same routing locally. Local runs and the contributor guards compare against the
+branch named in `ci/default_base_ref`, unless `--base` or `AGENTS_BASE_REF` says otherwise:
 
 ```sh
 scripts/dev_workflow.sh
-scripts/dev_workflow.sh --base origin/main
+scripts/dev_workflow.sh --base origin/some-branch
 scripts/dev_workflow.sh --full
 python3 scripts/rust_ci.py validate
 ```

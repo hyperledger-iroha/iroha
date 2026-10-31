@@ -235,6 +235,7 @@ pub(super) fn validation_failure(
                 ),
             )
             | StateStorageAdmissionError::SccpEvidence(EvidencePreparationError::Invariant)
+            | StateStorageAdmissionError::UnsupportedRuntime { .. }
             | StateStorageAdmissionError::NativeAmx(
                 super::super::amx::NativeAmxAdmissionError::Invalid(_),
             ) => return Ok(PublicationError::RecoveryRequired(original.to_string())),

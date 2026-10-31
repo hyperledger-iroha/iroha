@@ -461,7 +461,14 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     let chain: ChainId = "test-chain".parse().unwrap();
     let mut state = new_state(world, kura, query_handle, chain.clone());
     {
-        let mut fees = state.world.parameters.view().get().root_fees().unwrap().clone();
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .unwrap()
+            .clone();
         fees.sponsor_vault_custody_account_id = custody_id.clone();
         {
             let mut parameters =
@@ -646,7 +653,14 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let mut state = new_state(world, kura, query_handle, chain.clone());
     {
-        let mut fees = state.world.parameters.view().get().root_fees().unwrap().clone();
+        let mut fees = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .root_fees()
+            .unwrap()
+            .clone();
         fees.sponsor_vault_custody_account_id = custody_id.clone();
         let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
         crate::state::set_parameter_cell_for_testing(

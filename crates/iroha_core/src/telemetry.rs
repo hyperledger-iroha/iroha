@@ -3322,19 +3322,6 @@ impl StateTelemetry {
     [inc_runtime_upgrade_event(kind: &'static str) =>
         .runtime_upgrade_events_total.with_label_values(&[kind]).inc();]
     }
-    /// Increment runtime upgrade provenance rejection counter labeled by reason.
-    pub fn record_runtime_upgrade_provenance_rejection(
-        &self,
-        reason: iroha_data_model::runtime::RuntimeUpgradeProvenanceError,
-    ) {
-        if self.is_enabled() {
-            let label = reason.as_label();
-            self.metrics
-                .runtime_upgrade_provenance_rejections_total
-                .with_label_values(&[label])
-                .inc();
-        }
-    }
     /// Update governance proposal counters on status transition.
     pub fn record_governance_proposal_transition(
         &self,

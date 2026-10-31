@@ -64,6 +64,8 @@ mod sccp;
 pub use sccp::{
     SccpKeeper, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
 };
+mod socket_addr;
+pub use socket_addr::{ConfigSocketAddr, ConfigSocketAddrError};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -143,6 +145,23 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
 }
 fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
     AccountId::parse_encoded(raw).unwrap_or_else(|err| panic!("{context}: {err}"))
+}
+/// Parse an account setting whose omitted value is a fixed code-default account.
+///
+/// The default literal is rendered for the default chain discriminant, but it names the same
+/// account on every chain, so an omitted setting stays valid when a node selects another
+/// `chain_discriminant`. An explicitly configured literal must still use the node's prefix.
+fn parse_account_or_default(
+    raw: &str,
+    default_literal: fn() -> String,
+    default_account: fn() -> AccountId,
+    context: &str,
+) -> AccountId {
+    if raw == default_literal() {
+        default_account()
+    } else {
+        parse_account_id_literal(raw, context)
+    }
 }
 fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
     let trimmed = value.trim();
@@ -1444,6 +1463,9 @@ impl Root {
         if let Err(message) = snapshot.validate_read_buffer_budget() {
             emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
         }
+        if let Err(message) = snapshot.upgrade_checkpoint.checkpoint() {
+            emitter.emit(Report::new(ParseError::InvalidSnapshotConfig).attach(message));
+        }
         // The verification attempt budget is the one local value `[confidential]` gives ZK.
         zk.verify_timeout = confidential.verify_timeout;
         emitter.into_result()?;
@@ -2097,102 +2119,6 @@ impl SorafsTelemetryPolicy {
         }
     }
 }
-/// Runtime-upgrade provenance enforcement modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum RuntimeUpgradeProvenanceMode {
-    /// Provenance is optional; when provided it is verified.
-    #[default]
-    Optional,
-    /// Provenance is required for runtime upgrade manifests.
-    Required,
-}
-impl json::JsonSerialize for RuntimeUpgradeProvenanceMode {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-}
-impl json::JsonDeserialize for RuntimeUpgradeProvenanceMode {
-    fn json_deserialize(
-        parser: &mut json::Parser<'_>,
-    ) -> ::core::result::Result<Self, json::Error> {
-        let text = parser.parse_string()?;
-        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
-            field: "governance.runtime_upgrade_provenance.mode".into(),
-            message: err.to_string(),
-        })
-    }
-}
-fn default_runtime_upgrade_provenance_mode() -> RuntimeUpgradeProvenanceMode {
-    RuntimeUpgradeProvenanceMode::from_str(defaults::governance::RUNTIME_UPGRADE_PROVENANCE_MODE)
-        .expect("invalid runtime upgrade provenance mode default")
-}
-/// Runtime-upgrade provenance policy (user view).
-#[derive(Debug, ReadConfig, Clone)]
-pub struct RuntimeUpgradeProvenance {
-    /// Whether provenance is required for runtime upgrade manifests.
-    #[config(default = "default_runtime_upgrade_provenance_mode()")]
-    pub mode: RuntimeUpgradeProvenanceMode,
-    /// Require at least one SBOM digest entry when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM")]
-    pub require_sbom: bool,
-    /// Require a non-empty SLSA attestation when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA")]
-    pub require_slsa: bool,
-    /// Minimum number of trusted signatures required when provenance is present/required.
-    #[config(default = "defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD")]
-    pub signature_threshold: usize,
-    /// Trusted signer public keys (multihash).
-    #[config(default)]
-    pub trusted_signers: Vec<String>,
-}
-impl RuntimeUpgradeProvenance {
-    fn parse(self) -> actual::RuntimeUpgradeProvenancePolicy {
-        if matches!(self.mode, RuntimeUpgradeProvenanceMode::Optional)
-            && (self.require_sbom || self.require_slsa || self.signature_threshold > 0)
-        {
-            panic!(
-                "governance.runtime_upgrade_provenance.mode=optional cannot require sbom/slsa/signatures"
-            );
-        }
-        let mut trusted_signers = BTreeSet::new();
-        for signer in self.trusted_signers {
-            let pk = PublicKey::from_str(signer.trim()).unwrap_or_else(|err| {
-                panic!("invalid runtime upgrade provenance signer {signer}: {err}");
-            });
-            trusted_signers.insert(pk);
-        }
-        if self.signature_threshold > 0 {
-            assert!(
-                !trusted_signers.is_empty(),
-                "governance.runtime_upgrade_provenance.signature_threshold requires trusted_signers"
-            );
-            assert!(
-                self.signature_threshold <= trusted_signers.len(),
-                "governance.runtime_upgrade_provenance.signature_threshold exceeds trusted_signers"
-            );
-        }
-        actual::RuntimeUpgradeProvenancePolicy {
-            mode: self.mode.into(),
-            require_sbom: self.require_sbom,
-            require_slsa: self.require_slsa,
-            trusted_signers,
-            signature_threshold: self.signature_threshold,
-        }
-    }
-}
-impl Default for RuntimeUpgradeProvenance {
-    fn default() -> Self {
-        Self {
-            mode: default_runtime_upgrade_provenance_mode(),
-            require_sbom: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SBOM,
-            require_slsa: defaults::governance::RUNTIME_UPGRADE_PROVENANCE_REQUIRE_SLSA,
-            signature_threshold:
-                defaults::governance::RUNTIME_UPGRADE_PROVENANCE_SIGNATURE_THRESHOLD,
-            trusted_signers: Vec::new(),
-        }
-    }
-}
 /// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct ParliamentTimedOvn {
@@ -2376,9 +2302,6 @@ pub struct Governance {
     /// Allowed JDG signature schemes for attestation validation.
     #[config(default = "defaults::governance::jdg_signature_schemes()")]
     pub jdg_signature_schemes: Vec<String>,
-    /// Runtime upgrade provenance enforcement policy.
-    #[config(nested)]
-    pub runtime_upgrade_provenance: RuntimeUpgradeProvenance,
     /// Account supplying viral incentive payouts and sender bonuses.
     #[config(
         env = "GOV_VIRAL_INCENTIVE_POOL_ACCOUNT",
@@ -2603,7 +2526,6 @@ impl Default for Governance {
             alias_frontier_telemetry: defaults::governance::ALIAS_FRONTIER_TELEMETRY,
             debug_trace_pipeline: defaults::governance::DEBUG_TRACE_PIPELINE,
             jdg_signature_schemes: defaults::governance::jdg_signature_schemes(),
-            runtime_upgrade_provenance: RuntimeUpgradeProvenance::default(),
             viral_incentive_pool_account: defaults::governance::viral_incentive_pool_account(),
             viral_escrow_account: defaults::governance::viral_escrow_account(),
             viral_reward_asset_id: defaults::governance::viral_reward_asset_id(),
@@ -2748,12 +2670,16 @@ impl Governance {
             "governance.parliament_timed_ovn.max_corpus_entries must cover the largest hidden-ballot body (max(policy_jury_size, confirmation_jury_size)={maximum_hidden_body_size})"
         );
         let viral_incentives = actual::ViralIncentives {
-            incentive_pool_account: parse_account_id_literal(
+            incentive_pool_account: parse_account_or_default(
                 &self.viral_incentive_pool_account,
+                defaults::governance::viral_incentive_pool_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid viral incentive pool account id",
             ),
-            escrow_account: parse_account_id_literal(
+            escrow_account: parse_account_or_default(
                 &self.viral_escrow_account,
+                defaults::governance::viral_escrow_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid viral escrow account id",
             ),
             reward_asset_definition_id: self
@@ -2790,7 +2716,6 @@ impl Governance {
             );
         }
         let jdg_signature_schemes = normalize_jdg_signature_schemes(self.jdg_signature_schemes);
-        let runtime_upgrade_provenance = self.runtime_upgrade_provenance.parse();
         actual::Governance {
             // Relation-selecting keys are committed per election; a node names none.
             vk_ballot: None,
@@ -2804,17 +2729,23 @@ impl Governance {
                 .parse()
                 .expect("invalid citizenship asset id"),
             citizenship_bond_amount: self.citizenship_bond_amount,
-            citizenship_escrow_account: parse_account_id_literal(
+            citizenship_escrow_account: parse_account_or_default(
                 &self.citizenship_escrow_account,
+                defaults::governance::citizenship_escrow_account,
+                defaults::governance::citizenship_escrow_account_id,
                 "invalid citizenship escrow account id",
             ),
             min_bond_amount: self.min_bond_amount,
-            bond_escrow_account: parse_account_id_literal(
+            bond_escrow_account: parse_account_or_default(
                 &self.bond_escrow_account,
+                defaults::governance::bond_escrow_account,
+                defaults::governance::bond_escrow_account_id,
                 "invalid governance bond escrow account id",
             ),
-            slash_receiver_account: parse_account_id_literal(
+            slash_receiver_account: parse_account_or_default(
                 &self.slash_receiver_account,
+                defaults::governance::slash_receiver_account,
+                defaults::governance::slash_receiver_account_id,
                 "invalid governance slash receiver account id",
             ),
             slash_double_vote_bps: self.slash_double_vote_bps,
@@ -2824,15 +2755,16 @@ impl Governance {
             alias_frontier_telemetry: self.alias_frontier_telemetry,
             debug_trace_pipeline: self.debug_trace_pipeline,
             jdg_signature_schemes,
-            runtime_upgrade_provenance,
             viral_incentives,
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
             sorafs_pin_fee_asset_id: self
                 .sorafs_pin_fee_asset_id
                 .parse()
                 .expect("invalid SoraFS pin fee asset id"),
-            sorafs_pin_fee_treasury_account: parse_account_id_literal(
+            sorafs_pin_fee_treasury_account: parse_account_or_default(
                 &self.sorafs_pin_fee_treasury_account,
+                defaults::governance::sorafs_pin_fee::treasury_account,
+                defaults::governance::sorafs_pin_fee::treasury_account_id,
                 "invalid SoraFS pin fee treasury account id",
             ),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
@@ -5364,8 +5296,9 @@ pub struct StreamingCodec {
     pub cabac_mode: WithOrigin<CabacMode>,
     /// Block sizes that may use trellis scans (empty until claim-avoidance ships).
     pub trellis_blocks: WithOrigin<Vec<u16>>,
-    /// Path to the deterministic `SignedRansTablesV1` artefact shared across encoders/decoders.
-    pub rans_tables_path: WithOrigin<PathBuf>,
+    /// Optional `SignedRansTablesV1` artefact shared across encoders/decoders. Omit it to use the
+    /// canonical tables compiled into the binary.
+    pub rans_tables_path: Option<WithOrigin<PathBuf>>,
     /// Entropy coder advertised in manifests/headers.
     pub entropy_mode: WithOrigin<String>,
     /// Bundle width for the bundled rANS path.
@@ -5388,7 +5321,7 @@ impl ReadConfigTrait for StreamingCodec {
             .finish_with_origin();
         let rans_tables_path = reader
             .read_parameter::<PathBuf>(["rans_tables_path"])
-            .value_or_else(defaults::streaming::codec::rans_tables_path)
+            .value_optional()
             .finish_with_origin();
         let entropy_mode = reader
             .read_parameter::<String>(["entropy_mode"])
@@ -5424,11 +5357,15 @@ impl StreamingCodec {
     ) -> Option<actual::StreamingCodec> {
         let cabac_mode = Self::resolve_cabac_mode(self.cabac_mode, emitter)?;
         let trellis_blocks = Self::validate_trellis_blocks(self.trellis_blocks, emitter)?;
-        let (rans_tables_path, rans_tables_origin) =
-            Self::validate_rans_tables_path(self.rans_tables_path, emitter, files)?;
         let entropy_mode = Self::parse_entropy_mode(self.entropy_mode, emitter)?;
-        let tables_max_width =
-            Self::bundle_tables_max_width(&rans_tables_path, rans_tables_origin, emitter, files)?;
+        let (rans_tables_path, tables_max_width) = match self.rans_tables_path {
+            Some(configured) => {
+                let (path, origin) = Self::validate_rans_tables_path(configured, emitter, files)?;
+                let width = Self::bundle_tables_max_width(&path, origin, emitter, files)?;
+                (Some(path), width)
+            }
+            None => (None, Self::canonical_tables_max_width(emitter)?),
+        };
         let bundle_width = Self::validate_bundle_width(
             self.bundle_width,
             entropy_mode,
@@ -5533,6 +5470,21 @@ impl StreamingCodec {
             return None;
         };
         Some((resolved, origin))
+    }
+    fn canonical_tables_max_width(emitter: &mut Emitter<ParseError>) -> Option<u8> {
+        match norito::streaming::parse_bundle_tables_from_toml(
+            defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML,
+        ) {
+            Ok(tables) => Some(tables.max_width()),
+            Err(source) => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidStreamingConfig)
+                        .attach("the compiled-in canonical rANS tables are invalid")
+                        .attach(source),
+                );
+                None
+            }
+        }
     }
     fn bundle_tables_max_width(
         rans_tables_path: &Path,
@@ -7279,8 +7231,10 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
-        let operator_account_id = parse_account_id_literal(
+        let operator_account_id = parse_account_or_default(
             &operator_account_id,
+            defaults::soranet::vpn::operator_account_id,
+            defaults::governance::bond_escrow_account_id,
             "invalid network.soranet_vpn.operator_account_id",
         );
         let operator_private_key = match (operator_private_key, operator_private_key_file) {
@@ -7610,11 +7564,11 @@ mod soranet_vpn_tests {
 pub struct Network {
     /// Peer-to-peer address (internal, will be used only to bind to it).
     #[config(env = "P2P_ADDRESS")]
-    pub address: WithOrigin<SocketAddr>,
+    pub address: WithOrigin<ConfigSocketAddr>,
     /// Peer-to-peer address (external, as seen by other peers).
     /// Will be gossiped to connected peers so that they can gossip it to other peers.
     #[config(env = "P2P_PUBLIC_ADDRESS")]
-    pub public_address: WithOrigin<SocketAddr>,
+    pub public_address: WithOrigin<ConfigSocketAddr>,
     /// P2P relay role (disabled/hub/spoke/assist) for constrained topologies.
     #[config(default = "RelayMode::Disabled")]
     pub relay_mode: RelayMode,
@@ -7623,7 +7577,7 @@ pub struct Network {
     /// When set, values are attempted in order and the node may fall back to
     /// subsequent entries if the preferred hub is unreachable.
     #[config(default)]
-    pub relay_hub_addresses: Vec<WithOrigin<SocketAddr>>,
+    pub relay_hub_addresses: Vec<WithOrigin<ConfigSocketAddr>>,
     /// Hop limit for relayed frames.
     #[config(default = "defaults::network::RELAY_TTL")]
     pub relay_ttl: u8,
@@ -8097,9 +8051,11 @@ impl Network {
             quic_max_idle_timeout_ms,
             ..
         } = self;
+        let address = address.map(ConfigSocketAddr::into_inner);
+        let public_address = public_address.map(ConfigSocketAddr::into_inner);
         let mut relay_hub_addresses: Vec<SocketAddr> = user_relay_hub_addresses
             .into_iter()
-            .map(WithOrigin::into_value)
+            .map(|address| address.into_value().into_inner())
             .collect();
         // Deduplicate while preserving operator-supplied order.
         if relay_hub_addresses.len() > 1 {
@@ -10507,82 +10463,21 @@ impl_default!(NexusAxt {
     proof_cache_ttl_slots: defaults::nexus::axt::PROOF_CACHE_TTL_SLOTS,
     replay_retention_slots: defaults::nexus::axt::REPLAY_RETENTION_SLOTS,
 });
-/// User-level governed atomic private cross-dataspace settlement policy.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+/// Node-local encrypted sidecar custody for atomic private settlement.
+/// Committed privacy policy supplies all payment validity rules.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusAtomicPrivateSettlement {
-    /// Audited fixed-shape private-note proof profile version.
-    #[config(default = "defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION")]
-    pub proof_profile_version: u16,
-    /// Maximum ordered dataspace legs in one bundle.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS")]
-    pub max_participants: u16,
-    /// Maximum admission-to-expiry distance, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS")]
-    pub max_expiry_blocks: u64,
-    /// Maximum auditor-approval phase duration, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS")]
-    pub audit_timeout_blocks: u64,
-    /// Maximum Prepare-QC phase duration, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS")]
-    pub prepare_timeout_blocks: u64,
-    /// Maximum Commit-QC phase duration, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS")]
-    pub commit_timeout_blocks: u64,
-    /// Strictly increasing canonical padded-plaintext classes, in bytes.
-    ///
-    /// The authenticated ciphertext is exactly 16 bytes larger; configuration
-    /// also reserves canonical AAD, nonce, vector, and wrapped-DEK framing.
-    #[config(
-        default = "defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes()"
-    )]
-    pub capsule_padding_classes_bytes: Vec<u32>,
-    /// Maximum proof sidecar size per leg.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES")]
-    pub max_proof_bytes: u64,
-    /// Maximum encrypted audit capsule size per leg.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES")]
-    pub max_capsule_bytes: u64,
-    /// Maximum canonical sponsor-signed direct carrier transaction size.
-    #[config(default = "defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES")]
-    pub max_carrier_bytes: u64,
-    /// Minimum durable sidecar retention after admission, in blocks.
-    #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS")]
-    pub sidecar_retention_blocks: u64,
     /// Maximum encrypted settlement records retained by one local sidecar store.
     #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS")]
     pub sidecar_max_records: u32,
     /// Maximum canonical bytes retained by one local sidecar store.
     #[config(default = "defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES")]
     pub sidecar_max_total_bytes: u64,
-    /// Governed minimum online auditor threshold accepted for new policies.
-    #[config(
-        default = "defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS"
-    )]
-    pub default_min_auditor_approvals: u16,
-    /// Audit-policy schema versions accepted by this deployment.
-    #[config(default = "defaults::nexus::atomic_private_settlement::permitted_policy_versions()")]
-    pub permitted_policy_versions: Vec<u16>,
 }
 impl_default!(NexusAtomicPrivateSettlement {
-    proof_profile_version: defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION,
-    max_participants: defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS,
-    max_expiry_blocks: defaults::nexus::atomic_private_settlement::MAX_EXPIRY_BLOCKS,
-    audit_timeout_blocks: defaults::nexus::atomic_private_settlement::AUDIT_TIMEOUT_BLOCKS,
-    prepare_timeout_blocks: defaults::nexus::atomic_private_settlement::PREPARE_TIMEOUT_BLOCKS,
-    commit_timeout_blocks: defaults::nexus::atomic_private_settlement::COMMIT_TIMEOUT_BLOCKS,
-    capsule_padding_classes_bytes:
-        defaults::nexus::atomic_private_settlement::capsule_padding_classes_bytes(),
-    max_proof_bytes: defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES,
-    max_capsule_bytes: defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES,
-    max_carrier_bytes: defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES,
-    sidecar_retention_blocks: defaults::nexus::atomic_private_settlement::SIDECAR_RETENTION_BLOCKS,
     sidecar_max_records: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS,
     sidecar_max_total_bytes: defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES,
-    default_min_auditor_approvals:
-        defaults::nexus::atomic_private_settlement::DEFAULT_MIN_AUDITOR_APPROVALS,
-    permitted_policy_versions:
-        defaults::nexus::atomic_private_settlement::permitted_policy_versions(),
 });
 impl NexusAtomicPrivateSettlement {
     fn parse(
@@ -10590,50 +10485,6 @@ impl NexusAtomicPrivateSettlement {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::NexusAtomicPrivateSettlement> {
         let mut invalid = false;
-        macro_rules! nonzero_u64 {
-            ($value:expr, $field:literal) => {{
-                NonZeroU64::new($value).unwrap_or_else(|| {
-                    invalid = true;
-                    emitter.emit(
-                        Report::new(ParseError::InvalidNexusConfig)
-                            .attach(concat!($field, " must be > 0")),
-                    );
-                    NonZeroU64::new(1).expect("private-settlement placeholder is non-zero")
-                })
-            }};
-        }
-        let max_expiry_blocks = nonzero_u64!(
-            self.max_expiry_blocks,
-            "nexus.atomic_private_settlement.max_expiry_blocks"
-        );
-        let audit_timeout_blocks = nonzero_u64!(
-            self.audit_timeout_blocks,
-            "nexus.atomic_private_settlement.audit_timeout_blocks"
-        );
-        let prepare_timeout_blocks = nonzero_u64!(
-            self.prepare_timeout_blocks,
-            "nexus.atomic_private_settlement.prepare_timeout_blocks"
-        );
-        let commit_timeout_blocks = nonzero_u64!(
-            self.commit_timeout_blocks,
-            "nexus.atomic_private_settlement.commit_timeout_blocks"
-        );
-        let max_proof_bytes = nonzero_u64!(
-            self.max_proof_bytes,
-            "nexus.atomic_private_settlement.max_proof_bytes"
-        );
-        let max_capsule_bytes = nonzero_u64!(
-            self.max_capsule_bytes,
-            "nexus.atomic_private_settlement.max_capsule_bytes"
-        );
-        let max_carrier_bytes = nonzero_u64!(
-            self.max_carrier_bytes,
-            "nexus.atomic_private_settlement.max_carrier_bytes"
-        );
-        let sidecar_retention_blocks = nonzero_u64!(
-            self.sidecar_retention_blocks,
-            "nexus.atomic_private_settlement.sidecar_retention_blocks"
-        );
         let sidecar_max_records = NonZeroU32::new(self.sidecar_max_records).unwrap_or_else(|| {
             invalid = true;
             emitter.emit(
@@ -10642,105 +10493,16 @@ impl NexusAtomicPrivateSettlement {
             );
             NonZeroU32::new(1).expect("private-settlement record placeholder is non-zero")
         });
-        let sidecar_max_total_bytes = nonzero_u64!(
-            self.sidecar_max_total_bytes,
-            "nexus.atomic_private_settlement.sidecar_max_total_bytes"
-        );
-
-        if self.proof_profile_version
-            != defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.proof_profile_version must be {} for V1",
-                defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION
-            )));
-        }
-        let proof_profile_version =
-            NonZeroU16::new(self.proof_profile_version).unwrap_or_else(|| {
+        let sidecar_max_total_bytes =
+            NonZeroU64::new(self.sidecar_max_total_bytes).unwrap_or_else(|| {
                 invalid = true;
-                NonZeroU16::new(defaults::nexus::atomic_private_settlement::PROOF_PROFILE_VERSION)
-                    .expect("V1 private-settlement proof profile is non-zero")
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig).attach(
+                        "nexus.atomic_private_settlement.sidecar_max_total_bytes must be > 0",
+                    ),
+                );
+                NonZeroU64::new(1).expect("private-settlement byte placeholder is non-zero")
             });
-        if !(defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS
-            ..=defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS_LIMIT)
-            .contains(&self.max_participants)
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_participants must be within {}..={}",
-                defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS,
-                defaults::nexus::atomic_private_settlement::MAX_PARTICIPANTS_LIMIT
-            )));
-        }
-        let max_participants = NonZeroU16::new(self.max_participants).unwrap_or_else(|| {
-            NonZeroU16::new(defaults::nexus::atomic_private_settlement::MIN_PARTICIPANTS)
-                .expect("private-settlement minimum participant count is non-zero")
-        });
-        let default_min_auditor_approvals = NonZeroU16::new(self.default_min_auditor_approvals)
-            .unwrap_or_else(|| {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.atomic_private_settlement.default_min_auditor_approvals must be > 0",
-                ));
-                NonZeroU16::new(1).expect("private-settlement approval placeholder is non-zero")
-            });
-        if usize::from(default_min_auditor_approvals.get())
-            > iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.default_min_auditor_approvals must be at most {}",
-                iroha_data_model::nexus::PRIVATE_SETTLEMENT_MAX_AUDITORS_V1
-            )));
-        }
-
-        let phase_budget = self
-            .audit_timeout_blocks
-            .checked_add(self.prepare_timeout_blocks)
-            .and_then(|value| value.checked_add(self.commit_timeout_blocks));
-        if phase_budget.is_none_or(|budget| budget > self.max_expiry_blocks) {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.atomic_private_settlement phase timeouts must sum to no more than max_expiry_blocks",
-                ),
-            );
-        }
-        if self.sidecar_retention_blocks < self.max_expiry_blocks {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.atomic_private_settlement.sidecar_retention_blocks must be at least max_expiry_blocks",
-                ),
-            );
-        }
-        if self.max_proof_bytes > defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES_LIMIT
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_proof_bytes must be at most {}",
-                defaults::nexus::atomic_private_settlement::MAX_PROOF_BYTES_LIMIT
-            )));
-        }
-        if self.max_capsule_bytes
-            > defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES_LIMIT
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_capsule_bytes must be at most {}",
-                defaults::nexus::atomic_private_settlement::MAX_CAPSULE_BYTES_LIMIT
-            )));
-        }
-        if self.max_carrier_bytes
-            > defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
-        {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "nexus.atomic_private_settlement.max_carrier_bytes must be at most {}",
-                defaults::nexus::atomic_private_settlement::MAX_CARRIER_BYTES_LIMIT
-            )));
-        }
         if self.sidecar_max_records
             > defaults::nexus::atomic_private_settlement::SIDECAR_MAX_RECORDS_LIMIT
         {
@@ -10759,93 +10521,12 @@ impl NexusAtomicPrivateSettlement {
                 defaults::nexus::atomic_private_settlement::SIDECAR_MAX_TOTAL_BYTES_LIMIT
             )));
         }
-
-        if self.capsule_padding_classes_bytes.is_empty() {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.atomic_private_settlement.capsule_padding_classes_bytes must not be empty",
-            ));
-        }
-        let mut previous_padding = 0_u32;
-        let mut capsule_padding_classes_bytes = Vec::new();
-        for (index, bytes) in self
-            .capsule_padding_classes_bytes
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            if bytes == 0 || bytes <= previous_padding {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] must be non-zero and strictly increasing"
-                )));
-                continue;
-            }
-            if !defaults::nexus::atomic_private_settlement::CAPSULE_PADDING_CLASSES_BYTES
-                .contains(&bytes)
-            {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] is not supported by proof profile V1"
-                )));
-            }
-            let required_capsule_bytes =
-                iroha_data_model::nexus::private_settlement_capsule_canonical_upper_bound_v1(
-                    u64::from(bytes),
-                    u64::from(default_min_auditor_approvals.get()),
-                );
-            if required_capsule_bytes > self.max_capsule_bytes {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.capsule_padding_classes_bytes[{index}] cannot fit the complete canonical capsule for default_min_auditor_approvals"
-                )));
-            }
-            previous_padding = bytes;
-            capsule_padding_classes_bytes.push(
-                NonZeroU32::new(bytes).expect("validated private-settlement padding is non-zero"),
-            );
-        }
-
-        if self.permitted_policy_versions.is_empty() {
-            invalid = true;
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.atomic_private_settlement.permitted_policy_versions must not be empty",
-            ));
-        }
-        let mut permitted_policy_versions = BTreeSet::new();
-        for version in self.permitted_policy_versions {
-            if version != 1 {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.permitted_policy_versions contains unsupported version {version}; V1 supports only 1"
-                )));
-            }
-            if !permitted_policy_versions.insert(version) {
-                invalid = true;
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.atomic_private_settlement.permitted_policy_versions contains duplicate version {version}"
-                )));
-            }
-        }
         if invalid {
             return None;
         }
         Some(actual::NexusAtomicPrivateSettlement {
-            proof_profile_version,
-            max_participants,
-            max_expiry_blocks,
-            audit_timeout_blocks,
-            prepare_timeout_blocks,
-            commit_timeout_blocks,
-            capsule_padding_classes_bytes,
-            max_proof_bytes,
-            max_capsule_bytes,
-            max_carrier_bytes,
-            sidecar_retention_blocks,
             sidecar_max_records,
             sidecar_max_total_bytes,
-            default_min_auditor_approvals,
-            permitted_policy_versions,
         })
     }
 }
@@ -12430,6 +12111,119 @@ pub struct Snapshot {
     pub verification_public_key: Option<PublicKey>,
     /// Optional private key used to sign snapshots (defaults to node identity key).
     pub signing_private_key: Option<PrivateKey>,
+    /// Last block executed by the previous node release of this running network.
+    #[config(nested)]
+    pub upgrade_checkpoint: SnapshotUpgradeCheckpoint,
+}
+/// Last block executed by the previous node release of a running network.
+///
+/// A release whose execution writes differ from its predecessor's cannot re-execute the history
+/// the predecessor certified. With a checkpoint it restores the World at `height` from the
+/// predecessor's signed snapshot, proves that World against the block's certified World root and
+/// executes from the next block on. Blocks at or below the checkpoint are never re-executed.
+#[derive(Debug, Clone, Default, ReadConfig)]
+pub struct SnapshotUpgradeCheckpoint {
+    /// Height of the last block the previous release executed.
+    pub height: Option<u64>,
+    /// Hex hash (64 digits) of that block.
+    pub block_hash: Option<String>,
+    /// Public key that signed the checkpoint snapshot when another validator produced it.
+    pub signer: Option<PublicKey>,
+}
+/// A validated [`SnapshotUpgradeCheckpoint`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeCheckpoint {
+    /// Height of the last block the previous release executed.
+    pub height: u64,
+    /// Hash of that block.
+    pub block_hash: [u8; 32],
+    /// Signer of the checkpoint snapshot when it is not the node's own snapshot key.
+    pub signer: Option<PublicKey>,
+}
+impl SnapshotUpgradeCheckpoint {
+    /// The configured checkpoint, or `None` when this network has none.
+    ///
+    /// # Errors
+    /// Only one of `height` and `block_hash` is set, the height is below 2 (genesis is always
+    /// re-executed), or the hash is not 64 hex digits.
+    pub fn checkpoint(&self) -> core::result::Result<Option<UpgradeCheckpoint>, String> {
+        let (height, block_hash) = match (self.height, self.block_hash.as_deref()) {
+            (None, None) => {
+                if self.signer.is_some() {
+                    return Err(
+                        "snapshot.upgrade_checkpoint.signer needs height and block_hash".to_owned(),
+                    );
+                }
+                return Ok(None);
+            }
+            (Some(height), Some(block_hash)) => (height, block_hash),
+            _ => {
+                return Err(
+                    "snapshot.upgrade_checkpoint needs both height and block_hash".to_owned(),
+                );
+            }
+        };
+        if height < 2 {
+            return Err("snapshot.upgrade_checkpoint.height must be at least 2".to_owned());
+        }
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(block_hash.trim(), &mut bytes).map_err(|error| {
+            format!("snapshot.upgrade_checkpoint.block_hash must be 64 hex digits: {error}")
+        })?;
+        Ok(Some(UpgradeCheckpoint {
+            height,
+            block_hash: bytes,
+            signer: self.signer.clone(),
+        }))
+    }
+}
+#[cfg(test)]
+mod upgrade_checkpoint_tests {
+    use super::*;
+
+    const HASH: &str = "889e753c2f11c8836f7fdd651132c7b9f5fcf3c5ed6b7a1531b6fd4911c855a3";
+
+    fn checkpoint(height: Option<u64>, block_hash: Option<&str>) -> SnapshotUpgradeCheckpoint {
+        SnapshotUpgradeCheckpoint {
+            height,
+            block_hash: block_hash.map(str::to_owned),
+            signer: None,
+        }
+    }
+
+    #[test]
+    fn absent_checkpoint_is_none() {
+        assert_eq!(checkpoint(None, None).checkpoint(), Ok(None));
+    }
+
+    #[test]
+    fn checkpoint_parses_height_and_hash() {
+        let parsed = checkpoint(Some(5518), Some(HASH))
+            .checkpoint()
+            .expect("valid checkpoint")
+            .expect("configured");
+        assert_eq!(parsed.height, 5518);
+        assert_eq!(hex::encode(parsed.block_hash), HASH);
+        assert_eq!(parsed.signer, None);
+    }
+
+    #[test]
+    fn checkpoint_refuses_partial_genesis_and_malformed_values() {
+        assert!(checkpoint(Some(5518), None).checkpoint().is_err());
+        assert!(checkpoint(None, Some(HASH)).checkpoint().is_err());
+        assert!(checkpoint(Some(1), Some(HASH)).checkpoint().is_err());
+        assert!(
+            checkpoint(Some(5518), Some(&HASH[2..]))
+                .checkpoint()
+                .is_err()
+        );
+        assert!(checkpoint(Some(5518), Some("zz")).checkpoint().is_err());
+        let signer_only = SnapshotUpgradeCheckpoint {
+            signer: Some(iroha_crypto::KeyPair::random().public_key().clone()),
+            ..checkpoint(None, None)
+        };
+        assert!(signer_only.checkpoint().is_err());
+    }
 }
 impl Snapshot {
     fn validate_read_buffer_budget(&self) -> core::result::Result<(), String> {
@@ -13738,7 +13532,7 @@ impl core::fmt::Debug for RedactedConfigSecret {
 pub struct Torii {
     /// Listening address for the public Torii API.
     #[config(env = "API_ADDRESS")]
-    pub address: WithOrigin<SocketAddr>,
+    pub address: WithOrigin<ConfigSocketAddr>,
     /// Maximum HTTP payload size accepted by the API.
     #[config(default = "defaults::torii::MAX_CONTENT_LEN")]
     pub max_content_len: Bytes,
@@ -13772,6 +13566,9 @@ pub struct Torii {
     /// Maximum complete working set for one query, independent of aggregate capacity.
     #[config(default = "defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES")]
     pub query_fanout_max_working_set_bytes: Bytes,
+    /// Maximum initial full-native-finality working set within the same shared fanout pool.
+    #[config(default = "defaults::torii::FINALITY_MAX_WORKING_SET_BYTES")]
+    pub finality_max_working_set_bytes: Bytes,
     /// Bytes retained by this node's authenticated SCCP history-node cache.
     #[config(default = "defaults::torii::SCCP_HISTORY_CACHE_MAX_BYTES")]
     pub sccp_history_cache_max_bytes: Bytes,
@@ -14150,6 +13947,10 @@ impl core::fmt::Debug for Torii {
             .field(
                 "query_fanout_max_working_set_bytes",
                 &self.query_fanout_max_working_set_bytes,
+            )
+            .field(
+                "finality_max_working_set_bytes",
+                &self.finality_max_working_set_bytes,
             )
             .field(
                 "sccp_history_cache_max_bytes",
@@ -15166,6 +14967,19 @@ impl Torii {
                 "torii.query_fanout_max_working_set_bytes must be greater than zero",
             );
         }
+        let finality_max_working_set_bytes = self.finality_max_working_set_bytes.get();
+        if usize::try_from(finality_max_working_set_bytes).is_err()
+            || defaults::torii::finality_working_set_bytes(
+                query_fanout_max_retained_bytes,
+                finality_max_working_set_bytes,
+            )
+            .is_none()
+        {
+            emit_torii_config_error(
+                emitter,
+                "torii.finality_max_working_set_bytes must be nonzero, fit the platform address space and retain a positive share of the existing query pool",
+            );
+        }
         let sccp_history_cache_max_bytes = self.sccp_history_cache_max_bytes.get();
         if sccp_history_cache_max_bytes == 0 {
             emit_torii_config_error(
@@ -15257,7 +15071,7 @@ impl Torii {
             actual::AttachmentSanitizerMode::Subprocess
         });
         let torii = actual::Torii {
-            address: self.address,
+            address: self.address.map(ConfigSocketAddr::into_inner),
             max_content_len: self.max_content_len,
             data_dir: self.data_dir,
             receipt_signer,
@@ -15275,6 +15089,7 @@ impl Torii {
             query_heavy_max_inflight: self.query_heavy_max_inflight,
             query_fanout_max_retained_bytes: self.query_fanout_max_retained_bytes,
             query_fanout_max_working_set_bytes: self.query_fanout_max_working_set_bytes,
+            finality_max_working_set_bytes: self.finality_max_working_set_bytes,
             sccp_history_cache_max_bytes: self.sccp_history_cache_max_bytes,
             app_api_routed_read_body_read_timeout,
             query_queue_timeout: self.query_queue_timeout_ms.get(),
@@ -33382,7 +33197,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Forced),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
             bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33396,9 +33211,9 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(PathBuf::from(
+            rans_tables_path: Some(WithOrigin::inline(PathBuf::from(
                 "codec/rans/tables/does_not_exist.toml",
-            )),
+            ))),
             entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
             bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33408,11 +33223,32 @@ mod configuration_regression_tests {
         assert!(emitter.into_result().is_err());
     }
     #[test]
+    fn codec_parse_uses_compiled_in_tables_without_a_path() {
+        let codec = StreamingCodec {
+            cabac_mode: WithOrigin::inline(CabacMode::Disabled),
+            trellis_blocks: WithOrigin::inline(Vec::new()),
+            rans_tables_path: None,
+            entropy_mode: WithOrigin::inline(defaults::streaming::codec::entropy_mode()),
+            bundle_width: WithOrigin::inline(defaults::streaming::codec::bundle_width()),
+            bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
+        };
+        let mut emitter = Emitter::new();
+        let parsed = codec
+            .parse(&mut emitter)
+            .expect("omitted table path selects the compiled-in canonical tables");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.rans_tables_path, None);
+        assert_eq!(
+            defaults::streaming::codec::CANONICAL_RANS_TABLES_TOML.as_bytes(),
+            fs::read(bundled_tables_path()).expect("repository tables")
+        );
+    }
+    #[test]
     fn codec_parse_rejects_unknown_entropy_mode() {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline("invalid".to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33427,7 +33263,7 @@ mod configuration_regression_tests {
             let codec = StreamingCodec {
                 cabac_mode: WithOrigin::inline(CabacMode::Disabled),
                 trellis_blocks: WithOrigin::inline(Vec::new()),
-                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
                 entropy_mode: WithOrigin::inline(entropy_mode.to_owned()),
                 bundle_width: WithOrigin::inline(2),
                 bundle_accel: WithOrigin::inline("cpu_simd".to_owned()),
@@ -33440,7 +33276,7 @@ mod configuration_regression_tests {
             let codec = StreamingCodec {
                 cabac_mode: WithOrigin::inline(CabacMode::Disabled),
                 trellis_blocks: WithOrigin::inline(Vec::new()),
-                rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+                rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
                 entropy_mode: WithOrigin::inline("rans_bundled".to_owned()),
                 bundle_width: WithOrigin::inline(2),
                 bundle_accel: WithOrigin::inline(bundle_accel.to_owned()),
@@ -33461,7 +33297,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline(defaults::streaming::codec::bundle_accel()),
@@ -33485,7 +33321,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline("cpu_simd".to_string()),
@@ -33507,7 +33343,7 @@ mod configuration_regression_tests {
         let codec = StreamingCodec {
             cabac_mode: WithOrigin::inline(CabacMode::Disabled),
             trellis_blocks: WithOrigin::inline(Vec::new()),
-            rans_tables_path: WithOrigin::inline(bundled_tables_path()),
+            rans_tables_path: Some(WithOrigin::inline(bundled_tables_path())),
             entropy_mode: WithOrigin::inline(EntropyMode::RansBundled.to_string()),
             bundle_width: WithOrigin::inline(2),
             bundle_accel: WithOrigin::inline("gpu".to_string()),
@@ -34033,12 +33869,38 @@ mod configuration_regression_tests {
         );
     }
     #[test]
-    fn governance_default_account_literals_reject_foreign_chain_override() {
+    fn governance_default_accounts_parse_under_any_chain_prefix() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
-        let result = std::panic::catch_unwind(|| Governance::default().parse());
+        let parsed = Governance::default().parse();
+        let default_account = defaults::governance::bond_escrow_account_id();
+        assert_eq!(parsed.bond_escrow_account, default_account);
+        assert_eq!(parsed.citizenship_escrow_account, default_account);
+        assert_eq!(parsed.slash_receiver_account, default_account);
+        assert_eq!(
+            parsed.viral_incentives.incentive_pool_account,
+            default_account
+        );
+        assert_eq!(
+            parsed.sorafs_pin_fee_treasury_account,
+            defaults::governance::sorafs_pin_fee::treasury_account_id()
+        );
+    }
+    #[test]
+    fn explicit_governance_account_literals_reject_foreign_chain_prefix() {
+        let account = AccountId::new(
+            "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                .parse()
+                .expect("public key"),
+        );
+        let mut governance = Governance::default();
+        governance.bond_escrow_account = account
+            .to_i105_for_discriminant(defaults::common::chain_discriminant())
+            .expect("default-prefix literal");
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+        let result = std::panic::catch_unwind(move || governance.parse());
         assert!(
             result.is_err(),
-            "account literals for another chain discriminant must be rejected"
+            "a configured literal for another chain discriminant must be rejected"
         );
     }
     #[test]

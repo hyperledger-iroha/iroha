@@ -15,7 +15,7 @@ use crate::{
     },
     isi::sorafs::SorafsProviderGovernanceActionV1,
     prelude::*,
-    runtime::RuntimeUpgradeManifest,
+    runtime::lifecycle::RuntimeUpgradeActionV1,
     smart_contract::manifest::ManifestProvenance,
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
@@ -112,10 +112,11 @@ pub struct ProposeGlobalDataTriggerPermissionGovernance {
     pub proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
 }
 impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {}
-/// Propose a runtime upgrade manifest through governance.
+/// Propose to schedule or cancel a runtime change set through SORA Parliament
+/// (`specs/live_runtime_upgrades.md` §6).
 ///
-/// Ledger admission requires an exact `CanProposeRuntimeUpgrade` permission whose ABI version and
-/// hash match the manifest; contract-deployment permissions do not authorize runtime upgrades.
+/// Ledger admission requires the `CanProposeRuntimeChangeSet` permission; contract-deployment
+/// permissions do not authorize runtime changes.
 #[derive(
     Clone,
     Debug,
@@ -129,8 +130,12 @@ impl crate::seal::Instruction for ProposeGlobalDataTriggerPermissionGovernance {
 )]
 #[norito_schema(name = "iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal")]
 pub struct ProposeRuntimeUpgradeProposal {
-    /// Canonical runtime-upgrade manifest payload.
-    pub manifest: RuntimeUpgradeManifest,
+    /// The change set to schedule, or the scheduled change set to withdraw.
+    pub action: RuntimeUpgradeActionV1,
+    /// Trusted release signers' endorsements of the change set to schedule, at most one per
+    /// trusted signer; the committed `runtime_provenance_policy_v1` decides how many it needs.
+    /// A cancellation, or a proposal to a root without that policy, carries none.
+    pub provenance: Vec<crate::runtime::lifecycle::ChangeSetEndorsementV1>,
 }
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 /// Propose one SCCP v1 governance decision to the SORA Parliament (`specs/sccp.md` §4.14.3).
@@ -459,7 +464,8 @@ impl_governance_decode_from_slice!(ProposeGlobalDataTriggerPermissionGovernance 
     proposal: GlobalDataTriggerPermissionGovernanceProposalV1,
 });
 impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
-    manifest: RuntimeUpgradeManifest,
+    action: RuntimeUpgradeActionV1,
+    provenance: Vec<crate::runtime::lifecycle::ChangeSetEndorsementV1>,
 });
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
     proposal: crate::sccp::governance::SccpGovernanceProposalV1,
@@ -545,20 +551,8 @@ mod tests {
             .parse()
             .expect("contract address")
     }
-    fn runtime_manifest() -> RuntimeUpgradeManifest {
-        RuntimeUpgradeManifest {
-            name: "runtime-upgrade".to_string(),
-            description: "isi roundtrip".to_string(),
-            abi_version: 1,
-            abi_hash: crate::abi_v1_fixture::abi_v1_hash(),
-            added_syscalls: Vec::new(),
-            added_pointer_types: Vec::new(),
-            start_height: 100,
-            end_height: 200,
-            sbom_digests: Vec::new(),
-            slsa_attestation: Vec::new(),
-            provenance: Vec::new(),
-        }
+    fn runtime_action() -> RuntimeUpgradeActionV1 {
+        crate::runtime::lifecycle::test_schedule(100)
     }
     fn sccp_governance_proposal() -> crate::sccp::governance::SccpGovernanceProposalV1 {
         use crate::sccp::{
@@ -610,7 +604,7 @@ mod tests {
     }
     #[derive(Encode)]
     struct LegacyProposeRuntimeUpgradeProposal {
-        manifest: RuntimeUpgradeManifest,
+        action: RuntimeUpgradeActionV1,
         window: Option<AtWindow>,
         mode: Option<VotingMode>,
     }
@@ -883,7 +877,7 @@ mod tests {
         assert_legacy_instruction_payload_rejected(
             std::any::type_name::<ProposeRuntimeUpgradeProposal>(),
             &LegacyProposeRuntimeUpgradeProposal {
-                manifest: runtime_manifest(),
+                action: runtime_action(),
                 window: Some(window()),
                 mode: Some(VotingMode::Plain),
             },
@@ -928,8 +922,19 @@ mod tests {
     }
     #[test]
     fn runtime_upgrade_proposal_roundtrip() {
+        let RuntimeUpgradeActionV1::Schedule(change_set) = runtime_action() else {
+            panic!("the fixture schedules a change set");
+        };
+        let key = iroha_crypto::KeyPair::from_seed(vec![9; 32], iroha_crypto::Algorithm::Ed25519);
+        let endorsement = crate::runtime::lifecycle::ChangeSetEndorsementV1::sign(
+            change_set.id().expect("change-set identity"),
+            key.public_key().clone(),
+            key.private_key(),
+        )
+        .expect("endorse");
         let ins = ProposeRuntimeUpgradeProposal {
-            manifest: runtime_manifest(),
+            action: runtime_action(),
+            provenance: vec![endorsement],
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
@@ -987,7 +992,8 @@ mod tests {
             manifest_provenance: None,
         });
         assert_slice_roundtrip(ProposeRuntimeUpgradeProposal {
-            manifest: runtime_manifest(),
+            action: runtime_action(),
+            provenance: Vec::new(),
         });
         assert_slice_roundtrip(ProposeSccpRouteGovernance {
             proposal: sccp_governance_proposal(),
@@ -1053,7 +1059,8 @@ mod tests {
         assert_registry_decodes(
             &registry,
             ProposeRuntimeUpgradeProposal {
-                manifest: runtime_manifest(),
+                action: runtime_action(),
+                provenance: Vec::new(),
             },
         );
         assert_registry_decodes(

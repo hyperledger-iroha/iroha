@@ -88,7 +88,7 @@ produce a roster different from the one signed into genesis:
 kagami localnet generate --peers 4 --out-dir ./localnet
 kagami docker \
     --peers 4 \
-    --config-dir ./localnet generate \
+    --config-dir ./localnet \
     --image hyperledger/iroha:dev \
     --out-file ./my-configs/docker-compose.yml
 docker compose -f ./my-configs/docker-compose.yml up
@@ -153,7 +153,7 @@ the image locally:
 ```bash
 kagami docker \
     --peers 4 \
-    --config-dir ./localnet generate \
+    --config-dir ./localnet \
     --image myiroha:local \
     --build . \
     --out-file ./my-configs/docker-compose.build.yml

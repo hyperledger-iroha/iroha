@@ -42,7 +42,7 @@ boundaries and where to make changes.
 | [`iroha_panic_hook`](../crates/iroha_panic_hook) | The single process-wide panic-hook suppression state shared by Core, its ZK verifiers, Torii and `irohad`, whose panic hook reads it. Recovery boundaries depend on this crate; copying it would create suppression the hook never observes. |
 | `iroha_zkp_halo2`, `fastpq_prover`, `zk_ace_prover` | Proof primitives or execution engines according to their feature-resolved graph. Shipping SDK checks reject node proof-execution features. |
 | `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI explicitly. Qualified corridors retain their own binary/provenance runners. |
-| [`mochi`](../mochi) | Local sandbox application using account-bound SDK streams. The supervisor coordinates generation and peer lifecycles; [genesis artifacts](../mochi/mochi-core/src/supervisor/genesis_material.rs) and [snapshot transactions/recovery](../mochi/mochi-core/src/supervisor/snapshot_restore.rs) have distinct runtime owners. Node orchestration dependencies stay with the application. |
+| [`mochi`](../mochi) | Local sandbox application using account-bound SDK streams. It drives networks through the shared `iroha_deploy` managed runtime ([developer workspace](../mochi/mochi-core/src/developer.rs)). Node orchestration dependencies stay with the application. |
 | [`xtask`](../xtask), [`tools`](../tools) | Repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
 
 The remaining foundational owners and the `iroha_privacy_model` extraction

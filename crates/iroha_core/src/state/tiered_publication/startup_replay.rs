@@ -210,11 +210,7 @@ mod tests {
                 .load(Ordering::Acquire)
         );
         assert_eq!(
-            state
-                .world
-                .smart_contract_state
-                .view()
-                .get("kept"),
+            state.world.smart_contract_state.view().get("kept"),
             Some(&vec![9])
         );
         std::fs::remove_file(collision).unwrap();

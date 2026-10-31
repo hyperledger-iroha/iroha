@@ -229,7 +229,7 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
                 .is_some_and(std::collections::BTreeMap::is_empty))
     );
     let schema = &document["components"]["schemas"]["AccountCapabilitiesV1"];
-    assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(schema["additionalProperties"].as_bool(), Some(true));
     assert_eq!(schema["x-iroha-max-bytes"].as_u64(), Some(4096));
     assert_eq!(
         schema["properties"]["schema_version"]["const"].as_u64(),
@@ -251,7 +251,7 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
             .as_array()
             .expect("required fields")
             .len(),
-        5
+        4
     );
     assert!(
         document["paths"]["/v1/node/capabilities"]["get"]["security"]

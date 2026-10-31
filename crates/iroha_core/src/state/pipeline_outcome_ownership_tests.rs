@@ -12,7 +12,9 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
         "__registered_block_height".parse::<Name>().unwrap(),
         Json::new(0u64),
     );
-    let child_trigger = Trigger::new(
+    let mut child_trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
+        ExecuteTriggerEventFilter,
+    > = Trigger::new(
         child.clone(),
         Action::new(
             [InstructionBox::from(ordinary_tail_batch(&fixture))],
@@ -24,13 +26,17 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
         )
         .unwrap()
         .with_metadata(metadata.clone()),
-    );
+    )
+    .try_into()
+    .unwrap();
     let body = if nested {
         vec![InstructionBox::from(ExecuteTrigger::new(child.clone()))]
     } else {
         vec![InstructionBox::from(ordinary_tail_batch(&fixture))]
     };
-    let parent_trigger = Trigger::new(
+    let mut parent_trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
+        PipelineEventFilterBox,
+    > = Trigger::new(
         parent.clone(),
         Action::new(
             body,
@@ -40,21 +46,21 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
         )
         .unwrap()
         .with_metadata(metadata),
-    );
+    )
+    .try_into()
+    .unwrap();
+    {
+        let mut capture_block = fixture.state.block(fixture.parent.header());
+        let capture = capture_block.transaction();
+        capture_fixture_trigger_runtime(&mut child_trigger, &capture.world);
+        capture_fixture_trigger_runtime(&mut parent_trigger, &capture.world);
+    }
     // Use the actual typed trigger store, as existing pipeline/Time fixtures do.
     // Register before the applying block so its use-time incarnation guard holds.
     let mut block = fixture.state.world.triggers.block();
     let mut transaction = block.transaction();
-    assert!(
-        transaction
-            .add_by_call_trigger(child_trigger.try_into().unwrap())
-            .unwrap()
-    );
-    assert!(
-        transaction
-            .add_pipeline_trigger(parent_trigger.try_into().unwrap())
-            .unwrap()
-    );
+    assert!(transaction.add_by_call_trigger(child_trigger).unwrap());
+    assert!(transaction.add_pipeline_trigger(parent_trigger).unwrap());
     transaction.apply();
     block.commit();
     (fixture, parent, child)

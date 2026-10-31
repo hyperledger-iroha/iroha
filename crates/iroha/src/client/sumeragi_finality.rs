@@ -3,6 +3,41 @@
 const SUMERAGI_FINALITY_RESPONSE_MAX_BYTES: usize =
     2 * iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
 
+/// One bounded finality response retaining its exact requested height, scope and deadline.
+///
+/// This is untrusted transport ownership, not authenticated finality. It has no public
+/// constructor, byte accessor or codec implementation. Move it into an admitted native
+/// worker with the original operation custody before calling [`Self::decode_checked`].
+pub struct SumeragiFinalityProofResponse {
+    client: Client,
+    response: Response<Vec<u8>>,
+    height: NonZeroU64,
+    scope: iroha_data_model::block::consensus::SumeragiRootScope,
+}
+
+impl std::fmt::Debug for SumeragiFinalityProofResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SumeragiFinalityProofResponse")
+            .field("height", &self.height)
+            .field("scope", &self.scope)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SumeragiFinalityProofResponse {
+    /// Consume the original bounded response through the canonical structural decoder.
+    /// Committee, chain and execution authentication still require independent genesis.
+    /// # Errors
+    /// Original deadline, response/codec limit, exact-height or selected-scope refusal.
+    pub fn decode_checked(
+        self,
+    ) -> Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
+        self.client.ensure_activation_evidence_deadline()?;
+        self.client
+            .decode_sumeragi_finality_proof_response(&self.response, self.height, self.scope)
+    }
+}
+
 /// One immutable node statement authenticated by the exact SDK read that produced it.
 ///
 /// The SDK has checked canonical response framing, body consistency, the node signature and
@@ -433,6 +468,22 @@ impl Client {
         height: NonZeroU64,
         expected_scope: iroha_data_model::block::consensus::SumeragiRootScope,
     ) -> Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
+        let response = self
+            .read_sumeragi_finality_proof_response_async(height, expected_scope)
+            .await?;
+        response.decode_checked()
+    }
+
+    /// Read bounded untrusted finality bytes without decoding on the async caller's stack.
+    /// The returned owner fixes this read's height, independently selected scope and deadline;
+    /// consume it inside the original admitted native worker before authenticating finality.
+    /// # Errors
+    /// Original compatibility, deadline or bounded asynchronous transport failure.
+    pub async fn read_sumeragi_finality_proof_response_async(
+        &self,
+        height: NonZeroU64,
+        expected_scope: iroha_data_model::block::consensus::SumeragiRootScope,
+    ) -> Result<SumeragiFinalityProofResponse> {
         self.ensure_query_compatibility().await?;
         let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
             .path()
@@ -445,7 +496,12 @@ impl Client {
                 ActivationEvidenceReadAuth::Public,
             )
             .await?;
-        self.decode_sumeragi_finality_proof_response(&response, height, expected_scope)
+        Ok(SumeragiFinalityProofResponse {
+            client: self.clone(),
+            response,
+            height,
+            scope: expected_scope,
+        })
     }
 
     /// One height, scope and bounded canonical-codec gate for either transport capability.

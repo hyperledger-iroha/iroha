@@ -4,10 +4,10 @@ use super::*;
 fn prepare(
     profile: LocalnetServiceProfile,
 ) -> (
-    crate::localnet::localnet_test_helpers::PrivateTempDir,
+    crate::custody::test_support::PrivateTempDir,
     PreparedLocalnet,
 ) {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temp = crate::custody::test_support::private_tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let prepared = prepare_localnet_at(
         "attestation-initial",
@@ -22,11 +22,8 @@ fn prepare(
 fn storage(prepared: &PreparedLocalnet, index: usize) -> PathBuf {
     let peer = &prepared.peers[index];
     let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
-    let actual = parse_localnet_peer_config(
-        std::str::from_utf8(&bytes).unwrap(),
-        Some(&peer.config_path),
-    )
-    .unwrap();
+    let actual =
+        config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path).unwrap();
     assert!(!actual.torii.sorafs_storage.enabled);
     assert!(
         actual

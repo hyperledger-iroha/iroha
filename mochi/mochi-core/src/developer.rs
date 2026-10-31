@@ -1186,7 +1186,7 @@ mod tests {
         .unwrap();
         let alias = "desktop-private";
         let selector = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias).unwrap();
-        let spec = iroha_deploy::localnet::PrivateRootSpec {
+        let spec = iroha_deploy::sora_network::PrivateRootSpec {
             parent_network_id: iroha_data_model::NetworkId::from_genesis_hash(
                 iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
                     b"desktop parent",
@@ -1199,12 +1199,17 @@ mod tests {
         let request = desktop
             .runtime
             .private_root_request("private", Duration::from_secs(120));
+        let failure = store.up_private_root(&request, &spec).unwrap_err();
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            iroha_deploy::managed::Error::Timeout(request.startup_timeout)
+        );
         assert!(
             matches!(
-                store.up_private_root(&request, &spec),
-                Err(iroha_deploy::managed::Error::Timeout(timeout)) if timeout == request.startup_timeout
+                &failure,
+                iroha_deploy::managed::Error::Invalid(message) if message == &expected
             ),
-            "genuine CLI preparation reaches the original-budget worker-start failure"
+            "genuine CLI preparation must retain the owned worker's listener handoff failure: {failure}"
         );
         let prepared = store.prepared("private").unwrap();
         let owner = prepared.context.load_client_config().unwrap();
@@ -1212,12 +1217,16 @@ mod tests {
         assert_create_refuses_retained_context(&desktop, "private");
         let captured = desktop.network(Some("private")).unwrap();
         let failure = desktop.start(&captured).unwrap_err();
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            iroha_deploy::managed::Error::Timeout(Duration::from_secs(30))
+        );
         assert!(
             matches!(
                 failure.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Timeout(timeout)) if *timeout == Duration::from_secs(30)
+                Some(iroha_deploy::managed::Error::Invalid(message)) if message == &expected
             ),
-            "desktop restart must reach the original-budget worker-start failure with the same private root: {failure}"
+            "desktop restart must retain the listener handoff failure with the same private root: {failure}"
         );
         assert_eq!(store.prepared("private").unwrap(), prepared);
         let restarted = store
@@ -1340,7 +1349,7 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::create_dir(&bin).unwrap();
         // The native harness does not implement Kagami's worker entry point. Canonical
-        // preparation is real; the original budget expires after that worker exits.
+        // preparation is real; listener handoff detects its exit before adoption.
         for program in ["kagami", "iroha3d"] {
             std::fs::copy(
                 std::env::current_exe().unwrap(),
@@ -1355,12 +1364,16 @@ mod tests {
         )
         .unwrap();
         let failure = desktop.create_localnet("fixture").unwrap_err();
+        let expected = format!(
+            "listener handoff failed: owned child exited before listener adoption completed; startup cleanup is unconfirmed: {}",
+            iroha_deploy::managed::Error::Timeout(Duration::from_secs(30))
+        );
         assert!(
             matches!(
                 failure.downcast_ref::<iroha_deploy::managed::Error>(),
-                Some(iroha_deploy::managed::Error::Timeout(timeout)) if *timeout == Duration::from_secs(30)
+                Some(iroha_deploy::managed::Error::Invalid(message)) if message == &expected
             ),
-            "genuine generation must reach the original-budget worker-start failure: {failure}"
+            "genuine generation must retain the owned worker's listener handoff failure: {failure}"
         );
         let context = desktop.select("fixture").unwrap();
         assert_create_refuses_retained_context(&desktop, "fixture");

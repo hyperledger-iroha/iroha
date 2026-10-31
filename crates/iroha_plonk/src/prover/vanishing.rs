@@ -148,19 +148,17 @@ where
     }
     let blinds =
         SecretPolynomial::new(random_values::<C::ScalarExt, _>(rng, shape.quotient_pieces));
-    let tables = pk.commitment_tables();
-    for (piece, blind) in h.chunks_exact(shape.n).zip(blinds.iter()) {
-        let commitment = tables
-            .commit_cancellable(
-                params.params(),
-                piece,
-                blind,
-                Secrecy::Secret,
-                budget,
-                cancellation,
-            )?
-            .to_affine();
-        write_point(transcript, &commitment)?;
+    // The pieces are independent MSMs over the same bases: one bounded batch.
+    let pieces: Vec<&[C::ScalarExt]> = h.chunks_exact(shape.n).collect();
+    let commitments = pk.commitment_tables().commit_secret_columns_cancellable(
+        params.params(),
+        &pieces,
+        &blinds,
+        budget,
+        cancellation,
+    )?;
+    for commitment in &commitments {
+        write_point(transcript, &commitment.to_affine())?;
     }
     Ok(QuotientPieces {
         coefficients: h.into_vec(),

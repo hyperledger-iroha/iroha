@@ -45,6 +45,7 @@ export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export * from "./bootle-lantern-issuance.js";
 export * from "./atomic-private-settlement.js";
+export * from "./private-settlement.js";
 export * from "./dist/blockProofTypes.js";
 export type * from "./dist/explorerTransactionProofTypes.js";
 export * from "./dist/toriiBrowserExplorerTypes.js";
@@ -3428,8 +3429,10 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PRIVATE_KEY_LENGTH"
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
+  | "KAIGI_EMPTY_ROSTER_ROOT_HEX_V1"
   | "buildKaigiAuthorizationProofV1"
   | "buildKaigiUsageProofV1"
+  | "generateKaigiBlindingV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -4175,28 +4178,48 @@ export interface ToriiGovernanceManifestProvenance {
   signature: string;
 }
 
-export interface ToriiGovernanceRuntimeUpgradeSbomDigest {
-  algorithm: string;
-  digest: string;
+/** Execution root of a runtime change set; this release implements the universal root only. */
+export type ToriiRuntimeRootScope = Readonly<{ kind: "Universal"; content: null }>;
+
+/**
+ * Canonical `ChangeSetV1` JSON object: a governed change from one selection of the universal
+ * root to the next (`specs/live_runtime_upgrades.md` §6). Identities and the qualification
+ * digest are 32-byte lowercase hex; `network` is the exact NetworkId literal. Published
+ * definitions and transitions keep their `{kind, content}` envelopes with opaque content.
+ */
+export interface ToriiRuntimeChangeSet {
+  network: string;
+  root: ToriiRuntimeRootScope;
+  /** Selection the change starts from. */
+  predecessor: string;
+  /** Exact selection the change produces. */
+  successor: string;
+  /** First height executed under the successor; at most `Number.MAX_SAFE_INTEGER`. */
+  effective_height: number;
+  publish: ReadonlyArray<Readonly<{ kind: string; content: unknown }>>;
+  transitions: ReadonlyArray<Readonly<{ kind: string; content: unknown }>>;
+  qualification: string;
 }
 
-export interface ToriiGovernanceRuntimeUpgradeManifest {
-  name: string;
-  description: string;
-  abi_version: 1;
-  abi_hash: ReadonlyArray<number>;
-  added_syscalls: readonly [];
-  added_pointer_types: readonly [];
-  start_height: number;
-  end_height: number;
-  sbom_digests: ReadonlyArray<ToriiGovernanceRuntimeUpgradeSbomDigest>;
-  slsa_attestation: string;
-  provenance: ReadonlyArray<ToriiGovernanceManifestProvenance>;
+/** Minimum notice of a runtime change: blocks and committed milliseconds. */
+export interface ToriiGovernanceRuntimeUpgradeNotice {
+  blocks: number;
+  ms: number;
+  approval_cushion_ms: number;
 }
+
+/** Schedule a change set, or withdraw a scheduled one by its 32-byte lowercase hex id. */
+export type ToriiGovernanceRuntimeUpgradeAction =
+  | Readonly<{ kind: "Schedule"; content: ToriiRuntimeChangeSet }>
+  | Readonly<{ kind: "Cancel"; content: string }>;
 
 export interface ToriiGovernanceRuntimeUpgradeProposal {
   proposal_operator: string;
-  manifest: ToriiGovernanceRuntimeUpgradeManifest;
+  action: ToriiGovernanceRuntimeUpgradeAction;
+  /** Notice the committed policy required when the proposal was admitted, frozen for it. */
+  notice: ToriiGovernanceRuntimeUpgradeNotice;
+  /** Committed time of the block that admitted the proposal. */
+  proposed_ms: number;
 }
 
 export interface ToriiGovernanceSccpRouteProposal {
@@ -5332,7 +5355,7 @@ export interface ToriiNetworkTimeStatus {
   note: string | null;
 }
 
-/** Public, account-free V1 bootstrap policy; the default is explicit and unrelated to list order. */
+/** Validated public V1 discovery fields; algorithm order conveys no signing preference. */
 export interface AccountCapabilitiesV1 {
   readonly schema_version: 1;
   readonly network_id: string;
@@ -5410,9 +5433,12 @@ export interface ToriiRuntimeMetrics {
   upgradeEventsTotal: ToriiRuntimeMetricsCounters;
 }
 
+/** Recorded runtime change sets counted by lifecycle status. */
 export interface ToriiRuntimeMetricsCounters {
-  proposed: number;
+  scheduled: number;
   activated: number;
+  lapsed: number;
+  /** Change sets whose status is `Cancelled`. */
   canceled: number;
 }
 
@@ -5427,53 +5453,134 @@ export interface ToriiConfigurationTransportNoritoRpc {
   canaryAllowlistSize: number;
 }
 
-export interface ToriiRuntimeUpgradeManifestInput {
-  name: string;
-  description: string;
-  abiVersion: number | string | bigint;
-  abiHash: string | BinaryLike;
-  startHeight: number | string | bigint;
-  endHeight: number | string | bigint;
-  addedSyscalls?: ReadonlyArray<number | string | bigint>;
-  addedPointerTypes?: ReadonlyArray<number | string | bigint>;
-}
-
+/** The SORA Parliament proposal instruction Torii drafts for local signing. */
 export interface ToriiRuntimeUpgradeInstruction {
-  wire_id: string;
-  payload_hex?: string | null;
+  wire_id: "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+  /** Canonical framed instruction bytes, lowercase hex. */
+  payload_hex: string;
 }
 
+/**
+ * A trusted release signer's `ChangeSetEndorsementV1` (`iroha runtime upgrade endorse` prints
+ * one): its signature over the change-set identity, which the committed provenance policy counts.
+ */
+export interface ToriiRuntimeChangeSetEndorsement {
+  /** Identity of the endorsed change set, 32 lowercase hexadecimal bytes. */
+  change_set: string;
+  /** The release signer's canonical public-key multihash. */
+  signer: string;
+  /** The signature, uppercase hexadecimal. */
+  signature: string;
+}
+
+/** Draft returned by `proposeRuntimeUpgrade` and `cancelRuntimeUpgrade`. */
 export interface ToriiRuntimeUpgradeTxResponse {
-  ok: boolean;
-  tx_instructions: ReadonlyArray<ToriiRuntimeUpgradeInstruction>;
+  ok: true;
+  tx_instructions: readonly [ToriiRuntimeUpgradeInstruction];
 }
 
-export interface ToriiRuntimeUpgradeManifest {
-  name: string;
-  description: string;
-  abiVersion: number;
-  abiHashHex: string;
-  addedSyscalls: ReadonlyArray<number>;
-  addedPointerTypes: ReadonlyArray<number>;
-  startHeight: number;
-  endHeight: number;
+/** The support attestation a node signs with its own validator key, drafted for submission. */
+export interface ToriiRuntimeAttestationInstruction {
+  wire_id: "iroha.runtime.support.attest.v1";
+  /** Canonical framed instruction bytes, lowercase hex. */
+  payload_hex: string;
 }
 
-export type ToriiRuntimeUpgradeStatus =
-  | { kind: "Proposed" }
-  | { kind: "Canceled" }
-  | { kind: "ActivatedAt"; activatedHeight: number };
-
-export interface ToriiRuntimeUpgradeRecord {
-  manifest: ToriiRuntimeUpgradeManifest;
-  status: ToriiRuntimeUpgradeStatus;
-  proposer: string;
-  createdHeight: number;
+/** Draft returned by `attestRuntimeUpgrade`. */
+export interface ToriiRuntimeAttestationTxResponse {
+  ok: true;
+  tx_instructions: readonly [ToriiRuntimeAttestationInstruction];
 }
 
-export interface ToriiRuntimeUpgradeListItem {
+/** Whether the node's release executes one runtime selection. */
+export interface ToriiRuntimeSelectionSupport {
+  /** Selection identity, 32-byte lowercase hex. */
+  selectionIdHex: string;
+  supported: boolean;
+  /** The first definition the selection relies on that the release lacks; `null` when supported. */
+  missingDefinitionHex: string | null;
+}
+
+/** Whether the node's release executes the successor of one scheduled change set. */
+export interface ToriiRuntimeChangeSetSupport {
+  /** Change-set identity, 32-byte lowercase hex. */
   idHex: string;
-  record: ToriiRuntimeUpgradeRecord;
+  effectiveHeight: number;
+  /** `null` when the change set no longer applies to the selection it will meet. */
+  successor: ToriiRuntimeSelectionSupport | null;
+  /** Why the successor cannot be resolved; `null` when it resolves. */
+  unresolved: string | null;
+}
+
+/** The node's build and the runtime selections its release executes (`GET /v1/runtime/release`). */
+export interface ToriiRuntimeReleaseSupport {
+  build: {
+    version: string;
+    gitCommitSha: string;
+    dpnValidatorReleaseCommit: string;
+    cargoFeatures: string;
+    targetTriple: string;
+    wireSchemaHash: string;
+  };
+  /** Digest of the release the node's support attestations bind, 32-byte lowercase hex. */
+  releaseDigestHex: string;
+  selection: ToriiRuntimeSelectionSupport;
+  /** Scheduled change sets by effective height, then identity. */
+  scheduled: ToriiRuntimeChangeSetSupport[];
+}
+
+/**
+ * Where a change set stands. `Scheduled` waits for its effective height; `Activated`, `Lapsed`
+ * (the effective height passed without complete, current support or notice) and `Cancelled`
+ * (withdrawn by governance) record the height at which that happened.
+ */
+export type ToriiRuntimeChangeSetStatus =
+  | Readonly<{ kind: "Scheduled" }>
+  | Readonly<{ kind: "Activated"; height: number }>
+  | Readonly<{ kind: "Lapsed"; height: number }>
+  | Readonly<{ kind: "Cancelled"; height: number }>;
+
+/** Notice policy frozen for a change set when its proposal was admitted. */
+export interface ToriiRuntimeNotice {
+  blocks: number;
+  ms: number;
+  approvalCushionMs: number;
+}
+
+/** One recorded change set with the fields callers act on typed. */
+export interface ToriiRuntimeChangeSetListItem {
+  /** Change-set identity, 32-byte lowercase hex. */
+  idHex: string;
+  effectiveHeight: number;
+  /** Selection the change set starts from, 32-byte lowercase hex. */
+  predecessorHex: string;
+  /** Selection the change set produces, 32-byte lowercase hex. */
+  successorHex: string;
+  status: ToriiRuntimeChangeSetStatus;
+  notice: ToriiRuntimeNotice;
+  /**
+   * The complete `ChangeSetRecordV1` JSON object (`change_set`, `status`, `proposed_ms`,
+   * `approved_height`, `approved_ms`, `notice`, `attestations`); integers above
+   * `Number.MAX_SAFE_INTEGER` are bigint.
+   */
+  record: Readonly<Record<string, unknown>>;
+}
+
+/** `GET /v1/runtime/upgrades`: the committed selection, its attesting committee and change sets. */
+export interface ToriiRuntimeUpgradesSnapshot {
+  /**
+   * Identity of the committed selection. A new change set names the selection it will meet:
+   * this one, advanced by every change set scheduled to take effect before it.
+   */
+  selectionIdHex: string;
+  /** The committed `RootSelectionV1` JSON object; integers above the safe range are bigint. */
+  selection: Readonly<Record<string, unknown>>;
+  /** Public keys (multihash) of the validators that attest a change set before it activates. */
+  committee: ReadonlyArray<string>;
+  /** Committee digest an attestation binds, 32-byte lowercase hex. */
+  committeeDigestHex: string;
+  /** Recorded change sets by effective height, then identity. */
+  items: ReadonlyArray<ToriiRuntimeChangeSetListItem>;
 }
 
 export interface ToriiPipelineDagSnapshot {
@@ -5829,6 +5936,8 @@ export type KaigiRelayEventPayload =
   | KaigiRelayHealthEvent;
 
 export interface KaigiRelayEventsOptions {
+  /** Required unless the client was configured with `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
   domain?: string;
   relay?: string;
   kind?: string | ReadonlyArray<string>;
@@ -5920,14 +6029,53 @@ export interface KaigiCallEndedEvent {
   ended_at_ms: ToriiU64;
 }
 
+export interface KaigiCallRelayManifestUpdatedEvent {
+  kind: "relay_manifest_updated";
+  call: KaigiCallEventRef;
+  hop_count: number;
+  expiry_ms: ToriiU64;
+}
+
+export interface KaigiCallUsageUpdatedEvent {
+  kind: "usage_updated";
+  call: KaigiCallEventRef;
+  total_duration_ms: ToriiU64;
+  total_billed_gas: ToriiU64;
+  segments_recorded: number;
+}
+
 export type KaigiCallEventPayload =
   | KaigiCallRosterUpdatedEvent
-  | KaigiCallEndedEvent;
+  | KaigiCallEndedEvent
+  | KaigiCallRelayManifestUpdatedEvent
+  | KaigiCallUsageUpdatedEvent;
 
 export interface KaigiCallEventsOptions {
   kind?: string | ReadonlyArray<string>;
   lastEventId?: string;
   signal?: AbortSignal;
+  /** Required unless the client was configured with `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
+}
+
+/** The signed account's own standing in one call, from a single committed state. */
+export interface KaigiCallParticipation {
+  call_id: string;
+  privacy_mode: "transparent" | "private";
+  status: "active" | "ended";
+  is_host: boolean;
+  /** Whether the account is the host or currently holds roster membership. */
+  active: boolean;
+  /** Retained subject that the next authorization proof must bind. */
+  original_account_id: string;
+  /** Returned only to the host and to retained participants. */
+  host_account_id?: string;
+  /** Private calls only: zero for the host, else the live or next-join sequence. */
+  sequence?: ToriiU64;
+  /** Private calls only: the stored host or live participant commitment. */
+  active_commitment_hex?: string;
+  roster_root_hex: string;
+  segments_recorded: number;
 }
 
 type ExclusiveSingleOrMany<
@@ -6668,6 +6816,16 @@ export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 
 /** Maximum decoded bytes accepted for a Kaigi HPKE public key. */
 export declare const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: 4096;
+/** HPKE suites a Kaigi relay key may use, with the transport's suite identifiers. */
+export declare const KAIGI_RELAY_HPKE_SUITES_V1: Readonly<{
+  mlKem768AuthPsk: Readonly<{ suiteId: 1; publicKeyBytes: 1184 }>;
+  mlKem1024AuthPsk: Readonly<{ suiteId: 2; publicKeyBytes: 1568 }>;
+}>;
+/** Frame a raw public key as the descriptor a relay registers and a manifest hop carries. */
+export declare function buildKaigiRelayHpkeKeyV1(
+  suite: keyof typeof KAIGI_RELAY_HPKE_SUITES_V1,
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
 
 export interface KaigiParticipantCommitmentInput {
   /** Exact canonical Pasta Fp bytes, without a hash marker. */
@@ -10884,21 +11042,33 @@ export declare class ToriiClient {
     signal?: AbortSignal;
   }): Promise<ToriiRuntimeAbiHashResponse>;
   getRuntimeMetrics(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeMetrics>;
+  /** Operator-signed read of the committed selection, committee and recorded change sets. */
   listRuntimeUpgrades(options?: {
     signal?: AbortSignal;
-  }): Promise<ReadonlyArray<ToriiRuntimeUpgradeListItem>>;
+  }): Promise<ToriiRuntimeUpgradesSnapshot>;
+  /**
+   * Operator-signed draft of the Parliament proposal that schedules `changeSet`, carrying the
+   * trusted release signers' endorsements the committed provenance policy requires.
+   */
   proposeRuntimeUpgrade(
-    manifest: ToriiRuntimeUpgradeManifestInput,
-    options?: { signal?: AbortSignal },
+    changeSet: ToriiRuntimeChangeSet,
+    options?: {
+      signal?: AbortSignal;
+      provenance?: ReadonlyArray<ToriiRuntimeChangeSetEndorsement>;
+    },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
-  activateRuntimeUpgrade(
-    idHex: string | BinaryLike,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiRuntimeUpgradeTxResponse>;
+  /** Operator-signed draft of the Parliament proposal that withdraws a scheduled change set. */
   cancelRuntimeUpgrade(
     idHex: string | BinaryLike,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeUpgradeTxResponse>;
+  /** Operator-signed request that the node sign its support for a scheduled change set. */
+  attestRuntimeUpgrade(
+    idHex: string | BinaryLike,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiRuntimeAttestationTxResponse>;
+  /** Operator-signed report of the runtime selections the node's release executes. */
+  getRuntimeRelease(options?: { signal?: AbortSignal }): Promise<ToriiRuntimeReleaseSupport>;
   listPeers(options?: {
     signal?: AbortSignal;
   }): Promise<Array<Record<string, unknown>>>;
@@ -11115,6 +11285,10 @@ export declare class ToriiClient {
     callId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KaigiCallView | null>;
+  getKaigiCallParticipation(
+    callId: string,
+    options?: { signal?: AbortSignal; canonicalAuth?: CanonicalRequestAuth },
+  ): Promise<KaigiCallParticipation | null>;
   listKaigiCallSignals(
     callId: string,
     options?: KaigiCallSignalsOptions,
@@ -11493,6 +11667,15 @@ export function verifySm2(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
   distid?: string,
 ): boolean;
+
+/** Pre-action roster root a private `CreateKaigi` proof must bind, as lowercase hex. */
+export const KAIGI_EMPTY_ROSTER_ROOT_HEX_V1: string;
+
+/**
+ * Sample a new private Kaigi blinding. Keep it under owner-only custody: every proof
+ * for the same participation needs its own copy, because each proof clears its input.
+ */
+export function generateKaigiBlindingV1(): Uint8Array;
 
 export function buildKaigiAuthorizationProofV1(
   options: KaigiAuthorizationProofOptionsV1,

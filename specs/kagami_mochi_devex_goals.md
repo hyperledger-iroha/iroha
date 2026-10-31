@@ -1,8 +1,11 @@
 # Kagami and Mochi developer experience
 
 Status: localnet, contract deployment and disposable parent/private attachment pass
-installed-runtime end-to-end checks on macOS. Native Torii discovery uses signed
-genesis and consensus proofs without a separate publisher. Official Taira attachment
+end-to-end checks using both the standalone CLI package and an extracted Mochi bundle
+on macOS ARM64, built unsigned with Cargo's release profile. Mochi's headless walkthrough
+and native-window local startup, source deployment, calls, views, recovery and restart
+also pass against its packaged runtime. Native Torii discovery uses signed genesis
+and consensus proofs without a separate publisher. Official Taira attachment
 remains unverified: its deployed account capability response includes a retired field
 and a noncanonical signing-algorithm order rejected by the current client.
 The disposable parent/private fixture uses explicit
@@ -20,7 +23,13 @@ kagami contract deploy hello.ko
 ```
 
 These commands require no supplied TOML, prompts, source checkout, Cargo, Python,
-shell scripts, or container runtime. Configuration and credentials are generated
+shell scripts, or container runtime. For a network of separate machines,
+`kagami node init --dir DIR` writes the validator, SoraNet transport and streaming keys to
+`DIR/secrets/` and a starter `DIR/config.toml` (`data_dir = "."`) that names only the node's
+key and listeners and includes `network.toml`. `kagami network create` checks the collected
+`3f + 1` roster and proofs of possession, signs genesis with a fresh key and writes that
+shared file (chain, roster, genesis and the consensus-bound sections the genesis was signed
+with); every other node setting has a working default. Configuration and credentials are generated
 in private managed storage outside projects. Kagami is the CLI frontend; Mochi
 is the desktop frontend to the same services.
 
@@ -36,6 +45,15 @@ data, works behind NAT, and publishes only authenticated commitments and certifi
 to its parent. Restricted FullReplica lanes do not satisfy that privacy contract.
 Contract deployment accepts `.ko`, `.to`, and existing Musubi packages. Without a
 selected environment it starts the default localnet in the same invocation.
+
+A managed context belongs to the enclosing git repository or Musubi workspace, so every
+subdirectory selects the same network; `--workspace` selects another. Before a new generation
+starts, the selected daemon checks its generated configuration with `--check-config`, so a
+frontend and daemon built from different sources fail with that cause and retain nothing. A
+generation that never became ready is replaced once the binaries change. A stopped standard
+localnet moves to rebuilt binaries when the new daemon still accepts its signed genesis, and
+keeps its ledger; otherwise `up` refuses and names `localnet reset`. Storage-enabled networks and
+private roots stay bound to the binaries that created them.
 
 ## Optional managed storage services
 
@@ -132,6 +150,10 @@ Foreground status and attachment control exchanges share their original caller d
 with at most two seconds per observation including native connection admission and fragmented
 replies. Expired startup uses a separate bounded cleanup observation; an unanswered cleanup
 request proves neither that the owner stopped nor that readiness completed within its budget.
+After independently confirmed registration, new background relay turns use their normal
+budget rather than the remainder of startup's budget. Restoring a confirmed registration
+defers further anchoring to the next turn. Existing requests retain their original deadlines;
+an expired unsigned preparation reports expiry without replacing its journal or signing again.
 
 The `xtask mochi-latency` diagnostic collector records twenty fresh-state startup
 attempts and separate ready `.ko`, distinct `.to` and local Musubi package cases;
@@ -219,7 +241,7 @@ on the seed peer after aggregate activation. These source paths require combined
 
 ## Qualification and documentation
 
-Installed-release fixtures exercise both the local four-validator workflow and a
+Installed-runtime fixtures exercise both the local four-validator workflow and a
 disposable four-parent/four-private attachment. They check all three contract inputs,
 exact repeat receipts, localnet restart recovery, funded parent provisioning, paid SNS
 ownership, private execution and independently authenticated parent anchoring.
@@ -231,6 +253,10 @@ The local workflow covers retained restart and fresh reset without releasing res
 ports during startup. Mochi’s headless walkthrough exercises genuine quickstart,
 quoted account funding, contract deployment, mutable calls, views and all state
 listings, followed by verified zero-peer shutdown.
+A native macOS ARM64 window walkthrough also verifies Quickstart, fee-reviewed source
+deployment, initialization and mutable calls, views, saved-journal recovery, retained
+state after Stop/Start, all five state collections and zero-peer shutdown. Its Taira
+attempt reports the current discovery failure and restores the original local selection.
 The attachment fixture also checks
 that its private canary, complete artifact bytes and listener token are absent
 from captured parent requests and retained parent files. This bounded regression
@@ -787,7 +813,7 @@ that generation when applying registration; only its verified receipt establishe
 anchoring. Provisioning and relay turns share absolute deadlines. The native supervisor,
 Kagami command and Mochi profile picker call these shared owners. The installed CLI
 passes the disposable eight-validator attachment and execution fixture; live Taira and
-native desktop qualification remain separate. A retained context rejects substituted endpoints, chain labels,
+desktop attachment qualification remain separate. A retained context rejects substituted endpoints, chain labels,
 address prefixes and network identities without replacing its private ledger.
 
 Update source-coupled specifications as behavior lands. Public guides belong in

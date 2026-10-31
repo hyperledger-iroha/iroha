@@ -323,14 +323,53 @@ impl Drop for WorldBlock<'_> {
     }
 }
 
+/// Construct the original notification control from the complete admitted World demand.
+/// No writer exists yet, so a physical refusal retires only its unused exact charge.
+pub(super) fn original_refund_scope(
+    budget: &iroha_allocation::AllocationBudget,
+    reservation: &mut iroha_allocation::AllocationReservation,
+) -> Result<iroha_allocation::OwnedAllocationScope, AdmittedStorageError> {
+    use iroha_allocation::{OwnedAllocationScope, OwnedScopeError};
+
+    if !reservation.belongs_to(budget) {
+        return Err(AdmittedStorageError::ScopeIdentity);
+    }
+    let charge = reservation
+        .try_split(OwnedAllocationScope::allocation_layout())
+        .map_err(|error| AdmittedStorageError::PolicyDemand {
+            expected_bytes: error.requested_bytes,
+            remaining_bytes: error.remaining_bytes,
+        })?;
+    OwnedAllocationScope::try_from_charge(budget, charge).map_err(|(charge, error)| {
+        drop(charge);
+        match error {
+            OwnedScopeError::ForeignPool => AdmittedStorageError::ScopeIdentity,
+            OwnedScopeError::LayoutMismatch { expected, actual } => {
+                AdmittedStorageError::PolicyDemand {
+                    expected_bytes: expected.size(),
+                    remaining_bytes: actual.size(),
+                }
+            }
+            OwnedScopeError::Allocator { layout } => AdmittedStorageError::Allocator { layout },
+        }
+    })
+}
+
 macro_rules! build_world_block_from_fields {
     ($state:expr, $mode:expr, $budget:expr;
         [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{
         let budget = $budget;
-        // Declared before every field owner: all partial values and sibling writers
-        // retire before this original notification scope can release.
-        let refund_scope = budget.try_owned_refund_scope().map_err(mv::storage::AdmittedStorageError::Allocation)?;
-        let mut demand = world_acquisition::OriginalWorldFields::layout().size();
+        let mut demand = world_acquisition::OriginalWorldFields::layout().size()
+            .checked_add(iroha_allocation::OwnedAllocationScope::allocation_layout().size())
+            .ok_or(mv::storage::AdmittedStorageError::Allocation(iroha_allocation::AllocationRefusal::DemandOverflow))?;
+        // SPEC: §13.4 HC980 restores a real prematurely admitted refund scope.
+        #[cfg(all(test, sumeragi_core_mutation = "HC980"))]
+        let refund_scope = {
+            let mut early = budget.try_reserve(iroha_allocation::OwnedAllocationScope::allocation_layout())
+                .map_err(mv::storage::AdmittedStorageError::Allocation)?;
+            demand -= iroha_allocation::OwnedAllocationScope::allocation_layout().size();
+            world_acquisition::original_refund_scope(budget, &mut early)?
+        };
         // End the complete read-only census frame, including each propagated
         // error temporary, before allocating controls or acquiring any writer.
         world_acquisition::fill_world_acquisition(|| -> Result<(), mv::storage::AdmittedStorageError> {
@@ -339,9 +378,14 @@ macro_rules! build_world_block_from_fields {
             $(world_acquisition::add_original_control_demand(&$state.$suffix, &mut demand)?;)*
             Ok(())
         })?;
-        // Admit the complete concrete control demand atomically before any
-        // allocation or physical World writer, from the caller's original pool.
+        // Admit the complete concrete control demand, including the refund scope,
+        // before any allocation or physical writer. A capacity refusal must not
+        // free its own freshly admitted scope and satisfy its original wait.
         let mut reservation = budget.try_reserve_bytes(demand).map_err(mv::storage::AdmittedStorageError::Allocation)?;
+        // Declared before every field owner: all partial values and sibling writers
+        // retire before this original notification scope can release.
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC980")))]
+        let refund_scope = world_acquisition::original_refund_scope(budget, &mut reservation)?;
         let mut fields = world_acquisition::OriginalWorldFields::reserve(&mut reservation)?;
         let mut pending = world_acquisition::WorldAcquisition {
             $($prefix: None,)*
@@ -378,6 +422,8 @@ macro_rules! build_world_block_from_fields {
             initialization.finish();
         });
         Ok(WorldBlock {
+            uid_binding_run: None,
+            policy_decode_controls: None,
             publication: block_field::AggregatePublication::Executing,
             fields: Some(fields),
             _refund_scope: refund_scope,
@@ -391,6 +437,9 @@ macro_rules! build_world_block {
     };
 }
 
+#[cfg(test)]
+#[path = "world_acquisition/admission_tests.rs"]
+mod admission_tests;
 #[cfg(test)]
 #[path = "world_acquisition/original_control_tests.rs"]
 mod original_control_tests;

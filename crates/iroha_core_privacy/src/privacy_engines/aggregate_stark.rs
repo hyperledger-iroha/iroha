@@ -2246,7 +2246,7 @@ impl StreamingRowCommitmentV1 {
             zeroize_field_column_v1(row);
         }
     }
-    /// Retain a clearing level-four cut during the original root-only pass.
+    /// Retain clearing sibling-pair roots during the original root-only pass.
     pub(crate) fn finish_retaining_cut_v1(
         mut self,
     ) -> Result<
@@ -2339,10 +2339,46 @@ impl ZeroizingFieldColumnV1 {
         Self(values)
     }
 
+    /// Transfer completed transform words without duplicating private output,
+    /// then validate every residue before returning the new clearing owner.
+    /// Invalid words are erased through that owner and are never published.
+    #[allow(unsafe_code)]
+    pub(crate) fn from_canonical_words_v1(words: Vec<u64>) -> Result<Self, AggregateStarkErrorV1> {
+        // No fallible operation or callback occurs between taking the word
+        // allocation and installing its new clearing owner.
+        let mut words = core::mem::ManuallyDrop::new(words);
+        // SAFETY: F is repr(transparent) over u64, with identical size/alignment
+        // and no destructor; every u64 is a valid F bit pattern. Canonicality is
+        // checked below, before any arithmetic or publication of field values.
+        // This is the sole owning pointer; length, capacity and allocator are
+        // preserved, and ManuallyDrop prevents a second release of the words.
+        let fields = unsafe {
+            Vec::from_raw_parts(
+                words.as_mut_ptr().cast::<F>(),
+                words.len(),
+                words.capacity(),
+            )
+        };
+        let column = Self(fields);
+        if column.iter().any(|value| F::canonical(value.0).is_none()) {
+            return Err(AggregateStarkErrorV1::NonCanonicalField);
+        }
+        Ok(column)
+    }
+
     fn zeroize_v1(&mut self) {
+        #[cfg(test)]
+        let observation = field_column_erasure::before_clear_v1(&self.0);
         zeroize_field_column_v1(&mut self.0);
+        #[cfg(test)]
+        field_column_erasure::after_clear_v1(&self.0, observation);
     }
 }
+
+#[cfg(test)]
+#[path = "aggregate_stark/field_column_erasure_tests.rs"]
+pub(crate) mod field_column_erasure;
+
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {

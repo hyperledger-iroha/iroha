@@ -145,11 +145,11 @@ impl Fixture {
             nexus.fees.fee_asset_id = asset.clone();
             nexus.fees.fee_sink_account_id = observer.clone();
             // Author the selected monetary policy in the original signed genesis.
-            config.genesis_parameters.push(
-                iroha_data_model::parameter::Parameter::Custom(
+            config
+                .genesis_parameters
+                .push(iroha_data_model::parameter::Parameter::Custom(
                     nexus.fees.clone().into_custom_parameter().unwrap(),
-                ),
-            );
+                ));
             config.nexus = Some(nexus);
             config.genesis_instructions.push(
                 Register::asset_definition(AssetDefinition::numeric(

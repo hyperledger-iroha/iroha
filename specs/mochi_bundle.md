@@ -106,6 +106,8 @@ icon and installed profiles. Inventory and staging propagate traversal failures 
 reject symlinks or other nonregular entries instead of silently omitting them.
 The inventory is sorted by relative path; its hashes need authenticated release
 provenance before they establish download trust.
+macOS archive creation omits AppleDouble records and host extended attributes so
+extraction installs only the inventoried file content and manifest.
 
 `--smoke` first checks the exact retained profile image and packaged Kagami network-name
 projection. It then runs the packaged Kagami from an empty workspace with an empty `PATH`.
@@ -212,12 +214,19 @@ The `cargo xtask` alias enables the required `dev-tools` feature. Native release
 qualification is dispatched through `.github/workflows/devex_native.yml` using
 five explicitly supplied existing runner labels. Its resource and host checks,
 native custody tests and installed-runtime smoke are execution gates. Each target
-also builds the standalone `kagami-bundle` and runs the same installed deployment,
-restart and fresh bytecode/package flows against its `bin` directory. The Mochi
+also builds the standalone `kagami-bundle` and runs installed deployment,
+restart, fresh bytecode/package and eight-validator private attachment flows against
+its own `bin` directory. The Mochi
 archive is also extracted into a fresh runner temporary directory; the same installed
 flows and subsequent private/attachment checks use only that extracted application's
 runtime paths. These installed flows keep build tools off `PATH` and supply no runtime
-TOML. Defining the workflow does not establish that those platform jobs passed. An installation
+TOML. The same native job runs Mochi's existing headless live walkthrough against
+the extracted runtime with real quickstart, fee quotes, deployment, calls, views and
+state listings. It requires authenticated zero-peer shutdown; failed cleanup retains
+private diagnostics on the runner. Only its public PPM screens are uploaded, never
+the managed workspace or custody. This exercises the desktop state machine, not
+native window interaction. Defining the workflow does not establish that those
+platform jobs passed. An installation
 built with a development profile may omit remote authority. Release packaging requires
 the committed Taira preset; a successful local smoke still does not qualify remote attachment.
 The workflow also runs the eight-validator attachment regression with a disposable

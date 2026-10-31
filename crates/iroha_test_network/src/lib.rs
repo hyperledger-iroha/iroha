@@ -7592,6 +7592,26 @@ impl NetworkBuilder {
                 .build_retained_with_permit(retained, permit)
                 .expect("retained signed genesis network must validate without normalization");
         }
+        let (mut network, client_api_token, chain_discriminant) =
+            self.assemble_generated_network(permit);
+        let _profile =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
+        // Native genesis execution takes most of an ordinary test thread's stack.
+        // Assembly holds large resolved configs, so its frame must return first.
+        let exact_genesis_hash = network.genesis().0.hash();
+        Self::bind_generated_genesis(
+            &mut network,
+            exact_genesis_hash,
+            client_api_token,
+            chain_discriminant,
+        );
+        network
+    }
+    #[inline(never)]
+    fn assemble_generated_network(
+        self,
+        permit: NetworkPermit,
+    ) -> (Network, Option<SecretString>, u16) {
         let NetworkBuilder {
             n_peers,
             max_validator_capacity,
@@ -8470,7 +8490,7 @@ impl NetworkBuilder {
                 .set(final_custom)
                 .expect("final custom genesis should be cached exactly once");
         }
-        let mut network = Network {
+        let network = Network {
             env,
             peers,
             committee_validators,
@@ -8502,7 +8522,14 @@ impl NetworkBuilder {
             max_validator_capacity,
             _permit: permit,
         };
-        let exact_genesis_hash = network.genesis().0.hash();
+        (network, client_api_token, chain_discriminant)
+    }
+    fn bind_generated_genesis(
+        network: &mut Network,
+        exact_genesis_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+        client_api_token: Option<SecretString>,
+        chain_discriminant: u16,
+    ) {
         let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
         let client_config = PeerClientConfig {
             chain: network.chain_id(),
@@ -8544,7 +8571,6 @@ impl NetworkBuilder {
             observer_config_layers.push(network.observer_start_layer(peer));
             let _ = resolve_final_actual_config(peer, &observer_config_layers);
         }
-        network
     }
     /// Same as [`Self::build`], but also creates a [`Runtime`].
     ///
@@ -14664,19 +14690,12 @@ mod tests {
     #[test]
     fn default_network_has_no_da_toggle() {
         let network = NetworkBuilder::new().build();
-        let mut layers = network.config_layers();
-        let _trusted = layers.next().expect("trusted peers layer");
-        let base = layers.next().expect("base config layer").into_owned();
-        let sumeragi = base
-            .get("sumeragi")
-            .unwrap_or_else(|| {
-                let keys = base.keys().cloned().collect::<Vec<_>>();
-                panic!("missing sumeragi table; keys={keys:?}")
-            })
-            .as_table()
-            .expect("sumeragi entry must be a table");
         assert!(
-            get_nested_value(sumeragi, &["da", "enabled"]).is_none(),
+            network.config_layers().all(|layer| get_nested_value(
+                &layer,
+                &["sumeragi", "da", "enabled"]
+            )
+            .is_none()),
             "mandatory DA must not be represented by a local boolean toggle"
         );
     }
@@ -15386,7 +15405,7 @@ mod tests {
         ]);
     }
     #[test]
-    fn npos_bootstrap_clamps_to_min_self_bond() {
+    fn npos_bootstrap_refuses_declared_stake_below_min_self_bond() {
         init_instruction_registry();
         let mut npos_params = SumeragiNposParameters::default();
         npos_params.min_self_bond = npos_params
@@ -15394,15 +15413,25 @@ mod tests {
             .try_add(&Quantity::from(5_000_u64))
             .expect("test self-bond increment must remain representable");
         let expected = npos_params.min_self_bond.clone();
-        let network = build_with_isolated_permit(
+        let builder = || {
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_genesis_instruction(SetParameter::new(Parameter::Custom(
-                    npos_params.into_custom_parameter(),
+                    npos_params.clone().into_custom_parameter(),
                 )))
-                .with_npos_consensus(),
+                .with_npos_consensus()
+        };
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_with_isolated_permit(builder());
+        }))
+        .expect_err("the default declared stake is below this raised minimum");
+        assert_eq!(
+            refusal.downcast_ref::<&str>().copied(),
+            Some("declared bootstrap stake is below original NPoS minimum self bond")
         );
+        let network =
+            build_with_isolated_permit(builder().with_npos_genesis_bootstrap(expected.clone()));
         let genesis = network.genesis();
         let mut seen = false;
         for tx in genesis.0.external_transactions() {
@@ -15415,7 +15444,7 @@ mod tests {
                         seen = true;
                         assert_eq!(
                             register.initial_stake, expected,
-                            "bootstrap stake must honor min_self_bond"
+                            "bootstrap stake must be the exact declared amount"
                         );
                     }
                 }
@@ -15432,16 +15461,28 @@ mod tests {
             .try_add(&Quantity::from(5_000_u64))
             .expect("test self-bond increment must remain representable");
         let expected = npos_params.min_self_bond.clone();
-        let network = build_with_isolated_permit(
+        let builder = || {
             NetworkBuilder::new()
                 .with_peers(4)
                 .with_auto_populated_trusted_peers()
                 .with_genesis_post_topology_isi(vec![
-                    SetParameter::new(Parameter::Custom(npos_params.into_custom_parameter()))
-                        .into(),
+                    SetParameter::new(Parameter::Custom(
+                        npos_params.clone().into_custom_parameter(),
+                    ))
+                    .into(),
                 ])
-                .with_npos_consensus(),
+                .with_npos_consensus()
+        };
+        // The minimum authored after the topology still binds the declared stake.
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                build_with_isolated_permit(builder());
+            }))
+            .is_err(),
+            "the default declared stake is below the post-topology minimum"
         );
+        let network =
+            build_with_isolated_permit(builder().with_npos_genesis_bootstrap(expected.clone()));
         let profile = network.consensus_bootstrap_profile();
         assert_eq!(
             profile.mode_tag, NPOS_TAG,

@@ -1,6 +1,8 @@
 //! Proof-gated carrier reads and original business receipt recovery.
 
+use super::finality_custody::BoundNativePaymentFinality;
 use super::*;
+use crate::workflow::{WorkflowRunnerLease, WorkflowStorageError};
 use crate::{
     query::QueryError,
     workflow::{CommittedOutcome, DispatchOutcome, TransactionIdentityV1, WorkflowLedger},
@@ -18,7 +20,30 @@ use iroha_data_model::{
     },
     transaction::error::TransactionRejectionReason,
 };
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Weak};
+mod finality;
+
+pub(super) struct ObservationCustody {
+    _lease: Mutex<Box<dyn WorkflowRunnerLease>>,
+}
+pub(super) enum PaymentProof {
+    Response(super::super::SumeragiFinalityProofResponse),
+    #[cfg(test)]
+    Fixture(Box<SumeragiFinalityProof>),
+}
+impl PaymentProof {
+    pub(super) fn decode_checked(
+        self,
+    ) -> Result<SumeragiFinalityProof, NativePaymentObservationError> {
+        match self {
+            Self::Response(response) => response
+                .decode_checked()
+                .map_err(NativePaymentObservationError::Transport),
+            #[cfg(test)]
+            Self::Fixture(proof) => Ok(*proof),
+        }
+    }
+}
 
 /// Original observation/verification failure. Local resource errors are not ledger rejection.
 #[derive(Debug, thiserror::Error)]
@@ -44,18 +69,6 @@ pub enum NativePaymentObservationError {
     /// Local bounded proof-read budget; retry with the retained verifier or a larger local budget.
     #[error("native payment proof-read budget exhausted; verification remains resumable")]
     ReadBudgetExhausted,
-    /// The local session retired history required to authenticate this original payment.
-    /// Recover with the same request/storage and an independently pinned cold verifier;
-    /// this is neither ledger absence nor rejection and authorizes no replacement carrier.
-    #[error(
-        "native payment history at {requested_height} was retired; oldest verifiable height is {oldest_verifiable_height}"
-    )]
-    HistoryUnavailable {
-        /// Original payment's required certified height.
-        requested_height: u64,
-        /// Earliest witness whose decision and parent are retained by this session.
-        oldest_verifiable_height: u64,
-    },
     /// No exact candidate is present at the selected locator.
     #[error("payment locator differs from its authenticated block or carrier")]
     CandidateMismatch,
@@ -66,8 +79,20 @@ pub enum NativePaymentObservationError {
     #[error("stored payment completion differs from fresh verified evidence")]
     CompletionMismatch,
     /// A local worker or synchronization owner failed; no consensus conclusion was made.
-    #[error("payment observation worker failed: {0}")]
-    Worker(String),
+    #[error(transparent)]
+    Worker(#[from] super::super::NativeWorkerError),
+    /// Original operation lease failure; no monetary outcome or retry authority is granted.
+    #[error(transparent)]
+    Custody(#[from] WorkflowStorageError),
+    /// Original authenticated pending-checkpoint custody failure.
+    #[error(transparent)]
+    FinalityCustody(#[from] NativePaymentFinalityStorageError),
+    /// The original synchronous in-memory owner became poisoned.
+    #[error("payment observation synchronization owner failed")]
+    Synchronization,
+    /// The single admitted native worker for this operation is still occupied.
+    #[error("payment observation worker capacity unavailable")]
+    Capacity,
 }
 
 #[derive(Clone, Copy)]
@@ -92,7 +117,7 @@ pub(super) trait PaymentSource: Send + Sync {
     fn proof(
         &self,
         height: NonZeroU64,
-    ) -> WorkflowFuture<'_, Result<SumeragiFinalityProof, NativePaymentObservationError>>;
+    ) -> WorkflowFuture<'_, Result<PaymentProof, NativePaymentObservationError>>;
 }
 
 pub(super) struct OnlinePaymentSource(pub AccountClient);
@@ -141,12 +166,13 @@ impl PaymentSource for OnlinePaymentSource {
     fn proof(
         &self,
         height: NonZeroU64,
-    ) -> WorkflowFuture<'_, Result<SumeragiFinalityProof, NativePaymentObservationError>> {
+    ) -> WorkflowFuture<'_, Result<PaymentProof, NativePaymentObservationError>> {
         Box::pin(async move {
             self.0
                 .client()
-                .get_sumeragi_finality_proof_async(height, SumeragiRootScope::Global)
+                .read_sumeragi_finality_proof_response_async(height, SumeragiRootScope::Global)
                 .await
+                .map(PaymentProof::Response)
                 .map_err(NativePaymentObservationError::Transport)
         })
     }
@@ -160,14 +186,18 @@ pub(super) struct NativePaymentLedger {
     reads_remaining: AtomicUsize,
     receipt: Mutex<Option<VerifiedPaymentReceipt>>,
     error: Mutex<Option<NativePaymentObservationError>>,
-    replay: Mutex<Option<PaymentLocator>>,
+    storage: Arc<dyn WorkflowStorage>,
+    finality: BoundNativePaymentFinality,
+    observation_lease: WorkflowId,
+    observation: Mutex<Weak<ObservationCustody>>,
+    worker: Arc<tokio::sync::Semaphore>,
 }
 fn lock<T>(
     value: &Mutex<T>,
 ) -> Result<std::sync::MutexGuard<'_, T>, NativePaymentObservationError> {
-    value.lock().map_err(|_| {
-        NativePaymentObservationError::Worker("poisoned payment observation owner".into())
-    })
+    value
+        .lock()
+        .map_err(|_| NativePaymentObservationError::Synchronization)
 }
 impl NativePaymentLedger {
     pub fn new(
@@ -175,7 +205,13 @@ impl NativePaymentLedger {
         session: NativePaymentSession,
         dispatch: Arc<dyn WorkflowLedger>,
         source: Arc<dyn PaymentSource>,
+        storage: Arc<dyn WorkflowStorage>,
+        finality: BoundNativePaymentFinality,
     ) -> Self {
+        let observation_lease = WorkflowId::from_bytes(domain_digest(
+            b"iroha:native-payment:observation-worker:v1\0",
+            &[request.intent.network_id.as_bytes(), &request.digest],
+        ));
         Self {
             request,
             session,
@@ -184,14 +220,25 @@ impl NativePaymentLedger {
             reads_remaining: AtomicUsize::new(0),
             receipt: Mutex::new(None),
             error: Mutex::new(None),
-            replay: Mutex::new(None),
+            storage,
+            finality,
+            observation_lease,
+            observation: Mutex::new(Weak::new()),
+            worker: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
-    pub fn begin_call(&self, reads: usize) -> Result<(), NativePaymentObservationError> {
+    pub fn begin_call(
+        &self,
+        reads: usize,
+    ) -> Result<Arc<ObservationCustody>, NativePaymentObservationError> {
+        let custody = Arc::new(ObservationCustody {
+            _lease: Mutex::new(self.storage.acquire_runner(&self.observation_lease)?),
+        });
+        *lock(&self.observation)? = Arc::downgrade(&custody);
         self.reads_remaining.store(reads, Ordering::Relaxed);
         *lock(&self.error)? = None;
         *lock(&self.receipt)? = None;
-        Ok(())
+        Ok(custody)
     }
     pub fn take_receipt(
         &self,
@@ -204,79 +251,27 @@ impl NativePaymentLedger {
         Ok(lock(&self.error)?.take())
     }
 
-    async fn read_proof(
-        &self,
-        height: u64,
-    ) -> Result<SumeragiFinalityProof, NativePaymentObservationError> {
+    async fn read_proof(&self, height: u64) -> Result<PaymentProof, NativePaymentObservationError> {
         let height =
             NonZeroU64::new(height).ok_or(NativePaymentObservationError::CandidateMismatch)?;
         self.reads_remaining
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .map_err(|_| NativePaymentObservationError::ReadBudgetExhausted)?;
-        let proof = self.source.proof(height).await?;
-        if proof.height() != height.get() {
-            return Err(NativePaymentObservationError::CandidateMismatch);
-        }
-        Ok(proof)
-    }
-    async fn verified_block(
-        &self,
-        height: u64,
-    ) -> Result<VerifiedSumeragiBlock, NativePaymentObservationError> {
-        if height < 2 {
-            return Err(NativePaymentObservationError::CandidateMismatch);
-        }
-        // One original prefix owner spans different operations. Never hold its
-        // synchronous verifier guard across transport; cancellation releases this
-        // async gate and preserves only fully authenticated progress.
-        let _catch_up = self.session.owner.catch_up.lock().await;
-        loop {
-            let next = {
-                let verifier = self.session.verifier()?;
-                let first = verifier.oldest_authenticated_height().unwrap_or(1);
-                let oldest_verifiable_height = if first == 1 { 1 } else { first + 1 };
-                if height < oldest_verifiable_height {
-                    return Err(NativePaymentObservationError::HistoryUnavailable {
-                        requested_height: height,
-                        oldest_verifiable_height,
-                    });
-                }
-                verifier
-                    .authenticated_height()
-                    .unwrap_or(0)
-                    .checked_add(1)
-                    .ok_or(NativePaymentObservationError::CandidateMismatch)?
-            };
-            if next > height {
-                let proof = self.read_proof(height).await?;
-                return Ok(self.session.verifier()?.verify_retained_decision(&proof)?);
-            }
-            // One bounded existing proof transport at a time; no retained block/proof buffer.
-            let proof = self.read_proof(next).await?;
-            let block = {
-                let mut verifier = self.session.verifier()?;
-                let block = verifier.verify(&proof)?;
-                verifier.retain_recent_decisions(self.session.owner.retained_decisions);
-                block
-            };
-            if next == height {
-                return Ok(block);
-            }
-        }
+        self.source.proof(height).await
     }
     fn check_fees(
-        &self,
+        request: &NativePaymentRequest,
         receipt: &VerifiedPaymentReceipt,
     ) -> Result<(), NativePaymentObservationError> {
         let TransactionEntrypoint::External(transaction) = receipt.evidence().entrypoint() else {
             return Err(NativePaymentObservationError::CandidateMismatch);
         };
-        if transaction.fee_payment_intent() != &self.request.fee_payment
-            || transaction.authority() != self.request.intent.settlement_id.owner()
+        if transaction.fee_payment_intent() != &request.fee_payment
+            || transaction.authority() != request.intent.settlement_id.owner()
         {
             return Err(NativePaymentObservationError::FeeAuthorizationMismatch);
         }
-        self.request
+        request
             .validate_payload(transaction.payload())
             .map_err(|_| NativePaymentObservationError::CandidateMismatch)?;
         Ok(())
@@ -285,127 +280,17 @@ impl NativePaymentLedger {
         &self,
         marker: Option<&NativePaymentCompletionV1>,
     ) -> Result<Option<VerifiedPaymentReceipt>, NativePaymentObservationError> {
-        let replay = *lock(&self.replay)?;
-        let locator = if let Some(marker) = marker {
-            Some(PaymentLocator {
-                height: marker.block_height,
-                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed(marker.block_hash)),
-            })
-        } else if replay.is_some() {
-            replay
-        } else {
-            self.source
-                .settlement(&self.request.intent.settlement_id)
-                .await?
-        };
-        let Some(locator) = locator else {
-            return Ok(None);
-        };
-        let block = self.verified_block(locator.height).await?;
-        if block.header().hash() != locator.block_hash {
-            return Err(NativePaymentObservationError::CandidateMismatch);
-        }
-        let candidate = block
-            .block()
-            .network_entrypoints()
-            .enumerate()
-            .find_map(|(index, entry)| {
-                let index = u32::try_from(index).ok()?;
-                let TransactionEntrypoint::External(transaction) = entry else {
-                    return None;
-                };
-                let iroha_data_model::transaction::Executable::Instructions(instructions) =
-                    transaction.instructions()
-                else {
-                    return None;
-                };
-                let [instruction] = instructions.as_ref() else {
-                    return None;
-                };
-                let any = instruction.as_any();
-                let intent =
-                    any.downcast_ref::<SettleAtomic>().or_else(|| match any
-                        .downcast_ref::<SettlementInstructionBox>()
-                    {
-                        Some(SettlementInstructionBox::Atomic(intent)) => Some(intent),
-                        _ => None,
-                    })?;
-                (intent.settlement_id == self.request.intent.settlement_id
-                    && block
-                        .block()
-                        .network_output_at(index)
-                        .is_some_and(|(_, output)| output.result.is_ok()))
-                .then_some(index)
-            })
-            .ok_or(NativePaymentObservationError::CandidateMismatch)?;
-        let receipt = VerifiedPaymentReceipt::verify_recovered(
-            &block,
-            self.request.intent.network_id,
-            &self.request.intent,
-            evidence(block.block(), candidate)?,
-        )?;
-        self.check_fees(&receipt)?;
-        Ok(Some(receipt))
+        self.finality_business(marker).await
     }
     async fn read_carrier(
         &self,
         identity: &TransactionIdentityV1,
     ) -> Result<CommittedOutcome, NativePaymentObservationError> {
-        let hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed(identity.signed_transaction_hash));
-        let location = self.source.carrier(hash).await?;
-        let height = match location {
-            CarrierLocation::Absent => return Ok(CommittedOutcome::ExactAbsence),
-            CarrierLocation::Observed(None) => return Ok(CommittedOutcome::ObservedNotFinal),
-            CarrierLocation::Observed(Some(height)) => height,
-        };
-        let block = self.verified_block(height).await?;
-        let index = block
-            .block()
-            .network_entrypoints()
-            .enumerate()
-            .find_map(|(index, entry)| {
-                let index = u32::try_from(index).ok()?;
-                let TransactionEntrypoint::External(transaction) = entry else {
-                    return None;
-                };
-                (transaction.hash() == hash
-                    && Hash::from(transaction.hash_as_entrypoint()).as_ref()
-                        == &identity.entrypoint_hash)
-                    .then_some(index)
-            })
-            .ok_or(NativePaymentObservationError::CandidateMismatch)?;
-        let evidence = evidence(block.block(), index)?;
-        block.verify_transaction_execution(&self.request.intent.network_id, &evidence)?;
-        if evidence.result().is_ok() {
-            let receipt = VerifiedPaymentReceipt::verify(
-                &block,
-                self.request.intent.network_id,
-                hash,
-                &self.request.intent,
-                evidence,
-            )?;
-            self.check_fees(&receipt)?;
+        let (outcome, receipt) = self.finality_carrier(*identity).await?;
+        if let Some(receipt) = receipt {
             *lock(&self.receipt)? = Some(receipt);
-            Ok(CommittedOutcome::Applied {
-                block_height: Some(height),
-            })
-        } else {
-            if let Err(TransactionRejectionReason::Validation(ValidationFail::SettlementReplay(
-                replay,
-            ))) = &evidence.result().0
-                && replay.settlement_id == self.request.intent.settlement_id
-            {
-                *lock(&self.replay)? = Some(PaymentLocator {
-                    height: replay.committed_block_height,
-                    block_hash: replay.committed_block_hash,
-                });
-            }
-            Ok(CommittedOutcome::Rejected {
-                detail: "independently authenticated execution rejected this exact signed carrier"
-                    .into(),
-            })
         }
+        Ok(outcome)
     }
 }
 impl WorkflowLedger for NativePaymentLedger {

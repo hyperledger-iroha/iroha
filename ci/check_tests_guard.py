@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-DEFAULT_BASE_CANDIDATES = ("origin/main", "origin/master", "main", "master")
+FALLBACK_BASE_CANDIDATES = ("origin/main", "origin/master", "main", "master")
 DEFAULT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 FUNC_DEF_RE = re.compile(
@@ -42,6 +42,16 @@ def run_git(args: Sequence[str], *, cwd: pathlib.Path, check: bool = False) -> s
     )
 
 
+def default_base_candidates(root: pathlib.Path = DEFAULT_ROOT) -> Tuple[str, ...]:
+    """The configured integration branch first, then the usual default branches."""
+    try:
+        lines = (root / "ci" / "default_base_ref").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    configured = [value for value in (line.split("#", 1)[0].strip() for line in lines) if value]
+    return (*configured[:1], *FALLBACK_BASE_CANDIDATES)
+
+
 def resolve_base_ref(requested: Optional[str], *, root: pathlib.Path = DEFAULT_ROOT) -> str:
     if requested:
         result = run_git(["rev-parse", "--verify", requested], cwd=root)
@@ -49,7 +59,7 @@ def resolve_base_ref(requested: Optional[str], *, root: pathlib.Path = DEFAULT_R
             return requested
         print(f"warning: AGENTS_BASE_REF={requested} not found; falling back to defaults.", file=sys.stderr)
 
-    for candidate in DEFAULT_BASE_CANDIDATES:
+    for candidate in default_base_candidates(root):
         if run_git(["rev-parse", "--verify", candidate], cwd=root).returncode == 0:
             return candidate
 
