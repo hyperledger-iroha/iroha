@@ -331,7 +331,7 @@ impl NetworkBuilder {
             "retained peer omitted its signed PoP"
         );
         let gossip_ms = i64::try_from(self.block_sync_gossip_period.as_millis())?;
-        let mut base_layer = config::base_iroha_config()
+        let base_layer = config::base_iroha_config()
             .write("chain", genesis.manifest.chain_id().to_string())
             .write("chain_discriminant", i64::from(discriminant))
             .write(
@@ -350,17 +350,6 @@ impl NetworkBuilder {
             .write(["pipeline", "signature_batch_max_bls"], 4_i64)
             .write(["torii", "transport", "norito_rpc", "stage"], "ga")
             .write(["torii", "transport", "norito_rpc", "enabled"], true);
-        // These are ordinary runtime defaults only. Native staging must match the
-        // signed policy after all caller layers; no genesis instruction is added.
-        let genesis_account = AccountId::new(genesis.originals.public_key.clone())
-            .to_i105_for_discriminant(discriminant)?;
-        for path in [
-            ["nexus", "fees", "fee_sink_account_id"],
-            ["nexus", "staking", "stake_escrow_account_id"],
-            ["nexus", "staking", "slash_sink_account_id"],
-        ] {
-            base_layer = base_layer.write(path, genesis_account.clone());
-        }
         let network = Network {
             env,
             peers,
@@ -704,10 +693,18 @@ mod tests {
             .collect::<Vec<_>>();
         let mut actual = resolve_actual_config_result(&generated.peers[0], &layers)?;
         retained.validate_runtime(&actual, &topology)?;
-        actual.nexus.fees.fee_sink_account_id = iroha_test_samples::BOB_ID.clone();
+        // Fees are authored in the signed genesis; governance is still node execution policy.
+        actual.gov.slash_receiver_account = iroha_test_samples::BOB_ID.clone();
         let preexecutions = config::genesis_preexecution_count();
         let signatures = config::genesis_signing_count();
-        assert!(retained.validate_runtime(&actual, &topology).is_err());
+        let refusal = retained
+            .validate_runtime(&actual, &topology)
+            .err()
+            .expect("a changed native execution policy must be refused");
+        assert!(
+            format!("{refusal:#}").contains("Signed genesis policy mismatch"),
+            "{refusal:#}"
+        );
         assert!(
             config::genesis_preexecution_count() > preexecutions,
             "ordinary native validator was exercised"

@@ -11,6 +11,8 @@ use sha2::{Digest as _, Sha256};
 use super::{DescriptorBinding, SourceBoundVerifyingKeyV2, VerifyingKey, rebuild};
 use crate::{cs::CurveV1, keys::pk::artifact, pcs::ipa::PinnedParams};
 
+// Generated data with packaged byte identity; formatting it would change those bytes.
+#[rustfmt::skip]
 mod generated;
 
 const MAX_PROFILE_BYTES: usize = 32 << 20;

@@ -314,7 +314,7 @@ mod tests {
             .find_map(|line| line.strip_prefix("validator: "))
             .expect("roster entry");
         let parsed = entry
-            .parse::<iroha_deploy::localnet::NetworkValidator>()
+            .parse::<iroha_deploy::network::NetworkValidator>()
             .expect("node init prints a valid roster entry");
         assert_eq!(parsed.public_key(), validator.public_key());
         assert_eq!(parsed.address().to_string(), "10.0.0.5:1338");

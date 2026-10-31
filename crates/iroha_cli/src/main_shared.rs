@@ -604,7 +604,7 @@ enum Command {
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
-    /// Contract code, aliases, calls, views and local debugging; deploy with `musubi deploy`
+    /// Contract code, aliases, calls, views and local debugging; deploy with `kagami contract deploy` or `musubi deploy`
     #[command(subcommand)]
     Contract(crate::contracts::Command),
     /// Developer utilities and diagnostics
@@ -5245,6 +5245,10 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config()?;
             let details = client.get_transaction_details(self.hash)?;
+            // The output keeps its encoded result; stderr says what that result means.
+            if let Err(reason) = &details.transaction.result().0 {
+                eprintln!("rejected: {}", iroha::client::rejection_summary(reason));
+            }
             context.print_data(&details.transaction)
         }
     }

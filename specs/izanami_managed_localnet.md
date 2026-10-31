@@ -63,12 +63,12 @@ Non-goals:
 | # | Fact | Source |
 | - | --- | --- |
 | C1 | Validators 0–2 host providers 0–2 inside the same `iroha3d` process; validator 0 also hosts the publication service. Validator 3 hosts no provider. | `generated_service_runtime.rs:90-125`, `runtime/owned.rs:278-302` |
-| C2 | The generated client context targets validator 0's Torii. Deploy, call, view and the build registry use it, and deploys confirm through that one endpoint. | `crates/iroha_deploy/src/localnet.rs:1721`, `crates/iroha_contract_deploy/src/lib.rs:1085`, `crates/iroha_contract_deploy/src/call.rs:1240` |
+| C2 | The generated client context targets validator 0's Torii. Deploy, call, view and the build registry use it, and deploys confirm through that one endpoint. | `crates/iroha_deploy/src/localnet/config.rs:687`, `crates/iroha_contract_deploy/src/lib.rs:1085`, `crates/iroha_contract_deploy/src/call.rs:1240` |
 | C3 | `PeerProcesses::gateway` requires four children; start and stop act on the whole committee. On Windows every stop is `kill`. | `runtime/owned.rs:283`, `runtime/owned.rs:218-275`, `runtime/owned.rs:354-408`, `runtime/owned.rs:375-376` |
 | C4 | A service observation lasts `DISCOVERY_FRESHNESS` = 30 s and an expired one stops the network. Discovery reads fall back across peers, but each provider's gateway must be a running child. | `build_registry.rs:24`, `runtime.rs:203-214`, `runtime.rs:427-449`, `native_operation.rs:560-578` |
 | C5 | Custody renewal starts at the enrollment midpoint, withdraws Ready and may restart all four validators. Enrollment validity is at most one day. | `runtime.rs:479-541`, `runtime/renewal.rs:26-70`, `service_policies.rs:216` |
 | C6 | The first launch of each validator passes `--sumeragi-assert-fresh-key` and records `peer{i}.launch` = `1` before exec. Later launches never assert fresh keys. | `runtime.rs:611-658` |
-| C7 | `storage/peer{i}` holds Kura and its snapshot directory. `state/peer{i}` holds `sumeragi-records`, `sumeragi-installation.log`, provider archives and caches. Provider archives require State height = Kura height, and a height-zero start requires an empty archive namespace. | `crates/iroha_deploy/src/localnet.rs:1003-1043`, `crates/iroha_deploy/src/localnet.rs:2774-2795`, `crates/irohad/src/sorafs_reputation_finalized_query.rs:880-893`, `crates/irohad/src/sorafs_provider_ingest_finalized_query.rs:270-283` |
+| C7 | `storage/peer{i}` holds Kura and its snapshot directory. `state/peer{i}` holds `sumeragi-records`, `sumeragi-installation.log`, provider archives and caches. Provider archives require State height = Kura height, and a height-zero start requires an empty archive namespace. | `crates/iroha_deploy/src/localnet/config.rs:53-66`, `crates/iroha_deploy/src/localnet/config.rs:330-375`, `crates/irohad/src/sorafs_reputation_finalized_query.rs:880-893`, `crates/irohad/src/sorafs_provider_ingest_finalized_query.rs:270-283` |
 | C8 | Readiness already reads each peer separately through `status(peer)` and `wait_applied(peer, hash)`. | `runtime/readiness.rs:161-173`, `runtime/readiness.rs:401-415` |
 | C9 | Mochi shows a validator count only, because the status carries no per-validator data. Its `ready()` gate and stream connection require `Ready`. | `mochi/mochi-ui-egui/src/gui/widgets.rs:216-217`, `mochi/mochi-ui-egui/src/gui.rs:878`, `mochi/mochi-ui-egui/src/gui.rs:1330` |
 
@@ -475,7 +475,7 @@ Changes made while moving:
   non-zero charge (`crates/iroha_core/src/executor.rs:2974-2991`, `4692-4697`). The
   generated localnet charges 0.001 XOR per instruction plus gas
   (`crates/iroha_config/src/parameters/defaults.rs:3670-3685`,
-  `crates/iroha_deploy/src/localnet.rs:3605-3616`). The engine therefore signs a
+  `crates/iroha_deploy/src/localnet/genesis.rs:299-307`). The engine therefore signs a
   bounded limit for each transaction shape, either from a fee quote
   (`crates/iroha/src/client.rs:15473`) or from the committed fee policy, as the readiness
   transaction does (`runtime/readiness/fees.rs`). Mochi's composer signs the same empty

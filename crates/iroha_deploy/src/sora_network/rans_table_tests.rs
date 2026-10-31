@@ -1,7 +1,7 @@
 // Generated-localnet rANS table copy, isolation, and path contract tests.
 #[test]
 fn copy_rans_tables_writes_seed_table() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let emitted_path = copy_rans_tables(temp.path()).expect("copy rANS tables");
     let seed_path = temp
         .path()
@@ -19,42 +19,19 @@ fn copy_rans_tables_writes_seed_table() {
 }
 #[test]
 fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let profiles = [
-        ("generic", None, SumeragiConsensusMode::Permissioned),
-        (
-            "nexus",
-            Some(SoraProfile::Nexus),
-            SumeragiConsensusMode::Npos,
-        ),
-        (
-            "paynet",
-            Some(SoraProfile::Dataspace),
-            SumeragiConsensusMode::Npos,
-        ),
-        (
-            "sbp",
-            Some(SoraProfile::PrivateSbp),
-            SumeragiConsensusMode::Npos,
-        ),
-        (
-            "cbuae",
-            Some(SoraProfile::PrivateCbuae),
-            SumeragiConsensusMode::Npos,
-        ),
-        (
-            "bpng",
-            Some(SoraProfile::PrivateBpng),
-            SumeragiConsensusMode::Npos,
-        ),
+        ("nexus", SoraProfile::Nexus),
+        ("paynet", SoraProfile::Dataspace),
+        ("sbp", SoraProfile::PrivateSbp),
+        ("cbuae", SoraProfile::PrivateCbuae),
+        ("bpng", SoraProfile::PrivateBpng),
     ];
     let mut generated_paths = std::collections::BTreeSet::new();
-    for (label, sora_profile, consensus_mode) in profiles {
+    for (label, sora_profile) in profiles {
         let out_dir = temp.path().join(label);
-        let opts = LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
+        let opts = NetworkOptions {
             sora_profile,
-            perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some(format!("rans-table-{label}")),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -62,19 +39,15 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
             base_api_port: 19080,
             base_p2p_port: 23337,
             out_dir: out_dir.clone(),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode,
         };
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+        generate_network(&opts, &mut BufWriter::new(Vec::new()))
             .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
         let start_script =
             fs::read_to_string(out_dir.join("start.sh")).expect("read generated start script");
-        assert_eq!(
+        assert!(
             start_script.contains("IROHA_SORA_MODE=\"1\""),
-            sora_profile.is_some(),
-            "{label} startup mode must follow explicit Sora profile selection"
+            "{label} startup mode must follow the Sora profile"
         );
         let canonical_out_dir =
             fs::canonicalize(&out_dir).expect("canonical generated output directory");
@@ -131,18 +104,11 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
                 ),
                 "{label} peer {peer_index} must reserve its own SoraFS data root"
             );
-            if sora_profile.is_some() {
-                assert_eq!(
-                    sorafs_storage.get("enabled").and_then(toml::Value::as_bool),
-                    Some(false),
-                    "{label} must opt out of unprovisioned embedded SoraFS storage"
-                );
-            } else {
-                assert!(
-                    !sorafs_storage.contains_key("enabled"),
-                    "{label} must not emit a Sora-only enabled override"
-                );
-            }
+            assert_eq!(
+                sorafs_storage.get("enabled").and_then(toml::Value::as_bool),
+                Some(false),
+                "{label} must opt out of unprovisioned embedded SoraFS storage"
+            );
             let sorafs_por_state_dir = peer_config
                 .get("sorafs")
                 .and_then(toml::Value::as_table)

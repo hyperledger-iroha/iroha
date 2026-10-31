@@ -346,8 +346,10 @@ passing this three-block fixture does not establish their replay.
 The handshake change in `173b737010` replaced the compatibility probe's compiled
 `gas_schedule_hash` with `host_profiles`: each immutable host profile binds its
 ABI and metering semantics, and peers must support the profiles selected by the
-committed root. The inventory anchors that current owner; dormant extra profiles
-are capabilities, not an execution-semantics change or a reason to reset history.
+committed root. The inventory anchors the metering semantics at their definition,
+`ivm::gas::schedule_hash`, which the baseline host profile binds; dormant extra
+profiles are capabilities, not an execution-semantics change or a reason to
+reset history.
 
 Classify by effect on the stored history, not by intent. When unsure, run the
 pinned-history test and the read-only probes against a store written by the

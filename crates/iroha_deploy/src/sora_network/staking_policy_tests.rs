@@ -336,51 +336,14 @@ fn localnet_bootstrap_uses_original_custody_without_increasing_declared_stake() 
 }
 
 #[test]
-fn permissioned_support_registers_original_custody_once_without_staking() {
-    let _author = ChainDiscriminantGuard::enter(369);
-    let (policy, raw) = policy_and_manifest(SumeragiConsensusMode::Permissioned);
-    let peers = build_peers(4, Some(b"original-policy-support"), 31_080, 31_337).unwrap();
-    // Sharing gas and escrow remains legitimate; account registration is exact once.
-    let prepared = append_localnet_permissioned_support_accounts(
-        raw,
-        &peers,
-        &policy.stake_escrow_account_id,
-        false,
-    )
-    .unwrap();
-    assert_eq!(
-        localnet_bootstrap_staking_policy(&prepared).unwrap(),
-        policy
-    );
-    for account in [
-        &policy.stake_escrow_account_id,
-        &policy.slash_sink_account_id,
-    ] {
-        assert_eq!(prepared.instructions().filter(|instruction| matches!(instruction.as_any().downcast_ref::<RegisterBox>(), Some(RegisterBox::Account(register)) if register.object().id() == account)).count(), 1);
-    }
-    assert!(prepared.instructions().all(|instruction| {
-        instruction
-            .as_any()
-            .downcast_ref::<RegisterPublicLaneValidator>()
-            .is_none()
-            && instruction
-                .as_any()
-                .downcast_ref::<ActivatePublicLaneValidator>()
-                .is_none()
-    }));
-}
-
-#[test]
 fn native_localnet_staging_refuses_original_minimum_above_unchanged_bootstrap_stakes() {
     use iroha_core::block::{BlockValidationError, InvalidGenesisError};
 
-    let directory = crate::localnet::localnet_test_helpers::private_tempdir()
+    let directory = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("private generated localnet runtime");
     let seed = "original-minimum-native-rejection";
-    let options = LocalnetOptions {
-        service_profile: LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let options = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).unwrap(),
         seed: Some(seed.to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -388,12 +351,9 @@ fn native_localnet_staging_refuses_original_minimum_above_unchanged_bootstrap_st
         base_api_port: 31_580,
         base_p2p_port: 31_837,
         out_dir: directory.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&options, &mut BufWriter::new(Vec::new()))
+    generate_network(&options, &mut BufWriter::new(Vec::new()))
         .expect("original minimum admits the actual generated native genesis");
     let manifest = RawGenesisTransaction::from_path(directory.path().join("genesis.json"))
         .expect("generated complete original manifest");

@@ -1806,6 +1806,39 @@ pub struct KaigiCallViewDto {
     pub segments_recorded: u32,
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
+/// The authenticated account's own standing in a call, as a prover needs it.
+///
+/// Every field comes from one committed state view, so a proof built from this
+/// response binds a mutually consistent root, sequence and segment.
+pub struct KaigiCallParticipationDto {
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Simplified privacy label used by app clients.
+    pub privacy_mode: String,
+    /// Lifecycle status label.
+    pub status: String,
+    /// Whether the account belongs to the host's rekey lineage.
+    pub is_host: bool,
+    /// Whether the account is the host or currently holds roster membership.
+    pub active: bool,
+    /// Retained subject that the next authorization proof must bind.
+    pub original_account_id: String,
+    /// Original host, returned only to the host and to retained participants.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub host_account_id: Option<String>,
+    /// Private calls only: zero for the host, otherwise the live participation's
+    /// sequence or the only sequence the next join may prove.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<u64>,
+    /// Private calls only: the stored host or live participant commitment in hex.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub active_commitment_hex: Option<String>,
+    /// Current roster Merkle root in hex form.
+    pub roster_root_hex: String,
+    /// Number of usage segments recorded so far.
+    pub segments_recorded: u32,
+}
+( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// App-facing Kaigi signaling record derived from committed transaction metadata.
 pub struct KaigiCallSignalDto {
     /// Entrypoint hash of the transaction carrying the signal.
@@ -1870,7 +1903,8 @@ pub struct KaigiCallSignalsParams {
 ( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for Kaigi call SSE streams.
 pub struct KaigiCallEventsParams {
-    /// Restrict events to a comma-separated list of kinds (`roster_updated`, `ended`).
+    /// Restrict events to a comma-separated list of kinds (`roster_updated`, `ended`,
+    /// `relay_manifest_updated`, `usage_updated`).
     #[norito(default)]
     pub kind: Option<String>,
 }
@@ -2033,19 +2067,13 @@ fn decode_kaigi_relay_registration(
             "Kaigi relay registration metadata key does not match its embedded relay identifier",
         ));
     }
-    if registration.hpke_public_key.is_empty() {
-        return Err(kaigi_relay_metadata_error(
-            "Kaigi relay registration requires an HPKE public key",
-        ));
-    }
-    if registration.hpke_public_key.len()
-        > iroha_data_model::kaigi::KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1
-    {
-        return Err(kaigi_relay_metadata_error(format!(
-            "Kaigi relay registration HPKE public key exceeds the {}-byte limit",
-            iroha_data_model::kaigi::KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
-        )));
-    }
+    iroha_data_model::kaigi::parse_kaigi_relay_hpke_key_v1(&registration.hpke_public_key).map_err(
+        |error| {
+            kaigi_relay_metadata_error(format!(
+                "Kaigi relay registration has an invalid HPKE key: {error}"
+            ))
+        },
+    )?;
     if registration.bandwidth_class == 0 {
         return Err(kaigi_relay_metadata_error(
             "Kaigi relay registration requires a non-zero bandwidth class",
@@ -2193,7 +2221,6 @@ fn load_kaigi_record_from_world(
         return Err(explorer_not_found());
     };
     let record = raw
-        .clone()
         .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -2227,9 +2254,7 @@ fn validate_kaigi_record(
         }
         let mut relay_ids = std::collections::BTreeSet::new();
         let descriptor_is_valid = manifest.hops.iter().all(|hop| {
-            !hop.hpke_public_key.is_empty()
-                && hop.hpke_public_key.len()
-                    <= iroha_data_model::kaigi::KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1
+            iroha_data_model::kaigi::parse_kaigi_relay_hpke_key_v1(&hop.hpke_public_key).is_ok()
                 && hop.weight != 0
                 && relay_ids.insert(&hop.relay_id)
         });
@@ -36499,7 +36524,7 @@ mod tx_query_filter_tests {
             let (relay_id, _) = account_with_key();
             hops.push(iroha_data_model::kaigi::KaigiRelayHop {
                 relay_id,
-                hpke_public_key: vec![0xA5],
+                hpke_public_key: test_kaigi_relay_hpke_key(0xA5),
                 weight: 1,
             });
         }
@@ -36518,12 +36543,9 @@ mod tx_query_filter_tests {
         manifest
             .hops
             .truncate(iroha_data_model::kaigi::KAIGI_RELAY_MANIFEST_MIN_HOPS_V1);
-        manifest.hops[0].hpke_public_key = vec![
-            0xA5;
-            iroha_data_model::kaigi::KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1
-        ];
+        manifest.hops[0].hpke_public_key.push(0);
         let error = validate_kaigi_record(record, &call_id)
-            .expect_err("an oversized persisted relay key must fail closed");
+            .expect_err("an overlong persisted relay key must fail closed");
         let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
             panic!("unexpected Kaigi manifest error: {error:?}");
         };
@@ -36567,32 +36589,29 @@ mod tx_query_filter_tests {
         assert!(view.host_account_id.is_none());
         assert!(view.billing_account_id.is_none());
     }
-    routing_test! { sync kaigi_relay_registration_decode_rejects_oversized_hpke_keys
+    routing_test! { sync kaigi_relay_registration_decode_requires_exact_key_framing
         let (relay, _) = account_with_key();
         let metadata_key = iroha_data_model::kaigi::kaigi_relay_metadata_key(&relay)
             .expect("relay metadata key");
-        let exact = KaigiRelayRegistration {
-            relay_id: relay.clone(),
-            hpke_public_key: vec![
-                0xA5;
-                iroha_data_model::kaigi::KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1
-            ],
-            bandwidth_class: 1,
+        let registration = |hpke_public_key| {
+            IrohaJson::try_new(KaigiRelayRegistration {
+                relay_id: relay.clone(),
+                hpke_public_key,
+                bandwidth_class: 1,
+            })
+            .expect("relay registration JSON")
         };
-        let exact_json = IrohaJson::try_new(exact).expect("exact-limit relay registration");
-        assert!(decode_kaigi_relay_registration(&metadata_key, &exact_json).is_ok());
+        let exact = test_kaigi_relay_hpke_key(0xA5);
+        assert!(decode_kaigi_relay_registration(&metadata_key, &registration(exact.clone())).is_ok());
 
-        let oversized = KaigiRelayRegistration {
-            relay_id: relay,
-            hpke_public_key: vec![
-                0xA5;
-                iroha_data_model::kaigi::KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1 + 1
-            ],
-            bandwidth_class: 1,
-        };
-        let oversized_json =
-            IrohaJson::try_new(oversized).expect("oversized relay registration JSON");
-        assert!(decode_kaigi_relay_registration(&metadata_key, &oversized_json).is_err());
+        let mut overlong = exact.clone();
+        overlong.push(0);
+        assert!(decode_kaigi_relay_registration(&metadata_key, &registration(overlong)).is_err());
+        let mut unknown_suite = exact;
+        unknown_suite[..2].copy_from_slice(&0x7777_u16.to_le_bytes());
+        assert!(
+            decode_kaigi_relay_registration(&metadata_key, &registration(unknown_suite)).is_err()
+        );
     }
     routing_test! { sync kaigi_event_kind_filters_fail_closed_for_nonempty_invalid_input
         assert!(parse_kaigi_kind_filter(None).is_none());
@@ -36736,6 +36755,54 @@ mod tx_query_filter_tests {
             )),
         ));
         assert!(convert_kaigi_call_event(&active_event, &call_id).is_none());
+    }
+    routing_test! { sync convert_kaigi_call_event_maps_manifest_and_usage_updates
+        use iroha_data_model::events::data::prelude::{
+            DomainEvent, KaigiRelayManifestSummary, KaigiUsageSummary,
+        };
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let other_call = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "other-sync".parse().expect("call name"),
+        );
+        let manifest_event = |call: &iroha_data_model::kaigi::KaigiId| {
+            EventBox::Data(SharedDataEvent::from(
+                iroha_data_model::events::data::DataEvent::Domain(
+                    DomainEvent::KaigiRelayManifestUpdated(KaigiRelayManifestSummary {
+                        call: call.clone(),
+                        hop_count: 3,
+                        expiry_ms: 99,
+                    }),
+                ),
+            ))
+        };
+        let (kind, payload) = convert_kaigi_call_event(&manifest_event(&call_id), &call_id)
+            .expect("manifest event");
+        assert_eq!(kind, "relay_manifest_updated");
+        assert_eq!(payload.get("hop_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(payload.get("expiry_ms").and_then(Value::as_u64), Some(99));
+        assert!(convert_kaigi_call_event(&manifest_event(&other_call), &call_id).is_none());
+        let usage_event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::KaigiUsageSummary(
+                KaigiUsageSummary {
+                    call: call_id.clone(),
+                    total_duration_ms: 1_200,
+                    total_billed_gas: 345,
+                    segments_recorded: 1,
+                },
+            )),
+        ));
+        let (kind, payload) =
+            convert_kaigi_call_event(&usage_event, &call_id).expect("usage event");
+        assert_eq!(kind, "usage_updated");
+        assert_eq!(payload.get("total_billed_gas").and_then(Value::as_u64), Some(345));
+        assert_eq!(payload.get("segments_recorded").and_then(Value::as_u64), Some(1));
+        let filter = parse_kaigi_call_kind_filter(Some("relay_manifest_updated,usage_updated,bogus"))
+            .expect("explicit filter");
+        assert_eq!(filter.len(), 2);
     }
     routing_test! { sync explorer_history_request_limits_are_strictly_bounded
         let valid = crate::explorer::ExplorerCursorQuery {
@@ -41208,6 +41275,14 @@ where
     }
 }
 }
+/// A well-formed relay key descriptor for tests; different seeds give different keys.
+#[cfg(test)]
+fn test_kaigi_relay_hpke_key(seed: u8) -> Vec<u8> {
+    use iroha_data_model::kaigi::{KaigiRelayHpkeSuiteV1, encode_kaigi_relay_hpke_key_v1};
+    let suite = KaigiRelayHpkeSuiteV1::MlKem768AuthPsk;
+    encode_kaigi_relay_hpke_key_v1(suite, &vec![seed; suite.public_key_len()])
+        .expect("the key has its suite's exact length")
+}
 include!("routing/kaigi_response_format_tests.rs");
 app_api_items! {
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -41400,6 +41475,49 @@ pub async fn handle_v1_kaigi_call(
 ) -> Result<AxResponse, Error> {
     let record = load_kaigi_record(state.as_ref(), &call_id)?;
     Ok(JsonBody(kaigi_call_view_from_record(&record)).into_response())
+}
+/// GET `/v1/kaigi/calls/{call_id}/participation` — the signed caller's own standing.
+///
+/// Scoped to the authenticated account, so the route cannot be used to probe
+/// whether some other account belongs to a private call.
+#[expect(clippy::unused_async, reason = "HTTP route entry points retain a Future interface for route dispatch and shared async handler tests") ]
+pub async fn handle_v1_kaigi_call_participation(
+    state: Arc<CoreState>,
+    call_id: KaigiId,
+    account: AccountId,
+) -> Result<AxResponse, Error> {
+    let world = state.world_view();
+    let record = load_kaigi_record_from_world(&world, &call_id)?;
+    let view = iroha_core::smartcontracts::isi::kaigi::kaigi_participation_view_v1(
+        &world, &record, &account,
+    )
+    .map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            error.to_string(),
+        ))
+    })?;
+    Ok(JsonBody(kaigi_call_participation_from_view(&record, &view)).into_response())
+}
+fn kaigi_call_participation_from_view(
+    record: &iroha_data_model::kaigi::KaigiRecord,
+    view: &iroha_core::smartcontracts::isi::kaigi::KaigiParticipationViewV1,
+) -> KaigiCallParticipationDto {
+    let associated = view.is_host || view.sequence.is_some_and(|sequence| sequence > 1) || view.active;
+    KaigiCallParticipationDto {
+        call_id: record.id.to_string(),
+        privacy_mode: kaigi_privacy_mode_label(record.privacy_mode).to_owned(),
+        status: kaigi_status_label(record.status).to_owned(),
+        is_host: view.is_host,
+        active: view.active,
+        original_account_id: crate::account_literal::display_literal(&view.original_account),
+        host_account_id: associated.then(|| crate::account_literal::display_literal(&record.host)),
+        sequence: view.sequence,
+        active_commitment_hex: view
+            .active_commitment
+            .map(|commitment| hex::encode(commitment.to_le_bytes())),
+        roster_root_hex: hex::encode(<[u8; 32]>::from(record.roster_root)),
+        segments_recorded: record.segments_recorded,
+    }
 }
 /// GET `/v1/kaigi/calls/{call_id}/signals` — list committed signal metadata for a call.
 #[expect(clippy::unused_async, reason = "HTTP route entry points retain a Future interface for route dispatch and shared async handler tests") ]
@@ -41602,7 +41720,12 @@ fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> 
     let set: BTreeSet<String> = raw
         .split(',')
         .map(|entry| entry.trim().to_ascii_lowercase())
-        .filter(|entry| matches!(entry.as_str(), "roster_updated" | "ended"))
+        .filter(|entry| {
+            matches!(
+                entry.as_str(),
+                "roster_updated" | "ended" | "relay_manifest_updated" | "usage_updated"
+            )
+        })
         .collect();
     Some(set)
 }
@@ -41705,6 +41828,33 @@ fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(
                     json_entry("call", &(json_value(&kaigi_call_event_ref(call_id)))),
                     json_entry("status", &(kaigi_status_label(summary.status))),
                     json_entry("ended_at_ms", &(summary.ended_at_ms?)),
+                ]),
+            ))
+        }
+        // Participants follow a host's relay failover from this event, then re-read
+        // the manifest from the call view rather than trusting event contents.
+        DataEvent::Domain(DomainEvent::KaigiRelayManifestUpdated(summary))
+            if &summary.call == call_id =>
+        {
+            Some((
+                "relay_manifest_updated".to_owned(),
+                json_object(vec![
+                    json_entry("kind", "relay_manifest_updated"),
+                    json_entry("call", &(json_value(&kaigi_call_event_ref(call_id)))),
+                    json_entry("hop_count", &(summary.hop_count)),
+                    json_entry("expiry_ms", &(summary.expiry_ms)),
+                ]),
+            ))
+        }
+        DataEvent::Domain(DomainEvent::KaigiUsageSummary(summary)) if &summary.call == call_id => {
+            Some((
+                "usage_updated".to_owned(),
+                json_object(vec![
+                    json_entry("kind", "usage_updated"),
+                    json_entry("call", &(json_value(&kaigi_call_event_ref(call_id)))),
+                    json_entry("total_duration_ms", &(summary.total_duration_ms)),
+                    json_entry("total_billed_gas", &(summary.total_billed_gas)),
+                    json_entry("segments_recorded", &(summary.segments_recorded)),
                 ]),
             ))
         }

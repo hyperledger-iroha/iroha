@@ -3,10 +3,10 @@
 //! `kagami network create` takes the `validator:` line that `kagami node init` prints on each
 //! host and writes the signed genesis, its expected hash and public key, and `network.toml`,
 //! the shared configuration each node's `config.toml` includes with `extends`. Genesis
-//! composition, signing and output custody belong to [`iroha_deploy::localnet::generate_network`].
+//! composition, signing and output custody belong to [`iroha_deploy::network::generate_network`].
 use crate::{Outcome, RunArgs, localnet::ConsensusModeArg, tui};
 use clap::{Args as ClapArgs, Subcommand};
-use iroha_deploy::localnet::{
+use iroha_deploy::network::{
     DEFAULT_NETWORK_TORII_URL, NetworkOptions, NetworkValidator, generate_network,
 };
 use std::{

@@ -46,18 +46,16 @@ const GOVERNANCE_ACCOUNT_FIELDS: &[&str] = &[
 
 /// Today's canonical Taira localnet, generated with the profile's cadence.
 struct KagamiTaira {
-    _dir: crate::localnet::localnet_test_helpers::PrivateTempDir,
+    _dir: crate::sora_network::localnet_test_helpers::PrivateTempDir,
     manifest: RawGenesisTransaction,
 }
 
 impl KagamiTaira {
     fn generate(block_cadence_ms: u64) -> Self {
-        let dir = crate::localnet::localnet_test_helpers::private_tempdir()
+        let dir = crate::sora_network::localnet_test_helpers::private_tempdir()
             .expect("temporary Taira directory");
-        let opts = LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: Some(SoraProfile::Nexus),
-            perf_profile: None,
+        let opts = NetworkOptions {
+            sora_profile: SoraProfile::Nexus,
             peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),
             seed: Some(SEED.to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -65,12 +63,9 @@ impl KagamiTaira {
             base_api_port: 8_080,
             base_p2p_port: 1_337,
             out_dir: dir.path().to_path_buf(),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: Some(block_cadence_ms),
-            consensus_mode: SumeragiConsensusMode::Npos,
         };
-        generate_localnet_with_chain(
+        generate_network_with_chain(
             &opts,
             &mut BufWriter::new(Vec::new()),
             Some(PUBLIC_TAIRA_CHAIN_ID),

@@ -1369,18 +1369,13 @@ HARNESS_TARGETS = {
 }
 
 
-DEPLOY_STAGES = (("native generated genesis and independent localnet profiles", (
+DEPLOY_STAGES = (("native generated genesis and Sora network profiles", (
     "genesis::staging::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
-    "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
-    "localnet::tests::localnet_assets_contain_only_explicit_requests",
-    "localnet::tests::localnet_asset_validation_rejects_duplicate_identity_or_alias",
-    "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
-    "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
-    "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-    "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
-    "localnet::tests::generated_localnet_bootstraps_explicitly_requested_asset",
-    "localnet::tests::generated_localnet_registers_requested_asset_definition_for_client_owner",
-    "localnet::tests::private_dataspace_manifests_use_the_selected_lane_alias",
+    "sora_network::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+    "sora_network::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
+    "sora_network::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
+    "sora_network::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
+    "sora_network::tests::private_dataspace_manifests_use_the_selected_lane_alias",
 )), )
 
 KAGAMI_STAGES = (("native Kagami bootstrap signing and key custody", (
@@ -1507,6 +1502,7 @@ CORE_CONTRACT_OWNER_STAGES = (("exact contract lifecycle owner delegation and in
     'executor::tests::ordinary_owner_self_grant_enables_guarded_call_and_revocation_closes_it',
     'executor::tests::suspended_contract_permissions_can_be_repaired_without_authorizing_invocation',
     'executor::tests::scoped_permission_delegation_requires_current_declaration_and_exact_instance',
+    'executor::tests::contract_runtime_delegates_only_its_exact_asset_and_trigger_capabilities',
 )),)
 CORE_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_STARTUP_STAGES
 CORE_ADMISSION_STARTUP_STAGES = CORE_CONTRACT_OWNER_STAGES + CORE_ADMISSION_STARTUP_STAGES

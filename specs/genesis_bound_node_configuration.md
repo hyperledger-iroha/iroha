@@ -18,7 +18,7 @@ its own configuration file:
 Native genesis execution (`crates/iroha_core/src/block/native_genesis_policy.rs`)
 recomputes both from the node's staged State and refuses the genesis when either
 differs. Every node file must therefore restate every non-default value the
-genesis was signed with. A Kagami localnet genesis plus a minimal
+genesis was signed with. A Kagami Sora network genesis plus a minimal
 `kagami node init` file fails until `[nexus.fusion] exit_teu = 50000000` is
 copied in (code default 6000). The value is already fixed by the signed genesis;
 the node file only has to repeat it.
@@ -126,7 +126,7 @@ no new genesis.
    rejected (`cfg.zk.node_schema`): a node file that sets one fails to load with
    an error naming the key and the genesis context that supplies it. The keys
    stay in the `iroha_config` schema only as genesis authoring input for Kagami
-   (`kagami genesis sign --config`, localnet generation). Compiled profiles move
+   (`kagami genesis sign --config`, Sora network generation). Compiled profiles move
    `[static.nexus]` into `[genesis_recipe]`, so `[static]` holds only settings no
    genesis digest covers (network frame limits, key algorithms, confidential
    switches), each tracked by its census entry.
@@ -138,11 +138,11 @@ Activation without migration:
 
 | Network | Preimage source | Effect |
 | --- | --- | --- |
-| Kagami localnets | `kagami localnet` already writes the file beside the signed genesis | Generated peer files drop their `[nexus]` catalog and `[nexus.fusion]` sections |
+| Kagami Sora networks | `kagami sora-network` already writes the file beside the signed genesis | Generated peer files drop their `[nexus]` catalog and `[nexus.fusion]` sections |
 | Taira | already a public-reset input (`iroha taira`, `kagami genesis validate-prepared --nexus-context-output`) | Validator configs drop the G1 keys at their next rollout |
 | Minamoto | `iroha3d --check-config --write-nexus-context <path>` on any validator whose current configuration passes, or Kagami restaging against the reference configuration; either output is accepted only by hash | Node files drop the three-lane catalog and routing |
 
-Required tests: a minimal node file plus a Kagami localnet genesis and its
+Required tests: a minimal node file plus a Kagami Sora network genesis and its
 context file starts without `[nexus.fusion]`; a substituted or truncated context
 file is refused before Kura opens; a node file setting a G1 key fails to load;
 restart from Kura uses the retained copy; the handshake `nexus_policy_digest`

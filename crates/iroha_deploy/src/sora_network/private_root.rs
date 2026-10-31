@@ -444,7 +444,7 @@ fn prepare_fresh(
         iroha_config::parameters::defaults::common::chain_discriminant(),
     );
     let root = custody::prepare_empty_private_directory(directory)?;
-    let chain = resolve_localnet_chain_id(None)?;
+    let chain = resolve_network_chain_id(None)?;
     let hosts = CanonicalHost::parse("127.0.0.1", "private-root loopback")?;
     let peers = build_peers(4, None, ports.base_api, ports.base_p2p)?;
     let owner = localnet_ephemeral_identity(None, b"private-root-owner")?;

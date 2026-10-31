@@ -2575,7 +2575,7 @@ fn initial_executor_admits_the_complete_kaigi_surface() {
         RegisterKaigiRelay {
             relay: KaigiRelayRegistration {
                 relay_id: relay.clone(),
-                hpke_public_key: vec![1],
+                hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(1),
                 bandwidth_class: 1,
             },
         }

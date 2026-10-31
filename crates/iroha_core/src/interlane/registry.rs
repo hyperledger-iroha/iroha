@@ -194,7 +194,9 @@ impl LanePrivacyRegistry {
         // Private construction splits every child from the shell's same original
         // reservation; no API can replace or detach those children. The shell is
         // therefore a constant-time proof for the entire closed graph.
-        self.owner.as_ref().is_none_or(|owner| owner.belongs_to(budget))
+        self.owner
+            .as_ref()
+            .is_none_or(|owner| owner.belongs_to(budget))
     }
 
     /// Whether both values share exactly the same original graph or are both empty.

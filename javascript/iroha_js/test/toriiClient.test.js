@@ -14175,6 +14175,161 @@ test("streamKaigiCallEvents encodes filters and normalizes payloads", async () =
   assert.ok(requested?.includes("kind=roster_updated%2Cended"));
 });
 
+test("getKaigiCallParticipation signs its request and returns one state's proving context", async () => {
+  const callId = "kaigi.universal:standup";
+  let requested;
+  let requestInit;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      requested = url;
+      requestInit = init;
+      return createResponse({
+        status: 200,
+        jsonData: {
+          call_id: callId,
+          privacy_mode: "private",
+          status: "active",
+          is_host: false,
+          active: true,
+          original_account_id: FIXTURE_ALICE_ID,
+          host_account_id: FIXTURE_ALICE_ID,
+          sequence: 3,
+          active_commitment_hex: "11".repeat(32),
+          roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+          segments_recorded: 2,
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const standing = await client.getKaigiCallParticipation(callId);
+  assert.equal(
+    requested,
+    `${BASE_URL}/v1/kaigi/calls/${encodeURIComponent(callId)}/participation`,
+  );
+  assert.ok(requestInit?.headers?.["X-Iroha-Signature"]);
+  assert.equal(standing?.sequence, 3);
+  assert.equal(standing?.active, true);
+  assert.equal(standing?.original_account_id, FIXTURE_ALICE_ID);
+  assert.equal(standing?.active_commitment_hex, "11".repeat(32));
+  assert.equal(standing?.segments_recorded, 2);
+});
+
+test("getKaigiCallParticipation returns null for an absent call", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 404 }),
+  });
+  assert.equal(await client.getKaigiCallParticipation("kaigi.universal:absent"), null);
+});
+
+test("getKaigiCallParticipation rejects inconsistent responses and missing signers", async () => {
+  const callId = "kaigi.universal:standup";
+  const valid = {
+    call_id: callId,
+    privacy_mode: "private",
+    status: "active",
+    is_host: false,
+    active: false,
+    original_account_id: FIXTURE_ALICE_ID,
+    sequence: 1,
+    roster_root_hex: KAIGI_HPKE_FINGERPRINT_HEX,
+    segments_recorded: 0,
+  };
+  const respondWith = (jsonData) => new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  const { sequence: _sequence, ...withoutSequence } = valid;
+  for (const [jsonData, message] of [
+    [withoutSequence, /sequence must be present exactly for a private call/u],
+    [{ ...valid, privacy_mode: "transparent" }, /sequence must be present exactly/u],
+    [{ ...valid, call_id: "kaigi.universal:other" }, /must match the requested call/u],
+    [{ ...valid, extra: 1 }, /fields are not canonical/u],
+    [{ ...valid, active: "no" }, /must be booleans/u],
+  ]) {
+    await assert.rejects(() => respondWith(jsonData).getKaigiCallParticipation(callId), message);
+  }
+  const unsigned = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
+    },
+  });
+  await assert.rejects(
+    () => unsigned.getKaigiCallParticipation(callId),
+    /getKaigiCallParticipation canonicalAuth is required/u,
+  );
+});
+
+test("Kaigi event streams carry the account signature Torii requires", async () => {
+  const callId = "kaigi.universal:standup";
+  const seen = [];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      seen.push(init.headers);
+      return createSseResponse([]);
+    },
+  });
+  await client.streamKaigiCallEvents(callId).next();
+  await client.streamKaigiRelayEvents().next();
+  assert.equal(seen.length, 2);
+  for (const headers of seen) {
+    assert.ok(headers?.["X-Iroha-Signature"], "stream request must be signed");
+  }
+  const unsigned = new ToriiClient(BASE_URL, {
+    canonicalRequestAuth: null,
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
+    },
+  });
+  assert.throws(
+    () => unsigned.streamKaigiCallEvents(callId),
+    /streamKaigiCallEvents canonicalAuth is required/u,
+  );
+  assert.throws(
+    () => unsigned.streamKaigiRelayEvents(),
+    /streamKaigiRelayEvents canonicalAuth is required/u,
+  );
+});
+
+test("streamKaigiCallEvents yields relay failover and usage updates", async () => {
+  const callId = "kaigi.universal:standup";
+  const call = `{"call_id":"${callId}","domain":"kaigi.universal","call_name":"standup"}`;
+  let requested;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      requested = url;
+      return createSseResponse([
+        "event: kaigi.call\n",
+        `data: {"kind":"relay_manifest_updated","call":${call},"hop_count":3,"expiry_ms":99}\n`,
+        "\n",
+        "event: kaigi.call\n",
+        `data: {"kind":"usage_updated","call":${call},"total_duration_ms":1200,"total_billed_gas":345,"segments_recorded":1}\n`,
+        "\n",
+      ]);
+    },
+  });
+  const iterator = client.streamKaigiCallEvents(callId, {
+    kind: ["relay_manifest_updated", "usage_updated"],
+  });
+  const manifest = await iterator.next();
+  assert.equal(manifest.value?.data?.kind, "relay_manifest_updated");
+  assert.equal(manifest.value?.data?.hop_count, 3);
+  assert.equal(manifest.value?.data?.expiry_ms, 99);
+  const usage = await iterator.next();
+  assert.equal(usage.value?.data?.kind, "usage_updated");
+  assert.equal(usage.value?.data?.total_billed_gas, 345);
+  assert.equal(usage.value?.data?.segments_recorded, 1);
+  assert.ok(requested?.includes("kind=relay_manifest_updated%2Cusage_updated"));
+  assert.throws(
+    () => client.streamKaigiCallEvents(callId, { kind: "unknown" }),
+    /kaigiCallEvents\.kind must be roster_updated, ended, relay_manifest_updated or usage_updated/u,
+  );
+});
+
 test("listKaigiRelays rejects unsupported option keys", async () => {
   const fetchImpl = async () => {
     throw new Error("should not fetch");

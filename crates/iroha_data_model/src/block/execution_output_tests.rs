@@ -1352,7 +1352,10 @@ fn lifecycle_missing_or_partial_coverage_never_becomes_complete_empty() {
 #[test]
 fn lifecycle_full_action_and_retry_state_survive_canonical_roundtrip() {
     let mut state = lifecycle_state(TriggerLifecycleStateKindV1::Time);
-    state.retry_state = Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 120 });
+    state.retry_state = Some(TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 120,
+    });
     let trace = TriggerLifecycleEffectsV1::Complete {
         effects: vec![TriggerLifecycleEffectV1 {
             change: TriggerLifecycleChangeV1::Insert {
@@ -1380,7 +1383,13 @@ fn lifecycle_full_action_and_retry_state_survive_canonical_roundtrip() {
     assert_eq!(after_action.metadata, state_action.metadata);
     assert_eq!(after_action.retry_policy(), state_action.retry_policy());
     lifecycle_fixture_validate_frames(&decoded).unwrap();
-    assert_eq!(after.retry_state, Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 120 }));
+    assert_eq!(
+        after.retry_state,
+        Some(TriggerLifecycleRetryStateV1 {
+            attempt: 1,
+            next_time_ms: 120
+        })
+    );
     // Shape checks deliberately do not accept the fixture hash as State proof.
 }
 
@@ -1519,7 +1528,10 @@ fn lifecycle_genuine_rejection_keeps_typed_retry_policy_with_full_state() {
         TriggerCompletedOutcome::Failure("actual native rejection".into());
     let before = lifecycle_state(TriggerLifecycleStateKindV1::Time);
     let mut after = before.clone();
-    after.retry_state = Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 130 });
+    after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 130,
+    });
     after.action_hash = Some(Hash::new(b"untrusted fixture retry action hash"));
     output.trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
         effects: vec![TriggerLifecycleEffectV1 {
@@ -1578,7 +1590,12 @@ fn lifecycle_invalid_filter_height_retry_and_hash_shapes_refuse() {
             1 => after.registered_at_height = None,
             2 => after.registered_at_height = Some(9),
             3 => after.kind = TriggerLifecycleStateKindV1::Pipeline,
-            _ => after.retry_state = Some(TriggerLifecycleRetryStateV1 { attempt: 0, next_time_ms: 120 }),
+            _ => {
+                after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                    attempt: 0,
+                    next_time_ms: 120,
+                })
+            }
         }
         let trace = TriggerLifecycleEffectsV1::Complete {
             effects: vec![effect],
@@ -1928,7 +1945,10 @@ fn lifecycle_rejected_policy_only_traces_do_not_require_an_invoke() {
         let before = lifecycle_state(kind);
         let change = if kind == TriggerLifecycleStateKindV1::Time {
             let mut after = before.clone();
-            after.retry_state = Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 130 });
+            after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                attempt: 1,
+                next_time_ms: 130,
+            });
             after.action_hash = Some(Hash::new(b"untrusted fixture retry action hash"));
             TriggerLifecycleChangeV1::Update { before, after }
         } else {
@@ -1971,7 +1991,10 @@ fn lifecycle_action_frame_retains_full_original_ivm_metadata_and_retry_content()
         iroha_primitives::json::Json::new("full metadata, not its hash"),
     );
     state.action = lifecycle_frame(&original);
-    state.retry_state = Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 120 });
+    state.retry_state = Some(TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 120,
+    });
     let trace = TriggerLifecycleEffectsV1::Complete {
         effects: vec![TriggerLifecycleEffectV1 {
             change: TriggerLifecycleChangeV1::Insert {
@@ -1991,7 +2014,13 @@ fn lifecycle_action_frame_retains_full_original_ivm_metadata_and_retry_content()
         norito::encode_canonical(&original).unwrap()
     );
     assert_eq!(lifecycle_fixture_action(&after.action), original);
-    assert_eq!(after.retry_state, Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 120 }));
+    assert_eq!(
+        after.retry_state,
+        Some(TriggerLifecycleRetryStateV1 {
+            attempt: 1,
+            next_time_ms: 120
+        })
+    );
     let json = norito::json::to_json(&state.action).unwrap();
     assert_eq!(
         norito::json::from_str::<TriggerLifecycleActionFrameV1>(&json).unwrap(),
@@ -2153,7 +2182,10 @@ fn lifecycle_action_frame_semantics_and_validator_refusals_cannot_be_bypassed() 
             let mut action = lifecycle_fixture_action(&after.action);
             action.retry_policy = None;
             after.action = lifecycle_frame(&action);
-            after.retry_state = Some(TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 120 });
+            after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                attempt: 1,
+                next_time_ms: 120,
+            });
         }
         let trace = TriggerLifecycleEffectsV1::Complete {
             effects: vec![effect],
@@ -2202,9 +2234,18 @@ fn lifecycle_retry_json_requires_both_exact_fields_and_rejects_unknowns() {
         r#"{"attempt":1,"next_time_ms":-1}"#,
         r#"[1,120]"#,
     ] {
-        assert!(norito::json::from_str::<TriggerLifecycleRetryStateV1>(json).is_err(), "{json}");
+        assert!(
+            norito::json::from_str::<TriggerLifecycleRetryStateV1>(json).is_err(),
+            "{json}"
+        );
     }
-    let actual = TriggerLifecycleRetryStateV1 { attempt: 1, next_time_ms: 120 };
+    let actual = TriggerLifecycleRetryStateV1 {
+        attempt: 1,
+        next_time_ms: 120,
+    };
     let json = norito::json::to_json(&actual).unwrap();
-    assert_eq!(norito::json::from_str::<TriggerLifecycleRetryStateV1>(&json).unwrap(), actual);
+    assert_eq!(
+        norito::json::from_str::<TriggerLifecycleRetryStateV1>(&json).unwrap(),
+        actual
+    );
 }

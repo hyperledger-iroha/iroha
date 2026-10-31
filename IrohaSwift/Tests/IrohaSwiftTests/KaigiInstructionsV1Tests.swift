@@ -4,6 +4,17 @@ import XCTest
 @testable import IrohaSwift
 
 final class KaigiInstructionsV1Tests: XCTestCase {
+  func testRelayHPKEDescriptorPrefixesTheExactSuite() throws {
+    for suite in KaigiRelayHPKESuiteV1.allCases {
+      let key = Data(repeating: 0x5A, count: suite.publicKeyByteCount)
+      let descriptor = try suite.descriptor(publicKey: key)
+      XCTAssertEqual(descriptor.prefix(2), Data([UInt8(suite.rawValue), 0]))
+      XCTAssertEqual(descriptor.dropFirst(2), key)
+      XCTAssertLessThanOrEqual(descriptor.count, KaigiRelayBoundsV1.maxHPKEPublicKeyBytes)
+      XCTAssertThrowsError(try suite.descriptor(publicKey: key.dropLast()))
+    }
+  }
+
   func testAllNineInstructionsUseCanonicalNativeFrames() throws {
     let callID = try KaigiIdV1(domainID: "meetings.universal", callName: "standup")
     let host = try account(1)

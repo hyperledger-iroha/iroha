@@ -50,7 +50,7 @@ pub(super) fn enforce(
         });
     if required > KAIGI_RECORD_MAX_JSON_BYTES_V1.min(configured) {
         return Err(privacy_error(
-            "Kaigi storage must reserve every live leave and host end",
+            "Kaigi call record is full: it must keep room for every live leave and the host end",
         ));
     }
     Ok(())
@@ -102,6 +102,51 @@ mod tests {
         record.push_nullifier(nullifier);
         let after_end = Json::try_new(record).unwrap().as_ref().len();
         assert!(after_end <= after_leave + ACTION_RESERVATION_BYTES);
+    }
+
+    /// The roster a private call really reaches, once each participant's commitment,
+    /// ledger entry, join nullifier and departure reservation count toward the 1-MiB
+    /// ceiling. It sits well below the 4,096 count limit and falls with longer account
+    /// keys, so `specs/kaigi_privacy_design.md` quotes these figures.
+    #[test]
+    fn json_ceiling_sets_the_reachable_private_roster() {
+        fn reachable(algorithm: iroha_crypto::Algorithm) -> usize {
+            let (mut record, _, _) = new_record(KaigiPrivacyMode::ZkRosterV1);
+            record.push_nullifier(sample_nullifier(0));
+            for joined in 1_u64.. {
+                let key_pair = iroha_crypto::KeyPair::try_random_with_algorithm(algorithm).unwrap();
+                let account =
+                    iroha_data_model::prelude::AccountId::new(key_pair.public_key().clone());
+                let mut bytes = [0xFF; 32];
+                bytes[..8].copy_from_slice(&joined.to_le_bytes());
+                bytes[31] = 63;
+                let commitment = KaigiAuthorizationScalarV1::from_le_bytes(bytes).unwrap();
+                record
+                    .private_participation
+                    .commit_join(&account, 1, commitment)
+                    .unwrap();
+                let mut entry = sample_commitment();
+                entry.commitment = commitment;
+                record.push_commitment(entry);
+                let mut nullifier = sample_nullifier(0);
+                nullifier.digest = commitment;
+                record.push_nullifier(nullifier);
+                // Encoding the whole record is the slow part, so sample the linear growth.
+                if joined % 16 == 0 {
+                    let bytes = Json::try_new(record.clone()).unwrap().as_ref().len();
+                    let live = record.roster_commitments.len();
+                    if required_bytes(bytes, live, true).unwrap() > KAIGI_RECORD_MAX_JSON_BYTES_V1 {
+                        return usize::try_from(joined).unwrap();
+                    }
+                }
+            }
+            unreachable!("the ceiling stops the loop")
+        }
+        let ed25519 = reachable(iroha_crypto::Algorithm::Ed25519);
+        let ml_dsa = reachable(iroha_crypto::Algorithm::MlDsa);
+        println!("first roster over the ceiling: Ed25519 {ed25519}, ML-DSA {ml_dsa}");
+        assert!((1_344..=1_376).contains(&ed25519), "{ed25519}");
+        assert!((192..=224).contains(&ml_dsa), "{ml_dsa}");
     }
 
     #[test]

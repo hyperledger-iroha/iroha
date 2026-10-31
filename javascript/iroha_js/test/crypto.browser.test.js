@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import {
   buildKaigiAuthorizationProofV1,
+  generateKaigiBlindingV1,
   generateKeyPair,
   normalizeCryptoAlgorithm,
   supportedCryptoAlgorithms,
@@ -18,6 +19,13 @@ import * as distPrivacyCapabilities from "../dist/privacyCapabilities.js";
 
 const RETIRED_STATIC_CRYPTO_CAPABILITY_LIST =
   ["SUPPORTED", "CRYPTO", "ALGORITHMS"].join("_");
+
+test("browser crypto samples a canonical nonzero Kaigi blinding", () => {
+  const blinding = generateKaigiBlindingV1();
+  assert.equal(blinding.length, 32);
+  assert.ok(blinding.some((byte) => byte !== 0));
+  assert.ok(blinding[31] < 0x41);
+});
 
 test("browser crypto bundle rejects native Kaigi authorization proof construction and omits retired ZK-ACE helpers", () => {
   const blinding = Buffer.alloc(32, 0x11);

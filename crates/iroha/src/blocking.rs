@@ -43,8 +43,8 @@ use crate::{
     client::{
         AccountClient as AsyncAccountClient, Client as AsyncClient, ContractCallDraftIntent,
         FeeQuoteRequest, OperatorClient as AsyncOperatorClient, PreparedTransactionPayload,
-        SorafsPinRegisterArgs, TransactionWaitOptions, TransactionWaitOutcome,
-        validate_validation_fee_draft_response,
+        SorafsPinRegisterArgs, TransactionFinalityFailure, TransactionWaitOptions,
+        TransactionWaitOutcome, validate_validation_fee_draft_response,
     },
     config::Config,
     http::HttpTransport,
@@ -358,13 +358,42 @@ impl Client {
     ///
     /// # Errors
     /// Returns compatibility, transport, rejection, expiry, timeout, ambiguity,
-    /// or [`BlockingCallError`] failures.
+    /// or [`BlockingCallError`] failures. A rejection downcasts to its authenticated
+    /// [`TransactionRejectionReason`](iroha_data_model::transaction::error::TransactionRejectionReason)
+    /// and to its [`TransactionFinalityFailure`] evidence.
     pub fn submit_transaction_and_wait(
         &self,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         self.runtime
             .block_on(self.account.submit_transaction_and_wait(transaction))?
+            .map_err(|error| self.with_rejection_reason(transaction, error))
+    }
+
+    /// Name the reason behind a terminal rejection.
+    ///
+    /// The status route that settles a wait carries none, so read it through the signer's
+    /// authenticated details route. If that read fails, the original error stands.
+    fn with_rejection_reason(
+        &self,
+        transaction: &SignedTransaction,
+        error: eyre::Report,
+    ) -> eyre::Report {
+        let Some(failure) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<TransactionFinalityFailure>())
+            .filter(|failure| failure.response().status.kind == "Rejected")
+            .cloned()
+        else {
+            return error;
+        };
+        match self.inner.get_transaction_rejection_reason(transaction) {
+            Ok(reason) => eyre::Report::new(reason).wrap_err(failure),
+            Err(lookup) => {
+                tracing::warn!(?lookup, "could not read the transaction rejection reason");
+                error
+            }
+        }
     }
 
     /// Register one `SoraFS` pin manifest through the account-bound workflow.
@@ -715,7 +744,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use iroha_data_model::transaction::FeePaymentIntent;
+    use iroha_data_model::transaction::{FeePaymentIntent, error::TransactionRejectionReason};
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::metadata::Metadata;
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
@@ -1147,6 +1176,129 @@ mod tests {
             async_sends.load(Ordering::Relaxed),
             3,
             "one capability probe, one submission, and one status poll expected"
+        );
+    }
+
+    /// Reports one exact transaction `Rejected`, then serves its details on the signed route.
+    #[derive(Debug)]
+    struct RejectingTransport {
+        details: Result<Vec<u8>, http::StatusCode>,
+    }
+
+    impl HttpTransport for RejectingTransport {
+        fn send_blocking(&self, request: TransportRequest) -> Result<Response<Vec<u8>>> {
+            assert_eq!(
+                request.url.path(),
+                iroha_torii_shared::route_catalog::pipeline::TRANSACTION_DETAILS.path()
+            );
+            Ok(match &self.details {
+                Ok(body) => Response::builder()
+                    .status(http::StatusCode::OK)
+                    .header(
+                        http::header::CONTENT_TYPE,
+                        crate::client::APPLICATION_NORITO,
+                    )
+                    .body(body.clone())
+                    .expect("details response"),
+                Err(status) => Response::builder()
+                    .status(*status)
+                    .body(Vec::new())
+                    .expect("details failure"),
+            })
+        }
+
+        fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+            let response = match request.url.path() {
+                "/v1/node/capabilities" => Response::builder()
+                    .status(http::StatusCode::OK)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(crate::client::compatible_capabilities_body().into_bytes())
+                    .expect("capability response"),
+                "/v1/pipeline/transactions/status" => {
+                    let hash = request
+                        .url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "hash").then(|| value.into_owned()))
+                        .expect("status request hash");
+                    let payload = PipelineTransactionStatusResponse::new(
+                        hash,
+                        PipelineTransactionStatus {
+                            kind: "Rejected".to_owned(),
+                            block_height: Some(7),
+                        },
+                        "global".to_owned(),
+                        "state".to_owned(),
+                    );
+                    Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(norito::json::to_vec(&payload).expect("status response body"))
+                        .expect("status response")
+                }
+                _ => Response::new(Vec::new()),
+            };
+            Box::pin(async move { Ok(response) })
+        }
+    }
+
+    fn rejected_submission(
+        details: impl FnOnce(&SignedTransaction) -> Result<Vec<u8>, http::StatusCode>,
+    ) -> eyre::Report {
+        let signer = accepting_client().0;
+        let account = signer.account_client();
+        let transaction = account
+            .prepare_transaction(crate::client::AccountTransactionDraft::new(
+                Vec::<iroha_data_model::isi::InstructionBox>::new(),
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+            .and_then(|payload| account.sign_transaction(payload))
+            .expect("build transaction");
+        let client = Client::from_client(
+            AsyncClient::builder(config_factory())
+                .http_transport(Arc::new(RejectingTransport {
+                    details: details(&transaction),
+                }))
+                .build()
+                .expect("valid client configuration"),
+        )
+        .expect("blocking client");
+        client
+            .submit_transaction_and_wait(&transaction)
+            .expect_err("the transaction is rejected")
+    }
+
+    #[test]
+    fn rejected_submission_downcasts_to_its_authenticated_reason() {
+        use iroha_data_model::{ValidationFail, transaction::TransactionResult};
+        let reason =
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted("no".to_owned()));
+        let error = rejected_submission(|transaction| {
+            let (_, details) = crate::query::query_errors_handling::transaction_details_fixture_for(
+                transaction.clone(),
+                TransactionResult::new(Err(reason.clone())),
+            );
+            Ok(norito::to_bytes(&details).expect("encode details"))
+        });
+        assert_eq!(
+            error.downcast_ref::<TransactionRejectionReason>(),
+            Some(&reason)
+        );
+        let evidence = error
+            .downcast_ref::<TransactionFinalityFailure>()
+            .expect("the finality evidence stays typed");
+        assert_eq!(evidence.response().status.kind, "Rejected");
+        assert!(error.to_string().contains("fixed terminal failure status"));
+    }
+
+    #[test]
+    fn rejected_submission_keeps_its_evidence_when_the_reason_is_unreadable() {
+        let error = rejected_submission(|_| Err(http::StatusCode::FORBIDDEN));
+        assert!(error.downcast_ref::<TransactionRejectionReason>().is_none());
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.downcast_ref::<TransactionFinalityFailure>().is_some())
         );
     }
 

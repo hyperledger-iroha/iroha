@@ -20511,6 +20511,41 @@ impl Client {
         let resp = self.get_gov_contract_response(contract_address)?;
         Self::decode_json_ok(resp, "Failed to get governed contract")
     }
+    /// GET `/v1/kaigi/calls/{call_id}`: the public app-facing view of one call.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, the call is absent or the body is not JSON.
+    pub fn get_kaigi_call_json(
+        &self,
+        call_id: &iroha_data_model::kaigi::KaigiId,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, &format!("v1/kaigi/calls/{call_id}"));
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header(http::header::ACCEPT, APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to get Kaigi call")
+    }
+    /// GET `/v1/kaigi/calls/{call_id}/participation`: this signed account's own standing.
+    ///
+    /// The response carries the ledger-owned sequence, retained subject and current
+    /// roster root from one state view, which is what a private-call prover must bind.
+    ///
+    /// # Errors
+    /// Returns an error if signing or the request fails, the call is absent or the
+    /// body is not JSON.
+    pub fn get_kaigi_call_participation_json(
+        &self,
+        call_id: &iroha_data_model::kaigi::KaigiId,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(
+            &self.torii_url,
+            &format!("v1/kaigi/calls/{call_id}/participation"),
+        );
+        let resp =
+            self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)?;
+        Self::decode_json_ok(resp, "Failed to get Kaigi participation")
+    }
     /// GET `/v1/gov/contracts/{contract_address}` and retain the exact response bytes.
     ///
     /// This is intended for callers that enforce a closed response schema and must detect
@@ -21814,9 +21849,24 @@ impl Client {
         Self::decode_json_http_status(resp, StatusCode::OK, "Failed to get VK with HTTP status")
     }
 }
-#[cfg(test)]
-fn rejection_reason_from_transaction_details(
-    details: &PipelineTransactionDetailsResponse,
+/// Render a rejection and its causes on one line, for people reading a failed transaction.
+#[must_use]
+pub fn rejection_summary(reason: &TransactionRejectionReason) -> String {
+    let mut summary = reason.to_string();
+    let mut cause = std::error::Error::source(reason);
+    while let Some(error) = cause {
+        let text = error.to_string();
+        if !summary.contains(&text) {
+            summary.push_str(": ");
+            summary.push_str(&text);
+        }
+        cause = error.source();
+    }
+    summary
+}
+
+pub(crate) fn rejection_reason_from_transaction_details(
+    details: &iroha_torii_shared::PipelineTransactionDetailsResponse,
     signed_hash: HashOf<SignedTransaction>,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<TransactionRejectionReason> {
@@ -29663,6 +29713,37 @@ mod tests {
                 "no refusal may dispatch a transaction"
             );
         }
+    }
+    #[test]
+    fn kaigi_participation_read_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"active\":false}");
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            iroha_model_base::domain::DomainId::try_new("kaigi", "universal").expect("domain"),
+            "standup".parse().expect("call name"),
+        );
+        let value = with_mock_http(respond_with(&store, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client
+                .get_kaigi_call_participation_json(&call_id)
+                .expect("signed Kaigi participation read")
+        });
+        assert_eq!(
+            value.get("active").and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/kaigi/calls/kaigi.universal:standup/participation"
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
     }
     #[test]
     fn governed_contract_read_sends_canonical_account_signed_request() {

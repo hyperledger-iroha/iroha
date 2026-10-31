@@ -69,9 +69,10 @@ fn profile_account_defaults_materialize_selected_chain_before_root_parse() {
 
 #[test]
 fn profile_account_defaults_preserve_explicit_foreign_and_invalid_overrides() {
-    let foreign = defaults::governance::bond_escrow_account_id()
-        .to_i105_for_discriminant(753)
-        .unwrap();
+    // The code default's own literal names that same account on every chain and parses
+    // everywhere, so a foreign override must name some other account.
+    let foreign = BOB_ID.to_i105_for_discriminant(753).unwrap();
+    assert_ne!(*BOB_ID, defaults::governance::bond_escrow_account_id());
     for vpn in [false, true] {
         let mut explicit = Table::new().write("chain_discriminant", 369_i64);
         let path: &[&str] = if vpn {

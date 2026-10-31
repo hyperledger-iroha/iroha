@@ -17,6 +17,7 @@ mod generated_service_runtime;
 mod generation;
 mod listeners;
 pub(crate) mod native_operation;
+mod preflight;
 mod provider_advert;
 mod provider_capacity;
 mod provider_credit;
@@ -102,7 +103,9 @@ pub use stream_token_custody::{
     ManagedCustodyEnrollmentInterval, ManagedCustodyProgress, ManagedStreamTokenCustody,
     RetainedCustodyEnrollment,
 };
-pub use workspace::{InstalledRuntime, default_state_root, workspace_state_root};
+pub use workspace::{
+    InstalledRuntime, default_state_root, discover_workspace_root, workspace_state_root,
+};
 
 /// Result of one managed developer-network operation.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -124,6 +127,9 @@ pub enum Error {
     /// Stored metadata or caller input is invalid.
     #[error("{0}")]
     Invalid(String),
+    /// These kagami and iroha3d binaries cannot run this environment; nothing was started.
+    #[error("{0}")]
+    RuntimeMismatch(String),
     /// Native discovery or finality verification failed at the selected network endpoint.
     #[error(
         "could not bootstrap network `{}` at {}: {source}{}",
@@ -468,7 +474,7 @@ struct RetainedLocalnet {
 enum RootKind {
     Global,
     Private {
-        spec: crate::localnet::PrivateRootSpec,
+        spec: crate::sora_network::PrivateRootSpec,
     },
 }
 
@@ -511,6 +517,8 @@ enum ControlAction {
 const MANIFEST: &str = "localnet.json";
 const WORKER: &str = "worker.json";
 const STATUS: &str = "status.json";
+// Present once a generation has proved readiness, so a later rebuild keeps its ledger.
+const BECAME_READY: &str = "became-ready";
 const MAX_METADATA: usize = 1024 * 1024;
 const POLL: Duration = Duration::from_millis(50);
 

@@ -1,4 +1,4 @@
-//! Native owner-private publication for freshly generated localnet artifacts.
+//! Native owner-private publication for freshly generated network artifacts.
 
 use color_eyre::eyre::{Result, ensure, eyre};
 use iroha_fs::{PrivateDirectory, PublishMode};
@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) fn prepare_empty_private_directory(path: &Path) -> Result<PathBuf> {
+pub fn prepare_empty_private_directory(path: &Path) -> Result<PathBuf> {
     let directory = PrivateDirectory::open_or_create(path)?;
     ensure!(
         fs::read_dir(directory.path())?.next().is_none(),
@@ -16,12 +16,12 @@ pub(super) fn prepare_empty_private_directory(path: &Path) -> Result<PathBuf> {
     Ok(directory.path().to_path_buf())
 }
 
-pub(super) fn ensure_directory(path: &Path) -> Result<()> {
+pub fn ensure_directory(path: &Path) -> Result<()> {
     PrivateDirectory::open_or_create(path)?;
     Ok(())
 }
 
-pub(super) fn create_directory(path: &Path) -> Result<()> {
+pub fn create_directory(path: &Path) -> Result<()> {
     let parent =
         PrivateDirectory::open(path.parent().ok_or_else(|| eyre!("output has no parent"))?)?;
     parent.create_child(
@@ -43,15 +43,15 @@ fn publish(path: &Path, bytes: &[u8], mode: PublishMode) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> Result<()> {
+pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> Result<()> {
     publish(path.as_ref(), bytes.as_ref(), PublishMode::CreateNew)
 }
 
-pub(super) fn replace(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> Result<()> {
+pub fn replace(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> Result<()> {
     publish(path.as_ref(), bytes.as_ref(), PublishMode::Replace)
 }
 
-pub(super) fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     ensure!(
         !bytes.is_empty() && bytes.len() <= 1024 * 1024,
         "private file payload must be within 1..=1048576 bytes"
@@ -59,7 +59,7 @@ pub(super) fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> Result<()>
     write(path, bytes)
 }
 
-pub(super) fn create_file(path: &Path) -> Result<File> {
+pub fn create_file(path: &Path) -> Result<File> {
     write(path, [])?;
     let parent =
         PrivateDirectory::open(path.parent().ok_or_else(|| eyre!("output has no parent"))?)?;
@@ -69,7 +69,7 @@ pub(super) fn create_file(path: &Path) -> Result<File> {
     )?)
 }
 
-pub(super) fn validate_private_tree(path: &Path, executables: &[&Path]) -> Result<()> {
+pub fn validate_private_tree(path: &Path, executables: &[&Path]) -> Result<()> {
     let root = PrivateDirectory::open(path)?;
     // Retain the root capability, but open one subtree at a time. Keeping every queued child's
     // full ancestor chain open can exhaust the native default file limit for a large bundle.
@@ -138,14 +138,44 @@ pub fn sync_private_tree(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Private temporary roots shared by generator tests.
+#[cfg(test)]
+pub mod test_support {
+    use std::path::{Path, PathBuf};
+
+    /// Temporary root whose generated-artifact child has native owner-only custody.
+    pub struct PrivateTempDir {
+        _temporary: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    impl PrivateTempDir {
+        /// Return the canonical private child used by generator fixtures.
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    /// Create the same private artifact boundary used by a real managed generation.
+    pub fn private_tempdir() -> std::io::Result<PrivateTempDir> {
+        let temporary = tempfile::tempdir()?;
+        let private = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))?;
+        Ok(PrivateTempDir {
+            path: private.path().to_path_buf(),
+            _temporary: temporary,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn artifact_publication_stays_private_and_refuses_reuse() {
-        let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
-        let root = prepare_empty_private_directory(&temporary.path().join("bundle")).unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
+        let root = prepare_empty_private_directory(&parent.path().join("bundle")).unwrap();
         ensure_directory(&root.join("nested/deeper")).unwrap();
         create_directory(&root.join("new")).unwrap();
         assert!(create_directory(&root.join("new")).is_err());

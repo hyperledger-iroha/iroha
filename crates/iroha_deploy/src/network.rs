@@ -2,12 +2,59 @@
 //!
 //! Each operator creates its validator's keys on its own host (`kagami node init`) and hands
 //! over only `PUBLIC_KEY@HOST:PORT=POP_HEX`. [`generate_network`] checks that roster, composes
-//! genesis with the localnet genesis helpers, signs it with a fresh genesis key and writes
+//! genesis with the bundle genesis helpers it shares with [`crate::sora_network`], signs it with
+//! a fresh genesis key and writes
 //! [`NETWORK_CONFIG_FILE`]: the chain, the roster, `[genesis]` and the consensus-bound settings
 //! the signed genesis binds. A node includes that file with `extends = "network.toml"`, so no
-//! validator private key leaves its host.
-use super::*;
-use std::str::FromStr;
+//! validator private key leaves its host. Unlike a developer network ([`crate::localnet`]) no
+//! generator holds the validators' keys, and unlike a Sora network it has no Sora profile.
+use crate::{
+    custody,
+    genesis::{
+        ConsensusPolicy,
+        profile::{PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID, reject_retired_public_chain_id},
+        validate_consensus_mode,
+    },
+    localnet::consensus_mode_label,
+    sora_network::{
+        BootstrapRegistrations, GENESIS_EXPECTED_HASH_FILE, GENESIS_PRIVATE_KEY_FILE,
+        GENESIS_PUBLIC_KEY_FILE, GENESIS_SEED, GenesisConsensusPolicies, GenesisValidator,
+        GenesisWriteContext, LOCALNET_BLOCK_MAX_TRANSACTIONS, LOCALNET_NEXUS_DOMAIN,
+        LOCALNET_PIPELINE_TIME_MS, LocalnetClientIdentity, LocalnetNposBootstrapContext,
+        append_localnet_contract_permissions_for_client, append_localnet_native_lane_policy,
+        append_localnet_npos_bootstrap, append_localnet_service_accounts,
+        append_localnet_service_fee_bootstrap, append_peer_pop, apply_parameter_overrides,
+        generate_genesis_key_pair, generate_raw_genesis, insert_localnet_signed_nexus_settings,
+        localnet_bootstrap_staking_policy, localnet_dataspace_fault_tolerance,
+        localnet_ephemeral_identity, localnet_gas_account_id, localnet_gas_custody_parameter,
+        localnet_npos_stake_amount, localnet_root_fee_policy, localnet_staking_policy,
+        parse_localnet_peer_config, resolve_localnet_chain_discriminant,
+        resolve_localnet_da_proof_policies, validate_localnet_crypto_policy,
+        write_and_validate_genesis_expected_hash, write_genesis, write_genesis_key_files,
+        write_owner_only_localnet_file, write_private_key_sidecar,
+    },
+};
+use color_eyre::eyre::{Result, WrapErr as _, ensure, eyre};
+use iroha_crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    account::address::ChainDiscriminantGuard, parameter::system::SumeragiConsensusMode, prelude::*,
+};
+use iroha_genesis::{RawGenesisTransaction, init_instruction_registry};
+use iroha_model_base::{
+    chain::ChainId,
+    domain::DomainId,
+    topology::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+};
+use iroha_primitives::addr::SocketAddr;
+use rand::{TryRng as _, rngs::SysRng};
+use std::{
+    collections::BTreeSet,
+    io::{BufWriter, Write},
+    num::NonZeroU16,
+    path::PathBuf,
+    str::FromStr,
+};
+use zeroize::Zeroizing;
 
 /// Shared node configuration that every validator includes with `extends`.
 pub const NETWORK_CONFIG_FILE: &str = "network.toml";
@@ -380,8 +427,8 @@ fn resolve_network_torii_url(configured: Option<&str>) -> Result<url::Url> {
     Ok(url)
 }
 
-/// Compose genesis from the localnet helpers: default bootstrap state, the funded operator,
-/// localnet block parameters and fee policy, the validator roster with its PoPs, and the
+/// Compose genesis from the bundle helpers: default bootstrap state, the funded operator,
+/// their block parameters and fee policy, the validator roster with its PoPs, and the
 /// consensus-specific validator bootstrap.
 fn compose_network_genesis(
     validators: &[NetworkValidator],
@@ -392,7 +439,7 @@ fn compose_network_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     operator_account_id: &AccountId,
 ) -> Result<RawGenesisTransaction> {
-    let npos = localnet_uses_npos(consensus_mode);
+    let npos = consensus_mode == SumeragiConsensusMode::Npos;
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let gas_account_id = localnet_gas_account_id(genesis_public_key);
     let mut genesis = generate_raw_genesis(
@@ -447,14 +494,42 @@ fn compose_network_genesis(
             },
         )?;
     } else {
-        genesis = append_localnet_permissioned_support_accounts(
-            genesis,
-            validators,
-            &gas_account_id,
-            false,
-        )?;
+        genesis = append_permissioned_support_accounts(genesis, validators, &gas_account_id)?;
     }
     validate_localnet_crypto_policy(genesis)
+}
+
+/// Permissioned networks register the Nexus support accounts and every validator account, but
+/// stake nothing: staking is NPoS-only (the network XOR identity lives in the signed `NPoS`
+/// parameters), and the committee is the genesis roster (`RegisterPeerWithPop`).
+fn append_permissioned_support_accounts(
+    genesis: RawGenesisTransaction,
+    validators: &[NetworkValidator],
+    gas_account_id: &AccountId,
+) -> Result<RawGenesisTransaction> {
+    let policy = localnet_bootstrap_staking_policy(&genesis)?;
+    let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
+    let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
+    let mut builder = genesis.into_builder().next_transaction();
+    if !registrations.domains.contains(&nexus_domain) {
+        builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain)));
+    }
+    for account in [
+        gas_account_id,
+        &policy.stake_escrow_account_id,
+        &policy.slash_sink_account_id,
+    ] {
+        if registrations.accounts.insert(account.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(account.clone())));
+        }
+    }
+    for validator in validators {
+        let validator_id = validator.account_id(false);
+        if registrations.accounts.insert(validator_id.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(validator_id)));
+        }
+    }
+    builder.build_raw()
 }
 
 /// TOML string literal for a value rendered into a generated file.
@@ -511,8 +586,8 @@ fn render_network_config(
     )
     .expect("writing to a String cannot fail");
     let mut nexus = toml::Table::new();
-    let dataspace_fault_tolerance =
-        localnet_uses_npos(consensus_mode).then(|| localnet_dataspace_fault_tolerance(peers));
+    let dataspace_fault_tolerance = (consensus_mode == SumeragiConsensusMode::Npos)
+        .then(|| localnet_dataspace_fault_tolerance(peers));
     insert_localnet_signed_nexus_settings(&mut nexus, None, false, dataspace_fault_tolerance, None);
     let bound = toml::Table::from_iter([("nexus".to_owned(), toml::Value::Table(nexus))]);
     rendered.push_str(&toml::to_string(&bound).expect("generated [nexus] settings encode as TOML"));
@@ -651,5 +726,4 @@ fn render_network_client_config(
 }
 
 #[cfg(test)]
-#[path = "network_tests.rs"]
 mod tests;

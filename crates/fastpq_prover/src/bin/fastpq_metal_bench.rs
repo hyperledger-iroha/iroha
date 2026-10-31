@@ -652,10 +652,10 @@ mod tests {
 #[cfg(all(test, feature = "fastpq-gpu", target_os = "macos"))]
 mod heuristics_value_tests {
     use super::harness::heuristics_value;
-    use norito::json::Value;
     use fastpq_prover::{
         AdaptiveScheduleSnapshot, BatchHeuristicSnapshot, CommandLimitSnapshot, CommandLimitSource,
     };
+    use norito::json::Value;
     #[test]
     fn heuristics_preserve_fft_fields_and_omit_unused_scalar_geometry() {
         let snapshot = AdaptiveScheduleSnapshot {

@@ -272,9 +272,8 @@ fn native_helpers_match_their_definitions() {
     // Fixed-base tags are distinct and below the dynamic tags (2^32).
     let mut tags: Vec<u64> = (0..8)
         .flat_map(|base| {
-            (0..33).map(move |window| {
-                window::checked_fixed_tag(base, window).expect("fixed window")
-            })
+            (0..33)
+                .map(move |window| window::checked_fixed_tag(base, window).expect("fixed window"))
         })
         .collect();
     let count = tags.len();
@@ -2564,7 +2563,10 @@ fn p256_window_tags_are_unique_by_construction() {
     assert_eq!(window::checked_fixed_tag(base, 62), Ok((1 << 32) - 1));
     assert_eq!(window::checked_fixed_tag(base, 63), Err(Error::Synthesis));
     for (base, window) in [(0, usize::MAX), (usize::MAX, 0), (usize::MAX, usize::MAX)] {
-        assert_eq!(window::checked_fixed_tag(base, window), Err(Error::Synthesis));
+        assert_eq!(
+            window::checked_fixed_tag(base, window),
+            Err(Error::Synthesis)
+        );
     }
 }
 

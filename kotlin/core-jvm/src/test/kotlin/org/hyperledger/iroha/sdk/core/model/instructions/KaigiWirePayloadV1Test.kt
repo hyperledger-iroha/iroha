@@ -22,12 +22,20 @@ class KaigiWirePayloadV1Test {
     private val p = BigInteger("40000000000000000000000000000000224698fc094cf91b992d30ed00000001", 16)
 
     @Test
-    fun `all five typed instructions match complete reference instruction boxes`() {
+    fun `all nine typed instructions match complete reference instruction boxes`() {
         val vectors = (fixture["vectors"] as List<*>).map { it as Map<*, *> }.associateBy { it["name"] }
         val instructions = listOf(
             CreateKaigiInstruction.create(call, accounts[0]), JoinKaigiInstruction(call, accounts[0]),
             LeaveKaigiInstruction(call, accounts[0]), EndKaigiInstruction(call),
             RecordKaigiUsageInstruction(call, 1, 2),
+            SetKaigiRelayManifestInstruction.fromArguments(mapOf(
+                "action" to "SetKaigiRelayManifest",
+                "call.domain_id" to call.domainId,
+                "call.call_name" to call.callName,
+            )),
+            RegisterKaigiRelayInstruction(accounts[0], Base64.getEncoder().encodeToString("key".toByteArray()), 1),
+            UnregisterKaigiRelayInstruction(accounts[0]),
+            ReportKaigiRelayHealthInstruction(call, accounts[0], ReportKaigiRelayHealthInstruction.Status.HEALTHY, 3),
         )
         for (typed in instructions) {
             val expected = Base64.getDecoder().decode(vectors.getValue(typed.arguments.getValue("action"))["instruction_box_base64"] as String)
@@ -38,6 +46,17 @@ class KaigiWirePayloadV1Test {
             assertContentEquals(actual, NoritoJavaCodecAdapter.encodeInstructionBox(NoritoJavaCodecAdapter.decodeInstructionBox(actual)))
             assertEquals(typed, KaigiWirePayloadEncoderV1.decode(typed.wireName, typed.payloadBytes))
         }
+    }
+
+    @Test
+    fun `relay health keeps its status and notes through the wire`() {
+        val typed = ReportKaigiRelayHealthInstruction(
+            call, accounts[0], ReportKaigiRelayHealthInstruction.Status.UNAVAILABLE, 7, "relay stopped answering",
+        )
+        val decoded = KaigiWirePayloadEncoderV1.decode(typed.wireName, typed.payloadBytes)
+        assertEquals(typed, decoded)
+        assertEquals("Unavailable", decoded.arguments["status"])
+        assertEquals("relay stopped answering", decoded.arguments["notes"])
     }
 
     @Test

@@ -85,12 +85,13 @@ level = "info"
 
 [torii]
 address = "127.0.0.1:{args.base_api_port + i}"
-
-[torii.faucet]
-asset_definition_id = "FAKEXOR"
 """)
 for name in filter(None, os.environ.get("SOAK_TEST_FAIL_FIRST_BOOT", "").split(",")):
     (out / f"{name}.fail-once").write_text("exit at the first boot\n")
+(out / "genesis.json").write_text(
+    '{"transactions": [{"parameters": {"custom": {"root_fees_v1": '
+    '{"payload": {"fee_asset_id": "FAKEXOR"}}}}}]}\n'
+)
 (out / "genesis.expected_hash").write_text("fake-network-id\n")
 (out / "genesis.public_key").write_text("ed0120GENESIS\n")
 (out / "genesis.private_key").write_text("802620GENESISSECRET\n")

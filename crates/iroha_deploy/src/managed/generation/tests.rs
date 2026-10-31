@@ -101,7 +101,7 @@ fn staged_private_generation_publishes_exact_final_paths_and_original_identity()
     let spec = super::super::tests::private_spec();
     let staged = fresh_stage(&directory).unwrap();
     let abandoned =
-        crate::localnet::prepare_private_root("private", staged.path(), &ports, &spec).unwrap();
+        crate::sora_network::prepare_private_root("private", staged.path(), &ports, &spec).unwrap();
     let abandoned_owner = abandoned.context.account_id;
     drop(staged);
     let retained = prepare(

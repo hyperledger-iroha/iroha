@@ -3076,8 +3076,8 @@ mod tests {
             handle.entropy_mode, codec.entropy_mode,
             "codec config must update entropy mode"
         );
-        let expected_tables = load_bundle_tables_from_toml(repo_rans_tables_path())
-            .expect("bundle tables");
+        let expected_tables =
+            load_bundle_tables_from_toml(repo_rans_tables_path()).expect("bundle tables");
         assert_eq!(
             handle.bundle_tables.precision_bits(),
             default_bundle_tables().precision_bits(),

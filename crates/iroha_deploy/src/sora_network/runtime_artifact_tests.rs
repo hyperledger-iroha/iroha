@@ -9,9 +9,9 @@ fn localnet_uses_a_durable_fsync_policy() {
 #[cfg(unix)]
 #[test]
 fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("make private writer temp dir");
-    let path = crate::localnet::custody::prepare_empty_private_directory(temp.path())
+    let path = crate::custody::prepare_empty_private_directory(temp.path())
         .expect("prepare private writer directory")
         .join("peer0.toml");
     write_owner_only_localnet_file(&path, b"private_key = 'secret'\n")
@@ -32,12 +32,11 @@ fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
 }
 #[test]
 fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("make genesis key temp dir");
-    let custody = crate::localnet::custody::prepare_empty_private_directory(
-        &temp.path().join("genesis-custody"),
-    )
-    .expect("prepare genesis key custody directory");
+    let custody =
+        crate::custody::prepare_empty_private_directory(&temp.path().join("genesis-custody"))
+            .expect("prepare genesis key custody directory");
     let public_path = custody.join(GENESIS_PUBLIC_KEY_FILE);
     let private_path = custody.join(GENESIS_PRIVATE_KEY_FILE);
     let (public_key, private_key) =

@@ -152,9 +152,9 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
         row.compiled_profile
     );
     ensure!(
-        row.activation.is_none(),
-        "unavailable ZK-ACE unexpectedly has an activation: {:?}",
-        row.activation
+        row.policy.is_none(),
+        "unavailable ZK-ACE unexpectedly has a committed policy: {:?}",
+        row.policy
     );
 
     let witness = witness(0x11);

@@ -18,9 +18,11 @@
 //! durable publication; a locally finalized child block remains a separate fact.
 //!
 //! [`managed`] owns persistent developer contexts and the native localnet process lifecycle.
-//! Canonical node/genesis generation is owned by [`localnet`]; subsequent
-//! starts retain the same network identity, signers and ledger. Kagami and Mochi use the same
-//! bounded owner-authenticated local control protocol and signed readiness checks.
+//! [`localnet`] generates developer networks, including the opt-in storage layer of managed
+//! networks, and never takes a public chain identity or a Sora profile. [`sora_network`] builds
+//! Nexus, Taira, the private dataspace presets and owner-private roots. Subsequent starts retain
+//! the same network identity, signers and ledger. Kagami and Mochi use the same bounded
+//! owner-authenticated local control protocol and signed readiness checks.
 //!
 //! Later phases add planning and the decision hash, the converge executor and
 //! its journal, the local, container and SSH drivers, and the remaining
@@ -33,13 +35,17 @@ mod deploy_mutation_guard;
 
 pub mod attachment;
 pub mod bootstrap;
+mod custody;
 pub mod definition;
 pub mod genesis;
+pub mod host;
 pub mod localnet;
 pub mod managed;
+pub mod network;
 pub mod provisioning;
 pub mod secret_toml;
 pub mod shell;
+pub mod sora_network;
 pub mod verify;
 
 #[cfg(test)]

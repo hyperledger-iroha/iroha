@@ -88,3 +88,78 @@ public sealed record RecordKaigiUsageInstruction : TransactionInstruction
         KaigiWireV1.Option(Authorization?.UsageCommitment.ToLittleEndianBytes()),
         KaigiWireV1.Option(Authorization is null ? null : KaigiWireV1.BytesVector(Authorization.ProofBytes)));
 }
+
+/// <summary>Replace or clear a call's relay route. Only the host may change it.</summary>
+public sealed record SetKaigiRelayManifestInstruction : TransactionInstruction
+{
+    public SetKaigiRelayManifestInstruction(KaigiId callId, KaigiRelayManifest? relayManifest)
+    {
+        CallId = callId ?? throw new ArgumentNullException(nameof(callId));
+        RelayManifest = relayManifest;
+    }
+    public KaigiId CallId { get; }
+    public KaigiRelayManifest? RelayManifest { get; }
+    internal override string WireId => "iroha.instruction.v1::kaigi::SetKaigiRelayManifest";
+    internal override string TypeName => "iroha_data_model::isi::kaigi::SetKaigiRelayManifest";
+    internal override byte[] EncodePayload(TransactionEncodingContext context) => KaigiWireV1.Struct(
+        CallId.Encode(context), KaigiWireV1.Option(RelayManifest?.Encode(context)));
+}
+
+/// <summary>Register or update the signing relay's descriptor. Only the relay account may do this.</summary>
+public sealed record RegisterKaigiRelayInstruction : TransactionInstruction
+{
+    private readonly byte[] hpkePublicKey;
+    public RegisterKaigiRelayInstruction(string relayId, ReadOnlySpan<byte> hpkePublicKey, byte bandwidthClass)
+    {
+        RelayId = TransactionEncodingContext.CanonicalizeAccountId(relayId, nameof(relayId));
+        if (hpkePublicKey.Length is < 1 or > 4096) throw new ArgumentException("Kaigi HPKE descriptor requires 1..4096 bytes.", nameof(hpkePublicKey));
+        if (bandwidthClass == 0) throw new ArgumentOutOfRangeException(nameof(bandwidthClass));
+        this.hpkePublicKey = hpkePublicKey.ToArray();
+        BandwidthClass = bandwidthClass;
+    }
+    public string RelayId { get; }
+    public byte[] HpkePublicKey => (byte[])hpkePublicKey.Clone();
+    public byte BandwidthClass { get; }
+    internal override string WireId => "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
+    internal override string TypeName => "iroha_data_model::isi::kaigi::RegisterKaigiRelay";
+    internal override byte[] EncodePayload(TransactionEncodingContext context) => KaigiWireV1.Struct(KaigiWireV1.Struct(
+        context.EncodeAccountId(RelayId), KaigiWireV1.BytesVector(hpkePublicKey), [BandwidthClass]));
+}
+
+/// <summary>Retire a relay descriptor and its retained health feedback.</summary>
+public sealed record UnregisterKaigiRelayInstruction : TransactionInstruction
+{
+    public UnregisterKaigiRelayInstruction(string relayId)
+    {
+        RelayId = TransactionEncodingContext.CanonicalizeAccountId(relayId, nameof(relayId));
+    }
+    public string RelayId { get; }
+    internal override string WireId => "iroha.instruction.v1::kaigi::UnregisterKaigiRelay";
+    internal override string TypeName => "iroha_data_model::isi::kaigi::UnregisterKaigiRelay";
+    internal override byte[] EncodePayload(TransactionEncodingContext context) => KaigiWireV1.Struct(context.EncodeAccountId(RelayId));
+}
+
+/// <summary>Report the health of a relay in the call's manifest. Only the host may report.</summary>
+public sealed record ReportKaigiRelayHealthInstruction : TransactionInstruction
+{
+    private const int MaximumNotesScalars = 512;
+    public ReportKaigiRelayHealthInstruction(KaigiId callId, string relayId, KaigiRelayHealthStatus status, ulong reportedAtMs, string? notes = null)
+    {
+        CallId = callId ?? throw new ArgumentNullException(nameof(callId));
+        RelayId = TransactionEncodingContext.CanonicalizeAccountId(relayId, nameof(relayId));
+        if (!Enum.IsDefined(status)) throw new ArgumentException("Unknown Kaigi relay health status.", nameof(status));
+        Notes = KaigiValidationV1.Text(notes);
+        if (Notes?.EnumerateRunes().Count() > MaximumNotesScalars) throw new ArgumentException($"Kaigi relay health notes must not exceed {MaximumNotesScalars} Unicode scalars.", nameof(notes));
+        Status = status; ReportedAtMs = reportedAtMs;
+    }
+    public KaigiId CallId { get; }
+    public string RelayId { get; }
+    public KaigiRelayHealthStatus Status { get; }
+    public ulong ReportedAtMs { get; }
+    public string? Notes { get; }
+    internal override string WireId => "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
+    internal override string TypeName => "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth";
+    internal override byte[] EncodePayload(TransactionEncodingContext context) => KaigiWireV1.Struct(
+        CallId.Encode(context), context.EncodeAccountId(RelayId), context.EncodeUInt32((uint)Status), context.EncodeUInt64(ReportedAtMs),
+        KaigiWireV1.Option(Notes is null ? null : context.EncodeString(Notes)));
+}

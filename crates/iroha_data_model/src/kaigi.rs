@@ -22,6 +22,16 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
 };
+/// Rejection of an authorization proof that binds a roster root which has since changed.
+///
+/// Clients match it to re-prove against the new root, so it is stable wire text.
+pub const KAIGI_STALE_ROSTER_ROOT_ERROR_V1: &str =
+    "roster root differs from authenticated call state";
+/// Rejection of a usage proof that binds a root or segment which has since changed.
+///
+/// Clients match it to re-prove against the new state, so it is stable wire text.
+pub const KAIGI_STALE_USAGE_CONTEXT_ERROR_V1: &str =
+    "Kaigi usage differs from authenticated call, host, root, segment or billed tuple";
 /// Domain separation tag for Kaigi roster commitment leaves.
 const KAIGI_ROSTER_LEAF_TAG: &[u8] = b"iroha:kaigi:roster:leaf:v1\x00";
 /// Seed used for the deterministic empty Kaigi roster root.
@@ -30,12 +40,123 @@ const KAIGI_ROSTER_EMPTY_SEED: &[u8] = b"iroha:kaigi:roster:empty:v1\x00";
 pub const KAIGI_RELAY_MANIFEST_MIN_HOPS_V1: usize = 3;
 /// Maximum relay hops accepted by the first-release Kaigi onion route.
 pub const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: usize = 8;
-/// Maximum opaque HPKE public-key descriptor size accepted by Kaigi V1.
+/// Maximum HPKE key descriptor size that SDKs accept before submission.
 ///
-/// This accommodates every ML-KEM public key currently supported by the
-/// workspace, plus headroom for hybrid-suite framing, while bounding ledger
-/// and operator-snapshot work before Kaigi gains an explicit suite tag.
+/// This bounds the wire carrier for every suite, including any later hybrid. Native
+/// admission is stricter: it requires the exact framing of
+/// [`parse_kaigi_relay_hpke_key_v1`].
 pub const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: usize = 4 * 1024;
+/// Bytes of the little-endian suite identifier that starts a relay HPKE key descriptor.
+const KAIGI_RELAY_HPKE_SUITE_ID_BYTES: usize = 2;
+
+/// HPKE suite of a Kaigi relay key, using the transport's suite identifiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KaigiRelayHpkeSuiteV1 {
+    /// ML-KEM-768 + ChaCha20-Poly1305 in `AuthPsk` mode.
+    MlKem768AuthPsk,
+    /// ML-KEM-1024 + ChaCha20-Poly1305 in `AuthPsk` mode.
+    MlKem1024AuthPsk,
+}
+impl KaigiRelayHpkeSuiteV1 {
+    /// Identifier shared with `norito::streaming::HpkeSuite`.
+    #[must_use]
+    pub const fn suite_id(self) -> u16 {
+        match self {
+            Self::MlKem768AuthPsk => 0x0001,
+            Self::MlKem1024AuthPsk => 0x0002,
+        }
+    }
+    /// Exact public-key length of this suite.
+    #[must_use]
+    pub const fn public_key_len(self) -> usize {
+        match self {
+            Self::MlKem768AuthPsk => 1_184,
+            Self::MlKem1024AuthPsk => 1_568,
+        }
+    }
+    /// Resolve a suite identifier, if it names a suite V1 admits.
+    #[must_use]
+    pub const fn from_suite_id(suite_id: u16) -> Option<Self> {
+        match suite_id {
+            0x0001 => Some(Self::MlKem768AuthPsk),
+            0x0002 => Some(Self::MlKem1024AuthPsk),
+            _ => None,
+        }
+    }
+}
+
+/// Why bytes are not a valid relay HPKE key descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KaigiRelayHpkeKeyError {
+    /// The bytes cannot hold a suite identifier.
+    MissingSuite,
+    /// The identifier names no suite V1 admits.
+    UnknownSuite(u16),
+    /// The key is not the exact length this suite requires.
+    WrongKeyLength(KaigiRelayHpkeSuiteV1),
+}
+impl std::fmt::Display for KaigiRelayHpkeKeyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSuite => formatter.write_str(
+                "relay HPKE key must start with its 2-byte little-endian suite identifier",
+            ),
+            Self::UnknownSuite(suite_id) => {
+                write!(
+                    formatter,
+                    "relay HPKE key names unknown suite {suite_id:#06x}"
+                )
+            }
+            Self::WrongKeyLength(suite) => write!(
+                formatter,
+                "relay HPKE key for suite {:#06x} must contain exactly {} key bytes",
+                suite.suite_id(),
+                suite.public_key_len()
+            ),
+        }
+    }
+}
+impl std::error::Error for KaigiRelayHpkeKeyError {}
+
+/// Frame a raw public key as a relay HPKE key descriptor, the bytes stored in
+/// `hpke_public_key`: a little-endian suite identifier, then the exact key.
+///
+/// The fingerprint hashes the whole descriptor, so it commits to the suite too.
+///
+/// # Errors
+/// Returns [`KaigiRelayHpkeKeyError::WrongKeyLength`] if the key does not fit the suite.
+pub fn encode_kaigi_relay_hpke_key_v1(
+    suite: KaigiRelayHpkeSuiteV1,
+    public_key: &[u8],
+) -> Result<Vec<u8>, KaigiRelayHpkeKeyError> {
+    if public_key.len() != suite.public_key_len() {
+        return Err(KaigiRelayHpkeKeyError::WrongKeyLength(suite));
+    }
+    let mut descriptor = Vec::with_capacity(KAIGI_RELAY_HPKE_SUITE_ID_BYTES + public_key.len());
+    descriptor.extend_from_slice(&suite.suite_id().to_le_bytes());
+    descriptor.extend_from_slice(public_key);
+    Ok(descriptor)
+}
+
+/// Split a relay HPKE key descriptor into its suite and exact public key.
+///
+/// # Errors
+/// Rejects a descriptor with no suite identifier, an unknown suite, or a key whose
+/// length differs from what that suite requires.
+pub fn parse_kaigi_relay_hpke_key_v1(
+    descriptor: &[u8],
+) -> Result<(KaigiRelayHpkeSuiteV1, &[u8]), KaigiRelayHpkeKeyError> {
+    let Some((suite_id, public_key)) = descriptor.split_first_chunk() else {
+        return Err(KaigiRelayHpkeKeyError::MissingSuite);
+    };
+    let suite_id = u16::from_le_bytes(*suite_id);
+    let suite = KaigiRelayHpkeSuiteV1::from_suite_id(suite_id)
+        .ok_or(KaigiRelayHpkeKeyError::UnknownSuite(suite_id))?;
+    if public_key.len() != suite.public_key_len() {
+        return Err(KaigiRelayHpkeKeyError::WrongKeyLength(suite));
+    }
+    Ok((suite, public_key))
+}
 /// Maximum number of live relay descriptors in the first-release Kaigi registry.
 ///
 /// The bound is shared by native admission and operator-facing snapshots so a
@@ -76,11 +197,14 @@ fn compute_roster_root_from(commitments: &[KaigiParticipantCommitment]) -> Hash 
     if commitments.is_empty() {
         return empty_roster_root();
     }
-    let mut tree = MerkleTree::<[u8; 32]>::default();
-    for entry in commitments {
-        tree.add(roster_leaf_hash(&entry.commitment));
-    }
-    tree.root().map_or_else(empty_roster_root, Hash::from)
+    // Build the tree in one pass: `MerkleTree::add` re-hashes the root path per
+    // leaf, while the roster root is recomputed several times per instruction.
+    commitments
+        .iter()
+        .map(|entry| roster_leaf_hash(&entry.commitment))
+        .collect::<MerkleTree<[u8; 32]>>()
+        .root()
+        .map_or_else(empty_roster_root, Hash::from)
 }
 /// Identifier for a Kaigi session scoped to a domain.
 #[derive(
@@ -226,7 +350,7 @@ pub struct KaigiParticipantNullifier {
 pub struct KaigiRelayHop {
     /// Account offering relay services.
     pub relay_id: AccountId,
-    /// HPKE public key bytes advertised by the relay.
+    /// Suite-tagged HPKE key descriptor; see [`parse_kaigi_relay_hpke_key_v1`].
     #[norito(json = "crate::json_helpers::base64_vec")]
     pub hpke_public_key: Vec<u8>,
     /// Relative weight for load-balancing decisions.
@@ -276,7 +400,7 @@ pub struct KaigiRelayRegistration {
     /// Native execution requires its live domain-qualified primary alias to
     /// select the relay governance domain.
     pub relay_id: AccountId,
-    /// HPKE public key bytes advertised by the relay.
+    /// Suite-tagged HPKE key descriptor; see [`parse_kaigi_relay_hpke_key_v1`].
     #[norito(json = "crate::json_helpers::base64_vec")]
     pub hpke_public_key: Vec<u8>,
     /// Bandwidth class signalled by the relay (larger value == higher capacity).
@@ -650,12 +774,10 @@ impl KaigiRecord {
     pub fn push_usage_commitment(&mut self, commitment: KaigiAuthorizationScalarV1) {
         self.usage_commitments.push(commitment);
     }
-    /// Append a participant, preserving uniqueness.
+    /// Insert a participant into the sorted roster, preserving uniqueness.
     pub fn push_participant(&mut self, account: AccountId) {
-        if !self.has_participant(&account) {
-            self.participants.push(account);
-            self.participants.sort_unstable();
-            self.participants.dedup();
+        if let Err(index) = self.participants.binary_search(&account) {
+            self.participants.insert(index, account);
         }
     }
     /// Remove an exact participant and its associated metadata if present.
@@ -756,6 +878,108 @@ mod tests {
     }
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_random_keypair().public_key().clone())
+    }
+    #[test]
+    fn relay_hpke_descriptors_carry_an_exact_suite_tagged_key() {
+        for suite in [
+            KaigiRelayHpkeSuiteV1::MlKem768AuthPsk,
+            KaigiRelayHpkeSuiteV1::MlKem1024AuthPsk,
+        ] {
+            let key = vec![0x5A; suite.public_key_len()];
+            let descriptor = encode_kaigi_relay_hpke_key_v1(suite, &key).unwrap();
+            assert_eq!(&descriptor[..2], suite.suite_id().to_le_bytes());
+            assert_eq!(
+                parse_kaigi_relay_hpke_key_v1(&descriptor),
+                Ok((suite, key.as_slice()))
+            );
+            assert_eq!(
+                KaigiRelayHpkeSuiteV1::from_suite_id(suite.suite_id()),
+                Some(suite)
+            );
+            assert!(descriptor.len() <= KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1);
+            // One byte either side of the exact length is refused both ways.
+            let refused = KaigiRelayHpkeKeyError::WrongKeyLength(suite);
+            for wrong in [suite.public_key_len() - 1, suite.public_key_len() + 1] {
+                assert_eq!(
+                    encode_kaigi_relay_hpke_key_v1(suite, &vec![0x5A; wrong]),
+                    Err(refused)
+                );
+                let mut framed = descriptor.clone();
+                framed.resize(2 + wrong, 0x5A);
+                assert_eq!(parse_kaigi_relay_hpke_key_v1(&framed), Err(refused));
+            }
+        }
+        assert_eq!(
+            parse_kaigi_relay_hpke_key_v1(&[]),
+            Err(KaigiRelayHpkeKeyError::MissingSuite)
+        );
+        assert_eq!(
+            parse_kaigi_relay_hpke_key_v1(&[1]),
+            Err(KaigiRelayHpkeKeyError::MissingSuite)
+        );
+        assert_eq!(
+            parse_kaigi_relay_hpke_key_v1(&[0x03, 0x00, 0xAA]),
+            Err(KaigiRelayHpkeKeyError::UnknownSuite(3))
+        );
+    }
+    #[test]
+    fn relay_hpke_suite_ids_are_the_transport_identifiers() {
+        use norito::streaming::HpkeSuite;
+        assert_eq!(
+            KaigiRelayHpkeSuiteV1::MlKem768AuthPsk.suite_id(),
+            HpkeSuite::Kyber768AuthPsk.suite_id()
+        );
+        assert_eq!(
+            KaigiRelayHpkeSuiteV1::MlKem1024AuthPsk.suite_id(),
+            HpkeSuite::Kyber1024AuthPsk.suite_id()
+        );
+    }
+    #[test]
+    fn empty_roster_root_is_the_constant_sdks_publish() {
+        assert_eq!(
+            hex::encode(<[u8; 32]>::from(KaigiRecord::compute_roster_root(&[]))),
+            "bdd344046b24a25a5ec75a0c58712f09180b15b4c2c9ee51f348bd3e984dc3d7"
+        );
+    }
+    #[test]
+    fn bulk_roster_root_matches_incremental_merkle_tree() {
+        for count in [1_usize, 2, 3, 4, 5, 7, 8, 9, 31, 32, 33, 4_096] {
+            let commitments = (1..=u64::try_from(count).unwrap())
+                .map(|value| {
+                    let mut bytes = [0_u8; 32];
+                    bytes[..8].copy_from_slice(&value.to_le_bytes());
+                    KaigiParticipantCommitment {
+                        commitment: KaigiAuthorizationScalarV1::from_le_bytes(bytes)
+                            .expect("small scalar is canonical"),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut incremental = MerkleTree::<[u8; 32]>::default();
+            for entry in &commitments {
+                incremental.add(roster_leaf_hash(&entry.commitment));
+            }
+            assert_eq!(
+                KaigiRecord::compute_roster_root(&commitments),
+                Hash::from(incremental.root().expect("non-empty tree")),
+                "roster root is consensus state and must not change for {count} leaves"
+            );
+        }
+    }
+    #[test]
+    fn participant_insertion_keeps_the_roster_sorted_and_unique() {
+        let host = checked_account_id();
+        let id = KaigiId::new(
+            DomainId::try_new("nexus", "universal").expect("domain id"),
+            Name::from_str("sorted").expect("valid name"),
+        );
+        let mut record = KaigiRecord::from_new(&NewKaigi::with_defaults(id, host), 0);
+        let accounts = (0..16).map(|_| checked_account_id()).collect::<Vec<_>>();
+        for account in accounts.iter().chain(&accounts) {
+            record.push_participant(account.clone());
+        }
+        let mut expected = accounts;
+        expected.sort_unstable();
+        assert_eq!(record.participants, expected);
     }
     #[test]
     fn metadata_key_prefixes_call_name() {

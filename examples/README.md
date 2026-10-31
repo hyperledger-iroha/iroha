@@ -26,8 +26,11 @@ Use the Iroha CLI for a local named-entrypoint check:
 iroha --config defaults/client.toml \
   contract debug-call \
   --code-file target/examples/hello.to \
-  --entrypoint main
+  --entrypoint hajimari
 ```
+
+A local run starts with empty contract state. An entrypoint that reads state, like `greet`,
+needs `--durable-state-json`, or a real network where `hajimari` has already run.
 
 Kotodama V1 has no implicit entrypoint or source-order dispatch. Always select
 the public `kotoage fn`/`言挙げ fn` or `view fn` by name. The local debugger reports gas,
@@ -43,8 +46,8 @@ the debugger first checks its artifact hash.
 
 - `coffee-club/` packages a small rewards contract with Musubi and includes four
   Kotodama VM tests; see its README for the local workflow.
-- `hello/hello.ko` logs a greeting and calls
-  `ledger::account::set_metadata` for `context::authority()`.
+- `hello/hello.ko` logs a greeting and counts it in contract state. It needs no permission
+  grant; run it on a local network with the commands in the repository README.
 - `transfer/transfer.ko` uses typed pointer constructors and
   `ledger::asset::transfer`.
 - `nft/nft.ko` uses `ledger::nft::mint` and `ledger::nft::transfer`.

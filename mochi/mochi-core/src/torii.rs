@@ -2211,11 +2211,10 @@ impl ToriiClient {
                 message: None,
             });
         }
-        let bytes = read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "name service policy")
-            .await?;
-        json::from_slice(&bytes).map_err(|error| {
-            ToriiError::Decode(format!("name service policy response: {error}"))
-        })
+        let bytes =
+            read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "name service policy").await?;
+        json::from_slice(&bytes)
+            .map_err(|error| ToriiError::Decode(format!("name service policy response: {error}")))
     }
     /// Submit a signed iterable query and return the [`QueryOutput`] its response carries.
     ///

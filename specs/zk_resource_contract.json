@@ -18644,7 +18644,7 @@
         ]
       },
       {
-        "reason": "The Kaigi conferencing product: relay manifest, registry, participant, nullifier, commitment and metadata bounds of its records and the identity frame of its authorization. A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
+        "reason": "The Kaigi conferencing product: relay manifest, registry, participant, nullifier, commitment and metadata bounds of its records, the identity frame of its authorization, and the proof-size bound its client writes into the two governed Kaigi verifying-key records (64 KiB, which the Kaigi verifier enforces below the native PIPA-R ceilings proof.config_pipa_r_max_proof_bytes and proof.native_max_proof_bytes). A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/kaigi/authorization.rs",
@@ -18687,6 +18687,15 @@
             ],
             "exprs": {
               "KAIGI_RELAY_HEALTH_NOTES_MAX_CHARS_V1": "512"
+            }
+          },
+          {
+            "path": "crates/iroha_core_zk/src/kaigi_client_v1.rs",
+            "symbols": [
+              "KAIGI_MAX_PROOF_BYTES_V1"
+            ],
+            "exprs": {
+              "KAIGI_MAX_PROOF_BYTES_V1": "64 * 1024"
             }
           }
         ]
@@ -21544,7 +21553,7 @@
         ]
       },
       {
-        "reason": "Fixed widths of an encoding, compared by name: header, prefix, frame, packet, record, tag, checksum, digest, accumulator and hash-block sizes, the length prefix of a vector, the payload room of a fixed-size VPN cell, the exact request sizes of the KAGEMUSHA signing tools and the exact raw lengths of the fixed values and proofs of the Parliament anonymous ballot (32 to 233,012 bytes). A decoder refuses a buffer shorter than the width or a record that is not exactly its frame. The width is the layout of one record; it bounds no variable amount. The ZK-ACE byte packing takes at most its limb width (7 bytes) for each field limb. The record width of Kura's block-hash file (one hash) and the width of one processed Pasta scalar in the key-size prediction of the KAGEMUSHA artifact preflight are of this kind: each multiplies a count into a size, and the scalar width is also one of three candidate payload sizes of a column of which the prediction takes the least.",
+        "reason": "Fixed widths of an encoding, compared by name: header, prefix, frame, packet, record, tag, checksum, digest, accumulator and hash-block sizes, the radix of the I105 account-address alphabet (the size of its symbol table), the length prefix of a vector, the payload room of a fixed-size VPN cell, the exact request sizes of the KAGEMUSHA signing tools and the exact raw lengths of the fixed values and proofs of the Parliament anonymous ballot (32 to 233,012 bytes). A decoder refuses a buffer shorter than the width or a record that is not exactly its frame. The width is the layout of one record; it bounds no variable amount. The ZK-ACE byte packing takes at most its limb width (7 bytes) for each field limb. The record width of Kura's block-hash file (one hash) and the width of one processed Pasta scalar in the key-size prediction of the KAGEMUSHA artifact preflight are of this kind: each multiplies a count into a size, and the scalar width is also one of three candidate payload sizes of a column of which the prediction takes the least.",
         "files": [
           {
             "path": "crates/iroha_core/src/kura.rs",
@@ -21598,10 +21607,12 @@
           {
             "path": "crates/iroha_data_model/src/account/address.rs",
             "symbols": [
-              "I105_CHECKSUM_LEN"
+              "I105_CHECKSUM_LEN",
+              "I105_BASE_U8"
             ],
             "exprs": {
-              "I105_CHECKSUM_LEN": "6"
+              "I105_CHECKSUM_LEN": "6",
+              "I105_BASE_U8": "105"
             }
           },
           {

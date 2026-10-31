@@ -1455,11 +1455,11 @@ fn decode_i105_payload(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
     decode::decode_i105_payload(payload, &decode::Ordinary).map(|work| work.values)
 }
 
-fn lookup_i105_digit(symbol: &str) -> Option<u8> {
-    I105_SYMBOLS
-        .iter()
-        .position(|candidate| *candidate == symbol)
-        .and_then(|index| u8::try_from(index).ok())
+fn lookup_i105_digit(symbol: char) -> Option<u8> {
+    I105_DIGITS_BY_SYMBOL
+        .binary_search_by_key(&symbol, |entry| entry.0)
+        .ok()
+        .map(|index| I105_DIGITS_BY_SYMBOL[index].1)
 }
 fn i105_digit_symbol(digit: u8) -> Result<&'static str, AccountAddressError> {
     i105_symbol(digit).ok_or(AccountAddressError::InvalidI105Digit(digit))
@@ -1499,9 +1499,66 @@ const fn i105_symbols() -> [&'static str; I105_BASE_U8 as usize] {
 /// The I105 digit alphabet in digit order: Base58 followed by the half-width Iroha poem kana.
 #[doc(hidden)]
 pub const I105_SYMBOLS: [&str; I105_BASE_U8 as usize] = i105_symbols();
+/// The character a symbol spells; every symbol is one ASCII or three-byte character.
+const fn i105_symbol_char(symbol: &str) -> char {
+    let bytes = symbol.as_bytes();
+    let scalar = match bytes.len() {
+        1 => bytes[0] as u32,
+        3 => {
+            ((bytes[0] as u32 & 0x0F) << 12)
+                | ((bytes[1] as u32 & 0x3F) << 6)
+                | (bytes[2] as u32 & 0x3F)
+        }
+        _ => panic!("an I105 symbol must be one ASCII or three-byte character"),
+    };
+    match char::from_u32(scalar) {
+        Some(character) => character,
+        None => panic!("an I105 symbol must be a Unicode scalar value"),
+    }
+}
+const fn i105_digits_by_symbol() -> [(char, u8); I105_BASE_U8 as usize] {
+    let mut table = [('\0', 0); I105_BASE_U8 as usize];
+    let mut digit = 0;
+    while digit < I105_BASE_U8 {
+        let symbol = i105_symbol_char(I105_SYMBOLS[digit as usize]);
+        let mut slot = digit as usize;
+        while slot > 0 && table[slot - 1].0 as u32 > symbol as u32 {
+            table[slot] = table[slot - 1];
+            slot -= 1;
+        }
+        table[slot] = (symbol, digit);
+        digit += 1;
+    }
+    table
+}
+/// Digits sorted by character. Account literals decode one character at a time, so a
+/// scan of the alphabet would dominate reading a record that names many accounts.
+static I105_DIGITS_BY_SYMBOL: [(char, u8); I105_BASE_U8 as usize] = i105_digits_by_symbol();
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn digit_lookup_matches_the_alphabet_for_every_character() {
+        let expected = I105_SYMBOLS
+            .iter()
+            .enumerate()
+            .map(|(digit, symbol)| {
+                let mut characters = symbol.chars();
+                let character = characters.next().expect("non-empty symbol");
+                assert_eq!(characters.next(), None, "{symbol} is one character");
+                (character, u8::try_from(digit).expect("digit fits u8"))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(expected.len(), I105_SYMBOLS.len(), "symbols are distinct");
+        for character in char::MIN..=char::MAX {
+            assert_eq!(
+                lookup_i105_digit(character),
+                expected.get(&character).copied(),
+                "{character:?}"
+            );
+        }
+    }
+
     #[test]
     fn canonical_gost_account_and_address_json_preserve_actual_parser_outcome() {
         let algorithm = Algorithm::Gost3410_2012_256ParamSetA;

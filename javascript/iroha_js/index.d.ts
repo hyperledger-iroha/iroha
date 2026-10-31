@@ -3429,8 +3429,10 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PRIVATE_KEY_LENGTH"
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
+  | "KAIGI_EMPTY_ROSTER_ROOT_HEX_V1"
   | "buildKaigiAuthorizationProofV1"
   | "buildKaigiUsageProofV1"
+  | "generateKaigiBlindingV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -5934,6 +5936,8 @@ export type KaigiRelayEventPayload =
   | KaigiRelayHealthEvent;
 
 export interface KaigiRelayEventsOptions {
+  /** Required unless the client was configured with `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
   domain?: string;
   relay?: string;
   kind?: string | ReadonlyArray<string>;
@@ -6025,14 +6029,53 @@ export interface KaigiCallEndedEvent {
   ended_at_ms: ToriiU64;
 }
 
+export interface KaigiCallRelayManifestUpdatedEvent {
+  kind: "relay_manifest_updated";
+  call: KaigiCallEventRef;
+  hop_count: number;
+  expiry_ms: ToriiU64;
+}
+
+export interface KaigiCallUsageUpdatedEvent {
+  kind: "usage_updated";
+  call: KaigiCallEventRef;
+  total_duration_ms: ToriiU64;
+  total_billed_gas: ToriiU64;
+  segments_recorded: number;
+}
+
 export type KaigiCallEventPayload =
   | KaigiCallRosterUpdatedEvent
-  | KaigiCallEndedEvent;
+  | KaigiCallEndedEvent
+  | KaigiCallRelayManifestUpdatedEvent
+  | KaigiCallUsageUpdatedEvent;
 
 export interface KaigiCallEventsOptions {
   kind?: string | ReadonlyArray<string>;
   lastEventId?: string;
   signal?: AbortSignal;
+  /** Required unless the client was configured with `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
+}
+
+/** The signed account's own standing in one call, from a single committed state. */
+export interface KaigiCallParticipation {
+  call_id: string;
+  privacy_mode: "transparent" | "private";
+  status: "active" | "ended";
+  is_host: boolean;
+  /** Whether the account is the host or currently holds roster membership. */
+  active: boolean;
+  /** Retained subject that the next authorization proof must bind. */
+  original_account_id: string;
+  /** Returned only to the host and to retained participants. */
+  host_account_id?: string;
+  /** Private calls only: zero for the host, else the live or next-join sequence. */
+  sequence?: ToriiU64;
+  /** Private calls only: the stored host or live participant commitment. */
+  active_commitment_hex?: string;
+  roster_root_hex: string;
+  segments_recorded: number;
 }
 
 type ExclusiveSingleOrMany<
@@ -6773,6 +6816,16 @@ export declare const KAIGI_RELAY_MANIFEST_MAX_HOPS_V1: 8;
 
 /** Maximum decoded bytes accepted for a Kaigi HPKE public key. */
 export declare const KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1: 4096;
+/** HPKE suites a Kaigi relay key may use, with the transport's suite identifiers. */
+export declare const KAIGI_RELAY_HPKE_SUITES_V1: Readonly<{
+  mlKem768AuthPsk: Readonly<{ suiteId: 1; publicKeyBytes: 1184 }>;
+  mlKem1024AuthPsk: Readonly<{ suiteId: 2; publicKeyBytes: 1568 }>;
+}>;
+/** Frame a raw public key as the descriptor a relay registers and a manifest hop carries. */
+export declare function buildKaigiRelayHpkeKeyV1(
+  suite: keyof typeof KAIGI_RELAY_HPKE_SUITES_V1,
+  publicKey: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
 
 export interface KaigiParticipantCommitmentInput {
   /** Exact canonical Pasta Fp bytes, without a hash marker. */
@@ -11232,6 +11285,10 @@ export declare class ToriiClient {
     callId: string,
     options?: { signal?: AbortSignal },
   ): Promise<KaigiCallView | null>;
+  getKaigiCallParticipation(
+    callId: string,
+    options?: { signal?: AbortSignal; canonicalAuth?: CanonicalRequestAuth },
+  ): Promise<KaigiCallParticipation | null>;
   listKaigiCallSignals(
     callId: string,
     options?: KaigiCallSignalsOptions,
@@ -11610,6 +11667,15 @@ export function verifySm2(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
   distid?: string,
 ): boolean;
+
+/** Pre-action roster root a private `CreateKaigi` proof must bind, as lowercase hex. */
+export const KAIGI_EMPTY_ROSTER_ROOT_HEX_V1: string;
+
+/**
+ * Sample a new private Kaigi blinding. Keep it under owner-only custody: every proof
+ * for the same participation needs its own copy, because each proof clears its input.
+ */
+export function generateKaigiBlindingV1(): Uint8Array;
 
 export function buildKaigiAuthorizationProofV1(
   options: KaigiAuthorizationProofOptionsV1,

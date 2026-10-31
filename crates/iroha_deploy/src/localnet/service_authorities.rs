@@ -1,4 +1,4 @@
-//! Retained native token authority prerequisites for managed global genesis.
+//! The storage layer of managed developer networks (`kagami localnet up --with-storage`).
 //!
 //! This profile creates funded signers, initial capabilities, two non-signing reserve accounts and
 //! three genesis-bound providers with distinct custody and one shared pricing/admission policy.
@@ -6,7 +6,13 @@
 //! enable token services; original profile intent is distinct from current native eligibility.
 use super::*;
 use crate::managed::{Error, PreparedLocalnet};
-use iroha_data_model::{NetworkId, sorafs::capacity::ProviderId};
+use iroha_config::parameters::actual;
+use iroha_data_model::{
+    NetworkId, block::consensus::SumeragiRootScope, sorafs::capacity::ProviderId,
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
+};
 use iroha_executor_data_model::permission::sorafs::{
     CanCheckSorafsStreamToken, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
     CanManageSorafsReputationJournalPolicy, CanManageSorafsStreamTokenCustody,
@@ -14,7 +20,13 @@ use iroha_executor_data_model::permission::sorafs::{
     CanRecordSorafsProofOutcome, CanRecordSorafsReputationJournal, CanSetSorafsReservePolicy,
     CanUpsertSorafsProviderCredit,
 };
+use iroha_genesis::{
+    RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1, init_instruction_registry,
+};
+use iroha_model_base::{metadata::Metadata, topology::DataSpaceId};
+use iroha_primitives::addr::SocketAddr;
 use norito::{JsonDeserialize, JsonSerialize};
+use std::{fs, net::Ipv4Addr};
 
 mod capture;
 mod compliance_material;
@@ -39,8 +51,10 @@ const PROVIDERS_DIRECTORY: &str = "providers";
 const MAX_ROLE_CREDENTIAL_BYTES: usize = 256;
 const PROFILE_METADATA: &str = "localnet_service_profile_v1";
 const ROLE_METADATA: &str = "localnet_stream_token_authority_role_v1";
+/// XOR minted to each transacting service signer; it also caps the publication namespace lease.
+const SERVICE_FEE_BALANCE: u64 = 10;
 
-pub(super) fn append_profile(
+pub(crate) fn append_profile(
     genesis: RawGenesisTransaction,
     profile: LocalnetServiceProfile,
     manager: &AccountId,
@@ -602,7 +616,7 @@ fn provider_directory(root: &Path, slot: u8) -> Result<PathBuf> {
         "provider slot exceeds original topology"
     );
     Ok(root
-        .join(LOCALNET_RUNTIME_DIRECTORY)
+        .join(RUNTIME_DIRECTORY)
         .join(DIRECTORY)
         .join(PROVIDERS_DIRECTORY)
         .join(slot.to_string()))
@@ -620,30 +634,16 @@ fn open_provider_directory(
 }
 struct GeneratedProviderAuthorities {
     slot: u8,
-    authorities: Vec<(StreamTokenAuthorityRole, LocalnetClientIdentity)>,
+    authorities: Vec<(StreamTokenAuthorityRole, Identity)>,
     provider_id: ProviderId,
     provider: provider_material::GeneratedProvider,
     compliance: compliance_material::GeneratedCompliance,
 }
 pub(super) struct GeneratedAuthorities {
-    authorities: Vec<(NetworkServiceAuthorityRole, LocalnetClientIdentity)>,
+    authorities: Vec<(NetworkServiceAuthorityRole, Identity)>,
     network: network_material::NetworkServicePlanV1,
     publication: publication_material::GeneratedPublication,
     providers: [GeneratedProviderAuthorities; PROVIDER_COUNT],
-}
-
-pub(super) fn validate_selection(opts: &LocalnetOptions, managed: bool, taira: bool) -> Result<()> {
-    if opts.service_profile == LocalnetServiceProfile::StreamTokenAuthorities {
-        ensure!(
-            managed
-                && !taira
-                && opts.sora_profile.is_none()
-                && opts.peers.get() == 4
-                && opts.consensus_mode == SumeragiConsensusMode::Permissioned,
-            "native service authorities require the stock managed global four-validator profile"
-        );
-    }
-    Ok(())
 }
 
 // ProviderId is protocol-assigned opaque bytes, not an account address. This is only the local
@@ -659,28 +659,23 @@ pub(super) fn generate(
     profile: LocalnetServiceProfile,
     root: &Path,
     seed: Option<&[u8]>,
-    manager: &LocalnetClientIdentity,
-    http: &LocalnetClientIdentity,
-    onboarding: &LocalnetClientIdentity,
+    manager: &Identity,
+    http: &Identity,
 ) -> Result<Option<GeneratedAuthorities>> {
     if profile == LocalnetServiceProfile::Standard {
         return Ok(None);
     }
-    let directory = root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY);
+    let directory = root.join(RUNTIME_DIRECTORY).join(DIRECTORY);
     custody::prepare_empty_private_directory(&directory)?;
     let network_directory = directory.join(NETWORK_DIRECTORY);
     let providers_directory = directory.join(PROVIDERS_DIRECTORY);
     custody::prepare_empty_private_directory(&network_directory)?;
     custody::prepare_empty_private_directory(&providers_directory)?;
-    let mut unique = BTreeSet::from([
-        manager.public_key.clone(),
-        http.public_key.clone(),
-        onboarding.public_key.clone(),
-    ]);
+    let mut unique = BTreeSet::from([manager.public_key.clone(), http.public_key.clone()]);
     let mut authorities = Vec::with_capacity(NETWORK_ROLES.len());
     for role in NETWORK_ROLES {
         let label = format!("native-service-network/{}", role.credential_filename());
-        let identity = localnet_ephemeral_identity(seed, label.as_bytes())?;
+        let identity = ephemeral_identity(seed, label.as_bytes())?;
         ensure!(
             unique.insert(identity.public_key.clone()),
             "network service credentials must be distinct"
@@ -721,7 +716,7 @@ pub(super) fn generate(
                 "native-service-provider/{slot}/{}",
                 role.credential_filename()
             );
-            let identity = localnet_ephemeral_identity(seed, label.as_bytes())?;
+            let identity = ephemeral_identity(seed, label.as_bytes())?;
             ensure!(
                 unique.insert(identity.public_key.clone()),
                 "provider credentials must be distinct"
@@ -835,6 +830,30 @@ fn grants(
     }
     Ok(grants)
 }
+/// Register service accounts in the open bootstrap transaction, skipping accounts genesis
+/// already registers.
+fn append_service_accounts(
+    genesis: RawGenesisTransaction,
+    accounts: &[iroha_data_model::account::NewAccount],
+) -> Result<RawGenesisTransaction> {
+    let mut registered = genesis
+        .instructions()
+        .filter_map(
+            |instruction| match instruction.as_any().downcast_ref::<RegisterBox>() {
+                Some(RegisterBox::Account(register)) => Some(register.object.id.clone()),
+                _ => None,
+            },
+        )
+        .collect::<BTreeSet<_>>();
+    let mut builder = genesis.into_builder();
+    for account in accounts {
+        if registered.insert(account.id.clone()) {
+            builder = builder.append_instruction(Register::account(account.clone()));
+        }
+    }
+    builder.build_raw().map_err(Into::into)
+}
+
 impl GeneratedAuthorities {
     pub(super) fn configure_peer(
         &self,
@@ -971,11 +990,11 @@ impl GeneratedAuthorities {
             Account::new(network.reserve_accounts.treasury.clone())
                 .with_metadata(role_metadata(ReserveAccountRole::ReserveTreasury)),
         ]);
-        let genesis = append_localnet_service_accounts(genesis, &accounts)?;
+        let genesis = append_service_accounts(genesis, &accounts)?;
         let mut builder = genesis.into_builder();
         for (_, identity) in &self.authorities {
             builder = builder.append_instruction(Mint::asset_quantity(
-                LOCALNET_ALIAS_SETUP_PAYER_BALANCE,
+                SERVICE_FEE_BALANCE,
                 AssetId::new(
                     localnet_xor_asset_definition_id(),
                     identity.account_id.clone(),
@@ -991,7 +1010,7 @@ impl GeneratedAuthorities {
                     let amount = if *role == StreamTokenAuthorityRole::IssuerOperator {
                         issuer_endowment.clone()
                     } else {
-                        Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE)
+                        Quantity::from(SERVICE_FEE_BALANCE)
                     };
                     builder = builder.append_instruction(Mint::asset_quantity(
                         amount,
@@ -1049,9 +1068,7 @@ impl GeneratedAuthorities {
             "authority manifest exceeds byte bound"
         );
         custody::write(
-            root.join(LOCALNET_RUNTIME_DIRECTORY)
-                .join(DIRECTORY)
-                .join(MANIFEST),
+            root.join(RUNTIME_DIRECTORY).join(DIRECTORY).join(MANIFEST),
             bytes,
         )
     }
@@ -1138,7 +1155,7 @@ impl PreparedLocalnet {
 // Each private caller passes the scalar from its same-block canonical authentication.
 // Profile validation keeps its original order without reconstructing completed metadata;
 // the original signed block remains mandatory and no positive result is cached.
-pub(super) fn validate_signed_profile(
+pub(crate) fn validate_signed_profile(
     prepared: &PreparedLocalnet,
     block: &iroha_data_model::block::SignedBlock,
     metadata: &iroha_data_model::parameter::system::ConsensusHandshakeMetadata,
@@ -1222,7 +1239,7 @@ pub(super) fn validate_signed_profile(
             .client_config
             .parent()
             .ok_or_else(invalid)?
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY);
         match fs::symlink_metadata(&directory) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1298,7 +1315,7 @@ fn read_selected_role_key(
         .ok_or_else(|| Error::Invalid("original generation is absent".into()))?;
     let generation = iroha_fs::PrivateDirectory::open_exact(root)?;
     let runtime = generation
-        .open_child(LOCALNET_RUNTIME_DIRECTORY)?
+        .open_child(RUNTIME_DIRECTORY)?
         .open_child(DIRECTORY)?;
     let directory = open_provider_directory(&runtime, selected.slot)?;
     read_role_key(&directory, selected.authority(role)?)
@@ -1352,7 +1369,7 @@ pub(crate) fn reserve_operations_key(
         .ok_or_else(|| Error::Invalid("original generation is absent".into()))?;
     let generation = iroha_fs::PrivateDirectory::open_exact(root)?;
     let directory = generation
-        .open_child(LOCALNET_RUNTIME_DIRECTORY)?
+        .open_child(RUNTIME_DIRECTORY)?
         .open_child(DIRECTORY)?
         .open_child(NETWORK_DIRECTORY)?;
     read_network_role_key(
@@ -1640,7 +1657,7 @@ pub(crate) fn capture_retained(
         read_network_role_key(network_directory, authority)?;
         expected_funding.insert(
             authority.account.clone(),
-            Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+            Quantity::from(SERVICE_FEE_BALANCE),
         );
     }
     network
@@ -1670,7 +1687,7 @@ pub(crate) fn capture_retained(
             if role.transacts() {
                 expected_funding.insert(
                     authority.account.clone(),
-                    Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                    Quantity::from(SERVICE_FEE_BALANCE),
                 );
             }
         }

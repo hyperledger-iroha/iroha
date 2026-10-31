@@ -399,16 +399,21 @@ pub fn run_worker(
                         );
                     }
                     status.phase = ManagedPhase::Ready;
-                    publish(&directory, &status).map_err(|error| {
-                        close_worker_error(
-                            &directory,
-                            &mut status,
-                            &mut processes,
-                            &cancelled,
-                            progress.unconfirmed(),
-                            error,
-                        )
-                    })?;
+                    publish(&directory, &status)
+                        .and_then(|()| {
+                            directory.write_atomic(BECAME_READY, b"1", PublishMode::Replace)?;
+                            Ok(())
+                        })
+                        .map_err(|error| {
+                            close_worker_error(
+                                &directory,
+                                &mut status,
+                                &mut processes,
+                                &cancelled,
+                                progress.unconfirmed(),
+                                error,
+                            )
+                        })?;
                     if let Err(failure) = budget.check() {
                         return fail_worker(
                             &directory,
@@ -602,7 +607,7 @@ pub(super) fn same_token(left: &str, right: &str) -> bool {
             == 0
 }
 
-fn daemon_command(
+pub(super) fn daemon_command(
     daemon: &std::path::Path,
     config: &std::path::Path,
     root_kind: &RootKind,

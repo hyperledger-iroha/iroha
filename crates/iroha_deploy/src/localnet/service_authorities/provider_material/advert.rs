@@ -40,7 +40,7 @@ impl PreparedLocalnet {
         let root = self.context.client_config.parent().ok_or_else(invalid)?;
         let generation = iroha_fs::PrivateDirectory::open_exact(root)?;
         let directory = generation
-            .open_child(LOCALNET_RUNTIME_DIRECTORY)?
+            .open_child(RUNTIME_DIRECTORY)?
             .open_child(DIRECTORY)?;
         let directory = open_provider_directory(&directory, manifest.provider(provider)?.slot)?;
         let key = read_service_private_key(&directory, ADVERT_KEY)?;
@@ -175,7 +175,7 @@ mod tests {
                 .client_config
                 .parent()
                 .unwrap()
-                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(RUNTIME_DIRECTORY)
                 .join(DIRECTORY),
         )
         .unwrap();

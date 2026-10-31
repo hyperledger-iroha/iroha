@@ -462,10 +462,18 @@ fn injected_filesystem_capacity_still_rejects_zero_budget_and_real_links() -> ey
         .expect_err("zero available capacity with no managed bytes cannot fund a budget");
     let diagnostic = format!("{error:?}");
     assert!(
-        diagnostic.contains("no safe non-zero Nexus storage budget"),
+        diagnostic.contains("not enough free disk space for Nexus storage"),
         "{diagnostic}"
     );
-    assert!(diagnostic.contains("200 bytes of headroom"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("keeps 20% of the filesystem free (200 bytes of 1000 bytes)"),
+        "{diagnostic}"
+    );
+    // With nothing stored the budget must be non-zero: one byte above the headroom.
+    assert!(
+        diagnostic.contains("Free at least 201 bytes"),
+        "{diagnostic}"
+    );
     assert!(config.nexus.storage.effective_local_budget_bytes.is_none());
     let real = temp.path().join("real-managed");
     std::fs::create_dir(&real)?;

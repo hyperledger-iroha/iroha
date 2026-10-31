@@ -284,7 +284,8 @@ fn verify_committed_transaction(
         block_hash: *committed.block_hash.as_ref(),
         block_height: tip.height(),
         block_creation_time_ms: tip.header().creation_time_ms,
-        global_root: tip.root_scope() == iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        global_root: tip.root_scope()
+            == iroha_data_model::block::consensus::SumeragiRootScope::Global,
         result_ok: committed.result().is_ok(),
     })
 }

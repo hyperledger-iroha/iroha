@@ -159,7 +159,7 @@ fn assert_other_admission_settings(actual: &iroha_config::parameters::actual::So
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::localnet::*;
+    use crate::sora_network::*;
 
     fn fixture(host: &str) -> Table {
         let host = CanonicalHost::parse(host, "test endpoint").unwrap();
@@ -297,10 +297,8 @@ mod tests {
     fn exported_loopback_localnet_keeps_standard_admission_policy() {
         let _guard = crate::managed::native_test_guard();
         let directory = localnet_test_helpers::private_tempdir().unwrap();
-        let opts = LocalnetOptions {
-            service_profile: LocalnetServiceProfile::Standard,
-            sora_profile: None,
-            perf_profile: None,
+        let opts = NetworkOptions {
+            sora_profile: SoraProfile::Dataspace,
             peers: std::num::NonZeroU16::new(4).unwrap(),
             seed: Some("exported-loopback-puzzle-policy".into()),
             bind_host: "127.0.0.1".into(),
@@ -308,12 +306,9 @@ mod tests {
             base_api_port: 18_080,
             base_p2p_port: 23_337,
             out_dir: directory.path().to_path_buf(),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-        generate_localnet(&opts, &mut std::io::BufWriter::new(Vec::new())).unwrap();
+        generate_network(&opts, &mut std::io::BufWriter::new(Vec::new())).unwrap();
         for index in 0..4 {
             let path = directory.path().join(format!("peer{index}.toml"));
             let bytes = iroha_fs::read_private(&path, 1024 * 1024).unwrap();

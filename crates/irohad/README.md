@@ -593,6 +593,16 @@ The key files the configuration itself names under `<data_dir>/secrets/`
 same custody checks whenever the node file is loaded, before the configuration
 parser reads them; `--check-config` and `--check-storage` do read those.
 
+The SoraNet transport and streaming identities are node-local: the validator key
+certifies the transport key at every handshake, and the streaming key only
+encrypts this node's session snapshots. When the configuration reads
+`transport.key` or `streaming.key` only because `data_dir` completed its path (no
+inline key, explicit key file or configured public key) and the file is missing,
+the first load of the node file (a start or a check) creates it with a fresh
+Ed25519 key: create-new and owner-only, in an owner-only `secrets` directory that
+is created when absent. The path and public key go to stderr. An existing file is
+never replaced, and `validator.key` is never created.
+
 Deployment launchers that supply their own runtime-provider registry
 (`iroha3d_taira` until the cutover) do not use `node_secrets`.
 
@@ -603,7 +613,7 @@ Run these with a new binary before it replaces an old one:
 - `iroha3d --config <file> --check-config --json` prints the handshake- and
   genesis-bound values of this build and configuration as one Norito JSON object
   (`config_fingerprint`, `protocol_version`, `wire_schema_hash`,
-  `nexus_policy_digest`, `gas_schedule_hash`, `execution_policy_hash`,
+  `nexus_policy_digest`, `host_profiles`, `execution_policy_hash`,
   `nexus_amx_context_hash`, plus `status`). Genesis-bound values are `null`
   while the signed genesis is not available locally.
 - When this configuration derives other policy commitments than the signed
@@ -742,8 +752,8 @@ and independently approved exact hash for that exact sample roster before
 evaluating the manifest:
 
 ```bash
-cargo run --bin kagami -- localnet \
-  --seed Iroha --peers 4 --sora-profile nexus --consensus-mode npos \
+cargo run --bin kagami -- sora-network generate \
+  --seed Iroha --peers 4 --profile nexus \
   --out-dir target/compose-genesis
 export IROHA_GENESIS_SIGNED_FILE="$PWD/target/compose-genesis/genesis.signed.nrt"
 export IROHA_GENESIS_PUBLIC_KEY_FILE="$PWD/target/compose-genesis/genesis.public_key"
@@ -760,7 +770,7 @@ not appear in Compose YAML or environment variables. Neither mode mounts the
 genesis signing key, client credentials, source manifest, or source peer config.
 Host-only account-onboarding and faucet services are omitted from the
 validator-only projection. Missing files and trust-root mismatches fail closed.
-For a deployed network, generate one authoritative `kagami localnet` bundle and
+For a deployed network, generate one authoritative `kagami sora-network` bundle and
 run `kagami docker` without `--seed`; Kagami validates and reuses its identities,
 PoPs, signed body, verifier key, hash, and policy-equivalent configs rather than
 inheriting the sample validator credentials.

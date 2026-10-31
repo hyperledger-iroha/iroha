@@ -131,6 +131,7 @@ use iroha_data_model::{
         transaction::prelude::FindTransactions,
     },
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    runtime::lifecycle::RuntimeRejectionV1,
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
     sorafs::{
@@ -7430,6 +7431,37 @@ mod tests {
         }
     }
     #[test]
+    fn runtime_rejection_projection_preserves_each_typed_reason() {
+        use iroha_data_model::runtime::{definition::DefinitionId, lifecycle::RestrictionKindV1};
+
+        for (reason, code) in [
+            (
+                RuntimeRejectionV1::DefinitionInactive {
+                    wire_id: "iroha.bond.call.v1".into(),
+                },
+                "DefinitionInactive",
+            ),
+            (
+                RuntimeRejectionV1::DefinitionRestricted {
+                    definition: DefinitionId([1; 32]),
+                    restriction: RestrictionKindV1::Disabled.at(9),
+                },
+                "DefinitionRestricted",
+            ),
+            (
+                RuntimeRejectionV1::ExpectationMismatch { wire_id: None },
+                "ExpectationMismatch",
+            ),
+        ] {
+            let rejection = TransactionRejectionReason::Validation(
+                ValidationFail::InstructionFailed(InstructionExecutionError::Runtime(reason)),
+            );
+            assert_eq!(transaction_rejection_code(&rejection), code);
+            assert!(transaction_contract_rejection_json(&rejection).is_none());
+            assert!(transaction_ivm_fault_json(&rejection).is_none());
+        }
+    }
+    #[test]
     fn ivm_fault_projection_retains_typed_origin_without_presentation() {
         use iroha_data_model::executor::fault::{
             IvmFaultKindV1, IvmFaultPositionV1, IvmFaultSiteV1, IvmFaultV1,
@@ -12346,6 +12378,11 @@ fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'
         InstructionExecutionError::InvalidParameter(_) => "InvalidParameter",
         InstructionExecutionError::AccountAdmission(_) => "AccountAdmission",
         InstructionExecutionError::InvariantViolation(_) => "InvariantViolation",
+        InstructionExecutionError::Runtime(rejection) => match rejection {
+            RuntimeRejectionV1::DefinitionInactive { .. } => "DefinitionInactive",
+            RuntimeRejectionV1::DefinitionRestricted { .. } => "DefinitionRestricted",
+            RuntimeRejectionV1::ExpectationMismatch { .. } => "ExpectationMismatch",
+        },
     }
 }
 fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {

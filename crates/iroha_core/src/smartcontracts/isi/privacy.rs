@@ -476,8 +476,8 @@ impl Execute for SchedulePrivacyConsensusPolicyUpdateV1 {
             ));
         }
         let pending = PrivacyConsensusPolicyUpdateV1 {
-            // SPEC: §13.4 HC492 misclassifies an ordinary update as initial genesis policy.
-            scheduled_at_height: if cfg!(all(test, sumeragi_core_mutation = "HC492")) {
+            // SPEC: §13.4 HC497 records an ordinary update at the genesis schedule height.
+            scheduled_at_height: if cfg!(all(test, sumeragi_core_mutation = "HC497")) {
                 1
             } else {
                 incoming_height

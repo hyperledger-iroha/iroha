@@ -15,7 +15,7 @@ use iroha_model_base::chain::ChainId;
 use norito::{Decode, Encode};
 
 use super::{AuthenticatedBootstrap, BootstrapError, CheckpointTransport, Result, decode};
-use crate::localnet::PrivateRootSpec;
+use crate::sora_network::PrivateRootSpec;
 
 const DIRECTORY: &str = "amx-bootstrap";
 const STAGING: &str = ".amx-bootstrap-preparing";

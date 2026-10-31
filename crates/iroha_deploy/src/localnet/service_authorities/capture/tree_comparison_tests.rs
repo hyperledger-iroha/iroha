@@ -52,7 +52,7 @@ fn complete_profile_tree_keeps_all_original_inputs_inventories_and_same_source_r
             .iter()
             .map(|directory| directory.inputs.len())
             .sum::<usize>(),
-        77
+        75
     );
     let ((), parses) = count_semantic_validations(|| {
         image.revalidate().unwrap();
@@ -145,17 +145,14 @@ fn complete_profile_tree_keeps_all_original_inputs_inventories_and_same_source_r
             original_input.bytes.as_slice()
         );
         image.revalidate().unwrap();
-        let runtime = &image.directories[RUNTIME];
-        let key = runtime
-            .inputs
-            .iter()
-            .find(|input| input.name == "onboarding-signer.key")
-            .unwrap();
-        std::fs::remove_file(runtime.directory.path().join(key.name)).unwrap();
+        // A captured leaf in a directory without a fixed inventory surfaces its absence.
+        let tables = &image.directories[TABLES];
+        let key = tables.inputs.first().unwrap();
+        std::fs::remove_file(tables.directory.path().join(key.name)).unwrap();
         assert!(
             matches!(image.revalidate(), Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound)
         );
-        runtime
+        tables
             .directory
             .write_atomic(key.name, &key.bytes, PublishMode::CreateNew)
             .unwrap();

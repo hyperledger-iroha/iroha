@@ -1015,7 +1015,10 @@ authorization headers in this repository.
   carries no caller-authored assurance or availability claims. It proceeds
   only when the authenticated committed Exact12 manifest reports every one of
   the twelve rows as `production-qualified`; missing release, audit, security,
-  or deployment evidence therefore halts rollout.
+  or deployment evidence therefore halts rollout. The rollout plan pins the
+  exact `Cargo.lock`, and the plan's own SHA-256 is pinned in the bootstrap plan
+  and in Kagami. After any dependency change, run
+  `scripts/update_taira_privacy_rollout_pins.py` to move all three together.
 - `dns_records.json`, `explorer.runtime-config.json`, `sorafs_sites.json`, and
   `taira-canary-client.example.toml` describe the live public profile. The
   Explorer runtime config carries the exact genesis-derived `NETWORK_ID`, the

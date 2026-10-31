@@ -23,9 +23,9 @@ use iroha_deploy::genesis::staging::{
 #[cfg(test)]
 use iroha_deploy::genesis::staging::{
     build_signed_genesis, configured_initial_genesis_state, retired_synthetic_stake_asset_id,
-    staged_default_account_literal, staged_default_nexus, staged_default_pipeline,
-    staged_lane_manifest_registry, staged_signed_native_genesis,
-    staged_signed_native_genesis_with_projection, staged_signed_sumeragi_context_hashes,
+    staged_default_account_literal, staged_default_nexus, staged_lane_manifest_registry,
+    staged_signed_native_genesis, staged_signed_native_genesis_with_projection,
+    staged_signed_sumeragi_context_hashes,
 };
 #[cfg(test)]
 use iroha_genesis::GenesisBlock;
@@ -1916,6 +1916,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         // Materialize a separate complete four-validator identity fixture.
         // Some tested manifests intentionally leave topology for the later CLI
         // override; their original bytes remain the signing input unchanged.
+        // Rebuilding parses the manifest's account literals under its own network.
+        let _manifest_profile = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
         let identity_manifest = manifest
             .clone()
             .clear_topology()
@@ -4109,23 +4111,18 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("canonical localnet output parent")
             .join("network");
         let seed = "localnet-resign-confidential-policy".to_owned();
-        let options = iroha_deploy::localnet::LocalnetOptions {
-            service_profile: iroha_deploy::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: Some(iroha_deploy::localnet::SoraProfile::Nexus),
-            perf_profile: None,
+        let options = iroha_deploy::sora_network::NetworkOptions {
+            sora_profile: iroha_deploy::sora_network::SoraProfile::Nexus,
             peers: std::num::NonZeroU16::new(4).expect("non-zero peer count"),
             seed: Some(seed.clone()),
-            bind_host: iroha_deploy::localnet::DEFAULT_BIND_HOST.to_owned(),
-            public_host: iroha_deploy::localnet::DEFAULT_PUBLIC_HOST.to_owned(),
+            bind_host: iroha_deploy::sora_network::DEFAULT_BIND_HOST.to_owned(),
+            public_host: iroha_deploy::sora_network::DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 31_080,
             base_p2p_port: 31_337,
             out_dir: output_dir.clone(),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Npos,
         };
-        iroha_deploy::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
+        iroha_deploy::sora_network::generate_network(&options, &mut BufWriter::new(Vec::new()))
             .expect("generate Nexus localnet");
         let generated_bytes =
             fs::read(output_dir.join("genesis.signed.nrt")).expect("read generated signed genesis");
@@ -4133,9 +4130,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let config = load_peer_config(&config_path).expect("load generated peer config");
         let expected_policy = iroha_core::state::default_genesis_confidential_policy_hash();
         let (genesis_public_key, genesis_private_key) =
-            iroha_deploy::localnet::generate_genesis_key_pair(
+            iroha_deploy::sora_network::generate_genesis_key_pair(
                 Some(seed.as_bytes()),
-                iroha_deploy::localnet::GENESIS_SEED,
+                iroha_deploy::sora_network::GENESIS_SEED,
             )
             .expect("derive generated localnet genesis key");
         let genesis_key_pair = KeyPair::new(genesis_public_key, genesis_private_key.0.clone())
@@ -4654,25 +4651,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("typed validator mode overrides");
         let nexus = table["nexus"].as_table_mut().expect("Nexus config");
         nexus.insert("staking".to_owned(), toml::Value::Table(staking));
-        let pipeline = table
-            .entry("pipeline")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .expect("pipeline config");
-        let gas = pipeline
-            .entry("gas")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .expect("gas config");
-        gas.insert(
-            "tech_account_id".to_owned(),
-            toml::Value::String(
-                staged_default_pipeline(&manifest)
-                    .expect("manifest-specific gas account")
-                    .gas
-                    .tech_account_id,
-            ),
-        );
         // Use the existing complete fixture author: real key files, four trusted
         // validators and an actual signed genesis identity precede config admission.
         let path = runtime_test_peer_config(table, &manifest, &test_genesis_key_pair());

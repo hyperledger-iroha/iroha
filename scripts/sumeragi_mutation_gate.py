@@ -895,6 +895,8 @@ CORE_MUTATIONS = [
           "crates/iroha_core/src/private_settlement/carrier.rs"),)),
     m("HC492", "private payment policy: treat an ordinary update as initial genesis policy and omit its drain",
       ["smartcontracts::isi::privacy::tests::native_private_policy_schedules_drain_original_obligations_before_activation"]),
+    m("HC497", "privacy consensus policy: record an ordinary update at the genesis schedule height",
+      ["smartcontracts::isi::privacy::tests::consensus_policy_schedule_rejects_bad_authority_timing_limits_and_overwrite"]),
     m("HC493", "native restart authority: restart every descending parent read at the captured tip",
       ["sumeragi::runtime_availability::tests::descending_global_authority_rechecks_original_sources_with_linear_frame_work"],
       causes=(ExpectedFailure("descending global authority must not restart at the tip for each original parent",
@@ -2906,7 +2908,7 @@ DEPLOY_MUTATIONS = [
     m("DEP6", "Administrative AMX registration: accept a substituted original child or signer",
       ["attachment::amx_registration::tests::original_amx_administrator_child_fees_time_and_checkpoint_survive_reopen_and_refuse_substitution"]),
     m("DEP7", "signed service profile: reconstruct completed original authenticated genesis metadata",
-      ["localnet::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"]),
+      ["sora_network::private_root::tests::private_root_preparation_executes_signed_genesis_and_retains_owner_on_reopen"]),
 
 ]
 

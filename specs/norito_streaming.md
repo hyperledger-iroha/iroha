@@ -431,16 +431,16 @@ Operators can curate Kaigi calls directly from the CLI:
 
 ```bash
 # Register a session
-iroha kaigi create --domain streaming.universal --call-name daily --host <i105-account-id> \
+iroha app kaigi create --domain streaming.universal --call-name daily --host <i105-account-id> \
   --privacy-mode transparent --room-policy public \
   --relay-manifest manifests/torii.json
 
 # Join/leave flows for participants
-iroha kaigi join --domain streaming.universal --call-name daily --participant <i105-account-id>
-iroha kaigi leave --domain streaming.universal --call-name daily --participant <i105-account-id>
+iroha app kaigi join --domain streaming.universal --call-name daily --participant <i105-account-id>
+iroha app kaigi leave --domain streaming.universal --call-name daily --participant <i105-account-id>
 
 # Record billable usage (milliseconds + gas)
-iroha kaigi record-usage --domain streaming.universal --call-name daily \
+iroha app kaigi record-usage --domain streaming.universal --call-name daily \
   --duration-ms 120000 --billed-gas 1500
 ```
 

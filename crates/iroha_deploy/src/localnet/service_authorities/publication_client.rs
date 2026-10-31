@@ -6,18 +6,32 @@
 use super::*;
 use iroha::config::MusubiPublicationConfig;
 use iroha_core::state::WorldReadOnly as _;
-use iroha_data_model::musubi::{
-    MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiPackageScopeV1,
-    MusubiRegistryAdmissionModeV1, MusubiRegistryPolicyV1,
+use iroha_data_model::{
+    alias_setup::{
+        AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
+        AliasQuoteGuardV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+    },
+    isi::alias_setup::EnsureAlias,
+    musubi::{
+        MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiPackageScopeV1,
+        MusubiRegistryAdmissionModeV1, MusubiRegistryPolicyV1,
+    },
 };
+use iroha_primitives::numeric::Quantity;
 
 const NAMESPACE: &str = "dev.universal";
+/// Data space alias the namespace leases under; the namespace bootstrap leases it to genesis.
+const DATASPACE_ALIAS: &str = "universal";
+/// Domain genesis registers and owns; the namespace bootstrap must leave its ownership alone.
+const ADMIN_DOMAIN: &str = "universal.universal";
 const TEMPORARY_ROLE: &str = "generated_publication_domain_bootstrap";
 const NAMESPACE_JOURNAL_DIRECTORY: &str = "publication-namespace";
 const PUBLICATION_CLIENT_DIRECTORY: &str = "publication-client";
 const PUBLICATION_OPERATIONS_DIRECTORY: &str = "operations";
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
 const MAX_CLIENT_BYTES: usize = 1024 * 1024;
+/// SNS alias policy version the namespace lease quote expects.
+const ALIAS_POLICY_VERSION: u16 = 1;
 
 /// Original public publication configuration authenticated with the complete generated profile.
 ///
@@ -177,17 +191,17 @@ impl PreparedLocalnet {
         .map_err(|_| invalid())?;
         let signed = directory.read("genesis.signed.nrt", SIGNED_GENESIS_MAX_BYTES_V1)?;
         let peer_bytes = directory.read("peer0.toml", MAX_CLIENT_BYTES)?;
-        let peer = parse_localnet_peer_config(
+        let peer = config::parse_peer_config(
             std::str::from_utf8(&peer_bytes).map_err(|_| invalid())?,
-            Some(&self.peers[0].config_path),
+            &self.peers[0].config_path,
         )
         .map_err(|_| invalid())?;
         // Every management origin names its exact retained validator listener, in slot order.
         for (index, selected) in self.peers.iter().enumerate() {
             let config_bytes = directory.read(format!("peer{index}.toml"), MAX_CLIENT_BYTES)?;
-            let actual = parse_localnet_peer_config(
+            let actual = config::parse_peer_config(
                 std::str::from_utf8(&config_bytes).map_err(|_| invalid())?,
-                Some(&selected.config_path),
+                &selected.config_path,
             )
             .map_err(|_| invalid())?;
             let listener: std::net::SocketAddr = actual
@@ -228,22 +242,18 @@ impl PreparedLocalnet {
         let port = loopback_port(&urls[0]).map_err(|_| invalid())?;
         // Reconstruct through the sole generator. This checks every byte, including the existing
         // signing/network fields; no generic TOML reserialization of secrets is used.
-        let identity = LocalnetClientIdentity {
+        let identity = Identity {
             account_id: client.account.clone(),
             public_key: client.key_pair.public_key().clone(),
             private_key: Zeroizing::new(
                 ExposedPrivateKey(client.key_pair.private_key().clone()).to_string(),
             ),
         };
-        let expected = render_client_config(
+        let expected = config::render_client_config(
             port,
             &CanonicalHost::parse("127.0.0.1", "generated Torii host").map_err(|_| invalid())?,
             client.chain.as_ref(),
-            resolve_localnet_chain_discriminant(
-                client.chain.as_ref(),
-                Some(client.account_chain_discriminant),
-            )
-            .map_err(|_| invalid())?,
+            Some(client.account_chain_discriminant),
             &identity,
             HttpTransportPolicy::DirectLoopback,
             Some(&public),
@@ -259,7 +269,7 @@ impl PreparedLocalnet {
         }
         Ok(Some(RetainedPublicationClientConfig {
             namespace_journal_root: root
-                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(RUNTIME_DIRECTORY)
                 .join(NAMESPACE_JOURNAL_DIRECTORY),
             client_path: self.context.client_config.clone(),
             client_image: bytes,
@@ -290,22 +300,33 @@ pub(in crate::localnet) fn append_namespace(
     let permission = Permission::from(CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Domain(domain.clone()),
     });
+    let guard = AliasQuoteGuardV1 {
+        expected_policy_version: ALIAS_POLICY_VERSION,
+        expected_payment_asset: localnet_xor_asset_definition_id(),
+        max_amount: Quantity::from(SERVICE_FEE_BALANCE),
+        valid_until_ms: u64::MAX,
+    };
+    // The namespace lives under the `universal` data space alias, which genesis owns.
+    let dataspace = EnsureAlias::new(
+        AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: ResolvedDataSpaceV1::new(DATASPACE_ALIAS.parse()?, DataSpaceId::UNIVERSAL),
+            owner: genesis_authority.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        guard.clone(),
+    );
     let ensure = EnsureAlias::new(
         AliasIntentV1::Domain(AliasDomainIntentV1 {
             domain: ResolvedDomainV1::new(domain, DataSpaceId::UNIVERSAL),
             owner: developer.clone(),
         }),
         AliasLeaseAcquisitionV1::new(1, None),
-        AliasQuoteGuardV1 {
-            expected_policy_version: LOCALNET_ALIAS_SETUP_POLICY_VERSION,
-            expected_payment_asset: localnet_xor_asset_definition_id(),
-            max_amount: Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
-            valid_until_ms: u64::MAX,
-        },
+        guard,
     );
     genesis
         .into_builder()
         .next_transaction()
+        .append_instruction(dataspace)
         .append_instruction(Register::role(
             Role::new(role.clone(), genesis_authority.clone()).add_permission(permission),
         ))
@@ -354,7 +375,7 @@ fn native_original(
                         .as_ref()
                         == Some(&genesis_owner)
                     && world
-                        .domain(&DomainId::parse_fully_qualified(CLIENT_ACCOUNT_DOMAIN)?)?
+                        .domain(&DomainId::parse_fully_qualified(ADMIN_DOMAIN)?)?
                         .owned_by()
                         == &genesis_owner,
                 "generated publication changed existing admin ownership"
@@ -537,7 +558,7 @@ impl GeneratedPublicationClient {
         wallet
             .initialize_musubi_namespace_binding_parent(
                 &generation
-                    .join(LOCALNET_RUNTIME_DIRECTORY)
+                    .join(RUNTIME_DIRECTORY)
                     .join(NAMESPACE_JOURNAL_DIRECTORY),
                 &self.selection,
                 &self.fee,
@@ -545,7 +566,7 @@ impl GeneratedPublicationClient {
             .map_err(|_| eyre!("cannot initialize original namespace parent"))?;
         // Only the unpublished-generation producer initializes the complete client-history
         // directory. Consumers open its original inner and outer custody without repair.
-        let runtime = directory.open_child(LOCALNET_RUNTIME_DIRECTORY)?;
+        let runtime = directory.open_child(RUNTIME_DIRECTORY)?;
         let publication = runtime.create_child(PUBLICATION_CLIENT_DIRECTORY)?;
         let operations = publication.create_child(PUBLICATION_OPERATIONS_DIRECTORY)?;
         let journal =

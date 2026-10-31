@@ -10,15 +10,13 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
         }
     }
 
-    let base = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let base = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let previous = env::current_dir().expect("current dir");
     env::set_current_dir(base.path()).expect("chdir into temp");
     let _guard = DirGuard { prev: previous };
 
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).unwrap(),
         seed: Some("absolute-paths".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -26,14 +24,11 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
         base_api_port: 19081,
         base_p2p_port: 23338,
         out_dir: PathBuf::from("localnet"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
 
     let mut handoff = BufWriter::new(Vec::new());
-    generate_localnet(&opts, &mut handoff).expect("generate localnet with relative path");
+    generate_network(&opts, &mut handoff).expect("generate localnet with relative path");
     let handoff = String::from_utf8(handoff.into_inner().expect("flush localnet handoff"))
         .expect("localnet handoff is UTF-8");
 
@@ -230,13 +225,12 @@ fn relative_out_dir_paths_are_absolute_in_configs() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn start_and_stop_scripts_are_executable() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let client_account_literal = localnet_client_account_literal(None);
     let fee_asset_definition_id = localnet_xor_asset_literal();
     write_scripts(
         temp.path(),
         1,
-        false,
         false,
         &client_account_literal,
         &fee_asset_definition_id,
@@ -396,7 +390,6 @@ fn ordinary_localnet_launcher_isolates_peer_workdirs_and_detaches_without_privat
     write_start_script(
         &start_path,
         4,
-        false,
         false,
         &localnet_client_account_literal(None),
         &localnet_xor_asset_literal(),
@@ -587,8 +580,8 @@ for attempt, order in enumerate(("launcher-first", "daemon-check-first", "launch
 fn taira_launcher_keeps_consumed_launch_paths_in_either_consumption_order() {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
-    let root =
-        crate::localnet::localnet_test_helpers::private_tempdir().expect("private localnet root");
+    let root = crate::sora_network::localnet_test_helpers::private_tempdir()
+        .expect("private localnet root");
     let runtime = root.path().join("runtime");
     let signer_dir = runtime.join(TAIRA_RUNTIME_SIGNER_DIRECTORY);
     {
@@ -665,11 +658,10 @@ fn taira_launcher_keeps_consumed_launch_paths_in_either_consumption_order() {
 #[cfg(unix)]
 #[test]
 fn taira_lifecycle_is_exact_process_record_and_pidfd_only() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
         4,
-        true,
         true,
         &localnet_client_account_literal(Some(369)),
         &localnet_xor_asset_literal(),
@@ -748,11 +740,10 @@ fn shell_assignment_quoting_preserves_metacharacters_as_data() {
 #[cfg(unix)]
 #[test]
 fn start_script_preserves_explicit_faucet_allocation_without_minting() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
         4,
-        false,
         false,
         &localnet_client_account_literal(None),
         &localnet_xor_asset_literal(),
@@ -768,11 +759,10 @@ fn start_script_preserves_explicit_faucet_allocation_without_minting() {
 #[cfg(unix)]
 #[test]
 fn lifecycle_scripts_enforce_exact_peer_selector_grammar() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     write_scripts(
         temp.path(),
         4,
-        false,
         false,
         &localnet_client_account_literal(None),
         &localnet_xor_asset_literal(),

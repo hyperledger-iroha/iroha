@@ -382,16 +382,14 @@ pub(super) async fn prepare(
     let mut generate = Command::new(kagami);
     generate
         .args([
-            "localnet",
+            "sora-network",
             "generate",
             "--peers",
             "4",
             "--chain-id",
             "fc56984b-2be7-431d-840e-21514d1883f0",
-            "--sora-profile",
+            "--profile",
             "nexus",
-            "--consensus-mode",
-            "npos",
             "--block-cadence-ms",
             "2000",
             "--bind-host",

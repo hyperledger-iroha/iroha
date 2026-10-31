@@ -256,7 +256,7 @@ mod tests {
         signed_path: &Path,
         identity_path: &Path,
         global: &ExecutedGlobalSources,
-        spec: &iroha_deploy::localnet::PrivateRootSpec,
+        spec: &iroha_deploy::sora_network::PrivateRootSpec,
         public_key: &iroha_crypto::PublicKey,
         original_private_network: &str,
     ) {
@@ -374,20 +374,20 @@ mod tests {
         let private = temporary.path().join("private");
         let alias = "amxcli";
         let name = NameSelectorV1::new(DATASPACE_ALIAS_SUFFIX_ID, alias).unwrap();
-        let spec = iroha_deploy::localnet::PrivateRootSpec {
+        let spec = iroha_deploy::sora_network::PrivateRootSpec {
             parent_network_id: global.network_id,
             dataspace_id: iroha_model_base::topology::DataSpaceId::from_hash(&name.name_hash()),
             dataspace_alias: alias.into(),
         };
         let ports = iroha_deploy::managed::LocalnetPorts::reserve().unwrap();
         let prepared =
-            iroha_deploy::localnet::prepare_private_root("amx-cli", &private, &ports, &spec)
+            iroha_deploy::sora_network::prepare_private_root("amx-cli", &private, &ports, &spec)
                 .expect(
                     "generate actual private fee/SNS/topology policy and canonical signer custody",
                 );
         let client = prepared.context.load_client_config().unwrap();
         let manifest = private.join("genesis.json");
-        let key = private.join(iroha_deploy::localnet::GENESIS_PRIVATE_KEY_FILE);
+        let key = private.join(iroha_deploy::sora_network::GENESIS_PRIVATE_KEY_FILE);
         let config = &prepared.peers[0].config_path;
         let original_manifest = std::fs::read(&manifest).unwrap();
         let original_config = iroha_fs::read_private(config, 1024 * 1024).unwrap();

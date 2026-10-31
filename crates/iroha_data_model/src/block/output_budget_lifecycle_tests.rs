@@ -9,10 +9,9 @@ use crate::{
         INTERNAL_REJECTION_DIAGNOSTIC_OMITTED, InvocationCompletionV1, PipelineEventPositionV1,
         PipelineInvocationV1, TimeExecutionOutputV1, TimeExecutionOutputV2, TimeInvocationV1,
         TriggerFailureRootV1, TriggerLifecycleActionCodecV1, TriggerLifecycleActionFrameV1,
-        TriggerLifecycleChangeV1, TriggerLifecycleEffectV1,
-        TriggerLifecycleEffectsV1, TriggerLifecycleOriginV1, TriggerLifecyclePolicyV1,
-        TriggerLifecycleRetryStateV1, TriggerLifecycleStateKindV1, TriggerLifecycleStateV1,
-        TriggerUseV1,
+        TriggerLifecycleChangeV1, TriggerLifecycleEffectV1, TriggerLifecycleEffectsV1,
+        TriggerLifecycleOriginV1, TriggerLifecyclePolicyV1, TriggerLifecycleRetryStateV1,
+        TriggerLifecycleStateKindV1, TriggerLifecycleStateV1, TriggerUseV1,
     },
     events::{
         EventFilterBox,

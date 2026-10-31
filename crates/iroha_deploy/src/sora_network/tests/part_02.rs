@@ -3,12 +3,10 @@ include!("../profile_policy_tests.rs");
 #[allow(clippy::too_many_lines)]
 fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
     use std::collections::{BTreeMap, BTreeSet};
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(4).expect("non-zero");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: peer_count,
         seed: Some("localnet-nexus-alias-lanes".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -16,12 +14,9 @@ fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
         base_api_port: 32080,
         base_p2p_port: 32337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
     let peer_cfg: toml::Value = toml::from_str(
         &fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated peer config"),
     )
@@ -232,11 +227,9 @@ fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
 
 #[test]
 fn invalid_chain_requests_do_not_create_partial_output_directories() {
-    fn options(out_dir: PathBuf) -> LocalnetOptions {
-        LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: None,
-            perf_profile: None,
+    fn options(out_dir: PathBuf) -> NetworkOptions {
+        NetworkOptions {
+            sora_profile: SoraProfile::Dataspace,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("pre-write-chain-validation".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -244,18 +237,15 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
             base_api_port: 28_080,
             base_p2p_port: 28_337,
             out_dir,
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
         }
     }
 
-    let parent = crate::localnet::localnet_test_helpers::private_tempdir()
+    let parent = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("create localnet validation parent");
     let malformed_out = parent.path().join("malformed-chain");
     let malformed = options(malformed_out.clone());
-    let _error = generate_localnet_with_chain(
+    let _error = generate_network_with_chain(
         &malformed,
         &mut BufWriter::new(Vec::new()),
         Some(" padded"),
@@ -269,7 +259,7 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
 
     let taira_out = parent.path().join("invalid-taira-profile");
     let invalid_taira = options(taira_out.clone());
-    let _error = generate_localnet_with_chain(
+    let _error = generate_network_with_chain(
         &invalid_taira,
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
@@ -280,71 +270,6 @@ fn invalid_chain_requests_do_not_create_partial_output_directories() {
         !taira_out.exists(),
         "Taira profile mismatch must fail before creating its output directory"
     );
-}
-#[test]
-fn invalid_asset_requests_do_not_create_partial_output_directories() {
-    fn options(out_dir: PathBuf, assets: Vec<AssetSpec>) -> LocalnetOptions {
-        LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: None,
-            perf_profile: None,
-            peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("pre-write-asset-validation".to_owned()),
-            bind_host: DEFAULT_BIND_HOST.to_owned(),
-            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-            base_api_port: 28_080,
-            base_p2p_port: 28_337,
-            out_dir,
-            extra_accounts: 0,
-            assets,
-            block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
-        }
-    }
-    fn asset(id: String, alias: Option<&str>) -> AssetSpec {
-        AssetSpec {
-            id,
-            name: "Preflight asset".to_owned(),
-            alias: alias.map(str::to_owned),
-            owned_by: ALICE_ID.clone(),
-            mint_to: ALICE_ID.clone(),
-            quantity: 1,
-        }
-    }
-
-    let parent = crate::localnet::localnet_test_helpers::private_tempdir()
-        .expect("create asset-validation parent");
-    let valid_id = localnet_sample_asset_literal();
-    let cases = [
-        ("invalid-id", vec![asset("not-an-id".to_owned(), None)]),
-        (
-            "invalid-alias",
-            vec![asset(valid_id.clone(), Some("not an alias"))],
-        ),
-        (
-            "duplicate-id",
-            vec![asset(valid_id.clone(), None), asset(valid_id, None)],
-        ),
-        (
-            "duplicate-alias",
-            vec![
-                asset(localnet_sample_asset_literal(), Some("sample#localnet")),
-                asset(localnet_xor_asset_literal(), Some("sample#localnet")),
-            ],
-        ),
-    ];
-    for (name, assets) in cases {
-        let out_dir = parent.path().join(name);
-        let _error = generate_localnet(
-            &options(out_dir.clone(), assets),
-            &mut BufWriter::new(Vec::new()),
-        )
-        .expect_err("invalid asset request must fail");
-        assert!(
-            !out_dir.exists(),
-            "invalid asset request `{name}` must fail before creating output"
-        );
-    }
 }
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -593,7 +518,7 @@ fn private_dataspace_manifests_use_the_selected_lane_alias() {
         (SoraProfile::PrivateCbuae, "cbuae"),
         (SoraProfile::PrivateBpng, "bpng"),
     ] {
-        let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+        let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
         let manifest_directory =
             write_localnet_lane_manifests(temp.path(), Some(profile), &peers, None, false)
                 .expect("write private lane manifest")
@@ -661,12 +586,10 @@ fn private_dataspace_manifests_use_the_selected_lane_alias() {
 #[allow(clippy::too_many_lines)]
 fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
     use std::collections::{BTreeMap, BTreeSet};
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let peer_count = NonZeroU16::new(4).expect("non-zero");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Dataspace),
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: peer_count,
         seed: Some("localnet-paynet-dataspace-lane".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -674,12 +597,9 @@ fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
         base_api_port: 34080,
         base_p2p_port: 34337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
     let peer_cfg: toml::Value = toml::from_str(
         &fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated peer config"),
     )
@@ -888,11 +808,9 @@ fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
 }
 #[test]
 fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("localnet-nexus-da-proof-policy".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -900,12 +818,9 @@ fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
         base_api_port: 33080,
         base_p2p_port: 33337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
     let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
     let parsed = actual::Root::from_toml_source(source).expect("config should parse");
     let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
@@ -930,55 +845,10 @@ fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
     );
 }
 #[test]
-fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
-        peers: NonZeroU16::new(4).expect("non-zero"),
-        seed: Some("permissioned-gas-metering-only".to_owned()),
-        bind_host: DEFAULT_BIND_HOST.to_owned(),
-        public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-        base_api_port: 28080,
-        base_p2p_port: 28337,
-        out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: Some(1_000),
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-    let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-    let params = genesis_parameters(&manifest);
-    let gas_limit: u64 = params
-        .custom()
-        .get(&localnet_custom_parameter_id("ivm_gas_limit_per_block"))
-        .expect("permissioned localnet should pin the IVM gas limit")
-        .payload()
-        .try_into_any_norito()
-        .expect("gas limit payload should decode");
-    assert_eq!(gas_limit, LOCALNET_IVM_GAS_LIMIT_PER_BLOCK);
-    assert!(
-        !params
-            .custom()
-            .contains_key(&localnet_custom_parameter_id("ivm_gas_accepted_assets")),
-        "permissioned localnet must not enable gas fee assets without bootstrapping XOR"
-    );
-    assert!(
-        !params
-            .custom()
-            .contains_key(&localnet_custom_parameter_id("ivm_gas_units_per_gas")),
-        "permissioned localnet must not override peer gas rates to a charging value"
-    );
-}
-#[test]
 fn block_cadence_override_is_signed_into_genesis() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("block-time-commit-default".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -986,12 +856,9 @@ fn block_cadence_override_is_signed_into_genesis() {
         base_api_port: 28080,
         base_p2p_port: 28337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: Some(1_000),
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
     let genesis_path = temp.path().join("genesis.json");
     let manifest = genesis_json_from_path(&genesis_path);
     let params = genesis_parameters(&manifest);
@@ -1026,11 +893,9 @@ fn block_cadence_override_is_signed_into_genesis() {
 }
 #[test]
 fn npos_localnet_keeps_payload_for_fast_block_cadence() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("npos-fast-timeouts".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1038,12 +903,9 @@ fn npos_localnet_keeps_payload_for_fast_block_cadence() {
         base_api_port: 38180,
         base_p2p_port: 38437,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: Some(333),
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
     let genesis_path = temp.path().join("genesis.json");
     let manifest = genesis_json_from_path(&genesis_path);
     let params = genesis_parameters(&manifest);
@@ -1060,11 +922,9 @@ fn npos_localnet_keeps_payload_for_fast_block_cadence() {
 }
 #[test]
 fn npos_localnet_keeps_genesis_under_transaction_cap() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("npos-genesis-cap".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1072,12 +932,9 @@ fn npos_localnet_keeps_genesis_under_transaction_cap() {
         base_api_port: 38280,
         base_p2p_port: 38537,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: Some(333),
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
     let genesis_path = temp.path().join("genesis.json");
     let transactions = RawGenesisTransaction::from_path(&genesis_path)
         .expect("parse generated genesis")
@@ -1091,8 +948,8 @@ fn npos_localnet_keeps_genesis_under_transaction_cap() {
 }
 #[test]
 fn client_config_selects_the_generated_identity_file_only() {
-    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let root = crate::localnet::custody::prepare_empty_private_directory(tmp.path())
+    let tmp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let root = crate::custody::prepare_empty_private_directory(tmp.path())
         .expect("prepare private client config directory");
     let host =
         CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
@@ -1150,8 +1007,8 @@ fn client_config_selects_the_generated_identity_file_only() {
 }
 #[test]
 fn client_config_records_chain_discriminant_when_known() {
-    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let root = crate::localnet::custody::prepare_empty_private_directory(tmp.path())
+    let tmp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let root = crate::custody::prepare_empty_private_directory(tmp.path())
         .expect("prepare private client config directory");
     let host =
         CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
@@ -1217,12 +1074,10 @@ fn client_config_preserves_publication_with_explicit_network_context() {
 #[test]
 fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
     let _chain_discriminant = ChainDiscriminantGuard::enter(369);
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("temporary Taira directory");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),
         seed: Some("taira-generated-deployer-permission".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -1230,12 +1085,9 @@ fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
         base_api_port: 29_080,
         base_p2p_port: 33_337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: Some(5_000),
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet_with_chain(
+    generate_network_with_chain(
         &opts,
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
@@ -1311,123 +1163,11 @@ fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
     }));
 }
 #[test]
-fn generated_permissioned_localnet_cannot_mint_additional_xor() {
-    use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
-        peers: NonZeroU16::new(4).expect("non-zero"),
-        seed: Some("permissioned-faucet-mint-permission".to_owned()),
-        bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
-        public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-        base_api_port: 29080,
-        base_p2p_port: 33337,
-        out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-    let operator =
-        localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
-            .expect("derive generated operator");
-    let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
-        .expect("parse generated genesis");
-    let mut operator_mint_permissions = manifest
-        .instructions()
-        .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
-        .filter_map(|grant| match grant {
-            GrantBox::Permission(grant) if grant.destination() == &operator.account_id => {
-                CanMintAssetWithDefinition::try_from(grant.object()).ok()
-            }
-            _ => None,
-        });
-    assert!(operator_mint_permissions.next().is_none());
-    let signed = read_signed_genesis(&temp.path().join("genesis.signed.nrt"))
-        .expect("read executed permissioned genesis");
-    assert!(signed.network_entrypoint_count() > 0);
-    signed
-        .validate_output_merkle_cache()
-        .expect("generated genesis retains its complete execution outputs");
-    assert!(
-        signed
-            .output_results()
-            .all(|result| result.as_ref().is_ok()),
-        "faucet funding must execute successfully in the real generated genesis"
-    );
-    for peer_index in 0..opts.peers.get() {
-        let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
-            .expect("read generated permissioned peer config");
-        let parsed = actual::Root::from_toml_source(source)
-            .expect("parse generated permissioned peer config");
-        assert!(parsed.torii.operator_signatures.enabled);
-        assert!(parsed.torii.operator_signatures.allow_node_key);
-        assert_eq!(
-            parsed.torii.operator_signatures.allowed_public_keys,
-            vec![
-                localnet_test_sidecar_key(
-                    &temp
-                        .path()
-                        .join(LOCALNET_RUNTIME_DIRECTORY)
-                        .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE)
-                )
-                .public_key()
-                .clone()
-            ],
-            "generic localnet must authorize exactly its dedicated HTTP operator"
-        );
-        assert!(
-            !parsed
-                .torii
-                .operator_signatures
-                .allowed_public_keys
-                .contains(&operator.public_key)
-        );
-        let faucet = parsed
-            .torii
-            .faucet
-            .as_ref()
-            .expect("native faucet admission");
-        assert_eq!(faucet.authority, operator.account_id);
-        assert_eq!(faucet.signer.public_key(), &operator.public_key);
-        let fee_definition = faucet
-            .asset_definition_id
-            .parse::<AssetDefinitionId>()
-            .expect("configured canonical faucet asset definition");
-        assert_eq!(fee_definition, localnet_xor_asset_definition_id());
-        let faucet_asset = AssetId::new(fee_definition, faucet.authority.clone());
-        let minted = manifest
-            .instructions()
-            .filter_map(
-                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
-                    Some(MintBox::Asset(mint)) if mint.destination() == &faucet_asset => {
-                        Some(mint.object().clone())
-                    }
-                    _ => None,
-                },
-            )
-            .collect::<Vec<_>>();
-        assert_eq!(
-            minted,
-            vec![
-                Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
-                Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE),
-            ],
-            "Permissioned faucet must receive its explicit Global allocation once"
-        );
-        assert!(Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE) > faucet.amount);
-    }
-}
-#[test]
 fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let temp =
+        crate::sora_network::localnet_test_helpers::private_tempdir().expect("make temp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("Iroha".to_owned()),
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1435,12 +1175,9 @@ fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
         base_api_port: 29080,
         base_p2p_port: 33337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
     let client_config: toml::Value = toml::from_str(
         &fs::read_to_string(temp.path().join("client.toml")).expect("read generated client"),
     )
@@ -1486,10 +1223,8 @@ fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
 }
 #[test]
 fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("typed-fee-sponsor".to_owned()),
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1497,10 +1232,7 @@ fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
         base_api_port: 29_080,
         base_p2p_port: 33_337,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let (genesis_public_key, _) =
         generate_genesis_key_pair(opts.seed.as_deref().map(str::as_bytes), GENESIS_SEED)
@@ -1569,11 +1301,10 @@ fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
 }
 #[test]
 fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let temp =
+        crate::sora_network::localnet_test_helpers::private_tempdir().expect("make temp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("localnet-faucet-config".to_owned()),
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1581,12 +1312,9 @@ fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
         base_api_port: 29080,
         base_p2p_port: 33337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
     let peer_cfg: toml::Value = toml::from_str(
         &fs::read_to_string(temp.path().join("peer0.toml")).expect("read peer config"),
     )
@@ -1668,11 +1396,10 @@ fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
+    let temp =
+        crate::sora_network::localnet_test_helpers::private_tempdir().expect("make temp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("localnet-fee-asset-convertible".to_owned()),
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -1680,12 +1407,9 @@ fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
         base_api_port: 29080,
         base_p2p_port: 33337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
     let peer_cfg: toml::Value = toml::from_str(
         &fs::read_to_string(temp.path().join("peer0.toml")).expect("read peer config"),
     )
@@ -1821,61 +1545,9 @@ fn generated_fee_unshield_verifier_uses_canonical_native_registry_material() {
     assert_eq!(iroha_core_zk::hash_vk(retry_key), original_commitment);
 }
 #[test]
-fn canonical_host_formats_ipv6_literals_and_urls() {
-    let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
-    let literal = host.addr_literal(8080);
-    let body = literal::parse("addr", &literal).expect("parse addr literal");
-    assert_eq!(body, "[::1]:8080");
-    assert_eq!(host.url_host(), "[::1]");
-}
-#[test]
-fn canonical_host_lowercases_names() {
-    let host = CanonicalHost::parse("LOCALHOST", "--public-host").expect("host");
-    let literal = host.addr_literal(1337);
-    let body = literal::parse("addr", &literal).expect("parse addr literal");
-    assert_eq!(body, "localhost:1337");
-    assert_eq!(host.url_host(), "localhost");
-}
-#[test]
-fn canonical_host_rejects_host_with_port() {
-    let err = CanonicalHost::parse("127.0.0.1:8080", "--public-host")
-        .expect_err("host with port should fail");
-    assert!(err.to_string().contains("without a port"));
-}
-#[test]
-fn canonical_host_rejects_unbalanced_brackets() {
-    let err = CanonicalHost::parse("[::1", "--public-host")
-        .expect_err("missing closing bracket should fail");
-    assert!(err.to_string().contains("unmatched"));
-    let err = CanonicalHost::parse("::1]", "--public-host")
-        .expect_err("missing opening bracket should fail");
-    assert!(err.to_string().contains("unmatched"));
-}
-#[test]
-fn canonical_host_rejects_non_dns_names_and_injection_characters() {
-    for raw in [
-        " example.test",
-        "example.test ",
-        "example.test/path",
-        "example.test\nnext",
-        "example\".test",
-        "$(command)",
-        "-leading.example",
-        "trailing-.example",
-        "two..labels",
-        "[localhost]",
-    ] {
-        let _error = CanonicalHost::parse(raw, "--public-host")
-            .expect_err("noncanonical or injectable host must fail");
-    }
-    let host =
-        CanonicalHost::parse("Node-1.Example.Test", "--public-host").expect("canonical DNS host");
-    assert_eq!(host.url_host(), "node-1.example.test");
-}
-#[test]
 fn client_config_renders_ipv6_torii_url() {
-    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let root = crate::localnet::custody::prepare_empty_private_directory(tmp.path())
+    let tmp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let root = crate::custody::prepare_empty_private_directory(tmp.path())
         .expect("prepare private client config directory");
     let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
     write_client_config(
@@ -1894,7 +1566,7 @@ fn client_config_renders_ipv6_torii_url() {
 }
 #[test]
 fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
-    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let tmp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
     let runtime_bundle = LocalnetRuntimeBundle {
         ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
@@ -1907,7 +1579,6 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
         tmp.path(),
         DEFAULT_CHAIN_ID,
         Some("Iroha"),
-        SumeragiConsensusMode::Npos,
         4,
         "http://127.0.0.1:29080/",
         &tmp.path().join("genesis.json"),
@@ -1943,7 +1614,7 @@ fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
 }
 #[test]
 fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
-    let tmp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let tmp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
     let runtime_bundle = LocalnetRuntimeBundle {
         ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
@@ -1956,7 +1627,6 @@ fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
         tmp.path(),
         DEFAULT_CHAIN_ID,
         None,
-        SumeragiConsensusMode::Npos,
         4,
         "http://127.0.0.1:29080/",
         &tmp.path().join("genesis.json"),
@@ -1999,15 +1669,13 @@ fn omitted_seed_uses_independent_os_random_keys() {
 #[test]
 fn localnet_refuses_to_mix_with_existing_output() {
     let output =
-        crate::localnet::localnet_test_helpers::private_tempdir().expect("localnet output");
+        crate::sora_network::localnet_test_helpers::private_tempdir().expect("localnet output");
     fs::set_permissions(output.path(), fs::Permissions::from_mode(0o700))
         .expect("harden localnet output directory");
     let sentinel = output.path().join("keep.txt");
     fs::write(&sentinel, b"do not overwrite").expect("write sentinel");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).expect("nonzero peers"),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2015,12 +1683,9 @@ fn localnet_refuses_to_mix_with_existing_output() {
         base_api_port: 29_080,
         base_p2p_port: 33_337,
         out_dir: output.path().to_owned(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
     };
-    let error = generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+    let error = generate_network(&opts, &mut BufWriter::new(Vec::new()))
         .expect_err("non-empty output must be rejected");
     assert!(format!("{error:#}").contains("must be empty"));
     assert_eq!(
@@ -2051,8 +1716,8 @@ fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
             .public_key
     );
     assert_ne!(ledger.public_key, http.public_key);
-    let root =
-        crate::localnet::localnet_test_helpers::private_tempdir().expect("runtime bundle parent");
+    let root = crate::sora_network::localnet_test_helpers::private_tempdir()
+        .expect("runtime bundle parent");
     let bundle = write_localnet_runtime_bundle(root.path(), &ledger, &http, &onboarding)
         .expect("write separated runtime bundle");
     assert_eq!(
@@ -2085,7 +1750,7 @@ fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
         (&ledger, &http, &ledger),
         (&ledger, &http, &http),
     ] {
-        let rejected = crate::localnet::localnet_test_helpers::private_tempdir()
+        let rejected = crate::sora_network::localnet_test_helpers::private_tempdir()
             .expect("rejected bundle parent");
         assert!(write_localnet_runtime_bundle(rejected.path(), ledger, http, onboarding).is_err());
         assert!(!rejected.path().join(LOCALNET_RUNTIME_DIRECTORY).exists());
@@ -2098,10 +1763,10 @@ fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         .expect("derive operator identity");
     let onboarding = localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"onboarding-root")
         .expect("derive onboarding identity");
-    let first =
-        crate::localnet::localnet_test_helpers::private_tempdir().expect("first runtime parent");
-    let second =
-        crate::localnet::localnet_test_helpers::private_tempdir().expect("second runtime parent");
+    let first = crate::sora_network::localnet_test_helpers::private_tempdir()
+        .expect("first runtime parent");
+    let second = crate::sora_network::localnet_test_helpers::private_tempdir()
+        .expect("second runtime parent");
     let http_operator =
         localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"http-operator-root")
             .expect("derive HTTP operator identity");
@@ -2121,11 +1786,9 @@ fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         .expect("read second onboarding token");
     assert_ne!(first_token, second_token);
 }
-fn mandatory_da_localnet_options(out_dir: PathBuf) -> LocalnetOptions {
-    LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+fn mandatory_da_localnet_options(out_dir: PathBuf) -> NetworkOptions {
+    NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("mandatory-da".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2133,16 +1796,13 @@ fn mandatory_da_localnet_options(out_dir: PathBuf) -> LocalnetOptions {
         base_api_port: 19090,
         base_p2p_port: 23347,
         out_dir,
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     }
 }
 fn assert_da_is_protocol_invariant_not_configuration() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let opts = mandatory_da_localnet_options(temp.path().to_path_buf());
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+    generate_network(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
     let peer_cfg: toml::Value = toml::from_str(
         &fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated peer config"),
     )
@@ -2168,10 +1828,8 @@ fn localnet_omits_retired_da_configuration() {
 }
 #[test]
 fn rejects_overflowing_port_ranges() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).unwrap(),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2179,13 +1837,10 @@ fn rejects_overflowing_port_ranges() {
         base_api_port: u16::MAX,
         base_p2p_port: 10,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut sink = BufWriter::new(Vec::<u8>::new());
-    let err = generate_localnet(&opts, &mut sink).expect_err("port overflow should fail");
+    let err = generate_network(&opts, &mut sink).expect_err("port overflow should fail");
     assert!(
         err.to_string().contains("base_api_port"),
         "unexpected error: {err}"
@@ -2193,10 +1848,8 @@ fn rejects_overflowing_port_ranges() {
 }
 #[test]
 fn rejects_overlapping_port_ranges() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).unwrap(),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2204,13 +1857,10 @@ fn rejects_overlapping_port_ranges() {
         base_api_port: 1337,
         base_p2p_port: 1337,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut sink = BufWriter::new(Vec::<u8>::new());
-    let err = generate_localnet(&opts, &mut sink).expect_err("overlapping ports should fail");
+    let err = generate_network(&opts, &mut sink).expect_err("overlapping ports should fail");
     assert!(
         err.to_string().contains("overlap"),
         "unexpected error: {err}"
@@ -2218,10 +1868,8 @@ fn rejects_overlapping_port_ranges() {
 }
 #[test]
 fn rejects_zero_ports() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).unwrap(),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2229,13 +1877,10 @@ fn rejects_zero_ports() {
         base_api_port: 0,
         base_p2p_port: 1000,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let mut sink = BufWriter::new(Vec::<u8>::new());
-    let err = generate_localnet(&opts, &mut sink).expect_err("zero port should fail");
+    let err = generate_network(&opts, &mut sink).expect_err("zero port should fail");
     assert!(
         err.to_string().contains("must be > 0"),
         "unexpected error: {err}"
@@ -2243,10 +1888,8 @@ fn rejects_zero_ports() {
 }
 #[test]
 fn validate_localnet_options_rejects_zero_block_cadence() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).unwrap(),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2254,10 +1897,7 @@ fn validate_localnet_options_rejects_zero_block_cadence() {
         base_api_port: 28080,
         base_p2p_port: 28337,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: Some(0),
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let err = validate_localnet_options(&opts).expect_err("zero block cadence should fail");
     assert!(
@@ -2269,10 +1909,8 @@ fn validate_localnet_options_rejects_zero_block_cadence() {
 fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
     let oversized =
         u16::try_from(MAX_VALIDATORS_PER_HEIGHT + 1).expect("protocol test boundary fits u16");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(oversized).expect("non-zero"),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2280,10 +1918,7 @@ fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
         base_api_port: 28_080,
         base_p2p_port: 28_337,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let error = validate_localnet_options(&opts)
         .expect_err("the CLI must reject a roster above the wire-protocol limit");
@@ -2297,10 +1932,8 @@ fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
 }
 #[test]
 fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(5).expect("non-zero"),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2308,10 +1941,7 @@ fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
         base_api_port: 28_080,
         base_p2p_port: 28_337,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let error = validate_localnet_options(&opts)
         .expect_err("the CLI must reject a non-3f+1 validator roster");
@@ -2322,10 +1952,8 @@ fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
 }
 #[test]
 fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(3).unwrap(),
         seed: None,
         bind_host: DEFAULT_BIND_HOST.to_string(),
@@ -2333,222 +1961,13 @@ fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
         base_api_port: 28080,
         base_p2p_port: 28337,
         out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let err = validate_localnet_options(&opts)
         .expect_err("every generated localnet should enforce the minimum peer count");
     assert!(
         err.to_string().contains("`--peers` must be at least 4"),
         "unexpected error: {err}"
-    );
-}
-#[test]
-fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Nexus),
-        perf_profile: None,
-        peers: NonZeroU16::new(4).unwrap(),
-        seed: None,
-        bind_host: DEFAULT_BIND_HOST.to_string(),
-        public_host: DEFAULT_PUBLIC_HOST.to_string(),
-        base_api_port: 28080,
-        base_p2p_port: 28337,
-        out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    };
-    let err = validate_localnet_options(&opts).expect_err("sora nexus should require NPoS");
-    assert!(
-        err.to_string().contains("sora-profile"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::Dataspace),
-        perf_profile: None,
-        peers: NonZeroU16::new(4).unwrap(),
-        seed: None,
-        bind_host: DEFAULT_BIND_HOST.to_string(),
-        public_host: DEFAULT_PUBLIC_HOST.to_string(),
-        base_api_port: 28080,
-        base_p2p_port: 28337,
-        out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    };
-    let err = validate_localnet_options(&opts).expect_err("sora profile should require NPoS");
-    assert!(
-        err.to_string().contains("sora-profile"),
-        "unexpected error: {err}"
-    );
-}
-#[test]
-fn validate_localnet_options_allows_permissioned_localnet() {
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
-        peers: NonZeroU16::new(4).unwrap(),
-        seed: None,
-        bind_host: DEFAULT_BIND_HOST.to_string(),
-        public_host: DEFAULT_PUBLIC_HOST.to_string(),
-        base_api_port: 28080,
-        base_p2p_port: 28337,
-        out_dir: PathBuf::from("unused"),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    };
-    validate_localnet_options(&opts).expect("permissioned localnet should be allowed");
-}
-#[test]
-fn permissioned_localnet_uses_mandatory_nexus_default() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
-        peers: NonZeroU16::new(4).unwrap(),
-        seed: Some("permissioned-localnet".to_owned()),
-        bind_host: DEFAULT_BIND_HOST.to_string(),
-        public_host: DEFAULT_PUBLIC_HOST.to_string(),
-        base_api_port: 28080,
-        base_p2p_port: 28337,
-        out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
-    };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-        .expect("generate permissioned localnet");
-    let peer_cfg: toml::Value = toml::from_str(
-        &fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated peer config"),
-    )
-    .expect("parse peer config");
-    let nexus = peer_cfg
-        .get("nexus")
-        .and_then(toml::Value::as_table)
-        .expect("nexus table");
-    assert!(
-        !nexus.contains_key("enabled"),
-        "generated configs must not expose the retired Nexus availability switch"
-    );
-    assert_eq!(
-        nexus["storage"]["local_budget_bytes"].as_integer(),
-        Some(i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES).unwrap()),
-        "mandatory Nexus storage must have a finite developer cap in permissioned mode"
-    );
-}
-#[test]
-#[allow(clippy::too_many_lines)] // End-to-end config assertions are kept together for this localnet scenario.
-fn npos_without_sora_profile_uses_mandatory_nexus() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
-        peers: NonZeroU16::new(4).unwrap(),
-        seed: Some("npos-localnet".to_owned()),
-        bind_host: DEFAULT_BIND_HOST.to_string(),
-        public_host: DEFAULT_PUBLIC_HOST.to_string(),
-        base_api_port: 28080,
-        base_p2p_port: 28337,
-        out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
-        block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
-    };
-    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate npos localnet");
-    let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-    let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
-        .expect("test localnet genesis key generation should succeed");
-    let gas_account_id = localnet_gas_account_id(&genesis_public_key);
-    let peer_cfg: toml::Value = toml::from_str(
-        &fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated peer config"),
-    )
-    .expect("parse peer config");
-    let nexus = peer_cfg
-        .get("nexus")
-        .and_then(toml::Value::as_table)
-        .expect("nexus table");
-    assert!(
-        !nexus.contains_key("enabled"),
-        "generated configs must rely on mandatory Nexus"
-    );
-    assert_eq!(
-        nexus
-            .get("storage")
-            .and_then(toml::Value::as_table)
-            .and_then(|storage| storage.get("local_budget_bytes"))
-            .and_then(toml::Value::as_integer),
-        Some(
-            i64::try_from(LOCALNET_NEXUS_STORAGE_BUDGET_BYTES)
-                .expect("localnet Nexus storage budget fits i64")
-        ),
-        "npos iroha3 localnet should use an explicit disposable storage budget"
-    );
-    let gas_account_id = account_id_runtime_literal(&gas_account_id, None);
-    assert!(
-        !nexus.contains_key("staking"),
-        "no generated node monetary policy"
-    );
-    let expected_stake_asset_id = localnet_xor_asset_literal();
-    let expected_fee_asset_id = localnet_xor_asset_literal();
-    let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-    let policy = PublicLaneStakingPolicy::from_parameters(&genesis_parameters(&manifest)).unwrap();
-    assert_eq!(policy.stake_asset_id.to_string(), expected_stake_asset_id);
-    assert_eq!(policy.stake_escrow_account_id.to_string(), gas_account_id);
-    assert_eq!(policy.slash_sink_account_id.to_string(), gas_account_id);
-    assert!(
-        nexus.get("fees").is_none(),
-        "node config cannot author monetary terms"
-    );
-    let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-    let fees = iroha_data_model::block::consensus::RootFeePolicy::from_parameters(
-        &genesis_parameters(&manifest),
-    )
-    .unwrap()
-    .expect("explicit signed root fee policy");
-    assert_eq!(fees.fee_asset_id.to_string(), expected_fee_asset_id);
-    assert_eq!(fees.base_fee, Quantity::zero());
-    assert_eq!(fees.per_byte_fee, Quantity::zero());
-    assert_eq!(fees.per_instruction_fee, "0.001".parse().unwrap());
-    assert_eq!(fees.per_gas_unit_fee, "0.00005".parse().unwrap());
-    assert!(fees.successful_claim_fee_exempt_authorities.is_empty());
-    assert_eq!(fees.fee_sink_account_id.to_string(), gas_account_id);
-    assert_eq!(
-        fees.sponsor_vault_custody_account_id.to_string(),
-        gas_account_id
-    );
-    let pipeline = peer_cfg
-        .get("pipeline")
-        .and_then(toml::Value::as_table)
-        .expect("pipeline table");
-    assert!(
-        pipeline.get("gas").is_none(),
-        "fee policy is committed chain state"
-    );
-    let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-    let parameters = genesis_parameters(&manifest);
-    let projected = iroha_core::state::StateParameters::try_from(parameters).unwrap();
-    assert_eq!(
-        AccountId::parse_encoded(&projected.gas().tech_account_id).unwrap(),
-        localnet_gas_account_id(&genesis_public_key),
-        "the same deterministic custody account is pinned in signed parameters"
     );
 }
 include!("../private_fee_and_account_tests.rs");
@@ -2661,11 +2080,9 @@ fn default_sorafs_telemetry_submitters_match_self_service_policy() {
 }
 #[test]
 fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Dataspace,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("localnet-genesis-account-dedupe".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2673,10 +2090,7 @@ fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
         base_api_port: 31080,
         base_p2p_port: 31337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
     let manifest = localnet_genesis_for_opts(&opts);
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
@@ -2697,13 +2111,12 @@ include!("../path_and_script_tests.rs");
 #[cfg(unix)]
 #[test]
 fn start_script_includes_sora_flag_when_enabled() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("tmp dir");
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir().expect("tmp dir");
     let client_account_literal = localnet_client_account_literal(None);
     let fee_asset_definition_id = localnet_xor_asset_literal();
     write_scripts(
         temp.path(),
         1,
-        true,
         false,
         &client_account_literal,
         &fee_asset_definition_id,
@@ -2718,7 +2131,7 @@ fn start_script_includes_sora_flag_when_enabled() {
         "validator launcher must include --sora when profile enabled"
     );
 }
-// Keep the generated rANS table contract tests in a focused child under `localnet::tests`.
+// Keep the generated rANS table contract tests in a focused child under `sora_network::tests`.
 include!("../rans_table_tests.rs");
 
 #[test]
@@ -2777,7 +2190,7 @@ fn localnet_genesis_signing_rejects_incomplete_duplicate_and_invalid_pop_rosters
 #[test]
 fn taira_private_output_rejects_git_directory_and_worktree_pointer() {
     let root =
-        crate::localnet::localnet_test_helpers::private_tempdir().expect("private output test");
+        crate::sora_network::localnet_test_helpers::private_tempdir().expect("private output test");
     let output = root.path().join("future/runtime/output");
     require_taira_private_output_outside_git(&output).expect("outside checkout");
     fs::create_dir(root.path().join(".git")).expect("repository marker");
@@ -2821,11 +2234,10 @@ fn localnet_chain_discriminant_preserves_defaults_and_fixed_public_prefixes() {
 
 #[test]
 fn custom_chain_prefix_configs_leave_default_governance_accounts_implicit() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir().expect("make temp dir");
-    let opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: None,
-        perf_profile: None,
+    let temp =
+        crate::sora_network::localnet_test_helpers::private_tempdir().expect("make temp dir");
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::Nexus,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: Some("custom-chain-prefix-defaults".to_owned()),
         bind_host: DEFAULT_BIND_HOST.to_owned(),
@@ -2833,13 +2245,10 @@ fn custom_chain_prefix_configs_leave_default_governance_accounts_implicit() {
         base_api_port: 21_080,
         base_p2p_port: 25_337,
         out_dir: temp.path().to_path_buf(),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Permissioned,
     };
-    generate_localnet_with_chain(&opts, &mut BufWriter::new(Vec::new()), None, Some(777))
-        .expect("generate a localnet with a custom account prefix");
+    generate_network_with_chain(&opts, &mut BufWriter::new(Vec::new()), None, Some(777))
+        .expect("generate a Sora network with a custom account prefix");
     let path = temp.path().join("peer0.toml");
     let source = fs::read_to_string(&path).expect("read generated peer config");
     assert!(

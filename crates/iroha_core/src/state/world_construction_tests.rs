@@ -62,7 +62,7 @@ fn source(record: bool) -> (Domain, Name, Json) {
             kaigi_relay_metadata_key(&ALICE_ID).unwrap(),
             Json::try_new(KaigiRelayRegistration {
                 relay_id: ALICE_ID.clone(),
-                hpke_public_key: vec![1, 2, 3],
+                hpke_public_key: crate::smartcontracts::isi::kaigi::test_relay_hpke_key(1),
                 bandwidth_class: 1,
             })
             .unwrap(),

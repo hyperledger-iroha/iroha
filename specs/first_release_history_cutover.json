@@ -887,8 +887,8 @@
       "cutover": "fresh_genesis",
       "anchors": [
         {
-          "path": "crates/irohad/src/compatibility_probe.rs",
-          "contains": "pub host_profiles: Vec<String>"
+          "path": "crates/ivm/src/gas.rs",
+          "contains": "pub fn schedule_hash"
         },
         {
           "path": "crates/iroha_core/src/sumeragi/node.rs",

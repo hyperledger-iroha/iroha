@@ -224,6 +224,56 @@ fn parser_read_key_files_fail_closed_on_custody() {
     );
 }
 
+/// A `data_dir` node creates its missing node-local identities on the first load, a check
+/// included, and keeps them afterwards.
+#[test]
+fn missing_local_identities_are_created_on_first_load_and_kept() {
+    let node = ProfileNode::new();
+    let identities = [NodeSecretFile::Transport, NodeSecretFile::Streaming];
+    for file in identities {
+        fs::remove_file(node.data_dir.secret(file)).expect("remove identity");
+    }
+    let (path, _) = node.node_file();
+    let path = path.to_str().expect("UTF-8 path").to_owned();
+    let (checked, _) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path, "--check-config"],
+    ))
+    .unwrap_or_else(|report| panic!("{report:?}"));
+    for file in identities {
+        let secret = node.data_dir.secret(file);
+        let mode = fs::metadata(&secret)
+            .expect("created identity")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o600, "{file:?}");
+    }
+    let (started, _) = read_with_fixture_space(&parse_args_from(
+        test_build_metadata(),
+        ["iroha3d", "--config", &path],
+    ))
+    .unwrap_or_else(|report| panic!("{report:?}"));
+    let transport = |config: &Config| {
+        config
+            .common
+            .soranet_transport_key_pair
+            .public_key()
+            .clone()
+    };
+    let streaming = |config: &Config| {
+        config
+            .streaming
+            .key_material
+            .identity()
+            .public_key()
+            .clone()
+    };
+    assert_eq!(transport(&checked), transport(&started));
+    assert_eq!(streaming(&checked), streaming(&started));
+    assert_ne!(transport(&started), streaming(&started));
+    assert_eq!(transport(&started).algorithm(), Algorithm::Ed25519);
+}
+
 #[test]
 fn compiled_nexus_profile_needs_no_sora_flag() {
     let node = ProfileNode::with_profile("sora-nexus-v1", 369);

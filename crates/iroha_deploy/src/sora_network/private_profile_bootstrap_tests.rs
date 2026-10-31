@@ -28,10 +28,8 @@ fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
         },
     ] {
         let seed = format!("private-profile-sns-bootstrap-{}", case.alias);
-        let opts = LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: Some(case.profile),
-            perf_profile: None,
+        let opts = NetworkOptions {
+            sora_profile: case.profile,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some(seed.clone()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -39,10 +37,7 @@ fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
             base_api_port: 29_080,
             base_p2p_port: 33_337,
             out_dir: PathBuf::from("unused"),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Npos,
         };
         let (genesis_public_key, _) =
             generate_genesis_key_pair(Some(seed.as_bytes()), GENESIS_SEED)
@@ -448,12 +443,10 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
         (SoraProfile::PrivateCbuae, "cbuae", 49_080, 53_337),
         (SoraProfile::PrivateBpng, "bpng", 29_080, 33_337),
     ] {
-        let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+        let temp = crate::sora_network::localnet_test_helpers::private_tempdir()
             .expect("create private-profile signing directory");
-        let opts = LocalnetOptions {
-            service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-            sora_profile: Some(profile),
-            perf_profile: None,
+        let opts = NetworkOptions {
+            sora_profile: profile,
             peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some(format!("private-profile-staged-sign-{alias}")),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -461,12 +454,9 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
             base_api_port,
             base_p2p_port,
             out_dir: temp.path().join(alias),
-            extra_accounts: 0,
-            assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Npos,
         };
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+        generate_network(&opts, &mut BufWriter::new(Vec::new()))
             .unwrap_or_else(|error| panic!("stage and sign {alias} private genesis: {error:#}"));
         let start_script = fs::read_to_string(opts.out_dir.join("start.sh"))
             .expect("read private-profile start script");
@@ -532,13 +522,11 @@ fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
 }
 
 #[test]
-fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
-    let temp = crate::localnet::localnet_test_helpers::private_tempdir()
+fn private_bpng_profile_rejects_public_taira_before_writing() {
+    let temp = crate::sora_network::localnet_test_helpers::private_tempdir()
         .expect("create BPNG output parent");
-    let mut opts = LocalnetOptions {
-        service_profile: crate::localnet::LocalnetServiceProfile::Standard,
-        sora_profile: Some(SoraProfile::PrivateBpng),
-        perf_profile: None,
+    let opts = NetworkOptions {
+        sora_profile: SoraProfile::PrivateBpng,
         peers: NonZeroU16::new(4).expect("non-zero"),
         seed: None,
         bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -546,12 +534,9 @@ fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
         base_api_port: 29_080,
         base_p2p_port: 33_337,
         out_dir: temp.path().join("bpng"),
-        extra_accounts: 0,
-        assets: Vec::new(),
         block_cadence_ms: None,
-        consensus_mode: SumeragiConsensusMode::Npos,
     };
-    let error = generate_localnet_with_chain(
+    let error = generate_network_with_chain(
         &opts,
         &mut BufWriter::new(Vec::new()),
         Some(PUBLIC_TAIRA_CHAIN_ID),
@@ -559,14 +544,5 @@ fn private_bpng_profile_rejects_public_taira_and_permissioned_before_writing() {
     )
     .expect_err("a local BPNG preset must not become public Taira allocation");
     assert!(error.to_string().contains("Nexus Sora profile"));
-    assert!(!opts.out_dir.exists());
-    opts.consensus_mode = SumeragiConsensusMode::Permissioned;
-    let error = generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-        .expect_err("BPNG requires the native NPoS global merge ledger");
-    assert!(
-        error
-            .to_string()
-            .contains("require `--consensus-mode npos`")
-    );
     assert!(!opts.out_dir.exists());
 }

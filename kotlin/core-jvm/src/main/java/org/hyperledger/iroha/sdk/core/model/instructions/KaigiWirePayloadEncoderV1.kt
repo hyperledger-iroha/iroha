@@ -22,7 +22,11 @@ object KaigiWirePayloadEncoderV1 {
     private const val PREFIX = "iroha.instruction.v1::kaigi::"
     private const val SCHEMA_PREFIX = "iroha_data_model::isi::kaigi::"
     private const val MAX_BYTES = 64 * 1024 * 1024
-    private val ACTIONS = setOf("CreateKaigi", "JoinKaigi", "LeaveKaigi", "EndKaigi", "RecordKaigiUsage")
+    private val ACTIONS = setOf(
+        "CreateKaigi", "JoinKaigi", "LeaveKaigi", "EndKaigi", "RecordKaigiUsage",
+        "SetKaigiRelayManifest", "RegisterKaigiRelay", "UnregisterKaigiRelay", "ReportKaigiRelayHealth",
+    )
+    private val RELAY_HEALTH_STATUSES = listOf("Healthy", "Degraded", "Unavailable")
     private val NONE = byteArrayOf(0)
     private object Raw : TypeAdapter<ByteArray> {
         override fun encode(encoder: NoritoEncoder, value: ByteArray) { encoder.writeBytes(value) }
@@ -38,6 +42,7 @@ object KaigiWirePayloadEncoderV1 {
         val action = arguments.getValue("action")
         wireName(action)
         val a = parse(arguments).arguments
+        relayPayload(action, a)?.let { return frame(it, action) }
         val fields = ArrayList<ByteArray>()
         if (action == "CreateKaigi") {
             val call = struct(
@@ -70,9 +75,58 @@ object KaigiWirePayloadEncoderV1 {
             fields.add(option(a["roster_root"]?.let { HashLiteral.decode(KaigiInstructionUtils.canonicalRosterRoot(it)) }))
         }
         fields.add(option(a["proof"]?.let { rawVector(proof(it)) }))
-        return NoritoCodec.encode(struct(*fields.toTypedArray()), SCHEMA_PREFIX + action, Raw).also {
+        return frame(struct(*fields.toTypedArray()), action)
+    }
+
+    private fun frame(payload: ByteArray, action: String): ByteArray =
+        NoritoCodec.encode(payload, SCHEMA_PREFIX + action, Raw).also {
             require(it.size <= MAX_BYTES) { "Kaigi archive exceeds the V1 byte limit" }
         }
+
+    /** Relay instructions carry no authorization artifacts, so they share no fields with the call lifecycle. */
+    private fun relayPayload(action: String, a: Map<String, String>): ByteArray? = when (action) {
+        "SetKaigiRelayManifest" -> struct(callId(a), option(relayManifest(a)))
+        "RegisterKaigiRelay" -> struct(struct(
+            account(a.getValue("relay.relay_id")),
+            rawVector(Base64.getDecoder().decode(a.getValue("relay.hpke_public_key"))),
+            uint(KaigiInstructionUtils.parseNonNegativeInt(a.getValue("relay.bandwidth_class"), "relay.bandwidth_class").toLong(), 8),
+        ))
+        "UnregisterKaigiRelay" -> struct(account(a.getValue("relay_id")))
+        "ReportKaigiRelayHealth" -> struct(
+            callId(a),
+            account(a.getValue("relay_id")),
+            uint(RELAY_HEALTH_STATUSES.indexOf(a.getValue("status")).toLong(), 32),
+            u64(a.getValue("reported_at_ms")),
+            option(a["notes"]?.let(::string)),
+        )
+        else -> null
+    }
+
+    private fun decodeRelay(action: String, reader: Reader, a: MutableMap<String, String>): Boolean {
+        when (action) {
+            "SetKaigiRelayManifest" -> {
+                decodeCall(reader.field(), a)
+                reader.option()?.let { decodeRelayManifest(it, a) }
+            }
+            "RegisterKaigiRelay" -> {
+                val relay = Reader(reader.field())
+                a["relay.relay_id"] = readAccount(relay.field())
+                a["relay.hpke_public_key"] = Base64.getEncoder().encodeToString(readRawVector(relay.field()))
+                a["relay.bandwidth_class"] = readUInt(relay.field(), 8).toString()
+                relay.end()
+            }
+            "UnregisterKaigiRelay" -> a["relay_id"] = readAccount(reader.field())
+            "ReportKaigiRelayHealth" -> {
+                decodeCall(reader.field(), a)
+                a["relay_id"] = readAccount(reader.field())
+                a["status"] = RELAY_HEALTH_STATUSES.getOrNull(readUInt(reader.field(), 32).toInt())
+                    ?: throw IllegalArgumentException("unknown Kaigi relay health status")
+                a["reported_at_ms"] = readU64(reader.field())
+                reader.option()?.let { a["notes"] = readString(it) }
+            }
+            else -> return false
+        }
+        return true
     }
 
     /** Validate recognized Kaigi frames at the transaction boundary, including caller-supplied WirePayloads. */
@@ -93,6 +147,12 @@ object KaigiWirePayloadEncoderV1 {
         }
         val reader = Reader(NoritoCodec.decode(frame, Raw, SCHEMA_PREFIX + action))
         val a = linkedMapOf("action" to action)
+        if (decodeRelay(action, reader, a)) {
+            reader.end()
+            val relay = parse(a)
+            require(relay.payloadBytes.contentEquals(frame)) { "noncanonical Kaigi V1 frame" }
+            return relay
+        }
         if (action == "CreateKaigi") {
             val call = Reader(reader.field())
             decodeCall(call.field(), a)
@@ -148,6 +208,10 @@ object KaigiWirePayloadEncoderV1 {
             "LeaveKaigi" -> LeaveKaigiInstruction.fromArguments(a)
             "EndKaigi" -> EndKaigiInstruction.fromArguments(a)
             "RecordKaigiUsage" -> RecordKaigiUsageInstruction.fromArguments(a)
+            "SetKaigiRelayManifest" -> SetKaigiRelayManifestInstruction.fromArguments(a)
+            "RegisterKaigiRelay" -> RegisterKaigiRelayInstruction.fromArguments(a)
+            "UnregisterKaigiRelay" -> UnregisterKaigiRelayInstruction.fromArguments(a)
+            "ReportKaigiRelayHealth" -> ReportKaigiRelayHealthInstruction.fromArguments(a)
             else -> throw IllegalArgumentException("unknown Kaigi V1 instruction")
         }
 

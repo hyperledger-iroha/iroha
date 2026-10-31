@@ -200,6 +200,26 @@ object KaigiInstructionUtils {
         return requireBase64(value, fieldName, null)
     }
 
+    /** HPKE suite of a relay key, using the transport's suite identifiers. */
+    enum class RelayHpkeSuite(@JvmField val suiteId: Int, @JvmField val publicKeyBytes: Int) {
+        ML_KEM_768_AUTH_PSK(0x0001, 1_184),
+        ML_KEM_1024_AUTH_PSK(0x0002, 1_568),
+    }
+
+    /**
+     * Frame a raw public key as the descriptor a relay registers and a hop carries: a
+     * little-endian suite identifier, then the exact key. The ledger rejects anything
+     * else, and the relay fingerprint commits to the suite this way.
+     */
+    @JvmStatic
+    fun relayHpkeKeyDescriptor(suite: RelayHpkeSuite, publicKey: ByteArray): ByteArray {
+        require(publicKey.size == suite.publicKeyBytes) {
+            "publicKey must contain exactly ${suite.publicKeyBytes} bytes for $suite"
+        }
+        return byteArrayOf(suite.suiteId.toByte(), (suite.suiteId shr 8).toByte()) + publicKey
+    }
+
+    @JvmStatic
     fun requireHpkePublicKeyBase64(value: String?, fieldName: String): String {
         return requireBase64(value, fieldName, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1)
     }

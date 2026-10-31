@@ -26,7 +26,7 @@ fn directory(prepared: &PreparedLocalnet) -> PrivateDirectory {
             .client_config
             .parent()
             .unwrap()
-            .join(LOCALNET_RUNTIME_DIRECTORY)
+            .join(RUNTIME_DIRECTORY)
             .join(DIRECTORY),
     )
     .unwrap()
@@ -58,7 +58,7 @@ fn signature(directory: &PrivateDirectory, filename: &str, payload: &[u8]) -> [u
 #[test]
 fn original_compliance_plan_has_disjoint_threshold_keys_and_finite_unchanged_interval() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let manifest = prepared.stream_token_authorities().unwrap().unwrap();
     let original = first_compliance(&prepared).unwrap().unwrap();
@@ -160,11 +160,9 @@ fn original_compliance_plan_has_disjoint_threshold_keys_and_finite_unchanged_int
     assert_eq!(recovered.expires_at_unix(), original.expires_at_unix());
     for peer in &prepared.peers {
         let bytes = iroha_fs::read_private(&peer.config_path, 1024 * 1024).unwrap();
-        let config = parse_localnet_peer_config(
-            std::str::from_utf8(&bytes).unwrap(),
-            Some(&peer.config_path),
-        )
-        .unwrap();
+        let config =
+            config::parse_peer_config(std::str::from_utf8(&bytes).unwrap(), &peer.config_path)
+                .unwrap();
         assert!(!config.torii.sorafs_storage.enabled);
         assert!(!config.torii.sorafs_storage.stream_tokens.enabled);
         assert!(config.torii.sorafs_gateway.compliance.is_none());
@@ -174,7 +172,7 @@ fn original_compliance_plan_has_disjoint_threshold_keys_and_finite_unchanged_int
 #[test]
 fn retained_compliance_rejects_cross_purpose_malformed_and_missing_credentials_without_secrets() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let root_directory = directory(&prepared);
     let directory = open_provider_directory(&root_directory, 0).unwrap();
@@ -218,7 +216,7 @@ fn retained_compliance_rejects_cross_purpose_malformed_and_missing_credentials_w
 #[test]
 fn compliance_plan_is_required_bounded_and_exactly_committed_by_original_genesis() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let prepared = prepared(&temporary.path().join("generation"));
     let original = prepared.stream_token_authorities().unwrap().unwrap();
     let root_directory = directory(&prepared);
@@ -302,7 +300,7 @@ fn compliance_plan_is_required_bounded_and_exactly_committed_by_original_genesis
 #[test]
 fn same_original_template_bound_to_distinct_actual_networks_refuses_catalog_and_ack_replay() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let first = prepared(&temporary.path().join("first"));
     let second = prepared(&temporary.path().join("second"));
     let first_manifest = first.stream_token_authorities().unwrap().unwrap();
@@ -394,7 +392,7 @@ fn same_original_template_bound_to_distinct_actual_networks_refuses_catalog_and_
 #[test]
 fn standard_profile_has_no_compliance_plan_and_refuses_added_private_inventory() {
     let _resources = crate::managed::native_test_guard();
-    let temporary = crate::localnet::localnet_test_helpers::private_tempdir().unwrap();
+    let temporary = crate::custody::test_support::private_tempdir().unwrap();
     let ports = crate::managed::LocalnetPorts::reserve().unwrap();
     let root = temporary.path().join("standard");
     let prepared = prepare_localnet_at(
@@ -406,7 +404,7 @@ fn standard_profile_has_no_compliance_plan_and_refuses_added_private_inventory()
     )
     .unwrap();
     assert!(first_compliance(&prepared).unwrap().is_none());
-    let extra = root.join(LOCALNET_RUNTIME_DIRECTORY).join(DIRECTORY);
+    let extra = root.join(RUNTIME_DIRECTORY).join(DIRECTORY);
     iroha_fs::PrivateDirectory::open_or_create(&extra).unwrap();
     assert!(first_compliance(&prepared).is_err());
 }
